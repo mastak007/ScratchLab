@@ -1,0 +1,31 @@
+{
+  "configurations" : [
+    {
+      "id" : "D4995C97-D892-4BF8-AFBD-20B6F700CB19",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    },
+    {
+      "id" : "195A73A4-A0CF-47F5-A588-CF3D8340E1B7",
+      "name" : "Configuration 2",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:ScratchLab.xcodeproj",
+      "identifier" : "A6000001",
+      "name" : "ScratchLab"
+    }
+  },
+  "testTargets" : [
+
+  ],
+  "version" : 1
+}
