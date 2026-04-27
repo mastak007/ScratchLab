@@ -1,0 +1,807 @@
+
+## Next Priority Sequence
+
+Work top-to-bottom. Only take the first unchecked task that is implementation-ready.
+
+If a task is blocked, ambiguous, too large, or points at a file that does not exist, stop and explain the blocker.
+
+- [x] Run a Coach Preview safety pass for App Store wording, preview-only audio isolation, and unintended production-flow leaks
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: Coach Preview and its temporary entry points use App Review-safe product wording instead of internal/prototype copy, dismissing the preview restores any shared audio input selection it temporarily changed, the preview stays debug-gated without altering capture/export/upload/watch logic, and verification passes focused source regressions plus `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` and `./scripts/build.sh`
+  - Completed: root cause was not a crash in the 3D loader path. The audit found two smaller but real review/runtime risks in the active Coach Preview flow: user-facing copy still exposed internal wording like model tests and bundled-asset references, and the preview could change the shared `AudioEngine` input source for its audio-motion controls without restoring that choice on dismiss, which risked leaking preview state back into Practice or capture preparation. Fixed by keeping the change narrow and isolated to the preview/testing surface: `ScratchLab/Views/CoachPreviewView.swift` now uses product-safe status/error copy and snapshots/restores the prior shared audio input source around preview lifetime, the temporary entry labels in `ScratchLab/Views/MainMenuView.swift` and `ScratchLab/Views/PracticeModeView.swift` now read like a coach animation preview instead of a developer test hook, `ScratchLabDesktop/Views/MacAnalyzerView.swift` replaces the visible `Test Audio` label with `Audio Input`, and the source-level regression suite was updated to pin the safer copy plus the input-source restore contract. Verification: focused coach-preview/macOS analyzer source regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Audit the packaged iOS `Info.plist` path for `UIBackgroundModes` and verify the physical-phone launch path
+  - Files: `TASKS.md`, `DEV_LOG.md`
+  - Done when: the iOS `ScratchLab` target build settings confirm which `Info.plist` is used, the built `ScratchLab.app/Info.plist` is inspected directly, `UIBackgroundModes = ["audio"]` is present in the final iPhone app bundle, a paired physical iPhone install/launch succeeds without the previous background-mode denial, and `./scripts/build.sh` passes
+  - Completed: root cause was not a missing background-audio declaration in the packaged iOS app. Audit showed both iOS build configurations use `ScratchLab/Info.plist` with `GENERATE_INFOPLIST_FILE = NO`, Xcode's `ProcessInfoPlistFile` step writes that file into `/Users/karlwatson/Library/Developer/Xcode/DerivedData/Build/Products/Debug-iphoneos/ScratchLab.app/Info.plist`, and the built binary plist contains `UIBackgroundModes = ["audio"]`. A paired physical iPhone install/launch via `./scripts/run-on-phone.sh 00008140-000C21A13A9B001C` also succeeded, so the earlier launch denial was not reproducible from the current packaged app metadata. Verification: direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, built-plist inspection confirmed `audio`, phone install/launch passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Upgrade the shared baby-scratch motion analyzer to segment forward/back envelope strokes into real timing feedback
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Models/ScratchMotionAnalysis.swift`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the shared analyzer keeps using lightweight envelope-only analysis, stores a short recent envelope window, detects forward/back transitions from local peaks and valleys, publishes forward/back durations plus live timing error, marks `Balanced` when the stroke timing error stays within the existing tolerance, and verification passes focused analyzer regressions plus `./scripts/build.sh`
+  - Completed: root cause was that the first lightweight audio-motion pass could see envelope energy and current direction, but it never turned that envelope into discrete stroke segments, so `forwardDuration`, `backwardDuration`, and `timingError` frequently stayed empty and the UI remained stuck in `Listening`. Fixed by moving the shared motion types plus `ScratchMotionAnalyzer` into `ScratchLab/Models/ScratchMotionAnalysis.swift`, wiring that shared file into the iOS and macOS app targets, keeping `AudioEngine` as the existing publisher surface, and upgrading the analyzer to buffer recent smoothed envelope points, detect forward/back turnarounds from local maxima/minima plus short follow-through confirmation, close strokes using the per-frame envelope release instead of the smoothed decay tail, and emit paired forward/back timings with `[ScratchMotion] forwardDuration=`, `[ScratchMotion] backwardDuration=`, and `[ScratchMotion] timingError=` diagnostics. Verification: focused `ScratchLabDesktop` analyzer regressions passed, including balanced and unbalanced synthetic baby-scratch envelopes; direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' test ...` passed; and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add lightweight baby-scratch audio motion analysis to Coach Preview and Practice
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing iOS audio tap publishes a lightweight real-time baby-scratch motion estimate from mic or wired input without adding ML or video work, Coach Preview surfaces compact route/direction/forward/back/timing-error feedback with green `Balanced` and red `Unbalanced` states, the active Practice audio card surfaces the same feedback for Baby Scratch sessions only, and verification passes focused source regressions, a direct generic iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that ScratchLab already had shared live audio capture plus higher-level scratch classification, but neither Coach Preview nor the active Practice flow exposed a lightweight push/pull timing heuristic for baby-scratch balance. Fixed by extending only the existing shared audio path with a small envelope-based `ScratchMotionAnalyzer` inside `ScratchLab/Audio/AudioEngine.swift`, publishing live motion direction plus balanced/unbalanced timing feedback from the current input tap, surfacing that in `ScratchLab/Views/CoachPreviewView.swift` with compact mic/wired route controls and timing badges, and adding a Baby Scratch-only motion strip to the active Practice audio card in `ScratchLab/Views/PracticeModeView.swift`. Verification: focused audio-motion / preview / practice regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add spring release, inertia, and a motion-first layout to Coach Preview
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the isolated coach preview keeps the existing `Coach.usdz` load and loop path intact, manual Scratch Pad release now coasts briefly and settles back to center with spring-like motion while keeping `scratchValue` as position and `scratchVelocityApprox` as motion, Baby Scratch Demo uses eased forward/back timing with center pauses in a consistent `0 → +1 → 0 → -1 → 0` rhythm, the UI is reduced to scene-first motion controls with compact status/value/direction instead of long descriptive blocks, and verification passes focused preview regressions, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that the scratch interaction still behaved like a direct slider with an immediate center snap on release, the baby-scratch demo still used short generic pulses instead of a rhythmic forward/back pattern, and the screen still gave too much visual weight to explanatory copy instead of the platter and motion state. Fixed by extending only `ScratchLab/Views/CoachPreviewView.swift` with a cancellable release-physics task, brief inertial velocity decay followed by damped spring settling, eased demo strokes with real center pauses, and a reduced-text motion-first layout that keeps the 3D scene, motion controls, scratch value, direction, and pad primary. Verification: focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Audit the whole repo for RealityKit statistics overlay sources and harden Coach Preview against late re-enablement
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: project-wide runtime source scan confirms there is no `showStatistics = true` path leaking into Coach Preview, the isolated coach preview forces a stronger statistics shutdown during creation and updates, a deferred main-thread override re-applies the coach-preview-only shutdown after initialization, and verification passes focused preview regressions, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was not another app screen explicitly turning statistics on; the project-wide runtime scan of `ScratchLab`, `ScratchLabDesktop`, and `ScratchLabWatch` found no `showStatistics = true` source at all. The remaining issue was that Coach Preview still depended on `debugOptions` cleanup alone, while this SDK does not expose a typed `ARView.showStatistics` property even though the underlying ARView can still show the overlay. Fixed by strengthening only `ScratchLab/Views/CoachPreviewView.swift`: `makeUIView` and `updateUIView` now both drive a dedicated statistics-shutdown helper, `debugOptions` is cleared, `.showStatistics` is removed, `arView.__statisticsOptions` is emptied, `arView.__disableStatisticsRendering` is set, and a selector-backed `setShowStatistics:` call is used when available, plus a deferred `DispatchQueue.main.async` reapply right after ARView creation. Verification: the focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Improve Coach Preview scene readability so the 3D platter is the obvious interaction target
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the isolated coach preview keeps the existing `Coach.usdz` load and loop path intact, the 3D platter is materially larger and brighter, its placement is raised toward coach waist/hands and brought forward using camera-aware sizing math instead of arbitrary UI transforms, the dark preview background remains intact with no statistics HUD, and verification passes focused preview regressions, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that the temporary RealityKit platter technically existed and rotated with Scratch Pad input, but it still sat too low and visually receded behind the coach because its apparent size, depth, and material contrast were tuned like a placeholder instead of the primary interaction target. Fixed by keeping all changes isolated to `ScratchLab/Views/CoachPreviewView.swift`: the platter constants were rebalanced to a larger turntable-sized disc, placement now derives from coach bounds plus viewport-aware camera math so the platter sits around waist/hand height and stays clearly in front of the coach, a darker pedestal plus brighter metallic top/accent surfaces improve contrast against the existing dark background, and the source-level regression now pins the new platter framing contract. Verification: focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Make Coach Preview motion buttons drive real trainer behavior
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the isolated coach preview routes all `Motion` button taps through one `applyMotionMode(_:)` entry point, `Idle Loop` resets scratch state to neutral and resumes the bundled coach loop, `Forward Scratch` and `Back Scratch` trigger visible platter pulses that spring back to center, `Baby Scratch Demo` runs two complete forward/back cycles and stops at zero, manual Scratch Pad drag cancels any active demo immediately, and verification passes focused source regressions, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that the `Motion` buttons only updated the selected chip styling while the actual trainer state still depended entirely on manual drag input, so tapping `Idle Loop`, `Forward Scratch`, `Back Scratch`, or `Baby Scratch Demo` did not move either platter or change coach playback behavior. Fixed by extending only `ScratchLab/Views/CoachPreviewView.swift` with central `applyMotionMode(_:)` handling, cancellable `Task`-backed motion demos, neutral-reset logic for `Idle Loop`, transient forward/back scratch pulses that animate back to zero, a two-cycle baby-scratch demo sequence, and manual-drag cancellation that immediately overrides any active demo and returns control to the user. The existing `Coach.usdz` loading path, bundled animation loop, 2D platter indicator, 3D platter entity, and coach-preview-only HUD cleanup remain intact. Verification: focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add a temporary RealityKit platter entity to Coach Preview and drive it from Scratch Pad input
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing bundled `Coach.usdz` load path and first animation loop stay intact, the isolated preview adds a temporary 3D platter primitive in the RealityKit scene below and in front of the coach, Scratch Pad state drives that platter around its vertical axis using scratch value plus drag velocity, `[CoachTrainer3D]` diagnostics log the platter rotation and scratch value, the existing 2D platter feedback remains visible for comparison, no RealityKit statistics overlay reappears, and verification passes focused preview regressions, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that the isolated coach trainer already mapped Scratch Pad drag into useful 2D UI feedback and logging, but the RealityKit scene itself still had no scratch-responsive object, so there was no in-scene motion to validate the control mapping before real USDZ hand or platter rig targets exist. Fixed by extending only `ScratchLab/Views/CoachPreviewView.swift`: the existing non-AR `ARView` container now receives `scratchValue` and `scratchVelocityApprox`, builds a temporary `CoachTrainerPlatter` from RealityKit primitive cylinders/box, positions it from the coach's final framed visual bounds so it sits clearly below and in front of the character, and applies a bounded Y-axis rotation derived from scratch value plus velocity while printing clean `[CoachTrainer3D] platterRotation=` and `[CoachTrainer3D] scratchValue=` diagnostics. The bundled coach load path, animation loop, HUD shutdown, and 2D platter indicator remain intact. Verification: focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Turn the isolated Coach Preview into an interactive scratch-training prototype
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing bundled `Coach.usdz` path still loads and loops its first animation, the preview surface remains HUD-free, the isolated preview exposes app-safe `Motion` controls plus a horizontal `Scratch Pad`, drag maps into a visible `-1.00 ... +1.00` value and platter-style feedback, `[CoachTrainer]` diagnostics print scratch value/direction/velocity, and verification passes focused preview regressions, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that the current Coach Preview already handled asset loading, framing, and loop playback reliably, but it still stopped at passive previewing and gave no way to prototype scratch-control mapping before real skeletal hand or platter targets are attached to the USDZ. Fixed by keeping the current `Coach.usdz` loader, diagnostics, and clean ARView configuration intact, then extending only `ScratchLab/Views/CoachPreviewView.swift` with motion-mode selection (`Idle Loop`, `Forward Scratch`, `Back Scratch`, `Baby Scratch Demo`), a horizontal `Scratch Pad` drag surface, visible platter feedback, formatted scratch value/velocity/direction readouts, and an additive animation-controller bridge that pauses the idle loop while the pad is actively scratched and otherwise resumes it at a mode-specific speed. Verification: focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Remove the remaining CoachPreviewView RealityKit statistics/HUD overlay without affecting other AR surfaces
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the isolated coach preview actively clears RealityKit statistics/debug flags on its own `ARView`, the source contains no `RealityView` debug/statistics modifiers or `showStatistics = true` path, no global preview flag is wired through `CoachPreviewView`, and verification passes a focused preview regression, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that `CoachPreviewView` only reset `arView.debugOptions` during initial creation, so the preview did not actively reapply its clean-surface configuration during updates and there was still no explicit source-level guard against the RealityKit statistics overlay in this view. Fixed by isolating the preview-surface configuration in `ScratchLab/Views/CoachPreviewView.swift`, applying it from both `makeUIView` and `updateUIView`, keeping `arView.debugOptions = []`, and explicitly removing `ARView.DebugOptions.showStatistics` using the compile-safe RealityKit API that exists in this SDK. Audited the rest of `CoachPreviewView.swift` and confirmed there is no remaining `RealityView` path, no `.debug` or `.statistics` modifier, no `showStatistics = true`, and no `ARView.appearance` or repo-local HUD toggle affecting this screen. Verification: the focused coach-preview regression passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Audit and polish the isolated coach preview framing, diagnostics, and user-facing copy
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the bundled `Coach.usdz` path still loads from app resources, the in-app preview no longer shows the Metal/RealityKit debug HUD, the coach is framed larger and centered from measured visual bounds rather than arbitrary offsets, the console reports root/entity/animation/bounds/transform diagnostics, visible preview copy no longer says `Debug only`, a compact status line shows load state plus animation/scale/height, and verification passes a focused preview regression slice, a direct iOS build, and `./scripts/build.sh`
+  - Completed: root cause was that the isolated preview already had a working `Coach.usdz` load path, but it still behaved like a development probe: the presentation exposed debug wording, the rendering path could surface HUD noise, and the framing logic used fixed placement rather than the model's actual bounds, so the coach could appear too small or off-center on iPhone. Fixed by keeping the additive bundled `Coach.usdz` RealityKit path, moving the preview surface to a non-AR `ARView` with `debugOptions = []`, loading the bundle root entity while still probing `Entity(named: "Coach")` for diagnostics, logging the resolved URL, file-existence result, entity names, child names, animation count, bounds, scale normalization, and final transform, and computing the final camera-style placement from measured model bounds and viewport size so the character stays larger, centered, and fully visible. Updated the Practice and main-menu preview copy to remove visible `Debug only` wording, added a status line with loaded/failed state plus animation count, scale, and approximate height, and kept all changes isolated to the preview/testing flow. Verification: the focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add an isolated RealityKit coach model test that loads bundled `Coach.usdz` from the Practice/Baby Scratch flow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the iOS app bundles `Coach.usdz`, exposes a temporary debug entry from the Practice/Baby Scratch setup flow, loads `Entity(named: "Coach")` asynchronously through a dedicated `CoachPreviewView`, logs load success plus entity name and animation count, loops the first animation when present, falls back to a non-AR `ARView` when `RealityView` is unavailable, and verification passes a direct iOS build plus `./scripts/build.sh`
+  - Completed: root cause was that the working Reality Composer Pro export already lived in the repo as `ScratchLab/Resources/Coach/Coach.usdz`, but the preview flow was still aimed at the older coach asset path and there was no temporary validation entry point on the Practice/Baby Scratch screen. Fixed by replacing `ScratchLab/Views/CoachPreviewView.swift` with an additive iOS-only RealityKit loader that checks the bundled `Coach.usdz` URL, loads `Entity(named: "Coach")` asynchronously, adds the entity to the scene, positions it at `[0, 0, -1.2]`, logs success/entity/animation details, and loops the first available animation. Added a debug-only `Open Coach Model Test` button plus sheet to `PracticeModeView`, kept the existing main-menu debug preview aligned to the same loader, updated `ScratchLab.xcodeproj/project.pbxproj` so `Coach.usdz` is in Copy Bundle Resources, and extended the source-level/hosted-bundle regression coverage. Verification: the focused coach-preview regressions passed, direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Fix the shared iOS launch scheme so foreground Debug runs do not request undeclared background/location launch behavior
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the shared `ScratchLab` iOS scheme launches in normal foreground Debug mode without location/background simulation, `ScratchLab/Info.plist` is audited without adding unnecessary `UIBackgroundModes`, a source-level regression guards the scheme contract, and verification passes a direct iOS build plus `./scripts/build.sh`
+  - Completed: root cause was that the shared `ScratchLab` iOS scheme still enabled location simulation and a concrete launch location scenario even though the app does not use Core Location and `ScratchLab/Info.plist` only declares `UIBackgroundModes = ["audio"]`. That mismatch can make Xcode/device launch request background-capable behavior the app does not declare, producing the `SBMainWorkspace` launch denial instead of a normal foreground Debug run. Fixed by removing `allowLocationSimulation = "YES"` and the `LocationScenarioReference` block from `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme`, leaving the launch style as normal foreground Debug, and adding a source-level regression in `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift` to keep the shared scheme free of location simulation and wait-for-executable launch settings. Verification: direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed, the focused scheme regression passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Fix the Coach 3D Preview asset loading failure with a bundled USDZ-first SceneKit loader
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Image_0.jpg`, `ScratchLab/Image_2.jpg`, `ScratchLab/Image_3.jpg`, `ScratchLab/color_0C0C0C.exr`
+  - Done when: the debug-only `Coach 3D Preview` entry resolves the bundled coach asset through a robust loader, prefers a self-contained `ScratchLabCoach.usdz` scene first, keeps `ScratchLabCoach.fbx` only as a lower-priority fallback, bundles any FBX companion texture/material files needed for fallback loads, adds a source-level assertion that the bundled coach asset exists in `Bundle.main`, and verification passes direct iOS plus simulator builds and `./scripts/build.sh`
+  - Completed: root cause was that the current preview path tried to load `ScratchLabCoach.fbx` directly from `Bundle.main` even though that FBX is not self-contained and references external texture files that were not packaged beside it, which is why SceneKit reported `The document "ScratchLabCoach.fbx" could not be opened.` Fixed by changing `ScratchLab/Views/CoachPreviewView.swift` to prefer `ScratchLabCoach.usdz`, then `ScratchLabCoach.scn`, and only then `ScratchLabCoach.fbx`; logging the resolved bundle URL and file-existence result for each candidate; surfacing SceneKit domain/code/URL failures clearly; keeping the debug-only gate unchanged; and using the bundled USDZ because it is already valid and self-contained. `ScratchLab.xcodeproj/project.pbxproj` now includes `ScratchLabCoach.usdz`, `ScratchLabCoach.fbx`, `Image_0.jpg`, `Image_2.jpg`, `Image_3.jpg`, and `color_0C0C0C.exr` in Copy Bundle Resources for both the iOS app target and the macOS preview target. Verification: direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'generic/platform=iOS' build` passed, simulator `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination 'platform=iOS Simulator,name=iPhone 17' build` passed, `./scripts/build.sh` passed end-to-end, and the built simulator app installed plus launched on simulator `53B855D2-2933-4A9C-BB75-1AC5D866701E`. Physical-phone install verification was attempted on device `K` but blocked because the phone was locked.
+
+- [x] Replace the debug coach preview path with SceneKit loading of the bundled `ScratchLabCoach.fbx` asset
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing debug-only `Coach 3D Preview` entry in ScratchLab loads `ScratchLabCoach.fbx` from `Bundle.main` through SceneKit instead of RealityKit/USDZ, the preview scales safely, auto-plays any bundled FBX animation on loop, missing assets still fail soft, the Xcode project no longer references the old coach USDZ resources, and verification passes `./scripts/build.sh`
+  - Completed: root cause was that the older coach preview path still assumed RealityKit/USDZ even after `ScratchLabCoach.fbx` had become the real bundled asset, so the debug preview, project resources, and source-level tests were all enforcing the wrong 3D pipeline. Fixed by replacing the isolated preview implementation in `ScratchLab/Views/CoachPreviewView.swift` with a SceneKit `SCNView` loader that resolves `ScratchLabCoach.fbx` from `Bundle.main`, applies a conservative `0.01` root scale, ensures a fallback preview camera when the FBX has none, and starts the first available node animations through `animationPlayer(forKey:)` on loop; updating `MainMenuView` so the existing debug sheet advertises and gates on the SceneKit/FBX path; and removing the old `ScratchLabCoach.usdz` / `ScratchLabCoach 3.usdz` resource references from `ScratchLab.xcodeproj/project.pbxproj`. Verification: focused ScratchLabDesktop preview regressions passed and `./scripts/build.sh` passed end-to-end on this machine, including the capture-pipeline fixture suite, the full `ScratchLabDesktop` XCTest plan, and the iOS, macOS, and watchOS builds.
+
+- [x] Move the iOS RealityKit coach preview into a dedicated bundled `CoachPreviewView.swift` loader and wire the real `ScratchLabCoach.usdz` resource
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/CoachPreviewView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing ScratchLab iOS app loads `ScratchLabCoach.usdz` from `Bundle.main` through a dedicated `CoachPreviewView.swift` file instead of inline preview code, the model resource is present in the app target resources, the preview scales safely and loops the first available animation when present, failure stays soft when the file is missing or unreadable, the main app shell is unchanged apart from the existing debug entry point, and verification passes `./scripts/build.sh`
+  - Completed: root cause was that the first RealityKit integration pass proved the app could host a template-free preview, but the actual loader still lived inline inside `MainMenuView` and the Xcode project resource wiring still pointed at an older `ScratchLabCoach 2.usdz` filename instead of the real `ScratchLabCoach.usdz` asset now present in the repo. Fixed by extracting the preview implementation into `ScratchLab/Views/CoachPreviewView.swift`, keeping the existing debug-only `Coach 3D Preview` sheet in `MainMenuView` as the exposure point, loading the model directly from `Bundle.main.url(forResource: "ScratchLabCoach", withExtension: "usdz")`, using a non-AR `ARView`, applying a conservative `0.01` scale, looping the first available animation when present, and updating the Xcode project so `ScratchLabCoach.usdz` is the bundled resource name used by the app targets. Verification: focused ScratchLabDesktop source-level preview regressions passed and `./scripts/build.sh` passed end-to-end on this machine, including the fixture suite, full `ScratchLabDesktop` XCTest plan, iOS build, macOS build, and watchOS build.
+
+- [x] Add a debug-only bundled RealityKit coach preview entry to the existing ScratchLab iOS app
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing app exposes a safe development-only entry point for previewing a bundled `ScratchLabCoach.usdz`/`.usdc` asset from the main app bundle without assuming `RealityKitContent`, `realityKitContentBundle`, or `RealityView`; the preview loads via `Entity.load(contentsOf:)`, scales safely, loops the first available animation when present, fails soft with a clear fallback message when no asset is bundled or loading fails, and verification passes `./scripts/build.sh`
+  - Completed: root cause was that the requested 3D coach integration assumed an Apple RealityKit template project, but this repo is the existing ScratchLab app with no `RealityKitContent` module, no `.rkassets` package, and no bundled `.usdz`/`.usdc` asset yet. Fixed by adding a debug-only `Coach 3D Preview` entry to `MainMenuView` that opens a sheet-backed `ScratchCoachPreviewView`, then loading the first matching bundled asset from `Bundle.main` using the supported fallback order `ScratchLabCoach.usdz`, `ScratchLabCoach.usdc`, `Untitled.usdz`, `Untitled.usdc`. The preview uses a non-AR `ARView`, applies a conservative scale, plays the first animation on loop when available, and surfaces a clear operator-facing fallback explaining that the preferred final asset name is `ScratchLabCoach.usdz` and that `.usdc` should be re-exported as `.usdz` if RealityKit bundle loading is unreliable. Verification: direct `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed, focused ScratchLabDesktop source-level regressions for the new preview contract passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Fix iPhone safe-area overlap across Main Menu, Live Practice picker, and Practice Coach setup
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/LevelSelectView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the iOS top titles, back/menu controls, and Practice Coach setup content use real safe-area insets instead of hardcoded top spacing, Live Practice and the scratch picker remain scrollable on small iPhones, existing setup flow order stays intact, source-level regressions cover the new inset contract, and verification passes `./scripts/build.sh` plus `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9`
+  - Completed: root cause was that the iPhone-facing menu and practice surfaces still mixed custom top chrome with plain `.padding(.top, ...)` values, so titles and controls could creep into the Dynamic Island/status region on smaller phones. Fixed by moving `MainMenuView` and `LevelSelectView` onto `GeometryReader`-driven scroll layouts with safe-area-based top/bottom padding, tightening `PracticeModeView` and `SessionSetupOverlay` to anchor their existing custom top chrome to `geometry.safeAreaInsets` instead of minimum guesses, and extending the source-level regression suite to pin the new safe-area contract on all three views. Verification: focused ScratchLabDesktop source tests passed, `./scripts/build.sh` passed end-to-end, and `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` rebuilt, installed, and launched ScratchLab on `K`.
+
+- [x] Rework the shared ScratchLab Coach visual direction from emoji mascot to a rig-first DJ training diagram
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/ScratchCoachViews.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the shared Coach surface replaces the emoji-style mascot with a stylized ScratchLab DJ rig that uses `ScratchCoachDemoAnimator` to drive platter, record-hand, and fader-hand motion; Baby keeps the fader open with `Fader stays open.` copy; Chirp Flare uses `Quick fader click.` copy; future pose/controller metadata fields decode safely without requiring real extracted keyframes; no sessions/takes/artifacts are created; and verification passes `python3 scripts/test_dataset_processor.py` plus `./scripts/build.sh`
+  - Completed: root cause was that the previous Coach polish pass still kept the visual identity centered on an emoji-like mascot and a separate controller block, which did not match ScratchLab’s intended capture-derived training direction. Fixed by replacing that presentation with a shared `ScratchCoachRigView` that renders a stylized booth, deck, platter, mixer, arms, and hands driven by the existing shared demo animator, shrinking the speech bubble so the rig becomes the primary instructional surface, keeping `Steps & Tips` collapsed by default, and extending `ScratchCoachInstruction` with optional future rig metadata hooks (`poseKeyframesFile`, `controllerKeyframesFile`, `sourceAngle`, `motionReferenceType`) that decode safely from existing JSON. Verification: `python3 scripts/test_dataset_processor.py` passed with 25 tests, focused ScratchLabDesktop Coach tests passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Refine the shared ScratchLab Coach UI for small iPhone layout and clearer Baby/Chirp Flare demo guidance
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/ScratchCoachViews.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing shared Coach card fits more cleanly on small iPhone screens with safe-area-aware Practice layout, the mascot/controller demo are more expressive without changing the coaching flow, Baby keeps the fader open with explicit open-fader copy, Chirp Flare shows quick-click fader copy, `Steps & Tips` stays collapsed by default, no sessions/takes are created, and verification passes `python3 scripts/test_dataset_processor.py`, `./scripts/build.sh`, and phone redeploy
+  - Completed: root cause was that the shared Coach surface was functionally correct but still too tall and too generic for the smallest iPhones. The Practice setup overlay had no real top/bottom safe-area contract, the shared coach avatar was still very basic, the speech bubble stayed too text-heavy, and the controller cue copy still fell back toward generic open/close wording instead of clearly differentiating Baby from Chirp Flare. Fixed by making the Practice screen and setup overlay use explicit safe-area insets, tightening the overlay/header/card spacing, shortening the default speech bubble to the instruction summary, upgrading the shared mascot/controller visuals, and switching the shared fader cue copy to scratch-specific Baby/Chirp Flare guidance while keeping the existing Coach flow and playback/session contracts intact. Verification: `python3 scripts/test_dataset_processor.py` passed, focused ScratchLabDesktop coach/practice tests passed, `./scripts/build.sh` passed end-to-end, and `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` rebuilt, installed, and launched ScratchLab on `K`.
+
+- [x] Replace the text-heavy ScratchLab Coach card with a first-pass animated shared helper on iOS and macOS
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Views/ScratchCoachViews.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing coach surfaces reuse one shared SwiftUI presentation with an original ScratchLab character, speech bubble, controller demo driven by `ScratchCoachDemoAnimator`, collapsed `Steps & Tips`, preserved Listen/Pause/Replay controls plus missing-audio fallback, no session/take creation side effects, and verification passes `python3 scripts/test_dataset_processor.py` plus `./scripts/build.sh`
+  - Completed: root cause was that the current Coach layer still rendered as two separate text-heavy layouts on iPhone and Mac, even though the demo animator, audio player, and instruction store were already shared. Fixed by adding shared `ScratchCoachViews.swift` with `ScratchCoachCharacterView`, `ScratchCoachControllerDemoView`, and `ScratchCoachCardContent`, then refactoring the existing iOS and macOS coach wrappers down to platform-local theme/control styling plus the existing playback lifecycle. The new helper keeps the existing setup flow order, shows the coach character and speech bubble first, runs the controller demo from the shared animator only during playback, and collapses the longer detail copy into `Steps & Tips` so the card fits better on small screens. Added source-level regressions for the new shared views, the shared animator wiring, and project inclusion in both iOS and macOS targets. Verification: `python3 scripts/test_dataset_processor.py` passed, focused ScratchLabDesktop coach/practice tests passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Restore Live Practice scratch selection and replace Coach demo WAVs with scratch-only performance trims
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/build_coach_demo_audio.py`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/LevelSelectView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav`, `ScratchLab/Resources/CoachDemoAudio/chirpflare_noBeat.wav`, `ScratchLab/Resources/CoachDemoAudio/coach_demo_manifest.json`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: Live Practice opens to explicit scratch options instead of forcing Baby immediately, Baby and Chirp Flare both route into the existing setup overlay without `PracticeModeView` collapsing non-baby input back to Baby, the Coach lookup still resolves Baby and Chirp Flare aliases, bundled coach demo WAVs are regenerated from `noBeat` Chapter 2 performance-only trims with repo-visible provenance, and verification passes `python3 scripts/test_dataset_processor.py`, `./scripts/build.sh`, and a device redeploy through `./scripts/run-on-phone.sh`
+  - Completed: root cause was split across navigation and assets. `LevelSelectView` was still a Baby-only launcher, `PracticeModeView` rewrote every non-baby scratch back to `baby_scratch`, and the bundled `baby_noBeat.wav` / `chirpflare_noBeat.wav` files had been copied from full MakeMKV takes instead of trimmed to the post-explanation performance section. Fixed by restoring a lightweight two-option Live Practice selector, removing the Baby fallback from `PracticeModeView`, keeping the existing setup controls first with the Coach card additive below them, updating the Live Practice copy to match the new selector, and adding a deterministic `build_coach_demo_audio.py` helper plus `coach_demo_manifest.json` so the shipped demo WAVs come from the `noBeat` stream starting at Chapter 2 plus a small offset. Added regressions for explicit scratch selection, no forced Baby fallback, extra coach alias forms, and the new noBeat performance-source manifest. Verification: `python3 -m py_compile scripts/dataset_processor/build_coach_demo_audio.py scripts/test_dataset_processor.py` passed, `python3 scripts/test_dataset_processor.py` passed, focused ScratchLabDesktop coach/practice tests passed, `./scripts/build.sh` passed end-to-end, and `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` rebuilt, installed, and launched ScratchLab on `K`.
+
+- [x] Fix ScratchLab Coach scratch-type normalization so ChirpFlare resolves to the bundled coach JSON
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: shared coach lookup normalizes scratch-type aliases consistently, `Chirp Flare` and `chirp_flare` both resolve `chirpflare.json`, existing `baby` lookup still works, the visible Practice and macOS coach paths pass normalized scratch IDs into the shared store, and the updated build passes `./scripts/build.sh` and redeploys to the paired iPhone
+  - Completed: root cause was that ScratchLab Coach lookup still depended on inconsistent raw scratch-type strings across the UI and the shared instruction loader, so `Chirp Flare`/`chirp_flare` could miss the existing `chirpflare.json` bundle resource even though the file was present. Fixed by adding one shared `normalizeScratchType(input:)` helper, reusing it in the coach store plus demo animator, teaching `ScratchCoachInstructionStore` to search normalized candidates from both the selected scratch ID and the visible scratch name, and normalizing the iOS/macOS coach entry points before they call the shared store. Added regressions for `baby_scratch`, `Chirp Flare`, `chirp_flare`, and the real-world fallback path where the scratch ID has no coach file but the visible display name matches `Chirp Flare`. Verification: focused coach alias tests passed, `./scripts/build.sh` passed end-to-end, and `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` rebuilt, installed, and launched ScratchLab on `K`.
+
+- [x] Extend ScratchLab Coach Demo Mode with deterministic synced scratch animation
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the iPhone Practice setup overlay resolves coach content from the visible practice scratch, keeps the main Baby Scratch setup controls first, surfaces the ScratchLab Coach card earlier in the same scrollable overlay with safe bottom spacing and a visible accessibility hook, preserves neutral fallback when no scratch is selected, and the updated build passes `./scripts/build.sh` and redeploys to the paired iPhone
+  - Completed: root cause was not missing resources. The iOS build already bundled `CoachInstructions` and `CoachDemoAudio`, and the coach card was always instantiated, but the coach lookup followed the original `scratch` input instead of the visible `activeScratch`, while the card sat low in the setup overlay behind the later audio-routing section. Fixed by resolving `coachInstruction` from `activeScratch.id` / `activeScratch.name`, moving the existing `ScratchCoachCard` above the audio-input block while keeping the core Baby Scratch controls first, enabling visible scroll indicators, adding bottom padding plus an accessibility identifier for the card, and extending regressions to pin the active-scratch lookup, neutral fallback, and new overlay order. Verification: focused coach/practice tests passed, `./scripts/build.sh` passed end-to-end, and `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` rebuilt, installed, and launched ScratchLab on `K`.
+
+- [x] Extend ScratchLab Coach Demo Mode with deterministic synced scratch animation
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the iOS Practice flow keeps scratch selection and the existing Baby Scratch setup controls first, then shows the ScratchLab Coach card inside the same scrollable setup overlay rather than ahead of the core drill setup, source-level regression coverage pins that order, and `./scripts/build.sh` passes
+  - Completed: root cause was that the new Coach card was already embedded in the iOS Practice setup overlay, but it sat near the top ahead of the existing Baby Scratch drill controls, which made the setup flow feel reordered instead of additive. Fixed by moving the existing `ScratchCoachCard` lower in `SessionSetupOverlay` so the overlay now flows through the current practice setup controls before showing coaching, and by tightening the source-level regression to assert that the Coach card appears after the beat and audio-input setup sections. Verification: focused `testPracticeModeSourceExposesCoachCardInScrollableSetupOverlay` passed and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Extend ScratchLab Coach Demo Mode with deterministic synced scratch animation
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing iOS and macOS Coach Demo Mode visual reads shared playback time from the current demo player, uses one shared animator to render scratch-specific record and crossfader motion for `baby` and `chirpflare` only while local demo audio is actively playing, resets cleanly when paused or stopped, does not create sessions/takes/artifacts, and `python3 scripts/test_dataset_processor.py` plus `./scripts/build.sh` pass
+  - Completed: root cause was that Coach Demo Mode already had real local demo audio and basic record/fader visuals, but the visual layer only used a generic pulse and was not synchronized to scratch-specific playback state. Fixed by exposing read-only playback time and active-playing state from `ScratchCoachDemoAudioPlayer`, adding a shared `ScratchCoachDemoAnimator` that produces deterministic `baby` open-fader record motion and `chirpflare` flare-like fader pulses from playback time, wiring the existing iOS and macOS coach visuals to that shared animator through `TimelineView`, and extending the regression suite to cover animator reset, baby open-fader behavior, chirpflare pulse behavior, and the shared UI source contract. Verification: `python3 scripts/test_dataset_processor.py` passed and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add bundled ScratchLab Coach demo audio assets for baby and chirpflare only
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Resources/CoachInstructions/baby.json`, `ScratchLab/Resources/CoachInstructions/chirpflare.json`, `ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav`, `ScratchLab/Resources/CoachDemoAudio/chirpflare_noBeat.wav`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the existing Coach Demo Mode resolves real bundled `noBeat` demo WAVs for `baby` and `chirpflare`, the new `CoachDemoAudio` resource folder ships in both app targets, the shared bundle lookup handles the resource subdirectory, focused coach regressions prove the files are present and readable, and `python3 scripts/test_dataset_processor.py` plus `./scripts/build.sh` pass
+  - Completed: root cause was that the new Coach Demo Mode had shared playback logic and JSON metadata, but no real bundled demo-audio assets were included in the iOS or macOS app targets, so even the supported scratches always fell back to the unavailable state. Fixed by copying the local dataset `angle_1_noBeat.wav` files for `baby` and `chirpflare` into a new `ScratchLab/Resources/CoachDemoAudio/` folder, updating the shared lookup to search that bundled subdirectory, pointing the existing coach JSON at the concrete WAV filenames, wiring the folder into both app resource phases, and extending the regression suite to prove the folder is bundled and the WAVs are readable. Verification: `python3 scripts/test_dataset_processor.py` passed, `python3 -m py_compile scripts/dataset_processor/process_dataset.py scripts/dataset_processor/label_clip.py scripts/test_dataset_processor.py` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add a first-pass ScratchLab Coach UI to iOS and macOS using bundled original instruction JSON
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLab/Resources/CoachInstructions/baby.json`, `ScratchLab/Resources/CoachInstructions/chirpflare.json`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: iOS and macOS practice surfaces show a local ScratchLab Coach card for the selected scratch or a neutral/fallback state, the shared loader fails closed for missing or malformed JSON, no coach UI path creates sessions or takes, the bundled instruction folder ships in the iOS and macOS app targets, and `python3 scripts/test_dataset_processor.py` plus `./scripts/build.sh` pass
+  - Completed: root cause was that original ScratchLab instruction data existed outside the app, but there was no shared in-app model, loader, or UI surface to expose safe local coaching guidance on iPhone or Mac. Fixed by adding `ScratchCoachInstruction` and `ScratchCoachInstructionStore` in shared capture core, bundling original `baby` and `chirpflare` coach JSON, wiring a compact coach card into the iOS practice setup overlay and the macOS analyzer/practice card, adding safe neutral/unavailable fallback states, and extending the macOS XCTest suite with decode, lookup, fallback, source-contract, and resource-bundling coverage. Verification: `python3 scripts/test_dataset_processor.py` passed and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Extend the existing ScratchLab Coach UI with local Demo Mode playback
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLab/Resources/CoachInstructions/baby.json`, `ScratchLab/Resources/CoachInstructions/chirpflare.json`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the shared coach model carries demo-audio metadata, a shared local demo player can play/pause/replay and fail soft when audio is absent, the existing iOS/macOS coach surfaces expose Demo Mode controls plus simple original record/fader cue visuals without affecting session/take creation or practice/record flows, and `python3 scripts/test_dataset_processor.py` plus `./scripts/build.sh` pass
+  - Completed: root cause was that the new bundled coach layer exposed original instructional text but still had no in-app surface for locally bundled scratch demos, so the coach card could not add listen/replay guidance or show a safe disabled state when demo audio was absent. Fixed by extending `ScratchCoachInstruction` with `demoAudioFile` and default `demoAudioRole`, adding a shared `ScratchCoachDemoAudioPlayer` in capture core with play/pause/replay/stop plus safe missing-audio fallback, wiring the existing iOS and macOS coach cards to show Demo Mode controls and simple original record/crossfader cue visuals, stopping demo playback when the app backgrounds or the existing practice-beat/routine-record paths become active, and extending the regression suite with decode, fallback, playback-state, and source-contract coverage. Verification: `python3 scripts/test_dataset_processor.py` passed, the focused coach XCTest slice passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Extend the MakeMKV ingest tool to extract mapped multi-audio streams per camera angle
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/ingest_makemkv_scratch.py`, `scripts/test_dataset_processor.py`
+  - Done when: `scripts/dataset_processor/ingest_makemkv_scratch.py` probes every MKV audio stream with `ffprobe`, preserves one remuxed `angle_n_video.mkv` per source angle, extracts mapped `withBeat` / `noBeat` / `beatOnly` WAVs plus metadata sidecars, supports `--audio-map` and `--inspect-streams`, avoids the old `isolatedScratch` role, documents the stream-mapped MakeMKV workflow, and `./scripts/build.sh` passes
+  - Completed: root cause was that the first-pass MakeMKV ingester still flattened each MKV to one filename-derived beat/no-beat role, which is wrong for the real MakeMKV rips because each angle can carry multiple audio streams for `withBeat`, `noBeat`, and `beatOnly`. Fixed by refactoring `scripts/dataset_processor/ingest_makemkv_scratch.py` around one preserved video output plus one WAV/meta pair per mapped audio stream, adding `--audio-map` and `--inspect-streams`, keeping filename fallback only for single-stream files, removing any `isolatedScratch` output contract, extending `scripts/test_dataset_processor.py` with stream-level coverage, and updating the dataset docs plus root README to describe the inspect-then-ingest workflow. Verification: `python3 -m py_compile scripts/dataset_processor/ingest_makemkv_scratch.py scripts/test_dataset_processor.py` passed, `python3 scripts/test_dataset_processor.py` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Remove the obsolete Qbert DVD preparation tool and older chapter-split assumptions
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/prepare_dvd_scratch.py`, `scripts/test_dataset_processor.py`
+  - Done when: the repo no longer ships the superseded DVD/Qbert prep CLI, only the tied tests/docs for the old Chapter-1/Chapter-2 and multi-angle assumptions are removed, the shared dataset processor plus loose-clip labeler remain intact, and the requested Python/build verification passes
+  - Completed: root cause was that the earlier DVD/Qbert prep workflow was built around older HandBrake-era chapter and angle assumptions that are now superseded by cleaner MakeMKV rips. Fixed by deleting `scripts/dataset_processor/prepare_dvd_scratch.py`, removing only the DVD-specific tests from `scripts/test_dataset_processor.py`, and trimming the root/dataset-processor READMEs back to the general ScratchLab ZIP plus loose-clip workflows. Verification: `python3 -m py_compile scripts/dataset_processor/process_dataset.py scripts/dataset_processor/label_clip.py scripts/test_dataset_processor.py` passed, `python3 scripts/test_dataset_processor.py` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Build a first-pass MakeMKV offline scratch ingest tool for canonical dataset preparation
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/ingest_makemkv_scratch.py`, `scripts/test_dataset_processor.py`
+  - Done when: a repo-local CLI can scan cleaner MakeMKV scratch folders, derive scratch names and BPM only from folder names, classify beat versus no-beat files, assign deterministic camera angles, remux MKVs plus extract WAVs into canonical output folders with metadata/manifests, cover the ingest-only behavior in the Python test suite, and `./scripts/build.sh` passes
+  - Completed: root cause was that the earlier DVD prep flow had been removed after its HandBrake-era chapter assumptions were superseded, but the offline dataset pipeline still needed a MakeMKV-specific ingest path for cleaner rip sets. Fixed by narrowing `scripts/dataset_processor/ingest_makemkv_scratch.py` to a first-pass standard-library-first ffmpeg/ffprobe wrapper for folder parsing, beat versus no-beat filename classification, deterministic no-beat angle assignment, generated-output filtering, MKV copy plus WAV extraction, metadata sidecars, and folder manifests without BPM inference or later-phase role detection. Extended `scripts/test_dataset_processor.py` with focused MakeMKV ingest coverage and updated the dataset docs plus root README to describe the ingest-only scope. Verification: `python3 -m py_compile scripts/dataset_processor/ingest_makemkv_scratch.py scripts/test_dataset_processor.py` passed, `python3 scripts/test_dataset_processor.py` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add offline segmentation planning scaffolding for future dataset event extraction
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/SEGMENTATION_PLAN.md`
+  - Done when: the repo documents a future offline-only segmentation pass for accepted whole-take dataset items, explicitly includes placeholders for audio onset, beat-grid, and motion-peak segmentation plus manual review state and a per-segment `meta.json` schema, avoids any Swift app changes or destructive dataset rewrites, and `./scripts/build.sh` still passes
+  - Completed: root cause was that the offline dataset tooling now produces clean accepted whole-take items, but there was no in-repo plan for how future scratch-event segmentation should happen without prematurely implementing ML or changing the dataset contract. Fixed by adding `scripts/dataset_processor/SEGMENTATION_PLAN.md` as documentation-only scaffolding for a later offline segmenter, including placeholder strategies for audio onset, beat-grid, and motion-peak candidate generation, explicit manual review status, a proposed per-segment metadata schema, and non-destructive output rules that keep accepted whole takes intact. Updated the dataset processor docs and root README to point at the plan. Verification: `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Add a lightweight loose-clip labeling CLI for dataset sidecars
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/label_clip.py`, `scripts/test_dataset_processor.py`
+  - Done when: a repo-local CLI can write valid `.meta.json` sidecars for one loose clip or a batch directory without touching Swift app code, overwrite protection requires `--force`, batch labeling covers supported media files, null BPM is allowed for `noBeat`/`unknown`, regression coverage proves the new CLI paths, and `./scripts/build.sh` passes
+  - Completed: root cause was that the offline dataset processor could already ingest loose clips, but preparing those clips still required hand-writing every `.meta.json` file. Fixed by adding `scripts/dataset_processor/label_clip.py` as a standard-library-only helper for single-file and batch sidecar creation, reusing the shared loose-clip media and scratch-label contract, enforcing overwrite protection plus BPM/confidence validation, documenting the workflow, and extending `scripts/test_dataset_processor.py` with labeler coverage for single-file creation, overwrite refusal/force overwrite, invalid confidence rejection, batch labeling, and null-BPM no-beat metadata. Verification: `python3 -m py_compile scripts/dataset_processor/label_clip.py scripts/test_dataset_processor.py` passed, `python3 scripts/test_dataset_processor.py` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Build a terminal-only offline dataset processor for ScratchLab exports and loose labeled clips
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/dataset_processor/README.md`, `scripts/dataset_processor/process_dataset.py`, `scripts/test_dataset_processor.py`
+  - Done when: a repo-local CLI can validate/process ScratchLab export ZIPs plus loose audio/video clips with sidecar metadata into accepted/rejected dataset folders without touching app code, unlabeled or invalid loose clips are rejected safely, canonical item metadata and `manifest.json` are written, regression coverage proves the loose-clip and ScratchLab-ZIP paths, and `./scripts/build.sh` passes
+  - Completed: root cause was that ScratchLab still only had app-side export packaging plus the older session-create/rename/validate scripts, with no standalone offline pipeline for mixing shipped export ZIPs and manually labeled legacy clips into one training-ready dataset layout. Fixed by adding `scripts/dataset_processor/process_dataset.py`, a dedicated dataset-processor README, root README usage notes, and end-to-end tests that cover accepted loose clips, missing metadata rejection, unknown scratch-type rejection, ScratchLab ZIP validation, manifest writing, and canonical accepted output folders. Verification: `python3 -m py_compile scripts/dataset_processor/process_dataset.py scripts/test_dataset_processor.py` passed, `python3 scripts/test_dataset_processor.py` passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Fix the remaining removed-audio reference in the review demo seed script
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/seed_review_demo_data.sh`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the review/demo seeding script no longer references deleted Bert/reference bundled audio, any demo audio it needs is generated safely or sourced from assets that still exist, missing required generation steps fail clearly, focused regression coverage proves the script no longer depends on the removed audio path, and `./scripts/pre_release_check.sh` passes
+  - Completed: root cause was that `scripts/seed_review_demo_data.sh` still copied the deleted `ScratchLab/Resources/boom_bap_100bpm.wav`, so the developer-only review/demo seeding path could fail even though the shipped iOS/macOS/watchOS runtime had already been hardened against the removed Bert/reference assets. Fixed by replacing the hardcoded bundled WAV dependency with deterministic generated demo audio, adding a clear failure when audio generation does not produce an output file, and extending the regression suite to pin that the script no longer depends on the removed bundled asset path. Verification: `zsh -n scripts/seed_review_demo_data.sh` passed, the focused review-demo seed XCTest slice passed, and `./scripts/pre_release_check.sh` passed end-to-end on this machine.
+
+- [x] Audit removed Bert/training/audio asset impact and harden any remaining runtime references
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Audio/SampleManager.swift`, `ScratchLab/Audio/BackingTrackManager.swift`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Audio/ScratchAnalyzer.swift`, `ScratchLabDesktop/Services/MacScratchDetector.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: all remaining Bert/training/audio bundle references are traced, active shipped runtime impact is classified, legacy/dormant selectors no longer surface missing bundled assets, missing training/reference assets fail soft instead of crashing or pretending to load, focused regressions cover the missing-asset handling, and `./scripts/build.sh` passes
+  - Completed: root cause was that the removed Bert/reference audio data left legacy bundle lookups behind in dormant sample/track selectors and reference-analysis helpers, while the active analyzer paths still probed for the old training library at runtime. The audit showed no active shipped iOS/macOS/watchOS crash path from the removed assets: live practice on iOS and the macOS analyzer already fall back to default baby-scratch heuristics when the training library is absent, and the old `SampleManager`, `BackingTrackManager`, and `ScratchAnalyzer` flows are not routed from current shipped menus. Fixed the remaining risk by filtering the legacy sample/track selectors down to assets that actually exist in the bundle, adding safe empty-state messaging when none are bundled, exposing explicit missing-library discovery helpers for the active analyzer paths, and making `ScratchAnalyzer` fail closed with `resourceNotFound` instead of pretending it loaded an empty reference set. Verification: focused missing-asset regressions passed and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Run the final full-platform ScratchLab release audit from the repo workflow
+  - Files: `TASKS.md`, `DEV_LOG.md`
+  - Done when: `docs/codex_release_audit_prompt.md` is followed, `./scripts/pre_release_check.sh` passes, the highest-risk changed release surfaces are reviewed for blockers without broad redesign, and the audit result plus remaining risks are recorded
+  - Completed: root cause was that the current release candidate had a heavily dirty worktree after the last recorded successful build, so a green historical log was not enough to trust release readiness. Audited the current repo state by reading the in-repo release prompt/checklist, running `./scripts/pre_release_check.sh`, and spot-checking the release-facing changed surfaces around guided capture, session presentation, practice, watch relay, app identity, and main-menu navigation. No release-blocking issues were found in the audited live flows, so no app-code change was required for this pass. Remaining manual risks were recorded in `DEV_LOG.md`, including missing device smoke tests/screenshot review and legacy unreferenced audio-manager bundle lookups that no longer have source assets.
+
+- [x] Build the permanent ScratchLab release-audit workflow into the repo
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/release_audit_checklist.md`, `docs/codex_release_audit_prompt.md`, `scripts/pre_release_check.sh`
+  - Done when: the repo contains a durable release checklist, a reusable Codex audit prompt, a lightweight pre-release wrapper script, the script is executable, the README points future release work at that script, and the validation run passes
+  - Completed: root cause was that the release-audit flow only existed as ad hoc chat prompts and operator memory, so future Codex sessions had no in-repo, repeatable pre-submission workflow. Fixed by adding a permanent release audit checklist, a reusable Codex prompt document, a `pre_release_check.sh` wrapper that verifies the required audit files and runs `./scripts/build.sh` before printing manual smoke-test reminders and guardrails, and a README entry pointing release work at that script. Verification: `./scripts/pre_release_check.sh` passed end-to-end on this machine.
+
+- [x] Fix iOS guided-capture system-check overflow and safe-area navigation overlap
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the guided-capture shell respects iPhone safe areas, the back action sits in system navigation chrome instead of being covered by in-content UI, the system-check action stack stays reachable on smaller screens, focused regressions pass, and `./scripts/build.sh` passes
+  - Completed: root cause was that `CompanionCameraView` rendered its back/trailing controls inside the content stack while only padding for the raw safe-area inset, and `SystemCheckView` used a fixed vertical stack with no scroll container. On smaller iPhones that left the custom header competing with system navigation space and pushed lower system-check buttons off-screen. Fixed by moving the guided-capture back/trailing controls into toolbar-safe navigation chrome, increasing bottom safe-area padding in the shared capture shell, making `SystemCheckView` scrollable, and adding source-level regressions that pin the toolbar-safe navigation contract and scrollable system-check layout. Verification: the focused guided-capture source tests passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Revise the session cleanup policy so the UI stays capped without deleting real user work
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the shared session presentation keeps `Recent Sessions` capped at three, the macOS routine draft store prunes only stale empty or abandoned setup-only drafts, completed/exported/artifact-backed sessions remain accessible through `All Sessions`, focused retention regressions pass, and `./scripts/build.sh` passes
+  - Completed: root cause was that the previous retention patch treated sidebar clutter as a storage-retention problem and normalized the macOS routine draft store down to three total sessions. That was too destructive because completed, exported, or artifact-backed sessions could be deleted solely for exceeding the UI cap. Fixed by narrowing `SessionListPolicy` to a presentation-only recent-session limit, replacing total-count pruning in `RoutineSessionStore` with stale-draft pruning based on session age and meaningful activity, retaining sessions that have recorded take metrics, routine capture artifacts, or persisted upload jobs, and extending the regression suite to prove real sessions survive beyond the recent-session cap while stale empty drafts are still cleaned up. Verification: the focused session-retention test slice passed, and `./scripts/build.sh` passed end-to-end on this machine.
+
+- [x] Refactor the shared session list/sidebar presentation so macOS and iOS stop stacking unbounded session entries
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: session selection and listing routes through one shared `SessionListPresentationModel`, macOS shows a fixed `Active Session` section plus `Recent Sessions` and collapsed `All Sessions`, iOS setup shows `Current Session`, `Recent Sessions`, and collapsed `All Sessions` without the old single `Reuse Last Setup` path, opening a session updates shared last-opened ordering, setup/practice flows stop auto-creating new guided-capture sessions during setup-only transitions, and `./scripts/build.sh` passes
+  - Completed: root cause was that macOS rendered the routine draft store as a flat append-only list while iOS only exposed a one-off `Reuse Last Setup` shortcut, and neither surface shared a canonical notion of `active`, `recent`, or `all` sessions. The app also had no shared open-history tracking, so session ordering was inconsistent, and guided capture refreshed session identity during setup-only transitions instead of reserving new-session boundaries for explicit user action or the later recording path. Fixed by adding a shared `SessionListPresentationModel` plus `SessionOpenHistoryStore` in Capture Core, routing the macOS sidebar and iOS guided-capture setup through that shared presentation, pinning macOS to a fixed `Active Session` card with `Recent Sessions` and collapsed `All Sessions`, replacing iOS `Reuse Last Setup` with `Current Session`, `Recent Sessions`, and collapsed `All Sessions`, and updating guided capture so setup-only transitions stop auto-rolling new session IDs while the drill-change reset defers its new identity until recording begins. Verification: focused session-presentation regressions passed, the full `ScratchLabDesktop` XCTest plan passed, and `./scripts/build.sh` passed end-to-end.
+
+- [x] Expose the shared Practice beat controls in the macOS Practice UI
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the macOS Practice card visibly exposes `No Beat` / `Beat On`, visible beat-mode selection, BPM controls, and `Play Beat` / `Stop Beat` before starting Practice; every control uses the shared `PracticeBeatStore` instead of a new local audio path; practice beat playback stops on Practice tab exit, app inactive/background, and recording-flow start; source-level regression coverage pins the desktop store injection plus the visible Mac Practice control contract; and `./scripts/build.sh` passes
+  - Completed: root cause was that the macOS Practice flow does not use `PracticeModeView`; it uses a separate `MacAnalyzerView` Practice card that never consumed `PracticeBeatStore` or rendered any practice beat controls. iOS already had the shared store and visible beat buttons, but macOS had no store injection at the desktop app root and no visible beat section in the Practice card. Fixed by injecting the existing shared `PracticeBeatStore` into `ScratchLabDesktopApp`, adding a visible Practice beat section to the Mac Practice card with direct `No Beat` / `Beat On`, beat-mode buttons, BPM controls, and `Play Beat` / `Stop Beat`, and stopping the shared beat on Practice tab exit, app inactive, and recording-flow start. Verification: focused desktop Practice regressions passed, the new desktop source-contract tests passed, and `./scripts/build.sh` passed end-to-end.
+
+- [x] Fix the iOS Practice setup beat-style selector so alternate practice beat modes are actually selectable
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: the Scratch Practice setup screen on iOS exposes direct selectable beat-mode controls wired to the shared `PracticeBeatStore`, changing from `Click track` to other practice beat modes updates the selected state without requiring a new local audio path, focused Practice regressions cover mode switching plus the visible setup control contract, and `./scripts/build.sh` passes
+  - Completed: root cause was that the shared practice beat engine and store were present, but the setup UI still used an iOS `Menu` for beat-style selection. In live use that menu rendered but did not reliably invoke `practiceBeatStore.selectBeatMode(...)`, so the user could start the click track but could not switch to `Boom Bap Trainer`, `Minimal Funk`, or `Battle Loop`. Fixed by replacing the setup-card menu with direct selectable beat-mode buttons bound to the shared store, keeping the existing playback/BPM path unchanged, adding a regression that mode changes restart the shared engine with the newly selected mode, and extending the source-level setup-overlay contract test to cover the direct mode controls. Verification: focused Practice tests passed, `./scripts/build.sh` passed end-to-end, and a rebuilt iPhone 17 simulator run confirmed `Click track` switched to `Boom Bap Trainer`, `Play Beat` toggled to `Stop Beat`, and `No Beat` immediately disabled playback.
+
+- [x] Add optional shared beat/metronome playback to the Scratch Practice tab without creating capture/export artifacts
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLab/Views/LevelSelectView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: Scratch Practice can play optional beat guidance using the existing shared timing engine without creating takes, exporting, or starting capture sessions; Practice exposes beat on/off, BPM, no-beat, and play/stop controls; beat playback stops on Practice exit, app background/inactive, and record-flow start; shared scratch/BPM plus compatible beat mode can prefill Record without overriding stored record defaults; and `./scripts/build.sh` passes
+  - Completed: root cause was that Scratch Practice still used an isolated live-audio/backing-track path instead of a small shared beat state layered on the existing record-side click/beat engine. That meant Practice could not reuse Record's BPM defaults/range and beat engine, had no single lifecycle owner to stop practice playback on tab/app/record transitions, and could not cleanly carry the selected shared timing settings into Record. Fixed by adding a shared `PracticeBeatStore` in Capture Core backed by `ScratchLabBeatEngine` and `CaptureClickTrackDefaults`, wiring it through the app environment, using it from the Practice setup UI and guided-drill timing, stopping it on Practice/app/record lifecycle changes, and letting Record prefill from Practice only when there are no stored Record defaults. Test results: the six focused Practice/Record regressions passed and `./scripts/build.sh` passed end-to-end.
+
+- [x] Fix confirmed live export blockers for calibration validation and selected-take timing metadata resolution
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: calibration/no-click local exports no longer fail the shared `This session has inconsistent metadata.` gate when the persisted sidecar intentionally carries `bpm = null` and `clickStartHostTime = null`, exported `session_metadata.json` and `export_metadata.json` resolve click/timing fields from the selected take's persisted sidecar instead of a stale/default session config, mixed compatible sessions keep the selected take's timing metadata instead of flattening it to defaults, the capture-pipeline fixture guard is updated to the new resolver shape, and `./scripts/build.sh` passes
+  - Completed: root cause was that local export converted calibration `bpm = nil` into `take.bpm = 0`, which the shared canonical validator then rejected as out-of-range, and the shared metadata resolver still allowed session/export manifests to inherit timing fields from the first compatible sidecar or a mismatched draft config instead of the selected take's persisted sidecar. Fixed by keeping manifest BPM nullable for calibration, deriving canonical BPM fallback only for the internal archive path, preferring the selected take sidecar in the shared resolver, rejecting mismatched preferred configs, and reusing the validated selected-sidecar timing/config source for both `session_metadata.json` and `export_metadata.json`. Test results: the three focused export regressions passed, the full `ScratchLabDesktop` core export suite passed, and `./scripts/build.sh` passed end-to-end. Verified archive metadata values under test are calibration `captureMode = calibration_no_click`, `beatEngineMode = silent`, `bpm = null`, `clickEnabled = false`, `beatEnabled = false`, `countInBeats = 4`, `beatsPerBar = 4`, `clickStartHostTime = null`, `recordingStartHostTime = 456`, `clickVersion = scratchlab-click-v1`, `engineVersion = scratchlab-beat-engine-v1`; timed selected-take `captureMode = timed_click`, `beatEngineMode = click_track`, `bpm = 95`, `clickEnabled = true`, `beatEnabled = false`, `countInBeats = 4`, `beatsPerBar = 4`, `clickStartHostTime = 55555`, `recordingStartHostTime = 66666`, `clickVersion = scratchlab-click-v1`, `engineVersion = scratchlab-beat-engine-v1`. Manual live macOS capture verification remains pending because the camera/audio/watch capture path is not available in this environment.
+
+- [x] Add optional generated practice beats and dataset-safe export mix options on top of the shared click-track capture flow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `docs/metadata_schema.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/ClickTrackEngine.swift`, `ScratchLab/Services/ScratchLabBeatEngine.swift`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the existing click engine remains the default timed-capture timing source, optional generated practice beats are available without external audio assets, calibration stays silent, export mix selection flows through the existing shared metadata resolver and archive path, regression coverage pins beat/export metadata and stems output, and `./scripts/build.sh` passes
+
+- [x] Scope routine export to the selected take's metadata group
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: exporting a local routine capture uses the selected take's compatible metadata group instead of every sidecar sharing the mutable session ID, mixed baby/stab takes no longer trigger a generic metadata mismatch when exporting the selected stab take, regression coverage proves only the matching take group is exported, and `scripts/build.sh` passes
+
+- [x] Fix macOS Save ZIP when the chosen destination matches the generated archive path
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: `Save ZIP...` no longer deletes the generated archive when the chosen destination resolves to the same file location, the save panel is explicitly foregrounded before presentation, regression coverage proves the matching-destination save path succeeds, and `scripts/build.sh` passes
+
+- [x] Restore scratch-aware routine export validation for selected captures
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureReliability.swift`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: routine and guided exports validate and package against the selected scratch type instead of a hard-coded baby-only contract, legacy canonical export paths stay baby-only where required, regression coverage proves a non-baby scratch like `stab` exports cleanly, and `scripts/build.sh` passes
+
+- [x] Restore scratch-specific default speeds in Formula Lab
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/Scratch.swift`, `ScratchLab/Formula/ScratchFormulaCatalog.swift`, `ScratchLab/Views/FormulaPlaygroundView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: Formula Lab derives each scratch's default beat length from the shared scratch timing model instead of flattening every symbol to `1.0`, the supported-symbols UI makes those defaults visible, regression coverage proves the catalog and renderer keep distinct timings for different scratches, and `scripts/build.sh` passes
+
+- [x] Restore scratch-specific timed-capture BPM options in session setup
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: timed capture BPM presets come from the selected scratch type's shared `trainingBPMList` instead of one global preset list, both iOS and macOS session setup use the shared source, the no-scratch fallback still stays safe, and `scripts/build.sh` passes
+
+- [x] Fix the timed-capture record-start crash in the shared click-track engine
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/ClickTrackEngine.swift`
+  - Done when: starting timed capture no longer aborts inside `AVAudioPlayerNode.scheduleBuffer(...)`, the shared click engine uses an explicit mono player format plus scheduled sample timing for beat buffers, and desktop build/test plus `scripts/build.sh` verification pass
+
+- [x] Build internal click-track capture into shared timed capture flow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `docs/metadata_schema.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/ClickTrackEngine.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: timed captures use a deterministic internal click track with a 4-beat count-in, calibration captures remain silent, click/capture timing metadata persists through sidecars and export via the shared resolver, iOS and macOS setup flows expose the shared mode/BPM controls, regression coverage pins the new metadata behavior, and verification confirms the desktop test plan plus watch fallback build while the repo build script is blocked only by the local Xcode iOS platform component
+
+- [x] Polish platform-safe session setup UX and remove any remaining metadata drift
+  - Files: `TASKS.md`, `DEV_LOG.md`, touched iOS/macOS views, shared model/view-model files, relevant docs
+  - Done when: duplicate labels, stale field names, platform-only mismatches, dead controls, and misleading copy are removed from the session setup flow, macOS no longer feels like a reduced shell for capture metadata, and `scripts/build.sh` passes
+
+
+- [x] Add regression coverage for shared session-config integrity
+  - Files: `TASKS.md`, `DEV_LOG.md`, existing test/build script locations, any new lightweight test files, related docs if needed
+  - Done when: automated checks cover required session-config fields, platform parity for the shared model, and fail-closed behavior when required metadata is missing or invalid, and `scripts/build.sh` passes
+
+
+- [x] Carry shared session metadata through validation and export
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/SessionExportCoordinator.swift`, related shared files, any validation/export docs touched
+  - Done when: exported manifests, metadata payloads, and any validation path use the same canonical session metadata fields and values from the shared model without platform drift, and `scripts/build.sh` passes
+
+
+- [x] Persist shared session metadata into local sidecars and session storage
+  - Files: `TASKS.md`, `DEV_LOG.md`, shared capture/storage files, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, related model files
+  - Done when: the canonical session metadata is written into local sidecars or session storage at capture start and remains associated with each take/session consistently across iOS and macOS, and `scripts/build.sh` passes
+
+
+- [x] Enforce required session configuration before capture can start on every platform
+  - Files: `TASKS.md`, `DEV_LOG.md`, shared config/view-model files, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, relevant services
+  - Done when: capture cannot start from iOS or macOS with missing required metadata, validation errors are human-readable, dead-end states are removed, and `scripts/build.sh` passes
+
+
+- [x] Bring macOS session setup to feature parity for core capture options
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, related shared model/view-model files
+  - Done when: the macOS app exposes the same core capture metadata controls as iOS for performer name, BPM, scratch type, drill/mode, take duration, take count, handedness, and notes where those fields are supported on iOS, the UI is clear and production-safe, and `scripts/build.sh` passes
+
+- [x] Create a shared session-setup view model used by both iOS and macOS
+  - Files: `TASKS.md`, `DEV_LOG.md`, shared view-model/service files, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: iOS and macOS session setup flows bind to the same shared state and validation logic rather than separate platform-specific metadata state, and `scripts/build.sh` passes
+
+
+- [x] Audit and unify shared session metadata across iOS and macOS
+
+  - Files: `TASKS.md`, `DEV_LOG.md`, `AI_CONTEXT.md`, `ScratchLab/Models/`, `ScratchLabDesktop/`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+
+  - Done when: every user-facing session field that currently exists on either platform is inventoried, the canonical shared metadata shape is documented in-repo, duplicate or divergent field definitions are removed or explicitly mapped, and `scripts/build.sh` passes
+
+- [x] Introduce a shared `CaptureSessionConfig` model as the single source of truth
+
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift` or new shared model file under `ScratchLab/Models/`, related shared services/view models, any touched project files
+
+  - Done when: iOS and macOS both compile against one shared session-config model carrying performer name, BPM, scratch type, drill/mode, take duration, take count, handedness, notes, session ID, and timestamps, and `scripts/build.sh` passes
+
+- [x] Add strongly typed shared enums for scratch metadata instead of free-text fields
+
+  - Files: `TASKS.md`, `DEV_LOG.md`, shared model files under `ScratchLab/Models/`, any touched UI/view-model files
+
+  - Done when: scratch type, drill/mode, and handedness use shared typed enums with stable persistence/export values instead of ad hoc strings where applicable, existing saved/exported data remains readable or is migrated safely, and `scripts/build.sh` passes
+
+Work top to bottom. Only take the first unchecked task that is implementation-ready.
+If a task is blocked, ambiguous, too large, or points at a file that does not exist, stop and explain the blocker.
+
+## User Requested App Store Identity Fixes
+- [x] Restore automatic signing team settings across ScratchLab app targets
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the iOS, macOS, and watchOS app targets all use `CODE_SIGN_STYLE = Automatic`, every shipped app target Debug/Release config resolves the same `DEVELOPMENT_TEAM`, bundle identifiers remain unchanged, no entitlements/capabilities are removed, `xcodebuild -showBuildSettings -project ScratchLab.xcodeproj -scheme ScratchLabDesktop` resolves the team correctly, the `ScratchLab` target resolves the same team through a simulator-target fallback when the local Xcode install cannot satisfy the plain scheme destination, and `./scripts/build.sh` is rerun with any failure clearly identified as related or unrelated
+
+- [x] Audit App Store Review compliance across iOS, macOS, and watchOS
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Info.plist`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Info.plist`, `ScratchLabDesktop/ScratchLabDesktop.entitlements`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `docs/app_review_mac_release_checklist.md`, `docs/app_review_mac_screenshot_plan.md`
+  - Done when: the review-critical first-run and relaunch session flow are audited across platforms, macOS export no longer depends on the Downloads entitlement, release builds no longer expose the staging inspector UI, privacy strings match visible functionality and unused permission keys are removed, screenshot guidance still captures real UI states, regression coverage proves the new-session, export, and performer-monitor entitlement paths, `./scripts/build.sh` passes, the explicit macOS Release build passes, and the iOS Release archive passes
+
+- [x] Fix macOS File > New Session App Review retry path
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: `File > New Session` routes through the same shared routine-session creation action as the toolbar/sidebar/empty-state buttons, successful creation logs `NEW_SESSION_CREATED: <uuid>`, the new draft persists and becomes selected immediately, the main ScratchLab window is shown, the macOS workspace is forced to Routine Capture so the session list/detail visibly update, creation failure returns no draft and publishes the existing visible error banner, regression coverage proves the shared action success hook runs from the created session, `scripts/build.sh` passes, and the explicit macOS Release build passes
+
+- [x] Retake macOS App Review screenshots with no-decks-safe real UI states
+  - Files: `TASKS.md`, `DEV_LOG.md`, `build/app-review-mac-screenshots/final/`
+  - Done when: the final seven macOS App Review screenshots are recaptured from the real ScratchLab macOS app window, the recording screenshot shows an active real recording state, the result screenshot shows a completed/export-ready take with export/share controls, the stage/camera shots use visible desk/controller objects instead of ceiling-heavy empty space, the empty-state screenshot is captured last from a clean draft store, and `scripts/build.sh` plus the explicit macOS Release build pass
+
+- [x] Re-verify no-decks macOS App Review screenshot capture flow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/app_review_mac_screenshot_plan.md`, `docs/app_review_mac_release_checklist.md`, `scripts/capture_mac_review_window.sh`
+  - Done when: the Mac screenshot plan contains the `No-decks review capture setup` guidance, the capture script pauses before `04-stage-and-audio-routing.png` and `06-recording-in-progress.png` with desk-object framing instructions, the final screenshot checklist verifies intentional camera framing for `04`, `06`, and `07`, the final App Store screenshot order remains unchanged, no fake hardware/UI/marketing overlay is introduced, `./scripts/build.sh` passes, and the explicit macOS Release build passes
+
+- [x] Upload fresh macOS App Review build 15 to App Store Connect
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Info.plist`, `ScratchLabDesktop/Info.plist`, `ScratchLabWatch/Info.plist`
+  - Done when: the shared build number is bumped from `14` to `15`, `./scripts/build.sh` passes, the explicit macOS Release build passes, `ScratchLabDesktop` archives to `build/ScratchLabDesktop-TestFlight-v15.xcarchive`, and Xcode uploads the macOS package to App Store Connect successfully
+
+- [x] Add no-decks macOS App Review screenshot capture guidance
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/app_review_mac_screenshot_plan.md`, `docs/app_review_mac_release_checklist.md`, `scripts/capture_mac_review_window.sh`
+  - Done when: the Mac screenshot docs explain a review-safe desk/table setup without fake hardware, the release checklist verifies intentional camera framing for `04-stage-and-audio-routing.png`, `06-recording-in-progress.png`, and `07-captured-result-or-export-ready.png`, the capture helper pauses before `04` and `06` with no-decks desk-object guidance, the final screenshot order remains unchanged, and `scripts/build.sh` plus the Release macOS build pass
+
+- [x] Add proof-of-action macOS App Review screenshots and tighten review capture flow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/ScratchLabDesktop.entitlements`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `scripts/seed_review_demo_data.sh`, `scripts/capture_mac_review_window.sh`, `docs/app_review_mac_release_checklist.md`, `docs/app_review_mac_screenshot_plan.md`, `build/app-review-mac-screenshots/final/`
+  - Done when: the Mac screenshot set contains real app UI for workspace, new-session selection, metadata setup, active recording, export-ready capture result, stage/deck guidance, and first-launch empty state in the final recommended order; the empty state is last only; seeded review data loads a selected real session with completed local capture/export-ready state; screenshot capture fails clearly instead of producing blank/stale files; and `scripts/build.sh` passes
+
+- [x] Fix the macOS New-session review path and replace promotional Mac screenshots with real app UI
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `scripts/seed_review_demo_data.sh`, `scripts/capture_mac_review_window.sh`, `docs/app_review_mac_release_checklist.md`, `docs/app_review_mac_screenshot_plan.md`, `build/app-review-mac-screenshots/final/`
+  - Done when: every visible macOS `New` entry point uses one shared create-session path with immediate selection, visible failure alerts, and UUID-based draft IDs on a clean install; the first-launch empty state exposes a working `New Session` action; reviewer-safe Mac screenshot assets and capture guidance exist in-repo; and `scripts/build.sh` passes
+
+- [x] Harden the macOS New Session create path for App Review retry
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: `File > New Session` and the other visible macOS entry points still converge on one shared routine-session draft factory, successful creation prints `NEW_SESSION_CREATED: <uuid>`, creation failures surface as an in-window error banner instead of a silent failure, UUID-backed drafts persist and become selected immediately on fresh installs and reloads, and `scripts/build.sh` passes
+
+- [x] Add a macOS main-window reopen command and verify App Review entitlements
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`
+  - Done when: the app exposes an explicit Window-menu command that reopens the main ScratchLab window after it is closed, the main window is addressable by a stable scene id instead of relying on default SwiftUI window recreation behavior, `scripts/build.sh` passes, and the App Review follow-up clearly notes that `com.apple.security.files.downloads.read-write` backs `Save ZIP to Downloads` while `com.apple.security.network.server` backs the performer monitor listener/Bonjour sharing flow so those entitlements are only removed if the features are removed
+
+- [x] Add first cloud upload pipeline for completed ScratchLab sessions
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/session_upload_api_v1.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLab/Services/SessionUploadManager.swift`, `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: completed guided-capture and macOS routine sessions can be validated, zipped, queued, uploaded from a file URL through a background-capable presigned PUT flow, confirmed back to the backend before they are marked cloud-backed, the UI only shows human-readable upload state and retry messaging, the backend contract is documented in-repo, and `scripts/build.sh` passes
+
+- [x] Add ZIP export and native share flow for completed ScratchLab sessions
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLab/Services/SessionSharePresenter.swift`, `ScratchLab/ThirdParty/ZIPFoundation/`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: completed guided-capture sessions can be validated, staged, zipped, and shared as a single archive from iPhone/iPad and macOS without changing the existing session storage format, the UI only shows human-readable export/share status, temporary archives clean themselves up after sharing, and `scripts/build.sh` passes
+
+- [x] Add a guided capture flow for repeatable dataset acquisition
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Views/CompanionCameraView.swift`
+  - Done when: the iPhone capture flow moves through session setup, system check, focused setup fixes, capture, review, and next-take actions from one state-driven SwiftUI surface; session defaults and calibration choices persist for reuse; keep/retry/discard actions operate on the existing local recording sidecars instead of changing the storage format; and `scripts/build.sh` passes
+
+- [x] Add first-run quick start onboarding and reusable capture help
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Views/PracticeModeView.swift`
+  - Done when: `ContentView` shows a three-step quick start before the main flow whenever the stored quick-start version is missing or stale, finishing or skipping persists `hasSeenQuickStart` and the current quick-start version, guided capture exposes a reusable capture help sheet from the top bar while idle, that help can relaunch the quick start on demand, and `scripts/build.sh` passes
+
+- [x] Upload fresh build 11 of the current ScratchLab apps to App Store Connect
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Resources/boom_bap_100bpm.wav`
+  - Done when: the shared `CURRENT_PROJECT_VERSION` is bumped past the already-uploaded build `10`, the missing bundled `boom_bap_100bpm.wav` backing track is restored so iOS release builds complete, `scripts/build.sh` passes, the iOS archive embeds `ScratchLabWatch` with build `11`, and the iOS plus macOS archives for build `11` upload successfully to App Store Connect
+
+- [x] Upload fresh build 12 of the current ScratchLab apps to App Store Connect
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the shared `CURRENT_PROJECT_VERSION` is bumped past the already-uploaded build `11`, `scripts/build.sh` passes, the iOS archive embeds `ScratchLabWatch` with build `12`, and the iOS plus macOS archives for build `12` upload successfully to App Store Connect
+
+- [x] Trim locked-fit macOS hand-pose Vision load
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the macOS analyzer reuses the rig tracking region for hand-pose Vision requests, locked Deck Calibration sessions poll hand pose more slowly than live-fit sessions, a post-build macOS sample shows the locked-fit hand-pose hotspot drop versus the earlier baseline, and `scripts/build.sh` passes
+
+- [x] Slow macOS rig detection once Deck Calibration is locked
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/DJRigLayoutDetector.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: locked-fit sessions reuse cached rig layout for longer before rerunning rectangle detection, unlocking fit triggers a fast refresh on the next video frame, and `scripts/build.sh` passes
+
+- [x] Reduce macOS analyzer lag from unnecessary live publishing
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the macOS analyzer only JPEG-encodes performer-monitor frames while a device is actually connected, repeated identical rig and hand state stops republishing into SwiftUI, live audio meter UI updates are rate-limited to a glanceable cadence, and `scripts/build.sh` passes
+
+- [x] Normalize the built-in mic label and remove watchOS from the iPhone upload bundle
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: built-in iPhone mic routes display as `Microphone` instead of raw system text like `MicrophoneBuiltIn`, the `ScratchLab` iOS target no longer embeds or depends on `ScratchLabWatch` for archive/upload, `scripts/build.sh` passes, and a local iOS archive contains no embedded `Watch/` bundle
+
+- [x] Put the ScratchLab logo back into the app launch flow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Info.plist`, `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Assets.xcassets/ScratchLabLogo.imageset/`
+  - Done when: the iOS target ships a normal `ScratchLabLogo` image asset derived from the app icon artwork, the static launch screen references that logo, the custom splash animation visibly shows the logo before the main menu appears, and `scripts/build.sh` passes
+
+- [x] Remove the old concatenated macOS target name before App Store submission
+  - Files: `TASKS.md`, `DEV_LOG.md`, `AI_CONTEXT.md`, `AGENTS.md`, `README.md`, `docs/brand_kit.md`, `scripts/build.sh`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLabDesktop.xcscheme`, `ScratchLabDesktop/`
+  - Done when: repo docs, scripts, project files, schemes, and the macOS source folder all use `ScratchLabDesktop` for the internal desktop target name, no tracked source file text still uses the older concatenated macOS token, the built macOS product still ships as `ScratchLab` with bundle identifier `com.machelpnz.scratchlab`, and `scripts/build.sh` passes
+
+- [x] Restore the macOS target and align ScratchLab identity for one App Store Connect app
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLabDesktop.xcscheme`
+  - Done when: the Xcode project again exposes real `ScratchLabDesktop` and `ScratchLabWatch` targets, the macOS build product ships as `ScratchLab` with bundle identifier `com.machelpnz.scratchlab` so it can be added as the macOS platform on the existing iOS app record, the watch app re-embeds into the iOS build, and `scripts/build.sh` passes
+
+## Strategic Improvements
+- [x] Move local recording sidecar creation into shared Capture Core helpers
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the iPhone companion recorder and the Mac routine recorder both derive their initial sidecar payload, including `takeID`, app-local take number, in-progress status, and paired media/sidecar file names, from shared Capture Core helpers instead of separate per-app constructors, the capture spec notes the shared creation path, and `scripts/build.sh` passes
+
+- [x] Seed Capture Core with a shared local-recording sidecar schema
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the iPhone companion recorder and the Mac routine recorder both emit the same shared `scratchlab_local_recording_sidecar_v1` Capture Core model, the capture spec documents that shared schema, and `scripts/build.sh` passes
+
+- [x] Move app-local recording naming into shared Capture Core helpers
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the iPhone companion recorder and the Mac routine recorder derive `sessionID`, `takeID`, padded take numbers, and next app-local take numbers from shared Capture Core helpers instead of separate per-app implementations, the capture spec notes the shared naming path, and `scripts/build.sh` passes
+
+- [x] Move local recording file-pair creation into shared Capture Core helpers
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the iPhone companion recorder and the Mac routine recorder both derive their same-basename `.mov` plus `.json` URLs and fail-closed existence preflight from shared Capture Core helpers instead of separate per-app implementations, the capture spec notes that shared pairing rule, and `scripts/build.sh` passes
+
+- [x] Move local recording sidecar finalization into shared Capture Core helpers
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the iPhone companion recorder and the Mac routine recorder both derive final sidecar fields like `endedAt`, completion status, error description, and fallback sidecar URL from shared Capture Core helpers instead of separate per-app implementations, the capture spec notes the shared completion path, and `scripts/build.sh` passes
+
+## Audit Immediate Fixes
+- [x] Reject raw-path boundary escapes in kept take logs during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/create_session.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `create_session.py` refuses to keep an existing take log row whose non-empty raw source path is absolute or escapes the session `raw/` folder via `..` during reruns, the fixture suite covers both fail-closed cases, and `scripts/build.sh` passes
+
+- [x] Reject invalid source-file extensions in kept take logs during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/create_session.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `create_session.py` refuses to keep an existing take log row whose non-empty raw source path uses the wrong file extension for its source type during reruns, the fixture suite covers that fail-closed case, and `scripts/build.sh` passes
+
+- [x] Reject duplicate take identities in kept take logs during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/create_session.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `create_session.py` refuses to keep an existing take log that repeats the same `(bpm, take_number)` pair during reruns, the fixture suite covers that fail-closed case, and `scripts/build.sh` passes
+
+- [x] Validate kept take-log rows semantically during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/create_session.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `create_session.py` refuses to keep an existing take log row with an invalid BPM, invalid take number, or blank required slate/sync boolean during reruns, the fixture suite covers those fail-closed cases, and `scripts/build.sh` passes
+
+- [x] Reject semantically empty kept take logs during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/create_session.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `create_session.py` still accepts the canonical empty template take log on rerun but refuses to keep an existing take log that contains only blank rows or whitespace without any real take entries, the fixture suite covers that fail-closed path, and `scripts/build.sh` passes
+
+- [x] Add a fail-closed regression test for non-object kept manifests during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite proves rerunning `create_session.py` with an existing manifest whose top-level JSON is not an object fails with the manifest-shape error and leaves both scaffold files untouched, and `scripts/build.sh` passes
+
+- [x] Add a fail-closed regression test for invalid kept take logs during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite proves rerunning `create_session.py` with an existing invalid take log fails with the take-log validation error and leaves both scaffold files untouched, and `scripts/build.sh` passes
+
+- [x] Add a fail-closed regression test for corrupt kept manifests during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite proves rerunning `create_session.py` with an existing invalid-JSON manifest fails with the manifest-read error and leaves both scaffold files untouched, and `scripts/build.sh` passes
+
+- [x] Add a rerun-idempotence regression test for create-session scaffolding
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite proves rerunning `create_session.py` against a matching existing session leaves both scaffold files byte-for-byte unchanged while still reporting them as kept, and `scripts/build.sh` passes
+
+- [x] Add an end-to-end regression test for create-session take-log scaffolding
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite proves `create_session.py` copies `templates/take_log_template.csv` exactly into the new session on first scaffold, and `scripts/build.sh` passes
+
+- [x] Add an end-to-end regression test for create-session manifest scaffolding
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite proves `create_session.py` writes a manifest equal to `default_manifest(...)` after filling in the requested DJ name, DJ token, date, and session path, and `scripts/build.sh` passes
+
+- [x] Add a regression test that keeps the session manifest scaffold template aligned with the live default manifest
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite asserts `templates/session_manifest_template.json` still matches the exact payload returned by `default_manifest()`, and `scripts/build.sh` passes
+
+- [x] Add a regression test that keeps the take-log template aligned with the live parser columns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite asserts `templates/take_log_template.csv` still contains exactly the current `TAKE_LOG_COLUMNS` header and no stray sample rows, and `scripts/build.sh` passes
+
+- [x] Add a regression test that keeps the example manifest template aligned with the current take schema
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/test_capture_pipeline.py`
+  - Done when: the capture-pipeline fixture suite asserts the example manifest template derives the exact expected `files` and `artifacts` source sets from each take's camera/audio/watch selections and keeps each artifact path aligned with its matching file path, and `scripts/build.sh` passes
+
+- [x] Update the example session manifest template to the current take schema
+  - Files: `TASKS.md`, `DEV_LOG.md`, `templates/session_manifest_example.json`
+  - Done when: the example manifest template shows `files` and `artifacts` together for every example take so it matches the current validated manifest shape, and `scripts/build.sh` passes
+
+- [x] Refuse to keep mismatched session scaffolding during create-session reruns
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/pilot_session_runbook.md`, `scripts/create_session.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `create_session.py` only keeps an existing manifest when its DJ/date/session-root fields already match the requested session, refuses to keep a take log without that matching manifest, the fixture suite covers both mismatched-manifest and orphaned-take-log reruns, the docs describe the stricter keep-existing rule, and `scripts/build.sh` passes
+
+- [x] Restrict take-log raw source paths to the session raw folder
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/naming_convention.md`, `docs/pilot_session_runbook.md`, `scripts/capture_pipeline_common.py`, `scripts/rename_files.py`, `scripts/test_capture_pipeline.py`, `scripts/validate_session.py`
+  - Done when: absolute `raw_*` paths and `..` escapes are rejected, both rename and validate report those path violations cleanly, the fixture suite covers an absolute-path rename failure and a parent-escape validation failure, the docs state the session-local raw-path rule explicitly, and `scripts/build.sh` passes
+
+- [x] Validate renamed watch CSV files against the real exported motion schema
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/metadata_schema.md`, `scripts/capture_pipeline_common.py`, `scripts/fixtures/capture_pipeline/watch_stub.csv`, `scripts/test_capture_pipeline.py`, `scripts/validate_session.py`
+  - Done when: watch CSV probing rejects files that do not use the expected exported 18-column header or that contain too few non-empty motion rows, validation reports those probe failures cleanly instead of crashing, the fixture suite covers malformed-header and too-few-samples cases, the watch stub matches the real exported schema, and `scripts/build.sh` passes
+
+- [x] Enforce primary capture duration sanity during session validation
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/metadata_schema.md`, `scripts/test_capture_pipeline.py`, `scripts/validate_session.py`
+  - Done when: validation fails when primary `camA` or `serato` captures are too short or when their durations diverge enough to suggest a truncated or mismatched take, the fixture suite covers short-duration and duration-drift cases, the docs explain the new validation rule, and `scripts/build.sh` passes
+
+- [x] Require manifest file sets to match the renamed take sources and paths exactly
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/metadata_schema.md`, `scripts/test_capture_pipeline.py`, `scripts/validate_session.py`
+  - Done when: validation fails if a take's `files` object is missing any renamed source entry, includes unexpected source keys, or points at a stale canonical path, the fixture suite covers missing-source and stale-path cases, the metadata schema documents the exact-match rule, and `scripts/build.sh` passes
+
+- [x] Require manifest artifact sets to match the renamed take sources exactly
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/metadata_schema.md`, `scripts/test_capture_pipeline.py`, `scripts/validate_session.py`
+  - Done when: validation fails if a take's `artifacts` object is missing any renamed source entry or includes unexpected source keys, the fixture suite covers a missing-artifact case, the metadata schema explains the exact-match rule, and `scripts/build.sh` passes
+
+- [x] Roll back copied renamed files when a rename run fails
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/naming_convention.md`, `docs/pilot_session_runbook.md`, `scripts/fixtures/capture_pipeline/partial_failure_take_log.csv`, `scripts/rename_files.py`, `scripts/test_capture_pipeline.py`
+  - Done when: `rename_files.py` removes any renamed files copied during the current run whenever any take row fails, the capture-pipeline fixtures cover that rollback path, the operator docs describe the stronger fail-closed behavior, and `scripts/build.sh` passes
+
+- [x] Persist app-local recording sidecars before capture starts
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/capture_spec_v1.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the iPhone companion recorder and the Mac routine recorder both write the shared sidecar to disk before `AVCaptureMovieFileOutput` starts, the capture spec states that the in-progress sidecar is persisted before movie capture begins, and `scripts/build.sh` passes
+
+- [x] Make capture-pipeline rename fail closed and keep manifest writes atomic
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/capture_pipeline_common.py`, `scripts/rename_files.py`
+  - Done when: `rename_files.py` leaves the existing manifest untouched on any rename error, `session_manifest.json` writes atomically, BPM summary files are only emitted after a clean run, and `scripts/build.sh` passes
+
+- [x] Require the session manifest during validation
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/pilot_session_runbook.md`, `scripts/validate_session.py`
+  - Done when: validation treats a missing `session_manifest.json` as a failure instead of a warning, the operator docs match that rule, and `scripts/build.sh` passes
+
+- [x] Record artifact hashes and file sizes in the capture manifest
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/metadata_schema.md`, `scripts/capture_pipeline_common.py`, `scripts/rename_files.py`, `scripts/validate_session.py`
+  - Done when: renamed take records include stable per-file hashes and byte sizes, validation checks those fields against the on-disk artifacts, and `scripts/build.sh` passes
+
+- [x] Record probed media metadata in the capture manifest
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/metadata_schema.md`, `scripts/capture_pipeline_common.py`, `scripts/rename_files.py`, `scripts/validate_session.py`
+  - Done when: renamed take records include source-appropriate media facts such as duration or sample counts, validation checks those fields, and `scripts/build.sh` passes
+
+- [x] Fail rename when an expected target file already exists
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/naming_convention.md`, `docs/pilot_session_runbook.md`, `scripts/rename_files.py`
+  - Done when: `rename_files.py` stops with a conflict instead of silently trusting a pre-existing renamed target, the docs describe that fail-closed behavior, and `scripts/build.sh` passes
+
+- [x] Fix iPhone audio analysis to use the real input sample rate and channel layout
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Audio/AudioEngine.swift`
+  - Done when: the iPhone analyzer derives its frequency features from the real input sample rate, handles multi-channel input safely, and `scripts/build.sh` passes
+
+- [x] Timestamp watch motion capture from Core Motion timing and record jitter metadata
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Models/WatchMotionCapture.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`
+  - Done when: watch samples no longer depend on wall-clock elapsed time alone, capture metadata records timing-health facts, and `scripts/build.sh` passes
+
+- [x] Require explicit take-log booleans for slate and sync clap fields
+  - Files: `TASKS.md`, `DEV_LOG.md`, `docs/metadata_schema.md`, `docs/pilot_session_runbook.md`, `scripts/capture_pipeline_common.py`, `scripts/rename_files.py`, `scripts/validate_session.py`, `templates/take_log_template.csv`
+  - Done when: blank `verbal_slate_used` or `sync_clap_used` values fail validation instead of defaulting to `true`, the docs explain the stricter requirement, and `scripts/build.sh` passes
+
+- [x] Tie app-captured recordings to explicit session and take sidecars
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `docs/capture_spec_v1.md`
+  - Done when: app-created recordings carry explicit session/take metadata instead of free-form timestamp names, and `scripts/build.sh` passes
+
+- [x] Add capture-pipeline fixture tests and run them from the default build script
+  - Files: `TASKS.md`, `DEV_LOG.md`, `scripts/build.sh`, `scripts/create_session.py`, `scripts/rename_files.py`, `scripts/validate_session.py`
+  - Done when: the repo has fixture-driven pipeline checks for session create/rename/validate behavior and `scripts/build.sh` runs them by default
+
+- [x] Remove or fully document the stray `k` target and repo scope drift
+  - Files: `TASKS.md`, `DEV_LOG.md`, `AI_CONTEXT.md`, `README.md`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the undocumented `k` target is either removed or clearly explained in repo docs, and the top-level project description matches the real shipped scope with `scripts/build.sh` passing
+
+- [x] Carry shared session metadata through validation and export
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/SessionExportCoordinator.swift`, related shared files, any validation/export docs touched
+  - Done when: exported manifests, metadata payloads, and any validation path use the same canonical session metadata fields and values from the shared model without platform drift, and `scripts/build.sh` passes
+
+## User Requested Device Fixes
+- [x] Freeze the macOS deck-calibration boxes until the user explicitly changes them
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/DeckGamificationOverlay.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the macOS deck guide captures one stable starting layout instead of continuously following live rig detection, direct drag/resize and slider controls still move the boxes when the user wants, Reset Fit or camera/manual-guide changes can seed a fresh layout, and `scripts/build.sh` passes
+
+- [x] Add Baby Scratch practice logging to the macOS Scratch Rating workspace
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Services/ProgressManager.swift`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the macOS Scratch Rating workspace can run timed Baby Scratch practice sessions with score, timer, hits, average, and streak feedback; finished sessions persist into the shared Baby Scratch `ProgressManager` stats used by iPhone practice; starting or canceling a Mac practice run resets the live scratch-rating session cleanly; and `scripts/build.sh` passes
+
+- [x] Fix the practice-mode crash seen in Mac-distributed ScratchLab runs
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/FormulaPlaygroundView.swift`, `ScratchLab/Views/LevelSelectView.swift`
+  - Done when: every `PracticeModeView` presentation path explicitly passes the required `AudioEngine` and `ProgressManager` environment objects so Baby Scratch and guided-drill practice no longer trap on a missing environment object during presentation, and `scripts/build.sh` passes
+
+- [x] Fix watch provisioning/signing so build 6 can install on an actual Watch
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `scripts/run-on-watch.sh`
+  - Done when: the repo provides a repeatable real-watch install helper, the build notes call out the required watchOS runtime, and build 6 installs on the actual Apple Watch through a device-targeted signed watch build
+
+- [x] Import pending watch captures even when the Watch Capture screen is closed
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`
+  - Done when: the iPhone app activates WatchConnectivity from the main app lifecycle instead of only inside the Watch Capture screen, sweeps any queued `WatchConnectivity` inbox JSON files into durable `WatchMotionCaptures` storage on app foreground, and the real-device watch capture smoke test lands in durable storage without needing the Watch Capture screen open first
+
+## User Requested Release Work
+- [x] Make macOS and watchOS review copy device-neutral and production-safe
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Info.plist`, `ScratchLabDesktop/Info.plist`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLab/Views/LevelSelectView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLabDesktop/Services/CompanionCameraReceiver.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/DeckGamificationOverlay.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLabWatch/WatchCaptureView.swift`
+  - Done when: user-facing macOS, iPhone companion, and watch copy no longer uses Apple device branding where it was acting as product UI copy, visible network and recording errors are simplified to human-readable messages, monitor/manual-connect surfaces are softened behind advanced wording, watch capture terminology uses paired-device language, non-warning helper text no longer uses warning styling, and `./scripts/build.sh` passes
+
+- [x] Polish App Review copy and steady the Mac deck-calibration boxes
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/DeckGamificationOverlay.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLabWatch/WatchCaptureView.swift`
+  - Done when: watch paired-device text uses generic device wording, dense watch instructions are shortened, non-error watch helper text uses secondary styling, `Motion Data` replaces watch-facing sample labels, visible connection failures use human-readable copy, the Mac deck-calibration boxes stop jumping while dragged, and `scripts/build.sh` passes
+
+- [x] Restore watchOS, polish release copy, and upload unified build 10 to App Store Connect
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLab/Views/PracticeModeView.swift`, `ScratchLab/Views/LevelSelectView.swift`, `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLabWatch/WatchCaptureView.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLabWatch/ScratchLabNotificationController.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the shared `CURRENT_PROJECT_VERSION` is bumped past the previously uploaded build `9`, the iOS archive embeds `ScratchLabWatch`, built-in microphone text shows as `Microphone`, user-facing app copy no longer ships MVP/tester/dev wording across iPhone, Mac, and Watch, `./scripts/build.sh` passes, and the iOS plus macOS archives for build `10` upload successfully to App Store Connect or the exact external blocker is confirmed without guessing
+
+- [x] Finish the final App Review wording sweep for neutral device copy and hidden debug errors
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLab/Views/FormulaPlaygroundView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLabWatch/WatchCaptureView.swift`
+  - Done when: remaining user-facing `Computer` and `Continuity Camera` wording is replaced with more natural neutral labels, watch save/import copy no longer says `Saved on watch`, watch-facing motion counts use polished `Motion` labels, visible screens no longer expose raw parser or system error text, dynamic watch-source copy no longer surfaces device-brand names in the UI, and `./scripts/build.sh` passes
+
+- [x] Upload fresh build 9 of the unified ScratchLab iOS and macOS apps to App Store Connect
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the shared `CURRENT_PROJECT_VERSION` is bumped past the previously uploaded build `8`, `./scripts/build.sh` passes, and the iOS plus macOS archives for build `9` upload successfully to App Store Connect or the exact external blocker is confirmed without guessing
+
+- [x] Push a fresh TestFlight build after the watch import and export verification pass
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: the shared project build number is bumped past the already-uploaded build 6, `./scripts/build.sh` passes, and the iPhone + embedded Watch build plus the Mac build are archived and uploaded to App Store Connect or the exact external blocker is confirmed without guessing
+
+## User Requested Tooling
+- [x] Generate a Banta invoice-versus-payment reconciliation workpaper
+  - Files: `TASKS.md`, `DEV_LOG.md`, `nz-tax-workflow/README.md`, `nz-tax-workflow/src/build_counterparty_reconciliation.py`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/banta_hospitality_ltd_invoice_reconciliation.csv`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/banta_hospitality_ltd_related_deposits.csv`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/banta_hospitality_ltd_reconciliation_summary.md`, `scripts/build.sh`
+  - Done when: a counterparty workpaper can be generated from the extracted working files, the Banta run separates exact-paid invoices from still-open review items, related Banta/Fiddle deposits are listed without forced allocation, and `scripts/build.sh` passes
+
+- [x] Reconcile 2025-26 invoice income dates to exact ANZ statement deposits
+  - Files: `TASKS.md`, `DEV_LOG.md`, `nz-tax-workflow/README.md`, `nz-tax-workflow/src/extract_sorted_tax_docs.py`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/reconciled_transactions.csv`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/bank_statement_deposits.csv`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/income_reconciliation.csv`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/document_extraction_report.md`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/workflow_job.json`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/normalized_transactions.csv`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/import_audit.csv`, `nz-tax-workflow/outputs/real_2025_26_tax_docs/`, `scripts/build.sh`
+  - Done when: invoice-derived income rows are reconciled against exact ANZ statement deposits where the amount and statement detail both support the match, unmatched invoice rows retain their original issue date, reconciliation audit CSVs are written into the working folder, the real-doc workflow rerun completes, and `scripts/build.sh` passes
+
+- [x] Extract a draft 2025-26 ledger from the sorted tax-doc folder
+  - Files: `TASKS.md`, `DEV_LOG.md`, `nz-tax-workflow/README.md`, `nz-tax-workflow/requirements.txt`, `nz-tax-workflow/src/workflow.py`, `nz-tax-workflow/src/extract_sorted_tax_docs.py`, `nz-tax-workflow/data/working/real_2025_26_tax_docs/`, `nz-tax-workflow/outputs/real_2025_26_tax_docs/`
+  - Done when: the sorted `2025-26 Tax docs` folder can be scanned into a conservative draft ledger, a document register and document review queue are produced, the standard workflow runs against the extracted CSV, duplicate references are flagged for manual review, and `scripts/build.sh` passes
+
+- [x] Build a standalone NZ small-business tax prep workflow
+  - Files: `TASKS.md`, `DEV_LOG.md`, `nz-tax-workflow/README.md`, `nz-tax-workflow/assumptions.md`, `nz-tax-workflow/config/`, `nz-tax-workflow/data/raw/`, `nz-tax-workflow/data/working/sample_run/`, `nz-tax-workflow/docs/`, `nz-tax-workflow/outputs/sample_run/`, `nz-tax-workflow/src/`
+  - Done when: a self-contained Python project exists with raw inputs separated from cleaned and derived outputs, configurable GST and reserve rates, CSV import profiles, monthly and two-month GST summaries, weekly reserve guidance, a review queue, sample files and reports, and `scripts/build.sh` passes
+
+## Ready
+- [x] Let Companion Cam rotate into landscape for deck framing
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Views/CompanionCameraView.swift`
+  - Done when: the iPhone Companion Cam no longer forces portrait orientation, its preview and streamed frames follow landscape rotation for wider deck framing, and `scripts/build.sh` passes
+
+- [x] Fix Mac companion discovery permissions and clarify phone/watch routing
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Info.plist`, `ScratchLabDesktop/Info.plist`, `ScratchLabDesktop/Services/CompanionCameraReceiver.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: ScratchLab Mac ships local-network Bonjour metadata for the companion feed, the Mac UI clearly says the companion feed comes from the iPhone while watch captures still route through the phone, and `scripts/build.sh` passes
+
+- [x] Prepare the capture pipeline for a real pilot session
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/capture_spec_v1.md`, `docs/dj_operator_quickstart.md`, `docs/session_checklist.md`, `docs/pilot_session_runbook.md`, `templates/session_manifest_example.json`, `templates/take_log_example.csv`
+  - Done when: operator-facing docs are tighter, one end-to-end runbook exists, example-filled template files exist, README includes pilot troubleshooting, and `scripts/build.sh` passes
+
+- [x] Address capture-pipeline consistency review findings
+  - Files: `TASKS.md`, `DEV_LOG.md`, `README.md`, `docs/capture_spec_v1.md`, `docs/metadata_schema.md`, `scripts/capture_pipeline_common.py`, `scripts/rename_files.py`, `scripts/validate_session.py`
+  - Done when: `take_log.csv` is enforced as the operator source of truth, incomplete takes are not emitted into the manifest, `camB` remains additive-only coverage, the root README matches the repo, and `scripts/build.sh` passes
+
+- [x] Generate Scratch Capture Pipeline MVP templates and CLI scripts
+  - Files: `templates/session_manifest_template.json`, `templates/take_log_template.csv`, `scripts/capture_pipeline_common.py`, `scripts/create_session.py`, `scripts/rename_files.py`, `scripts/validate_session.py`
+  - Done when: a session can be scaffolded, take-log-driven rename runs without overwrite, validation flags missing files or BPM coverage, and `scripts/build.sh` passes
+
+- [x] Draft Scratch Capture Pipeline MVP documentation set
+  - Files: `docs/capture_spec_v1.md`, `docs/dj_operator_quickstart.md`, `docs/session_checklist.md`, `docs/naming_convention.md`, `docs/metadata_schema.md`
+  - Done when: the docs define one repeatable baby-scratch-only capture workflow, the folder and naming standards are human-readable, and `scripts/build.sh` passes
+
+- [x] Add Apple Watch scratch-motion capture companion
+  - Files: `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Models/WatchMotionCapture.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLabWatch/ScratchLabWatchApp.swift`, `ScratchLabWatch/WatchCaptureView.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLab.xcodeproj/project.pbxproj`, `scripts/build.sh`
+  - Done when: a Series 7+ Apple Watch can record wrist-motion sessions, queue them to the paired iPhone, the iPhone app can export the imported session as JSON or CSV, and `scripts/build.sh` passes
+
+- [x] Remove temporary combo debug logging from practice mode
+  - File: `ScratchLab/Views/PracticeModeView.swift`
+  - Done when: combo-tuning `print(...)` calls used for live debugging are removed or safely gated and `scripts/build.sh` passes
+
+- [x] Remove verbose baby scratch training profile logging
+  - File: `ScratchLab/Audio/AudioEngine.swift`
+  - Done when: the baby-scratch profile load `print(...)` is removed or safely gated and `scripts/build.sh` passes
+
+- [x] Add clearer empty-state copy to the Mac companion feed panel
+  - File: `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the Mac analyzer tells the user exactly how to make the phone companion feed appear and `scripts/build.sh` passes
+
+- [x] Default Companion Cam to deck view on launch
+  - File: `ScratchLab/Services/CompanionCameraBroadcaster.swift`
+  - Done when: Companion Cam opens on the rear/deck camera by default and `scripts/build.sh` passes
+
+- [x] Expose Continuity Desk View cameras in the Mac camera list
+  - File: `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: a Desk View camera attached to an iPhone continuity camera is available in the Mac analyzer camera picker and `scripts/build.sh` passes
+
+- [x] Auto-connect a single nearby iPhone companion feed in the Mac analyzer
+  - Files: `ScratchLabDesktop/Services/CompanionCameraReceiver.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the Mac analyzer auto-connects to the only discovered iPhone companion feed, switches to Dual Cam when connected, and `scripts/build.sh` passes
+
+- [x] Clarify that one iPhone cannot run Continuity Camera and Companion Cam at the same time
+  - Files: `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLab/Views/CompanionCameraView.swift`
+  - Done when: the Mac and iPhone UI explain that a single iPhone must be used as either Continuity/Desk View or ScratchLab Companion Cam, and `scripts/build.sh` passes
+
+## Mapped Follow-up Tasks
+These replace the legacy `Sources/...` placeholders with small follow-ups that fit the current repo structure.
+Keep working top-to-bottom from here once the checked items above are complete.
+
+- [x] Verify FFT windowing is already applied before frequency analysis
+  - Files: `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Audio/ScratchAnalyzer.swift`, `ScratchLabDesktop/Services/MacScratchDetector.swift`
+  - Done when: the current analyzers apply a Hanning window before FFT and `scripts/build.sh` passes
+
+- [x] Add local Companion Cam recording with external audio input support
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Views/CompanionCameraView.swift`
+  - Done when: Companion Cam can start and stop a local `.mov` recording while still streaming to the Mac, records from the current iPhone audio input, lets the user prefer an external USB audio input when one is connected, clearly shows the active route and save status on screen, and `scripts/build.sh` passes
+
+- [x] Surface baby scratch hand-direction guidance in the Mac analyzer
+  - Files: `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the existing left/right hand-motion state is reflected more clearly as baby-scratch direction guidance and `scripts/build.sh` passes
+
+- [x] Make the Mac performer monitor usable on an iPad Sidecar screen
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the performer monitor can switch into a live deck-view mode with camera overlays, offers a one-click move to an iPad Sidecar or other external display when available, and `scripts/build.sh` passes
+
+- [x] Stream the Mac performer monitor directly to an iPad when Sidecar is not available
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Info.plist`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktop/Info.plist`, `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: ScratchLab Mac advertises a direct performer-monitor feed over the local network, the iPad app exposes a Performer Monitor screen that auto-connects and renders the live deck boxes and cues without Sidecar, and `scripts/build.sh` passes
+
+- [x] Make the iPad performer monitor easier to surface and connect when auto-discovery misses
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the iPad performer-monitor screen refreshes its browse state on open, shows nearby Macs with a direct connect action, the Mac refreshes advertiser state when the analyzer/monitor views appear, and `scripts/build.sh` passes
+
+- [x] Stabilize the Mac deck bounding boxes so they do not jump between camera detections
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/DJRigLayoutDetector.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  - Done when: the Mac overlay holds a steady rig layout through small detection jitter and brief misses, resets cleanly when the capture session changes, and `scripts/build.sh` passes
+
+- [x] Add a one-click Serato screen mover for Sidecar iPad sessions
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: ScratchLab Mac offers a clear action to move the Serato DJ Pro window onto a connected iPad Sidecar or other external display, explains the Accessibility permission requirement when needed, and `scripts/build.sh` passes
+
+- [x] Allow phone fallback for Performer Monitor and ship a fresh TestFlight build
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: Performer Monitor is available on iPhone as well as iPad, the Mac/iOS copy reflects phone-or-iPad fallback without pretending the iPhone is a Sidecar display, the project build number is bumped, `scripts/build.sh` passes, and the new iPhone + Watch build is uploaded to App Store Connect
+
+- [x] Try to wire the ScratchLab Mac App Store export path with the current team signing setup
+  - Files: `TASKS.md`, `DEV_LOG.md`
+  - Done when: the macOS companion either exports and uploads to App Store Connect with the current Apple team setup, or the exact external signing blocker is confirmed and logged without guessing
+
+- [x] Add TTM notation aliases for the existing scratch library in Formula Lab
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Formula/ScratchFormulaCatalog.swift`, `ScratchLab/Views/FormulaPlaygroundView.swift`
+  - Done when: Formula Lab accepts the TTM v1.1 symbols and common aliases for the scratches already present in `ScratchLibrary`, the supported-symbols list makes those notation mappings clear, and `scripts/build.sh` passes
+
+- [x] Replace Companion Cam AVCaptureVideoOrientation usage with rotation angles
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/Views/CompanionCameraView.swift`
+  - Done when: Companion Cam no longer references deprecated `AVCaptureVideoOrientation` or `videoOrientation`, its preview, recording, and frame-output connections use `videoRotationAngle`, and `scripts/build.sh` passes without those deprecation warnings
+
+- [x] Make the Formula Lab notation catalog clearly readable on iPhone
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/FormulaPlaygroundView.swift`
+  - Done when: Formula Lab shows that the full notation catalog contains multiple scratches on iPhone, the supported-symbols card has its own bounded scroll area, and `scripts/build.sh` passes
+
+- [x] Render PDF-derived TTM graphs in Formula Lab
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/FormulaPlaygroundView.swift`
+  - Done when: Formula Lab shows graph-first TTM notation previews taken from the TTM v1.1 handbook pages for the supported scratches, parsed formulas display graph previews as well as text summaries, non-handbook shapes are clearly marked as derived, and `scripts/build.sh` passes
+
+- [x] Make the iPhone home screen companion-only
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/MainMenuView.swift`
+  - Done when: the iPhone home screen no longer advertises practice or Formula Lab as primary flows, clearly states that ScratchLab Mac owns routed audio and practice, keeps the phone focused on companion camera, performer monitor, and watch capture, and `scripts/build.sh` passes
+
+- [x] Add a Mac audio-routing setup panel to the analyzer
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: the Mac analyzer makes the BlackHole, Loopback, and interface-loopback routes obvious inside the audio card, warns when the selected source is still just a mic path, and `scripts/build.sh` passes
+
+- [x] Add Direct Serato Capture to the Mac analyzer
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: ScratchLab Mac detects a running Serato DJ Pro process, creates a private tap-backed aggregate input named `ScratchLab Direct Serato`, exposes that input through the existing analyzer source picker with a visible status/action in the audio card, and `scripts/build.sh` passes
+
+- [x] Split ScratchLab Mac into Test Lab and Routine Lab tabs
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: ScratchLab Mac has a simplified `Test Lab` tab focused on rating a scratcher from the live analyzer, a fuller `Routine Lab` tab for pro users, Mac-side start/stop routine recording is available from that pro tab, and `scripts/build.sh` passes
+
+- [x] Import normalized Qbert scratch audio and use the baby-scratch subset for recognition calibration
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Resources/README.md`, `ScratchLab/Resources/qbert_scratch_library/`, `ScratchLabDesktop/Services/MacScratchDetector.swift`
+  - Done when: the Qbert MP3 corpus is copied into a normalized bundled library, ScratchLab and ScratchLab Mac both ship that library in their app resources, the baby-scratch recognizers calibrate from `qbert_scratch_library/baby_scratch` while the older reference folders stay as fallback data, and `scripts/build.sh` passes
+
+- [x] Prefer Serato Virtual Audio for Direct Serato Capture and keep the private tap as fallback
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: Direct Serato Capture switches to `Serato Virtual Audio` whenever that native Serato route is available, falls back to the private tap-backed `ScratchLab Direct Serato` input otherwise, the loopback workflow remains unchanged, and `scripts/build.sh` passes
+
+- [x] Add a live-input iPhone practice mode without preloaded beats
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLab/Views/LevelSelectView.swift`, `ScratchLab/Views/PracticeModeView.swift`
+  - Done when: the iPhone home screen exposes a live practice entry again, practice sessions run from live mic or wired input without auto-starting a backing track, the setup UI explains mic versus USB/interface routing, and `scripts/build.sh` passes
+
+- [x] Replace the performer-monitor discovery path with a Bonjour TCP feed that the iPad can reliably see
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+  - Done when: ScratchLab Mac advertises the performer monitor over a visible Bonjour TCP service, the iPad performer-monitor screen discovers that service, manual connect still works, and `scripts/build.sh` passes
+
+- [x] Make the guided drill cue more visible over the iPhone practice camera
+  - File: `ScratchLab/Views/PracticeModeView.swift`
+  - Done when: the active guided-drill step renders as a clearer on-camera cue marker and `scripts/build.sh` passes
+
+- [x] Minimal App Review fix pass for sandboxed save destinations and review-risk bundled audio cleanup
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktop/ScratchLabDesktop.entitlements`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLabDesktop/Services/MacScratchDetector.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`
+  - Done when: macOS `Save ZIP...` works with user-selected destinations in the sandboxed app, shipping iOS/macOS targets no longer bundle the review-risk reference/Qbert/backing-track audio resources, hard-coded `/Users/...` development fallbacks are removed from shipped audio discovery, and the required build/test matrix stays green

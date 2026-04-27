@@ -5,24 +5,53 @@
 import SwiftUI
 import AVFoundation
 
+private enum PracticeBeatUIContract {
+    static let sectionAccessibilityID = "practice-beat-controls"
+    static let noBeatLabel = "No Beat"
+    static let beatOnLabel = "Beat On"
+    static let playLabel = "Play Beat"
+    static let stopLabel = "Stop Beat"
+}
+
 struct PracticeModeView: View {
     let scratch: Scratch
+    let drillTimeline: ScratchRenderTimeline?
+    let drillBPM: Double
+    let comboChallenge: ComboScratch?
+    let usesBackingTrack: Bool
     
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var gameState: GameState
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
+    @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
     
     // Session state
     @State private var isSessionActive = false
     @State private var isPaused = false
     @State private var showingTutorial = false
+    @State private var showingCaptureHelp = false
+    @State private var showingQuickStartAgain = false
     @State private var showingResults = false
+    @State private var showingCoachPreview = false
+    @AppStorage(QuickStartSettings.hasSeenKey) private var hasSeenQuickStart = false
+    @AppStorage(QuickStartSettings.versionKey) private var quickStartVersion = 0
     
     // Timing
     @State private var selectedDuration: TimeInterval = 300 // 5 min default
     @State private var timeRemaining: TimeInterval = 300
     @State private var sessionTimer: Timer?
+    @State private var drillElapsedSeconds: TimeInterval = 0
+    @State private var drillLoopCount: Int = 0
+    @State private var drillBeatInLoop: Double = 0
+    @State private var activeDrillEventIndex: Int?
+    @State private var comboStepsHitThisLoop: Set<Int> = []
+    @State private var comboBestRunCount: Int = 0
+    @State private var comboTrackedLoopCount: Int = 0
+    @State private var comboCompleted = false
+    @State private var comboCompletionQueued = false
+    @State private var sessionProgressPersisted = false
+    @State private var comboPhraseStartedAt: Date?
+    @State private var lastComboLockAt: Date?
     
     // Scoring
     @State private var currentScore: Int = 0
@@ -35,6 +64,7 @@ struct PracticeModeView: View {
     @State private var lastFeedback: [String] = []
     @State private var showFeedback = false
     @State private var feedbackColor: Color = .white
+    @State private var sessionTipText = ""
     
     // Animation states
     @State private var pulseRing = false
@@ -46,159 +76,553 @@ struct PracticeModeView: View {
         ("10 min", 600),
         ("15 min", 900)
     ]
+    private let comboSessionDuration: TimeInterval = 45
+    private let comboMinimumAccuracy: Double = 40
+    private let comboLockCooldown: TimeInterval = 0.24
+    private let comboResetInactivity: TimeInterval = 2.4
+    private let comboPhraseWindow: TimeInterval = 6.5
+
+    private var activeScratch: Scratch {
+        scratch
+    }
+
+    private var normalizedDrillEvents: [ScratchRenderEvent] {
+        guard let drillTimeline else { return [] }
+        return drillTimeline.events.sorted { lhs, rhs in
+            if lhs.startBeat == rhs.startBeat {
+                return lhs.durationBeats < rhs.durationBeats
+            }
+            return lhs.startBeat < rhs.startBeat
+        }
+    }
+
+    private var isGuidedDrillMode: Bool {
+        drillTimeline != nil && !normalizedDrillEvents.isEmpty && (drillTimeline?.totalBeats ?? 0) > 0
+    }
+
+    private var isComboChallengeMode: Bool {
+        comboChallenge != nil && isGuidedDrillMode
+    }
+
+    private var comboTargetStepCount: Int {
+        normalizedDrillEvents.count
+    }
+
+    private var comboLockedStepCount: Int {
+        comboStepsHitThisLoop.count
+    }
+
+    private var comboBestLockedStepCount: Int {
+        max(comboBestRunCount, comboLockedStepCount)
+    }
+
+    private var comboProgressPercent: Double {
+        guard comboTargetStepCount > 0 else { return 0 }
+        return (Double(comboBestLockedStepCount) / Double(comboTargetStepCount)) * 100
+    }
+
+    private var displayedAccuracy: Double {
+        isComboChallengeMode ? comboProgressPercent : currentAccuracy
+    }
+
+    private var activeSessionDuration: TimeInterval {
+        isComboChallengeMode ? comboSessionDuration : selectedDuration
+    }
+
+    private var currentSessionTitle: String {
+        if isComboChallengeMode {
+            return comboChallenge?.name ?? "Combo Challenge"
+        }
+        return activeScratch.name
+    }
+
+    private var currentSessionSubtitle: String {
+        if isComboChallengeMode {
+            return "Clear one clean \(comboTargetStepCount)-step baby phrase"
+        }
+        return activeScratch.technique.rawValue
+    }
+
+    private var centerMetricLabel: String {
+        isComboChallengeMode ? "Phrase Lock" : "Accuracy"
+    }
+
+    private var leadingStat: (icon: String, value: String, label: String, color: Color) {
+        if isComboChallengeMode {
+            return (
+                icon: "point.3.filled.connected.trianglepath.dotted",
+                value: "\(comboBestLockedStepCount)/\(max(1, comboTargetStepCount))",
+                label: "Best Run",
+                color: Color(hex: "00BCD4")
+            )
+        }
+        return (
+            icon: "flame.fill",
+            value: "\(currentStreak)",
+            label: "Streak",
+            color: Color(hex: "FF5722")
+        )
+    }
+
+    private var comboSetupObjective: String? {
+        guard isComboChallengeMode else { return nil }
+        return "Goal: chain all \(comboTargetStepCount) baby scratches inside one clean phrase window."
+    }
+
+    private var comboResultHeadline: String {
+        guard isComboChallengeMode else { return "" }
+        if comboCompleted {
+            return "Phrase Cleared"
+        }
+        if comboBestLockedStepCount == max(0, comboTargetStepCount - 1) {
+            return "One More Hit"
+        }
+        return "Build The Phrase"
+    }
+
+    private var comboResultDetail: String? {
+        guard isComboChallengeMode else { return nil }
+        let bestRun = "\(comboBestLockedStepCount)/\(max(1, comboTargetStepCount))"
+        if comboCompleted {
+            return "You chained all \(comboTargetStepCount) steps inside one phrase. Best run: \(bestRun)."
+        }
+        return "Best run this session: \(bestRun). Keep the hits closer together and clear the full phrase."
+    }
+
+    private var micStatusTitle: String {
+        switch audioEngine.inputMonitorState {
+        case .micOff:
+            return "Microphone Off"
+        case .micLive:
+            return "Microphone Ready"
+        case .listening:
+            return "Connected"
+        case .noSignal:
+            return "No signal"
+        }
+    }
+
+    private var micStatusDetail: String {
+        switch audioEngine.inputMonitorState {
+        case .micOff:
+            return "Audio engine is offline."
+        case .micLive:
+            return "Using \(audioEngine.activeInputName). Start scratching."
+        case .listening:
+            return "Signal is coming through \(audioEngine.activeInputName)."
+        case .noSignal:
+            return "No scratch audio detected on \(audioEngine.activeInputName). Move closer to the mic or check your input route."
+        }
+    }
+
+    private var micStatusIcon: String {
+        switch audioEngine.inputMonitorState {
+        case .micOff:
+            return "mic.slash.fill"
+        case .micLive:
+            return "mic.fill"
+        case .listening:
+            return "waveform"
+        case .noSignal:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var micStatusColor: Color {
+        switch audioEngine.inputMonitorState {
+        case .micOff:
+            return Color(hex: "9E9E9E")
+        case .micLive:
+            return Color(hex: "4CAF50")
+        case .listening:
+            return Color(hex: "00BCD4")
+        case .noSignal:
+            return Color(hex: "FF9800")
+        }
+    }
+
+    private var showsBabyScratchMotionFeedback: Bool {
+        activeScratch.id == "baby_scratch"
+    }
+
+    private var scratchMotionBalanceText: String {
+        audioEngine.scratchMotionFeedback?.balance.rawValue ?? ScratchMotionBalance.listening.rawValue
+    }
+
+    private var scratchMotionColor: Color {
+        switch audioEngine.scratchMotionFeedback?.balance ?? .listening {
+        case .listening:
+            return Color(hex: "38BDF8")
+        case .balanced:
+            return Color(hex: "22C55E")
+        case .unbalanced:
+            return Color(hex: "EF4444")
+        }
+    }
+
+    private var scratchMotionTimingErrorText: String {
+        guard let timingErrorMilliseconds = audioEngine.scratchMotionFeedback?.timingErrorMilliseconds else {
+            return "—"
+        }
+        return "\(timingErrorMilliseconds) ms"
+    }
+
+    private var scratchMotionForwardDurationText: String {
+        formatScratchMotionDuration(audioEngine.scratchMotionFeedback?.forwardDuration)
+    }
+
+    private var scratchMotionBackwardDurationText: String {
+        formatScratchMotionDuration(audioEngine.scratchMotionFeedback?.backwardDuration)
+    }
+
+    private var sessionAudioNote: String? {
+        if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
+            return playbackErrorMessage
+        }
+        if !practiceBeatStore.isBeatEnabled {
+            return "Practice beat off. Live scratch audio only."
+        }
+        if practiceBeatStore.isPlaying {
+            return "\(practiceBeatStore.beatEngineMode.title) playing at \(practiceBeatStore.bpmValue) BPM."
+        }
+        return "\(practiceBeatStore.beatEngineMode.title) ready at \(practiceBeatStore.bpmValue) BPM."
+    }
+
+    private var practiceInputSources: [AudioInputSource] {
+        var sources: [AudioInputSource] = [.microphone]
+        if audioEngine.hasExternalPracticeInput {
+            sources.append(.lineIn)
+        }
+        return sources
+    }
+
+    private var practiceInputHint: String {
+        if audioEngine.hasExternalPracticeInput {
+            return "Use Microphone for room sound, or switch to Wired Input for a USB/interface or loopback feed into this device."
+        }
+        return "Use Microphone, or plug in a USB/interface input before starting if you want routed deck audio on this device."
+    }
+
+    private var setupModeNote: String {
+        if isComboChallengeMode {
+            return "Deck video stays live while the phrase cue runs. Add optional beat guidance, or keep live audio only."
+        }
+        return "Deck video and audio analyze live here. Add optional beat guidance, or keep live input only."
+    }
+
+    private var currentTipText: String {
+        if isComboChallengeMode {
+            return comboCompleted
+                ? "Phrase cleared. Hold onto the same clean motion."
+                : "Chain four clean baby hits before the phrase window resets."
+        }
+        if isGuidedDrillMode {
+            return "Follow the cue card and hit each move on time."
+        }
+        return sessionTipText.isEmpty ? (activeScratch.tips.first ?? "Focus on clean execution") : sessionTipText
+    }
+
+    private var coachInstruction: ScratchCoachInstruction {
+        ScratchCoachInstructionStore.shared.instruction(
+            for: normalizeScratchType(input: activeScratch.id),
+            scratchDisplayName: activeScratch.name
+        )
+    }
+
+    private var activeDrillEvent: ScratchRenderEvent? {
+        guard let activeDrillEventIndex,
+              normalizedDrillEvents.indices.contains(activeDrillEventIndex) else {
+            return nil
+        }
+        return normalizedDrillEvents[activeDrillEventIndex]
+    }
+
+    init(
+        scratch: Scratch,
+        drillTimeline: ScratchRenderTimeline? = nil,
+        drillBPM: Double = 90,
+        comboChallenge: ComboScratch? = nil,
+        usesBackingTrack: Bool = false
+    ) {
+        self.scratch = scratch
+        self.drillTimeline = drillTimeline
+        self.drillBPM = drillBPM
+        self.comboChallenge = comboChallenge
+        self.usesBackingTrack = usesBackingTrack
+    }
     
     var body: some View {
-        ZStack {
-            // Camera feed background
-            CameraPreviewView()
-                .ignoresSafeArea()
-            
-            // Dark overlay for readability
-            Color.black.opacity(0.3)
-                .ignoresSafeArea()
-            
-            // Main UI overlay
-            VStack(spacing: 0) {
-                // Top bar
-                topBar
+        GeometryReader { geometry in
+            ZStack {
+                // Camera feed background
+                CameraPreviewView()
+                    .ignoresSafeArea()
                 
-                Spacer()
+                // Dark overlay for readability
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
                 
-                // Center feedback area
-                if isSessionActive {
-                    centerFeedbackArea
+                // Main UI overlay
+                VStack(spacing: 0) {
+                    // Top bar
+                    topBar(topSafeAreaInset: geometry.safeAreaInsets.top)
+                    
+                    Spacer()
+                    
+                    // Center feedback area
+                    if isSessionActive {
+                        centerFeedbackArea
+                    }
+                    
+                    Spacer()
+                    
+                    // Bottom controls
+                    bottomControls
                 }
                 
-                Spacer()
+                // Accuracy burst animation
+                if showAccuracyBurst {
+                    AccuracyBurstView(accuracy: lastAccuracyValue)
+                        .transition(.scale.combined(with: .opacity))
+                }
                 
-                // Bottom controls
-                bottomControls
+                // Tutorial overlay
+                if showingTutorial {
+                    TutorialOverlayView(scratch: activeScratch, onDismiss: { showingTutorial = false })
+                }
+                
+                // Results screen
+                if showingResults {
+                    ResultsOverlayView(
+                        scratch: activeScratch,
+                        sessionTitle: isComboChallengeMode ? comboChallenge?.name : nil,
+                        headline: isComboChallengeMode ? comboResultHeadline : nil,
+                        score: currentScore,
+                        accuracy: displayedAccuracy,
+                        primaryMetricLabel: isComboChallengeMode ? "Phrase Lock" : "Accuracy",
+                        attempts: attemptCount,
+                        bestStreak: bestStreak,
+                        detailNote: comboResultDetail,
+                        continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
+                        onContinue: { showingResults = false; resetSession() },
+                        onExit: { dismiss() }
+                    )
+                }
+                
+                // Pause overlay
+                if isPaused {
+                    PauseOverlayView(
+                        onResume: { resumeSession() },
+                        onRestart: { resetSession(); startSession() },
+                        onExit: { dismiss() },
+                        onTutorial: { showingTutorial = true }
+                    )
+                }
+                
+                // Pre-session setup
+                if !isSessionActive && !showingResults {
+                    SessionSetupOverlay(
+                        scratch: activeScratch,
+                        coachInstruction: coachInstruction,
+                        practiceBeatStore: practiceBeatStore,
+                        selectedDuration: $selectedDuration,
+                        durationOptions: durationOptions,
+                        sessionTitle: isComboChallengeMode ? "Combo Challenge" : "Practice",
+                        sessionDescription: isComboChallengeMode ? comboChallenge?.description : nil,
+                        objectiveText: comboSetupObjective,
+                        modeNote: setupModeNote,
+                        fixedDurationLabel: isComboChallengeMode ? "45 sec | looping phrase" : nil,
+                        startButtonTitle: isComboChallengeMode ? "Start Challenge" : "Start Session",
+                        selectedInputSource: audioEngine.currentInputSource,
+                        inputSourceOptions: practiceInputSources,
+                        activeInputName: audioEngine.activeInputName,
+                        inputRouteHint: practiceInputHint,
+                        topSafeAreaInset: geometry.safeAreaInsets.top,
+                        bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
+                        onSelectInputSource: { source in audioEngine.selectInputSource(source) },
+                        onShowCoachPreview: { showingCoachPreview = true },
+                        onStart: { startSession() },
+                        onTutorial: { showingTutorial = true },
+                        onBack: { dismiss() }
+                    )
+                }
             }
-            
-            // Accuracy burst animation
-            if showAccuracyBurst {
-                AccuracyBurstView(accuracy: lastAccuracyValue)
-                    .transition(.scale.combined(with: .opacity))
-            }
-            
-            // Tutorial overlay
-            if showingTutorial {
-                TutorialOverlayView(scratch: scratch, onDismiss: { showingTutorial = false })
-            }
-            
-            // Results screen
-            if showingResults {
-                ResultsOverlayView(
-                    scratch: scratch,
-                    score: currentScore,
-                    accuracy: currentAccuracy,
-                    attempts: attemptCount,
-                    bestStreak: bestStreak,
-                    onContinue: { showingResults = false; resetSession() },
-                    onExit: { dismiss() }
-                )
-            }
-            
-            // Pause overlay
-            if isPaused {
-                PauseOverlayView(
-                    onResume: { resumeSession() },
-                    onRestart: { resetSession(); startSession() },
-                    onExit: { dismiss() },
-                    onTutorial: { showingTutorial = true }
-                )
-            }
-            
-            // Pre-session setup
-            if !isSessionActive && !showingResults {
-                SessionSetupOverlay(
-                    scratch: scratch,
-                    selectedDuration: $selectedDuration,
-                    durationOptions: durationOptions,
-                    onStart: { startSession() },
-                    onTutorial: { showingTutorial = true },
-                    onBack: { dismiss() }
-                )
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
             setupAudioEngine()
         }
         .onDisappear {
             cleanupSession()
+            practiceBeatStore.handleLeavingPractice()
         }
+        .sheet(isPresented: $showingCaptureHelp) {
+            CaptureHelpView {
+                showingCaptureHelp = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    showingQuickStartAgain = true
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(isPresented: $showingQuickStartAgain) {
+            QuickStartView(onFinish: completeQuickStartReview)
+                .interactiveDismissDisabled()
+        }
+        #if DEBUG && canImport(RealityKit)
+        .sheet(isPresented: $showingCoachPreview) {
+            NavigationStack {
+                CoachPreviewView()
+            }
+        }
+        #endif
     }
     
     // MARK: - Top Bar
     
-    private var topBar: some View {
-        HStack {
-            // Back/Pause button
-            Button(action: {
-                if isSessionActive {
-                    pauseSession()
-                } else {
-                    dismiss()
-                }
-            }) {
-                Image(systemName: isSessionActive ? "pause.fill" : "chevron.left")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .padding(12)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
-            
-            Spacer()
-            
-            // Timer
-            if isSessionActive {
-                HStack(spacing: 8) {
-                    Image(systemName: "clock.fill")
-                        .foregroundColor(timeRemaining < 60 ? Color(hex: "F44336") : Color(hex: "FFD700"))
-                    
-                    Text(formatTime(timeRemaining))
-                        .font(.custom("Futura-Bold", size: 24))
+    private func topBar(topSafeAreaInset: CGFloat) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                Button(action: {
+                    if isSessionActive {
+                        pauseSession()
+                    } else {
+                        dismiss()
+                    }
+                }) {
+                    Image(systemName: isSessionActive ? "pause.fill" : "chevron.left")
+                        .font(.title2)
                         .foregroundColor(.white)
-                        .monospacedDigit()
+                        .padding(12)
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(20)
+                
+                Spacer()
+                
+                if isSessionActive {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(timeRemaining < 60 ? Color(hex: "F44336") : Color(hex: "22C55E"))
+                            .frame(width: 10, height: 10)
+
+                        Text(formatTime(timeRemaining))
+                            .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.52))
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+                }
+                
+                Spacer()
+                
+                if isSessionActive {
+                    Color.clear
+                        .frame(width: 48, height: 48)
+                        .accessibilityHidden(true)
+                } else {
+                    Button(action: { showingCaptureHelp = true }) {
+                        Image(systemName: "questionmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel("Open capture help")
+                }
             }
-            
-            Spacer()
-            
-            // Tutorial button
-            Button(action: { showingTutorial = true }) {
-                Image(systemName: "questionmark.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .padding(12)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
+
+            if isSessionActive {
+                practiceStatusStrip
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 60)
+        .padding(.top, topSafeAreaInset + 12)
+    }
+
+    private var practiceStatusStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                PracticeStatusChip(
+                    title: "Session",
+                    value: isComboChallengeMode ? "Challenge" : "Live",
+                    color: Color(hex: "F44336")
+                )
+                PracticeStatusChip(
+                    title: "Audio",
+                    value: micStatusTitle,
+                    color: micStatusColor
+                )
+                if isGuidedDrillMode {
+                    PracticeStatusChip(
+                        title: "BPM",
+                        value: "\(practiceBeatStore.bpmValue)",
+                        color: Color(hex: "38BDF8")
+                    )
+                    if let activeDrillEventIndex {
+                        PracticeStatusChip(
+                            title: "Step",
+                            value: "\(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)",
+                            color: Color(hex: "F59E0B")
+                        )
+                    }
+                } else {
+                    PracticeStatusChip(
+                        title: "Scratch",
+                        value: activeScratch.name,
+                        color: Color(hex: "38BDF8")
+                    )
+                }
+                PracticeStatusChip(
+                    title: "Beat",
+                    value: practiceBeatStore.isBeatEnabled
+                        ? (practiceBeatStore.isPlaying
+                            ? "\(practiceBeatStore.beatEngineMode.title) On"
+                            : "\(practiceBeatStore.beatEngineMode.title) Ready")
+                        : "Off",
+                    color: Color(hex: practiceBeatStore.isBeatEnabled ? "A855F7" : "22C55E")
+                )
+            }
+        }
+    }
+
+    private func completeQuickStartReview() {
+        hasSeenQuickStart = true
+        quickStartVersion = QuickStartSettings.currentVersion
+        showingQuickStartAgain = false
     }
     
     // MARK: - Center Feedback Area
     
     private var centerFeedbackArea: some View {
-        VStack(spacing: 24) {
-            // Current scratch name
-            VStack(spacing: 4) {
-                Text(scratch.name.uppercased())
-                    .font(.custom("Futura-Bold", size: 28))
+            VStack(spacing: 24) {
+                // Current scratch name
+                VStack(spacing: 4) {
+                Text(currentSessionTitle)
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.white)
                     .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
                 
-                Text(scratch.technique.rawValue)
-                    .font(.custom("Futura-Medium", size: 14))
-                    .foregroundColor(.white.opacity(0.7))
-            }
+                Text(currentSessionSubtitle)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+
+                if isGuidedDrillMode {
+                    guidedDrillCueCard
+                }
+
+                if isComboChallengeMode {
+                    comboProgressCard
+                }
             
             // Accuracy ring
             ZStack {
@@ -216,7 +640,7 @@ struct PracticeModeView: View {
                 
                 // Progress ring
                 Circle()
-                    .trim(from: 0, to: CGFloat(currentAccuracy / 100))
+                    .trim(from: 0, to: CGFloat(displayedAccuracy / 100))
                     .stroke(
                         accuracyGradient,
                         style: StrokeStyle(lineWidth: 8, lineCap: .round)
@@ -226,12 +650,12 @@ struct PracticeModeView: View {
                 
                 // Center content
                 VStack(spacing: 4) {
-                    Text("\(Int(currentAccuracy))%")
-                        .font(.custom("Futura-Bold", size: 48))
+                    Text("\(Int(displayedAccuracy))%")
+                        .font(.system(size: 48, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white)
                     
-                    Text("ACCURACY")
-                        .font(.custom("Futura-Medium", size: 12))
+                    Text(centerMetricLabel)
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                 }
             }
@@ -241,7 +665,7 @@ struct PracticeModeView: View {
                 VStack(spacing: 8) {
                     ForEach(lastFeedback, id: \.self) { feedback in
                         Text(feedback)
-                            .font(.custom("Futura-Medium", size: 14))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundColor(feedbackColor)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
@@ -254,9 +678,9 @@ struct PracticeModeView: View {
             
             // Stats row
             HStack(spacing: 40) {
-                StatDisplay(icon: "flame.fill", value: "\(currentStreak)", label: "Streak", color: Color(hex: "FF5722"))
+                StatDisplay(icon: leadingStat.icon, value: leadingStat.value, label: leadingStat.label, color: leadingStat.color)
                 StatDisplay(icon: "star.fill", value: "\(currentScore)", label: "Score", color: Color(hex: "FFD700"))
-                StatDisplay(icon: "number", value: "\(attemptCount)", label: "Attempts", color: Color(hex: "2196F3"))
+                StatDisplay(icon: "number", value: "\(attemptCount)", label: isComboChallengeMode ? "Detections" : "Attempts", color: Color(hex: "2196F3"))
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -266,9 +690,9 @@ struct PracticeModeView: View {
     }
     
     private var accuracyGradient: LinearGradient {
-        if currentAccuracy >= 90 {
+        if displayedAccuracy >= 90 {
             return LinearGradient(colors: [Color(hex: "4CAF50"), Color(hex: "8BC34A")], startPoint: .leading, endPoint: .trailing)
-        } else if currentAccuracy >= 70 {
+        } else if displayedAccuracy >= 70 {
             return LinearGradient(colors: [Color(hex: "FF9800"), Color(hex: "FFC107")], startPoint: .leading, endPoint: .trailing)
         } else {
             return LinearGradient(colors: [Color(hex: "F44336"), Color(hex: "FF5722")], startPoint: .leading, endPoint: .trailing)
@@ -279,6 +703,10 @@ struct PracticeModeView: View {
     
     private var bottomControls: some View {
         VStack(spacing: 16) {
+            if isSessionActive {
+                audioStatusCard
+            }
+
             // Audio level indicator
             if isSessionActive {
                 AudioLevelIndicator(level: audioEngine.inputLevel)
@@ -286,21 +714,205 @@ struct PracticeModeView: View {
             
             // Tips
             if isSessionActive {
-                Text("💡 \(scratch.tips.randomElement() ?? "Focus on clean execution")")
-                    .font(.custom("Futura-Medium", size: 12))
-                    .foregroundColor(.white.opacity(0.7))
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.3))
-                    .cornerRadius(8)
+                HStack(spacing: 8) {
+                    Text("TIP")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(Color(hex: "FFD700"))
+
+                    Text(currentTipText)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.8))
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.3))
+                .cornerRadius(8)
             }
         }
         .padding(.bottom, 40)
+    }
+
+    private var audioStatusCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: micStatusIcon)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(micStatusColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(micStatusTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+
+                    Text(micStatusDetail)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.75))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Circle()
+                    .fill(micStatusColor)
+                    .frame(width: 10, height: 10)
+            }
+
+            if let sessionAudioNote {
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 1)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "music.note.slash")
+                        .foregroundColor(Color(hex: "F59E0B"))
+
+                    Text(sessionAudioNote)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if showsBabyScratchMotionFeedback {
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 1)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("AUDIO MOTION")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.white.opacity(0.55))
+
+                        Spacer()
+
+                        Text(scratchMotionBalanceText)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(scratchMotionColor, in: Capsule())
+                    }
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        audioMotionChip(title: "Direction", value: audioEngine.scratchMotionDirection.label)
+                        audioMotionChip(title: "Forward", value: scratchMotionForwardDurationText)
+                        audioMotionChip(title: "Back", value: scratchMotionBackwardDurationText)
+                        audioMotionChip(title: "Error", value: scratchMotionTimingErrorText)
+                    }
+                }
+            }
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(practiceBeatStore.isBeatEnabled ? "Practice beat ready" : "Practice beat off")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white)
+
+                    Text(practiceBeatStore.isBeatEnabled
+                        ? "\(practiceBeatStore.beatEngineMode.title) • \(practiceBeatStore.bpmValue) BPM"
+                        : "Turn beat guidance on in setup if you want metronome help.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+
+                Spacer()
+
+                Button(action: { practiceBeatStore.togglePlayback() }) {
+                    Text(practiceBeatStore.isPlaying ? "Stop Beat" : "Play Beat")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            practiceBeatStore.isBeatEnabled
+                                ? Color(hex: practiceBeatStore.isPlaying ? "F59E0B" : "22C55E")
+                                : Color.white.opacity(0.22),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                }
+                .disabled(!practiceBeatStore.isBeatEnabled)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.55))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(micStatusColor.opacity(0.35), lineWidth: 1)
+        )
+        .cornerRadius(14)
+        .padding(.horizontal, 20)
+    }
+
+    private func audioMotionChip(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white.opacity(0.48))
+
+            Text(value)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var comboProgressCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Current Phrase")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(Color(hex: "FFD700"))
+
+                Spacer()
+
+                Text("Best \(comboBestLockedStepCount)/\(max(1, comboTargetStepCount))")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.75))
+            }
+
+            HStack(spacing: 10) {
+                ForEach(0..<max(1, comboTargetStepCount), id: \.self) { index in
+                    Capsule()
+                        .fill(comboStepsHitThisLoop.contains(index) ? Color(hex: "4CAF50") : Color.white.opacity(0.18))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 12)
+                        .overlay(
+                            Text("\(index + 1)")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(comboStepsHitThisLoop.contains(index) ? .black : .white.opacity(0.65))
+                        )
+                }
+            }
+
+            Text(comboCompleted
+                ? "Phrase locked. Result screen incoming."
+                : "Window live: \(comboLockedStepCount)/\(max(1, comboTargetStepCount)) hits chained.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.72))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.45))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(hex: "00BCD4").opacity(0.4), lineWidth: 1.5)
+        )
+        .cornerRadius(12)
     }
     
     // MARK: - Session Management
     
     private func setupAudioEngine() {
+        practiceBeatStore.configurePracticeContext(
+            scratchID: activeScratch.id,
+            preferredBPM: isGuidedDrillMode ? Int(drillBPM.rounded()) : nil
+        )
         audioEngine.start()
         audioEngine.onScratchDetected = { [self] result in
             handleScratchDetected(result)
@@ -308,68 +920,65 @@ struct PracticeModeView: View {
     }
     
     private func startSession() {
-        timeRemaining = selectedDuration
+        let sessionDuration = activeSessionDuration
+        timeRemaining = sessionDuration
         currentScore = 0
         currentAccuracy = 0
         attemptCount = 0
         currentStreak = 0
         bestStreak = 0
+        drillElapsedSeconds = 0
+        drillLoopCount = 0
+        drillBeatInLoop = 0
+        activeDrillEventIndex = nil
+        comboStepsHitThisLoop.removeAll()
+        comboBestRunCount = 0
+        comboTrackedLoopCount = 0
+        comboCompleted = false
+        comboCompletionQueued = false
+        sessionProgressPersisted = false
+        comboPhraseStartedAt = nil
+        lastComboLockAt = nil
+        sessionTipText = isComboChallengeMode
+            ? "Chain all \(comboTargetStepCount) baby scratches before the phrase window resets."
+            : (activeScratch.tips.randomElement() ?? "Focus on clean execution")
         
         isSessionActive = true
         isPaused = false
         
         // Start audio analysis
-        audioEngine.startAnalyzing(for: scratch)
-        
-        // Load and play backing track
-        audioEngine.loadBackingTrack(named: scratch.backingTrackName)
-        audioEngine.playBackingTrack()
-        
-        // Start timer
-        sessionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            if timeRemaining > 0 {
-                timeRemaining -= 1
-            } else {
-                endSession()
-            }
+        audioEngine.startAnalyzing(for: activeScratch)
+
+        if isGuidedDrillMode {
+            updateGuidedDrillState()
         }
+
+        startSessionTimer()
     }
     
     private func pauseSession() {
         isPaused = true
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
-        audioEngine.pauseBackingTrack()
+        practiceBeatStore.stopPlayback()
     }
     
     private func resumeSession() {
         isPaused = false
-        audioEngine.startAnalyzing(for: scratch)
-        audioEngine.playBackingTrack()
-        
-        sessionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            if timeRemaining > 0 {
-                timeRemaining -= 1
-            } else {
-                endSession()
-            }
-        }
+        audioEngine.startAnalyzing(for: activeScratch)
+
+        startSessionTimer()
     }
     
     private func endSession() {
+        finalizeComboLoopProgress()
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
-        audioEngine.stopBackingTrack()
+        practiceBeatStore.stopPlayback()
         
         isSessionActive = false
         showingResults = true
-        
-        // Save progress
-        progressManager.recordScratchAttempt(
-            scratchID: scratch.id,
-            accuracy: currentAccuracy,
-            duration: selectedDuration - timeRemaining
-        )
+        persistSessionProgressIfNeeded()
     }
     
     private func resetSession() {
@@ -379,6 +988,19 @@ struct PracticeModeView: View {
         attemptCount = 0
         currentStreak = 0
         bestStreak = 0
+        drillElapsedSeconds = 0
+        drillLoopCount = 0
+        drillBeatInLoop = 0
+        activeDrillEventIndex = nil
+        comboStepsHitThisLoop.removeAll()
+        comboBestRunCount = 0
+        comboTrackedLoopCount = 0
+        comboCompleted = false
+        comboCompletionQueued = false
+        sessionProgressPersisted = false
+        comboPhraseStartedAt = nil
+        lastComboLockAt = nil
+        sessionTipText = ""
         showingResults = false
         isSessionActive = false
     }
@@ -386,7 +1008,20 @@ struct PracticeModeView: View {
     private func cleanupSession() {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
-        audioEngine.stopBackingTrack()
+        practiceBeatStore.stopPlayback()
+        drillElapsedSeconds = 0
+        drillLoopCount = 0
+        drillBeatInLoop = 0
+        activeDrillEventIndex = nil
+        comboStepsHitThisLoop.removeAll()
+        comboBestRunCount = 0
+        comboTrackedLoopCount = 0
+        comboCompleted = false
+        comboCompletionQueued = false
+        sessionProgressPersisted = false
+        comboPhraseStartedAt = nil
+        lastComboLockAt = nil
+        sessionTipText = ""
     }
     
     private func handleScratchDetected(_ result: ScratchAnalysisResult) {
@@ -404,6 +1039,17 @@ struct PracticeModeView: View {
         let accuracyMultiplier = result.accuracy / 100.0
         let streakMultiplier = 1.0 + (Double(currentStreak) * 0.1)
         currentScore += Int(Double(basePoints) * accuracyMultiplier * streakMultiplier)
+
+        let comboStepLocked = registerComboHitIfNeeded(result)
+
+        if isGuidedDrillMode, let event = activeDrillEvent, !isComboChallengeMode {
+            let onTargetScratch = (result.matchedScratchID == event.scratchID)
+            if onTargetScratch && result.timing.isOnBeat {
+                currentScore += 75
+            } else if onTargetScratch {
+                currentScore += 35
+            }
+        }
         
         // Update streak
         if result.accuracy >= 70 {
@@ -417,12 +1063,28 @@ struct PracticeModeView: View {
         
         // Show feedback
         lastFeedback = result.feedback
-        lastAccuracyValue = result.accuracy
+        if isComboChallengeMode {
+            if comboCompleted {
+                lastFeedback.insert("Phrase cleared: \(comboTargetStepCount)/\(comboTargetStepCount) locked", at: 0)
+            } else if comboStepLocked {
+                lastFeedback.insert("Locked step \(comboLockedStepCount)/\(max(1, comboTargetStepCount))", at: 0)
+            } else {
+                lastFeedback.insert("Keep the phrase moving and lock the next baby hit.", at: 0)
+            }
+        } else if isGuidedDrillMode {
+            if let event = activeDrillEvent, result.matchedScratchID == event.scratchID {
+                lastFeedback.insert("On cue: \(drillCueTitle(for: event))", at: 0)
+            } else if let event = activeDrillEvent {
+                lastFeedback.insert("Target now: \(drillCueTitle(for: event))", at: 0)
+            }
+        }
+        lastAccuracyValue = isComboChallengeMode ? displayedAccuracy : result.accuracy
         
         // Determine feedback color
-        if result.accuracy >= 90 {
+        let feedbackScore = isComboChallengeMode ? displayedAccuracy : result.accuracy
+        if feedbackScore >= 90 {
             feedbackColor = Color(hex: "4CAF50")
-        } else if result.accuracy >= 70 {
+        } else if feedbackScore >= 70 {
             feedbackColor = Color(hex: "FF9800")
         } else {
             feedbackColor = Color(hex: "F44336")
@@ -446,12 +1108,219 @@ struct PracticeModeView: View {
                 pulseRing = false
             }
         }
+
+        if comboCompleted {
+            queueComboCompletion()
+        }
     }
     
     private func formatTime(_ seconds: TimeInterval) -> String {
         let mins = Int(seconds) / 60
         let secs = Int(seconds) % 60
         return String(format: "%d:%02d", mins, secs)
+    }
+
+    private func formatScratchMotionDuration(_ duration: TimeInterval?) -> String {
+        guard let duration else { return "—" }
+        return "\(Int((duration * 1_000).rounded())) ms"
+    }
+
+    private func startSessionTimer() {
+        sessionTimer?.invalidate()
+
+        let tick: TimeInterval = isGuidedDrillMode ? 0.1 : 1.0
+        sessionTimer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { _ in
+            if timeRemaining > tick {
+                timeRemaining -= tick
+            } else {
+                timeRemaining = 0
+                endSession()
+                return
+            }
+
+            if isGuidedDrillMode {
+                drillElapsedSeconds += tick
+                updateGuidedDrillState()
+            }
+
+            if isComboChallengeMode {
+                refreshComboPhraseWindow()
+            }
+        }
+    }
+
+    private func updateGuidedDrillState() {
+        guard isGuidedDrillMode,
+              let timeline = drillTimeline else {
+            activeDrillEventIndex = nil
+            drillLoopCount = 0
+            drillBeatInLoop = 0
+            return
+        }
+
+        let secondsPerBeat = 60.0 / max(1, Double(practiceBeatStore.bpmValue))
+        let elapsedBeats = drillElapsedSeconds / secondsPerBeat
+        let totalBeats = max(0.0001, timeline.totalBeats)
+        let loopCount = Int(floor(elapsedBeats / totalBeats))
+        let beatInLoop = elapsedBeats.truncatingRemainder(dividingBy: totalBeats)
+
+        comboTrackedLoopCount = loopCount
+        drillLoopCount = max(0, loopCount)
+        drillBeatInLoop = beatInLoop
+
+        activeDrillEventIndex = normalizedDrillEvents.firstIndex(where: { event in
+            let endBeat = event.startBeat + max(0.0001, event.durationBeats)
+            return beatInLoop >= event.startBeat && beatInLoop < endBeat
+        })
+
+        if activeDrillEventIndex == nil {
+            activeDrillEventIndex = normalizedDrillEvents.firstIndex(where: { beatInLoop < $0.startBeat })
+                ?? normalizedDrillEvents.indices.last
+        }
+    }
+
+    private func drillCueTitle(for event: ScratchRenderEvent) -> String {
+        let directionLabel = event.direction == .forward ? "Forward" : "Reverse"
+        let scratchName = ScratchLibrary.shared.scratch(byID: event.scratchID)?.name ?? event.scratchID
+        return "\(directionLabel) \(scratchName)"
+    }
+
+    private func finalizeComboLoopProgress() {
+        guard isComboChallengeMode else { return }
+        comboBestRunCount = max(comboBestRunCount, comboStepsHitThisLoop.count)
+    }
+
+    private func persistSessionProgressIfNeeded() {
+        guard !sessionProgressPersisted else { return }
+
+        let elapsedDuration = max(0, activeSessionDuration - timeRemaining)
+        progressManager.recordScratchAttempt(
+            scratchID: activeScratch.id,
+            accuracy: currentAccuracy,
+            duration: elapsedDuration
+        )
+
+        if isComboChallengeMode {
+            progressManager.recordComboAttempt(levelID: 1, accuracy: comboProgressPercent)
+        }
+
+        sessionProgressPersisted = true
+    }
+
+    private func registerComboHitIfNeeded(_ result: ScratchAnalysisResult) -> Bool {
+        guard isComboChallengeMode else {
+            return false
+        }
+
+        let now = Date()
+        refreshComboPhraseWindow(now: now)
+
+        let expectedStepIndex = comboLockedStepCount
+        guard normalizedDrillEvents.indices.contains(expectedStepIndex),
+              result.matchedScratchID == normalizedDrillEvents[expectedStepIndex].scratchID else {
+            return false
+        }
+        guard result.accuracy >= comboMinimumAccuracy else { return false }
+        if let lastComboLockAt,
+           now.timeIntervalSince(lastComboLockAt) < comboLockCooldown {
+            return false
+        }
+
+        let inserted = comboStepsHitThisLoop.insert(expectedStepIndex).inserted
+        guard inserted else { return false }
+
+        if comboPhraseStartedAt == nil {
+            comboPhraseStartedAt = now
+        }
+        lastComboLockAt = now
+        comboBestRunCount = max(comboBestRunCount, comboStepsHitThisLoop.count)
+        currentScore += 125
+        if comboStepsHitThisLoop.count >= comboTargetStepCount {
+            comboCompleted = true
+            currentScore += comboChallenge?.bonusPoints ?? 300
+        }
+
+        return true
+    }
+
+    private func refreshComboPhraseWindow(now: Date = Date()) {
+        guard isComboChallengeMode, !comboCompleted, !comboStepsHitThisLoop.isEmpty else { return }
+
+        if let comboPhraseStartedAt,
+           now.timeIntervalSince(comboPhraseStartedAt) > comboPhraseWindow {
+            resetComboPhraseProgress(reason: "window timeout")
+            return
+        }
+
+        if let lastComboLockAt,
+           now.timeIntervalSince(lastComboLockAt) > comboResetInactivity {
+            resetComboPhraseProgress(reason: "inactivity")
+        }
+    }
+
+    private func resetComboPhraseProgress(reason _: String) {
+        guard !comboStepsHitThisLoop.isEmpty else {
+            comboPhraseStartedAt = nil
+            lastComboLockAt = nil
+            return
+        }
+
+        finalizeComboLoopProgress()
+        comboStepsHitThisLoop.removeAll()
+        comboPhraseStartedAt = nil
+        lastComboLockAt = nil
+    }
+
+    private func queueComboCompletion() {
+        guard isComboChallengeMode, comboCompleted, !comboCompletionQueued else { return }
+
+        comboCompletionQueued = true
+        finalizeComboLoopProgress()
+        sessionTimer?.invalidate()
+        audioEngine.stopAnalyzing()
+        practiceBeatStore.stopPlayback()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            endSession()
+        }
+    }
+
+    private var guidedDrillCueCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Current Cue", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "38BDF8"))
+
+                Spacer()
+
+                if let activeDrillEventIndex {
+                    Text("Step \(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.74))
+                }
+            }
+
+            Text(activeDrillEvent.map(drillCueTitle(for:)) ?? "Get Ready")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundColor(.white)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                Text("Loop \(drillLoopCount + 1)")
+                Text("Beat \(drillBeatInLoop.formatted(.number.precision(.fractionLength(0...2))))")
+            }
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundColor(.white.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.black.opacity(0.62))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(hex: "38BDF8").opacity(0.45), lineWidth: 1.5)
+        )
+        .cornerRadius(8)
     }
 }
 
@@ -499,13 +1368,19 @@ struct AudioLevelIndicator: View {
                 Rectangle()
                     .fill(barColor(for: i))
                     .frame(width: 8, height: 30)
-                    .opacity(Float(i) / 20.0 < level * 5 ? 1.0 : 0.3)
+                    .opacity(i < activeBarCount ? 1.0 : 0.2)
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
         .background(Color.black.opacity(0.5))
         .cornerRadius(8)
+    }
+
+    private var activeBarCount: Int {
+        let boostedLevel = min(max(level * 60, 0), 1)
+        let normalized = sqrtf(boostedLevel)
+        return max(0, min(20, Int(ceilf(normalized * 20))))
     }
     
     private func barColor(for index: Int) -> Color {
@@ -521,6 +1396,31 @@ struct AudioLevelIndicator: View {
 
 // MARK: - Stat Display
 
+struct PracticeStatusChip: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.58))
+
+            Text(value)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.46), in: Capsule())
+    }
+}
+
 struct StatDisplay: View {
     let icon: String
     let value: String
@@ -534,11 +1434,11 @@ struct StatDisplay: View {
                     .font(.caption)
                     .foregroundColor(color)
                 Text(value)
-                    .font(.custom("Futura-Bold", size: 18))
+                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
             }
             Text(label)
-                .font(.custom("Futura-Medium", size: 10))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.6))
         }
     }
@@ -579,8 +1479,24 @@ struct AccuracyBurstView: View {
 
 struct SessionSetupOverlay: View {
     let scratch: Scratch
+    let coachInstruction: ScratchCoachInstruction
+    @ObservedObject var practiceBeatStore: PracticeBeatStore
     @Binding var selectedDuration: TimeInterval
     let durationOptions: [(String, TimeInterval)]
+    let sessionTitle: String
+    let sessionDescription: String?
+    let objectiveText: String?
+    let modeNote: String?
+    let fixedDurationLabel: String?
+    let startButtonTitle: String
+    let selectedInputSource: AudioInputSource
+    let inputSourceOptions: [AudioInputSource]
+    let activeInputName: String
+    let inputRouteHint: String
+    let topSafeAreaInset: CGFloat
+    let bottomSafeAreaInset: CGFloat
+    let onSelectInputSource: (AudioInputSource) -> Void
+    let onShowCoachPreview: () -> Void
     let onStart: () -> Void
     let onTutorial: () -> Void
     let onBack: () -> Void
@@ -589,76 +1505,477 @@ struct SessionSetupOverlay: View {
         ZStack {
             Color.black.opacity(0.8)
                 .ignoresSafeArea()
-            
-            VStack(spacing: 32) {
-                // Header
-                VStack(spacing: 8) {
-                    Text("PRACTICE")
-                        .font(.custom("Futura-Bold", size: 16))
-                        .foregroundColor(Color(hex: "FFD700"))
-                    
-                    Text(scratch.name)
-                        .font(.custom("Futura-Bold", size: 32))
-                        .foregroundColor(.white)
-                    
-                    Text(scratch.description)
-                        .font(.custom("Futura-Medium", size: 14))
-                        .foregroundColor(.white.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-                
-                // Duration selector
-                VStack(spacing: 12) {
-                    Text("SESSION LENGTH")
-                        .font(.custom("Futura-Bold", size: 12))
-                        .foregroundColor(.white.opacity(0.5))
-                    
-                    HStack(spacing: 12) {
-                        ForEach(durationOptions, id: \.1) { option in
-                            Button(action: { selectedDuration = option.1 }) {
-                                Text(option.0)
-                                    .font(.custom("Futura-Bold", size: 16))
-                                    .foregroundColor(selectedDuration == option.1 ? .black : .white)
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 12)
-                                    .background(selectedDuration == option.1 ? Color(hex: "FFD700") : Color.white.opacity(0.1))
-                                    .cornerRadius(12)
+            ScrollView(showsIndicators: true) {
+                VStack(spacing: 22) {
+                    // Header
+                    VStack(spacing: 6) {
+                        Text(sessionTitle)
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(Color(hex: "FFD700"))
+
+                        Text(scratch.name)
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.white)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.82)
+                            .multilineTextAlignment(.center)
+
+                        Text(sessionDescription ?? scratch.description)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 28)
+                    }
+
+                    PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)
+
+                    if let fixedDurationLabel {
+                        VStack(spacing: 12) {
+                            Text("CHALLENGE LENGTH")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white.opacity(0.5))
+
+                            Text(fixedDurationLabel)
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(Color.white.opacity(0.1))
+                                .cornerRadius(12)
+                        }
+                    } else {
+                        // Duration selector
+                        VStack(spacing: 12) {
+                            Text("SESSION LENGTH")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white.opacity(0.5))
+
+                            HStack(spacing: 12) {
+                                ForEach(durationOptions, id: \.1) { option in
+                                    Button(action: { selectedDuration = option.1 }) {
+                                        Text(option.0)
+                                            .font(.system(size: 16, weight: .bold))
+                                            .foregroundColor(selectedDuration == option.1 ? .black : .white)
+                                            .padding(.horizontal, 20)
+                                            .padding(.vertical, 12)
+                                            .background(selectedDuration == option.1 ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                                            .cornerRadius(12)
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                
-                // Buttons
-                VStack(spacing: 12) {
-                    Button(action: onStart) {
-                        Text("START SESSION")
-                            .font(.custom("Futura-Bold", size: 18))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color(hex: "FFD700"))
-                            .cornerRadius(16)
+
+                    if let objectiveText {
+                        Text(objectiveText)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white.opacity(0.74))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
                     }
-                    
-                    Button(action: onTutorial) {
-                        HStack {
-                            Image(systemName: "play.circle.fill")
-                            Text("Watch Tutorial First")
+
+                    if let modeNote {
+                        Text(modeNote)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white.opacity(0.74))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
+
+                    ScratchCoachCard(
+                        instruction: coachInstruction,
+                        practiceBeatStore: practiceBeatStore
+                    )
+
+                    #if DEBUG && canImport(RealityKit)
+                    Button(action: onShowCoachPreview) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "figure.stand")
+                                .font(.system(size: 15, weight: .bold))
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Open Coach Preview")
+                                    .font(.system(size: 14, weight: .bold))
+
+                                Text("View coach animation and motion response.")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.74))
+                            }
+
+                            Spacer()
                         }
-                        .font(.custom("Futura-Medium", size: 14))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(14)
+                    }
+                    .padding(.horizontal, 16)
+                    .accessibilityIdentifier("practice-coach-preview-button")
+                    #endif
+
+                    VStack(spacing: 12) {
+                        Text("AUDIO INPUT")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white.opacity(0.5))
+
+                        HStack(spacing: 12) {
+                            ForEach(inputSourceOptions, id: \.self) { source in
+                                Button(action: { onSelectInputSource(source) }) {
+                                    VStack(spacing: 6) {
+                                        Text(source.practiceLabel)
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundColor(selectedInputSource == source ? .black : .white)
+
+                                        Text(source == .lineIn ? "USB / interface" : "Room / turntable mic")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(selectedInputSource == source ? .black.opacity(0.72) : .white.opacity(0.62))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 12)
+                                    .background(selectedInputSource == source ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                                    .cornerRadius(12)
+                                }
+                            }
+                        }
+
+                        VStack(spacing: 6) {
+                            Text("Current route: \(activeInputName)")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.white)
+
+                            Text(inputRouteHint)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white.opacity(0.66))
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.horizontal, 28)
+                    }
+
+                    // Buttons
+                    VStack(spacing: 12) {
+                        Button(action: onStart) {
+                            Text(startButtonTitle)
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color(hex: "FFD700"))
+                                .cornerRadius(16)
+                        }
+
+                        Button(action: onTutorial) {
+                            HStack {
+                                Image(systemName: "play.circle.fill")
+                                Text("Watch Tutorial First")
+                            }
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.7))
+                        }
+                    }
+                    .padding(.horizontal, 24)
+
+                    Button(action: onBack) {
+                        Text("Back to Practice")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
                     }
                 }
-                .padding(.horizontal, 40)
-                
-                Button(action: onBack) {
-                    Text("Back to Level")
-                        .font(.custom("Futura-Medium", size: 14))
-                        .foregroundColor(.white.opacity(0.5))
+                .padding(.top, topSafeAreaInset + 12)
+                .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
+            }
+        }
+    }
+}
+
+private struct ScratchCoachCard: View {
+    let instruction: ScratchCoachInstruction
+    @ObservedObject var practiceBeatStore: PracticeBeatStore
+    @StateObject private var demoPlayer = ScratchCoachDemoAudioPlayer()
+
+    private let theme = ScratchCoachCardTheme(
+        accentColor: Color(hex: "FFD700"),
+        primaryTextColor: .white,
+        secondaryTextColor: .white.opacity(0.72),
+        bubbleFill: Color.white.opacity(0.08),
+        bubbleOutline: Color.white.opacity(0.12),
+        illustrationFill: Color.white.opacity(0.06),
+        detailFill: Color.white.opacity(0.06),
+        controllerFill: Color.black.opacity(0.18),
+        controllerTrackColor: Color.white.opacity(0.16),
+        inactiveKnobColor: Color.white.opacity(0.38)
+    )
+
+    private var demoInstructionKey: String {
+        "\(instruction.scratchType)|\(instruction.demoAudioFile ?? "")|\(instruction.demoAudioRole)"
+    }
+
+    private var isDemoPlaybackBlocked: Bool {
+        practiceBeatStore.isPlaying
+    }
+
+    private var demoStatusMessage: String {
+        if instruction.scratchType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Choose a scratch to load a coach demo."
+        }
+        if isDemoPlaybackBlocked {
+            return "Stop the practice beat to hear the coach demo."
+        }
+        if !demoPlayer.isAudioAvailable {
+            return "Demo audio unavailable for this scratch."
+        }
+        return instruction.demoAudioRole == "withBeat"
+            ? "Coach demo includes beat and scratch together."
+            : "Coach demo is isolated for scratch focus."
+    }
+
+    var body: some View {
+        ScratchCoachCardContent(
+            instruction: instruction,
+            demoStatusMessage: demoStatusMessage,
+            playbackTimeProvider: { demoPlayer.currentPlaybackTime },
+            isPlayingProvider: { demoPlayer.isActivelyPlayingAudio },
+            theme: theme
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    coachDemoButton(
+                        title: "Listen",
+                        icon: "play.fill",
+                        enabled: demoPlayer.isAudioAvailable && !isDemoPlaybackBlocked,
+                        action: demoPlayer.play
+                    )
+
+                    coachDemoButton(
+                        title: "Pause",
+                        icon: "pause.fill",
+                        enabled: demoPlayer.isPlaying && !isDemoPlaybackBlocked,
+                        action: demoPlayer.pause
+                    )
+
+                    coachDemoButton(
+                        title: "Replay",
+                        icon: "gobackward",
+                        enabled: demoPlayer.isAudioAvailable && !isDemoPlaybackBlocked,
+                        action: demoPlayer.replay
+                    )
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color.white.opacity(0.08))
+        .cornerRadius(16)
+        .padding(.horizontal, 16)
+        .accessibilityIdentifier("scratchlab-coach-card")
+        .onAppear {
+            demoPlayer.configure(with: instruction)
+        }
+        .onChange(of: demoInstructionKey) { _, _ in
+            demoPlayer.configure(with: instruction)
+        }
+        .onChange(of: practiceBeatStore.isPlaying) { _, isPlaying in
+            guard isPlaying else { return }
+            demoPlayer.stop()
+        }
+        .onDisappear {
+            demoPlayer.stop()
+        }
+    }
+
+    private func coachDemoButton(
+        title: String,
+        icon: String,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(title)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(enabled ? .black : .white.opacity(0.5))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(enabled ? Color(hex: "FFD700") : Color.white.opacity(0.08))
+            .cornerRadius(10)
+        }
+        .disabled(!enabled)
+    }
+}
+
+private struct PracticeBeatControlsCard: View {
+    private static let beatModeColumns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    @ObservedObject var practiceBeatStore: PracticeBeatStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("PRACTICE BEAT")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.white.opacity(0.5))
+
+                Spacer()
+
+                Text(practiceBeatStore.isBeatEnabled ? PracticeBeatUIContract.beatOnLabel : PracticeBeatUIContract.noBeatLabel)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(practiceBeatStore.isBeatEnabled ? Color(hex: "22C55E") : .white.opacity(0.64))
+            }
+
+            HStack(spacing: 10) {
+                Button(action: { practiceBeatStore.setBeatEnabled(false) }) {
+                    Text(PracticeBeatUIContract.noBeatLabel)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(!practiceBeatStore.isBeatEnabled ? .black : .white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(!practiceBeatStore.isBeatEnabled ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                        .cornerRadius(10)
+                }
+                .accessibilityIdentifier("practice-beat-no-beat-button")
+
+                Button(action: { practiceBeatStore.setBeatEnabled(true) }) {
+                    Text(PracticeBeatUIContract.beatOnLabel)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(practiceBeatStore.isBeatEnabled ? .black : .white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(practiceBeatStore.isBeatEnabled ? Color(hex: "22C55E") : Color.white.opacity(0.1))
+                        .cornerRadius(10)
+                }
+                .accessibilityIdentifier("practice-beat-on-button")
+            }
+
+            if practiceBeatStore.isBeatEnabled {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Beat style")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.72))
+
+                    LazyVGrid(columns: Self.beatModeColumns, spacing: 10) {
+                        ForEach(practiceBeatStore.availableBeatModes) { mode in
+                            Button(action: { practiceBeatStore.selectBeatMode(mode) }) {
+                                HStack(spacing: 8) {
+                                    Text(mode.title)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(practiceBeatStore.selectedBeatMode == mode ? .black : .white)
+                                        .multilineTextAlignment(.leading)
+
+                                    Spacer(minLength: 0)
+
+                                    if practiceBeatStore.selectedBeatMode == mode {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(.black.opacity(0.78))
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 12)
+                                .background(
+                                    practiceBeatStore.selectedBeatMode == mode
+                                        ? Color(hex: "FFD700")
+                                        : Color.white.opacity(0.1)
+                                )
+                                .cornerRadius(10)
+                            }
+                            .accessibilityIdentifier("practice-beat-mode-\(mode.rawValue)")
+                        }
+                    }
+                }
+            } else {
+                Text("No beat. Keep the timing guide off and practise from live scratch audio only.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.72))
+            }
+
+            VStack(spacing: 10) {
+                HStack {
+                    Button(action: { practiceBeatStore.stepBPM(by: -1) }) {
+                        Image(systemName: "minus")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.white.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+
+                    Spacer()
+
+                    VStack(spacing: 2) {
+                        Text("\(practiceBeatStore.bpmValue) BPM")
+                            .font(.system(size: 22, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+
+                        Text("Range \(CaptureClickTrackDefaults.supportedBPMRange.lowerBound)-\(CaptureClickTrackDefaults.supportedBPMRange.upperBound)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+
+                    Spacer()
+
+                    Button(action: { practiceBeatStore.stepBPM(by: 1) }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.white.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    ForEach(practiceBeatStore.allowedBPMList, id: \.self) { bpm in
+                        Button(action: { practiceBeatStore.setBPM(bpm) }) {
+                            Text("\(bpm)")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(practiceBeatStore.bpmValue == bpm ? .black : .white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    practiceBeatStore.bpmValue == bpm ? Color(hex: "FFD700") : Color.white.opacity(0.1)
+                                )
+                                .cornerRadius(10)
+                        }
+                    }
+                }
+            }
+
+            Button(action: { practiceBeatStore.togglePlayback() }) {
+                Text(practiceBeatStore.isPlaying ? PracticeBeatUIContract.stopLabel : PracticeBeatUIContract.playLabel)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        practiceBeatStore.isBeatEnabled
+                            ? Color(hex: practiceBeatStore.isPlaying ? "F59E0B" : "22C55E")
+                            : Color.white.opacity(0.22)
+                    )
+                    .cornerRadius(12)
+            }
+            .disabled(!practiceBeatStore.isBeatEnabled)
+            .accessibilityIdentifier("practice-beat-playback-button")
+
+            if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
+                Text(playbackErrorMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "F59E0B"))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color.white.opacity(0.08))
+        .cornerRadius(16)
+        .padding(.horizontal, 20)
+        .accessibilityIdentifier(PracticeBeatUIContract.sectionAccessibilityID)
     }
 }
 
@@ -677,7 +1994,7 @@ struct PauseOverlayView: View {
             
             VStack(spacing: 24) {
                 Text("PAUSED")
-                    .font(.custom("Futura-Bold", size: 32))
+                    .font(.system(size: 32, weight: .bold))
                     .foregroundColor(.white)
                 
                 VStack(spacing: 12) {
@@ -704,7 +2021,7 @@ struct PauseButton: View {
                 Image(systemName: icon)
                 Text(title)
             }
-            .font(.custom("Futura-Bold", size: 16))
+            .font(.system(size: 16, weight: .bold))
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -722,10 +2039,15 @@ struct PauseButton: View {
 
 struct ResultsOverlayView: View {
     let scratch: Scratch
+    let sessionTitle: String?
+    let headline: String?
     let score: Int
     let accuracy: Double
+    let primaryMetricLabel: String
     let attempts: Int
     let bestStreak: Int
+    let detailNote: String?
+    let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
     
@@ -741,37 +2063,48 @@ struct ResultsOverlayView: View {
                 
                 // Result text
                 VStack(spacing: 8) {
-                    Text(accuracy >= 90 ? "MASTERY!" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!")
-                        .font(.custom("Futura-Bold", size: 28))
+                    Text(headline ?? (accuracy >= 90 ? "MASTERY!" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
+                        .font(.system(size: 28, weight: .bold))
                         .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
                     
-                    Text(scratch.name)
-                        .font(.custom("Futura-Medium", size: 16))
+                    Text(sessionTitle ?? scratch.name)
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                 }
                 
                 // Stats grid
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
-                    ResultStat(value: "\(Int(accuracy))%", label: "Accuracy", icon: "target")
+                    ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
                     ResultStat(value: "\(score)", label: "Score", icon: "star.fill")
                     ResultStat(value: "\(attempts)", label: "Attempts", icon: "number")
                     ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
                 }
                 .padding(.horizontal, 40)
+
+                if let detailNote {
+                    Text(detailNote)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.72))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
                 
                 // Progress to mastery
-                if accuracy < 90 {
+                let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
+                if accuracy < progressGoal {
                     VStack(spacing: 8) {
-                        Text("Progress to Mastery")
-                            .font(.custom("Futura-Medium", size: 12))
+                        Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Progress to Mastery")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
                         
-                        ProgressView(value: accuracy, total: 90)
+                        ProgressView(value: accuracy, total: progressGoal)
                             .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "FFD700")))
                             .padding(.horizontal, 40)
                         
-                        Text("\(Int(90 - accuracy))% more to master")
-                            .font(.custom("Futura-Medium", size: 11))
+                        Text(primaryMetricLabel == "Phrase Lock"
+                            ? "\(Int(progressGoal - accuracy))% more to clear the phrase"
+                            : "\(Int(progressGoal - accuracy))% more to master")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.white.opacity(0.4))
                     }
                 }
@@ -779,8 +2112,8 @@ struct ResultsOverlayView: View {
                 // Buttons
                 VStack(spacing: 12) {
                     Button(action: onContinue) {
-                        Text("PRACTICE AGAIN")
-                            .font(.custom("Futura-Bold", size: 16))
+                        Text(continueButtonTitle)
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.black)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
@@ -790,7 +2123,7 @@ struct ResultsOverlayView: View {
                     
                     Button(action: onExit) {
                         Text("Back to Level")
-                            .font(.custom("Futura-Medium", size: 14))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                     }
                 }
@@ -812,17 +2145,119 @@ struct ResultStat: View {
                 .foregroundColor(Color(hex: "FFD700"))
             
             Text(value)
-                .font(.custom("Futura-Bold", size: 24))
+                .font(.system(size: 24, weight: .bold))
                 .foregroundColor(.white)
             
             Text(label)
-                .font(.custom("Futura-Medium", size: 11))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.5))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
         .background(Color.white.opacity(0.05))
         .cornerRadius(12)
+    }
+}
+
+struct CaptureHelpView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onShowQuickStartAgain: () -> Void
+
+    private let quickStartSteps = [
+        "Use one drill per take.",
+        "Check camera, audio, and motion before recording.",
+        "Pause briefly before starting.",
+        "Review each take before continuing."
+    ]
+
+    private let checklistItems = [
+        "Decks and mixer visible",
+        "Audio routed",
+        "Motion active",
+        "Calibration confirmed"
+    ]
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(hex: "05070B"),
+                    Color(hex: "0B1018"),
+                    Color(hex: "101826")
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text("Capture Help")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Spacer()
+
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(.headline)
+                    .foregroundColor(Color(hex: "00D4FF"))
+                }
+
+                helpSection(title: "Quick Start", items: quickStartSteps)
+                helpSection(title: "Capture Checklist", items: checklistItems)
+
+                Button(action: showQuickStartAgain) {
+                    Text("Show Quick Start Again")
+                        .font(.headline)
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(Color(hex: "00D4FF"))
+                        .cornerRadius(8)
+                }
+                .accessibilityLabel("Show Quick Start Again")
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+        }
+    }
+
+    private func helpSection(title: String, items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(0.62))
+                .textCase(.uppercase)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(items, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(Color(hex: "00D4FF"))
+                            .padding(.top, 1)
+                            .accessibilityHidden(true)
+
+                        Text(item)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.white.opacity(0.84))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background(Color.white.opacity(0.06))
+            .cornerRadius(8)
+        }
+    }
+
+    private func showQuickStartAgain() {
+        dismiss()
+        onShowQuickStartAgain()
     }
 }
 
@@ -861,7 +2296,7 @@ struct TutorialOverlayView: View {
                             .foregroundColor(.white.opacity(0.8))
                         
                         Text("Tutorial Video")
-                            .font(.custom("Futura-Medium", size: 14))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                     }
                 }
@@ -870,11 +2305,11 @@ struct TutorialOverlayView: View {
                 // Scratch info
                 VStack(spacing: 16) {
                     Text(scratch.name)
-                        .font(.custom("Futura-Bold", size: 24))
+                        .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.white)
                     
                     Text(scratch.description)
-                        .font(.custom("Futura-Medium", size: 14))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
@@ -883,7 +2318,7 @@ struct TutorialOverlayView: View {
                 // Tips
                 VStack(alignment: .leading, spacing: 12) {
                     Text("TIPS")
-                        .font(.custom("Futura-Bold", size: 12))
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundColor(Color(hex: "FFD700"))
                     
                     ForEach(scratch.tips, id: \.self) { tip in
@@ -891,7 +2326,7 @@ struct TutorialOverlayView: View {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(Color(hex: "4CAF50"))
                             Text(tip)
-                                .font(.custom("Futura-Medium", size: 14))
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.white.opacity(0.8))
                         }
                     }
@@ -906,7 +2341,7 @@ struct TutorialOverlayView: View {
                 // Got it button
                 Button(action: onDismiss) {
                     Text("GOT IT")
-                        .font(.custom("Futura-Bold", size: 16))
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
@@ -922,9 +2357,14 @@ struct TutorialOverlayView: View {
 
 // MARK: - Preview
 
-#Preview {
-    PracticeModeView(scratch: ScratchLibrary.shared.allScratches[0])
-        .environmentObject(GameState())
-        .environmentObject(AudioEngine())
-        .environmentObject(ProgressManager())
+#if DEBUG
+struct PracticeModeView_Previews: PreviewProvider {
+    static var previews: some View {
+        PracticeModeView(scratch: ScratchLibrary.shared.allScratches[0])
+            .environmentObject(GameState())
+            .environmentObject(AudioEngine())
+            .environmentObject(ProgressManager())
+            .environmentObject(PracticeBeatStore())
+    }
 }
+#endif
