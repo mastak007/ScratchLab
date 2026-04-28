@@ -1690,8 +1690,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("#if DEBUG && canImport(RealityKit)"))
         XCTAssertTrue(source.contains(".sheet(isPresented: $showingCoachPreview)"))
         XCTAssertTrue(source.contains("CoachPreviewView()"))
-        XCTAssertTrue(source.contains("title: \"Coach Preview\""))
-        XCTAssertTrue(source.contains("subtitle: \"View coach animation and motion response\""))
+        XCTAssertTrue(source.contains("title: \"3D Coach Demo\""))
+        XCTAssertTrue(source.contains("subtitle: \"Preview the coach model reacting to your input\""))
         XCTAssertTrue(source.contains("action: { showingCoachPreview = true }"))
         XCTAssertFalse(source.contains("Debug only"))
     }
@@ -1706,8 +1706,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("CoachPreviewView()"))
         XCTAssertTrue(source.contains("onShowCoachPreview: { showingCoachPreview = true }"))
         XCTAssertTrue(source.contains(".accessibilityIdentifier(\"practice-coach-preview-button\")"))
-        XCTAssertTrue(source.contains("Text(\"Open Coach Preview\")"))
-        XCTAssertTrue(source.contains("Text(\"View coach animation and motion response.\")"))
+        XCTAssertTrue(source.contains("Text(\"Open 3D Coach Demo\")"))
+        XCTAssertTrue(source.contains("Text(\"Try the 3D coach in Demo mode\")"))
         XCTAssertFalse(source.contains("Debug only"))
     }
 

@@ -1594,10 +1594,10 @@ struct SessionSetupOverlay: View {
                                 .font(.system(size: 15, weight: .bold))
 
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Open Coach Preview")
+                                Text("Open 3D Coach Demo")
                                     .font(.system(size: 14, weight: .bold))
 
-                                Text("View coach animation and motion response.")
+                                Text("Try the 3D coach in Demo mode")
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundColor(.white.opacity(0.74))
                             }

@@ -227,8 +227,8 @@ struct MainMenuView: View {
 
             #if DEBUG && canImport(RealityKit)
             MenuButton(
-                title: "Coach Preview",
-                subtitle: "View coach animation and motion response",
+                title: "3D Coach Demo",
+                subtitle: "Preview the coach model reacting to your input",
                 icon: "cube.transparent",
                 accent: Color(hex: "8B5CF6"),
                 action: { showingCoachPreview = true }

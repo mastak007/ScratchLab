@@ -419,7 +419,7 @@ struct CoachPreviewView: View {
                 .padding(.bottom, 28)
             }
         }
-        .navigationTitle("Coach Preview")
+        .navigationTitle("3D Coach Demo")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             prepareAudioMonitoringIfNeeded()
