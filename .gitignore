@@ -27,3 +27,16 @@ DerivedData/
 
 # Local scratch workspace
 Untitled.xcworkspace/
+
+# Local AI/tooling
+.codex/
+
+# Build output
+build/
+
+# macOS
+.DS_Store
+
+# Xcode user-local files
+*.xcuserstate
+xcuserdata/
