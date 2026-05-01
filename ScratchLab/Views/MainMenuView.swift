@@ -17,6 +17,7 @@ struct MainMenuView: View {
     @State private var showingWatchCapture = false
     @State private var showingPerformerMonitor = false
     @State private var showingCoachPreview = false
+    @State private var showingDemoMode = false
 
     private var isIOSAppOnMac: Bool {
         ProcessInfo.processInfo.isiOSAppOnMac
@@ -60,6 +61,9 @@ struct MainMenuView: View {
         }
         .navigationDestination(isPresented: $showingPracticeHub) {
             LevelSelectView()
+        }
+        .navigationDestination(isPresented: $showingDemoMode) {
+            DemoModeView()
         }
         .navigationDestination(isPresented: $showingCompanionCam) {
             if isIOSAppOnMac {
@@ -192,6 +196,14 @@ struct MainMenuView: View {
     private var menuButtons: some View {
         VStack(spacing: 16) {
             MenuButton(
+                title: "Try Demo",
+                subtitle: "See scratch feedback instantly",
+                icon: "play.circle.fill",
+                accent: Color(hex: "FFD700"),
+                action: { showingDemoMode = true }
+            )
+
+            MenuButton(
                 title: "Live Practice",
                 subtitle: "Pick a scratch and practice from mic or wired input",
                 icon: "waveform",
@@ -280,6 +292,354 @@ private struct UnsupportedCompanionCameraView: View {
         }
         .navigationTitle("Companion Camera")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct DemoModeView: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var demoController = ScratchLabDemoModeController()
+    @StateObject private var exportCoordinator = SessionExportCoordinator()
+    @State private var isBuildingExportPackage = false
+
+    private let theme = ScratchCoachCardTheme(
+        accentColor: Color(hex: "FFD700"),
+        primaryTextColor: .white,
+        secondaryTextColor: .white.opacity(0.72),
+        bubbleFill: Color.white.opacity(0.08),
+        bubbleOutline: Color.white.opacity(0.12),
+        illustrationFill: Color.white.opacity(0.06),
+        detailFill: Color.white.opacity(0.06),
+        controllerFill: Color.black.opacity(0.18),
+        controllerTrackColor: Color.white.opacity(0.16),
+        inactiveKnobColor: Color.white.opacity(0.38)
+    )
+
+    private var exportShareRequestBinding: Binding<SessionShareRequest?> {
+        Binding(
+            get: { exportCoordinator.shareRequest },
+            set: { exportCoordinator.shareRequest = $0 }
+        )
+    }
+
+    private var motionBalanceText: String {
+        demoController.motionFeedback?.balance.rawValue ?? ScratchMotionBalance.listening.rawValue
+    }
+
+    private var motionBalanceColor: Color {
+        switch demoController.motionFeedback?.balance ?? .listening {
+        case .listening:
+            return Color(hex: "38BDF8")
+        case .balanced:
+            return Color(hex: "22C55E")
+        case .unbalanced:
+            return Color(hex: "EF4444")
+        }
+    }
+
+    private var timingErrorText: String {
+        guard let timingErrorMilliseconds = demoController.motionFeedback?.timingErrorMilliseconds else {
+            return "Analyzing"
+        }
+        return "\(timingErrorMilliseconds) ms"
+    }
+
+    private var exportButtonTitle: String {
+        if isBuildingExportPackage || exportCoordinator.isPreparing {
+            return "Preparing ZIP"
+        }
+        return "Export Demo ZIP"
+    }
+
+    private var exportStatusText: String {
+        if let statusMessage = exportCoordinator.statusMessage {
+            return statusMessage
+        }
+        return "Scratch Only export is ready for this demo session."
+    }
+
+    var body: some View {
+        ZStack {
+            BackgroundView()
+
+            ScrollView(showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    feedbackCard
+                    coachCard
+                    exportCard
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 32)
+            }
+        }
+        .navigationBarHidden(true)
+        .background(
+            SessionSharePresenter(
+                request: exportShareRequestBinding,
+                onPresented: {
+                    exportCoordinator.markSharePresented()
+                },
+                onOutcome: { outcome in
+                    exportCoordinator.handleShareOutcome(outcome)
+                }
+            )
+        )
+        .onAppear {
+            demoController.startDemo()
+        }
+        .onDisappear {
+            demoController.stopDemo()
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 42, height: 42)
+                        .background(Color.white.opacity(0.08), in: Circle())
+                }
+                .accessibilityLabel("Back")
+
+                Spacer()
+
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(demoController.isReady ? Color(hex: "22C55E") : Color(hex: "F59E0B"))
+                        .frame(width: 8, height: 8)
+
+                    Text("Demo Mode")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white.opacity(0.76))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.08), in: Capsule())
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Try Demo")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundColor(.white)
+
+                Text("Bundled baby scratch audio is playing through the feedback engine now.")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.white.opacity(0.74))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                demoStatusBadge(label: "Audio", value: "Bundled WAV", color: Color(hex: "FFD700"))
+                demoStatusBadge(label: "Hardware", value: "Not Required", color: Color(hex: "22C55E"))
+            }
+        }
+    }
+
+    private var feedbackCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Motion Feedback")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white.opacity(0.58))
+
+                    Text(motionBalanceText)
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+
+                Spacer()
+
+                ZStack {
+                    Circle()
+                        .stroke(motionBalanceColor.opacity(0.24), lineWidth: 9)
+                        .frame(width: 82, height: 82)
+
+                    Circle()
+                        .trim(from: 0, to: CGFloat(max(0.08, min(1, demoController.inputLevel))))
+                        .stroke(motionBalanceColor, style: StrokeStyle(lineWidth: 9, lineCap: .round))
+                        .frame(width: 82, height: 82)
+                        .rotationEffect(.degrees(-90))
+
+                    Image(systemName: "waveform")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(motionBalanceColor)
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                demoMetric(title: "Direction", value: demoController.motionDirection.label)
+                demoMetric(title: "Timing Error", value: timingErrorText)
+            }
+
+            Text(demoController.statusMessage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.68))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(motionBalanceColor.opacity(0.32), lineWidth: 1)
+        )
+    }
+
+    private var coachCard: some View {
+        ScratchCoachCardContent(
+            instruction: demoController.instruction,
+            demoStatusMessage: "Coach animation follows the bundled baby scratch demo.",
+            playbackTimeProvider: { demoController.demoPlayer.currentPlaybackTime },
+            isPlayingProvider: { demoController.demoPlayer.isActivelyPlayingAudio },
+            theme: theme
+        ) {
+            HStack(spacing: 10) {
+                demoControlButton(
+                    title: "Pause",
+                    icon: "pause.fill",
+                    enabled: demoController.demoPlayer.isPlaying,
+                    action: demoController.pauseDemo
+                )
+
+                demoControlButton(
+                    title: "Replay",
+                    icon: "gobackward",
+                    enabled: demoController.isReady,
+                    action: demoController.replayDemo
+                )
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var exportCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Demo Export")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Text(exportStatusText)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.68))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+            }
+
+            Button(action: exportDemoSession) {
+                HStack(spacing: 8) {
+                    if isBuildingExportPackage || exportCoordinator.isPreparing {
+                        ProgressView()
+                            .tint(.black)
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                    }
+
+                    Text(exportButtonTitle)
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(Color(hex: "FFD700"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(isBuildingExportPackage || exportCoordinator.isPreparing)
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private func exportDemoSession() {
+        guard !isBuildingExportPackage, !exportCoordinator.isPreparing else { return }
+        isBuildingExportPackage = true
+
+        Task {
+            do {
+                let package = try await Task.detached(priority: .userInitiated) {
+                    try ScratchLabDemoSessionBuilder().makePackage()
+                }.value
+                isBuildingExportPackage = false
+                exportCoordinator.prepareShare(
+                    for: .package(package),
+                    options: SessionExportOptions(mixMode: .scratchOnly)
+                )
+            } catch {
+                isBuildingExportPackage = false
+                exportCoordinator.showFailure(.unableToPrepareExport)
+            }
+        }
+    }
+
+    private func demoStatusBadge(label: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.56))
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func demoMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.white.opacity(0.48))
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func demoControlButton(
+        title: String,
+        icon: String,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(title)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(enabled ? .black : .white.opacity(0.5))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(enabled ? Color(hex: "FFD700") : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .disabled(!enabled)
     }
 }
 

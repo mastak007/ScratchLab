@@ -1964,7 +1964,7 @@ struct SessionArchiveBuilder: Sendable {
 
     private func usesLegacyCanonicalScratchContract(workflow: String) -> Bool {
         switch workflow {
-        case "routine_capture", "guided_capture":
+        case "routine_capture", "guided_capture", "demo_mode":
             return false
         default:
             return true
@@ -2419,7 +2419,7 @@ struct SessionArchiveBuilder: Sendable {
     ) throws -> [Int] {
         let sortedCoverage = bpmCoverage.sorted()
         switch workflow {
-        case "routine_capture", "guided_capture":
+        case "routine_capture", "guided_capture", "demo_mode":
             guard !sortedCoverage.isEmpty,
                   sortedCoverage.allSatisfy({ CaptureClickTrackDefaults.supportedBPMRange.contains($0) }) else {
                 throw SessionExportError.invalidSessionMetadata

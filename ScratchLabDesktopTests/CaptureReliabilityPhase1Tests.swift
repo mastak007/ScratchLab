@@ -1725,6 +1725,120 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains(".padding(.top, 16)"))
     }
 
+    func testDemoModeProducesFeedbackWithoutHardware() throws {
+        let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
+        let demoStart = try XCTUnwrap(mainMenuSource.range(of: "private struct DemoModeView: View"))
+        let demoEnd = try XCTUnwrap(mainMenuSource.range(of: "// MARK: - Menu Button Component"))
+        let demoSource = String(mainMenuSource[demoStart.lowerBound..<demoEnd.lowerBound])
+
+        XCTAssertTrue(mainMenuSource.contains("title: \"Try Demo\""))
+        XCTAssertTrue(mainMenuSource.contains("subtitle: \"See scratch feedback instantly\""))
+        XCTAssertTrue(mainMenuSource.contains(".navigationDestination(isPresented: $showingDemoMode)"))
+        XCTAssertTrue(demoSource.contains("ScratchLabDemoModeController()"))
+        XCTAssertTrue(demoSource.contains("demoController.startDemo()"))
+        XCTAssertTrue(demoSource.contains("ScratchCoachCardContent("))
+        XCTAssertTrue(demoSource.contains("Motion Feedback"))
+        XCTAssertFalse(demoSource.contains("CameraPreviewView("))
+        XCTAssertFalse(demoSource.contains("audioEngine.start()"))
+        XCTAssertFalse(demoSource.contains("requestRecordPermission"))
+
+        let coreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
+        XCTAssertTrue(coreSource.contains("final class ScratchLabDemoModeAnalyzer"))
+        XCTAssertTrue(coreSource.contains("private let motionAnalyzer = ScratchMotionAnalyzer()"))
+        XCTAssertTrue(coreSource.contains("static let demoAudioFileName = \"baby_noBeat.wav\""))
+
+        let macAnalyzerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let macAnalyzerSource = try String(contentsOf: macAnalyzerURL, encoding: .utf8)
+        let macDemoStart = try XCTUnwrap(macAnalyzerSource.range(of: "private var macDemoModeCard: some View"))
+        let macDemoEnd = try XCTUnwrap(macAnalyzerSource.range(of: "private var analyzerSidebar: some View"))
+        let macDemoSource = String(macAnalyzerSource[macDemoStart.lowerBound..<macDemoEnd.lowerBound])
+        XCTAssertTrue(macDemoSource.contains("Text(\"Try Demo\")"))
+        XCTAssertTrue(macDemoSource.contains("Text(\"See scratch feedback instantly\")"))
+        XCTAssertTrue(macDemoSource.contains("No hardware"))
+        XCTAssertTrue(macAnalyzerSource.contains("@StateObject private var demoModeController = ScratchLabDemoModeController()"))
+        XCTAssertTrue(macAnalyzerSource.contains("if liveInputEnabled {\n                startMacLiveInput()"))
+        XCTAssertTrue(macAnalyzerSource.contains("Button(liveInputEnabled ? \"Live Input Enabled\" : \"Start Live Input\")"))
+        XCTAssertTrue(macAnalyzerSource.contains("private func exportMacDemoSession()"))
+        XCTAssertTrue(macAnalyzerSource.contains("try ScratchLabDemoSessionBuilder().makePackage()"))
+        XCTAssertFalse(macAnalyzerSource.contains(".onAppear {\n            captureEngine.start()"))
+        XCTAssertFalse(macDemoSource.contains("captureEngine.start()"))
+        XCTAssertFalse(macDemoSource.contains("requestAccess"))
+
+        let audioURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
+
+        let sampleBuffer = try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+        let analyzer = ScratchLabDemoModeAnalyzer(sampleBuffer: sampleBuffer)
+        var producedBalances: [ScratchMotionBalance] = []
+        let frameCount = 1_024
+        let maximumFrameWindows = max(1, Int((sampleBuffer.duration * sampleBuffer.sampleRate) / Double(frameCount)))
+        for _ in 0..<maximumFrameWindows {
+            let frame = analyzer.processNextFrame(frameCount: frameCount)
+            if let balance = frame.feedback?.balance, balance != .listening {
+                producedBalances.append(balance)
+                break
+            }
+        }
+
+        XCTAssertFalse(producedBalances.isEmpty)
+        XCTAssertTrue(producedBalances.allSatisfy { $0 == .balanced || $0 == .unbalanced })
+    }
+
+    func testDemoModeExportSucceeds() throws {
+        let audioURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
+
+        let root = try makeTemporaryDirectory()
+        let builder = ScratchLabDemoSessionBuilder(audioURLProvider: { audioName in
+            audioName == ScratchLabDemoSessionBuilder.demoAudioFileName ? audioURL : nil
+        })
+        let package = try builder.makePackage(
+            rootDirectory: root.appendingPathComponent("demo-package", isDirectory: true),
+            sessionID: "demo-mode-test-session",
+            now: Date(timeIntervalSince1970: 1_720_010_000)
+        )
+
+        XCTAssertEqual(package.metadata.workflow, "demo_mode")
+        XCTAssertEqual(package.metadata.sessionName, "ScratchLab Demo")
+        XCTAssertEqual(package.metadata.scratchTypeID, CaptureSessionScratchType.babyScratch.rawValue)
+        XCTAssertEqual(package.metadata.takeCount, 1)
+        XCTAssertEqual(package.takes.count, 1)
+        XCTAssertEqual(package.takes.first?.audioPresent, true)
+        XCTAssertEqual(package.takes.first?.motionPresent, false)
+        XCTAssertNil(package.takes.first?.watchCaptureSession)
+        let demoTake = try XCTUnwrap(package.takes.first)
+        let demoAudioPath = try XCTUnwrap(demoTake.audioArtifactURL?.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: demoTake.mediaURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: demoAudioPath))
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try SessionArchiveBuilder().createArchive(
+            from: package,
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("demo-unzipped", isDirectory: true)
+        )
+        let metadata = try decodeSessionMetadataDocument(from: archiveRoot)
+        let exportMetadata = try decodeExportMetadataDocument(from: archiveRoot)
+
+        XCTAssertEqual(metadata.session.workflow, "demo_mode")
+        XCTAssertEqual(metadata.session.scratchTypeID, CaptureSessionScratchType.babyScratch.rawValue)
+        XCTAssertEqual(metadata.session.takeCount, 1)
+        XCTAssertEqual(metadata.takes.first?.captureMode, CaptureSessionCaptureMode.calibrationNoClick.rawValue)
+        XCTAssertEqual(exportMetadata.exportMixMode, ExportMixMode.scratchOnly.rawValue)
+        XCTAssertEqual(exportMetadata.takes.first?.exportMixMode, ExportMixMode.scratchOnly.rawValue)
+    }
+
     func testScratchLabIOSSchemeUsesForegroundLaunchWithoutLocationSimulation() throws {
         let schemeURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme")
         let scheme = try String(contentsOf: schemeURL, encoding: .utf8)

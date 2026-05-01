@@ -1838,6 +1838,588 @@ struct ScratchCoachDemoAnimator: Sendable {
     }
 }
 
+struct ScratchLabDemoAudioSampleBuffer: Sendable {
+    let samples: [Float]
+    let sampleRate: Double
+    let duration: TimeInterval
+
+    init(audioURL: URL) throws {
+        let audioFile = try AVAudioFile(forReading: audioURL)
+        let format = audioFile.processingFormat
+        guard format.sampleRate > 0,
+              format.channelCount > 0,
+              let buffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(audioFile.length)
+              ) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+
+        try audioFile.read(into: buffer)
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else {
+            throw SessionExportError.missingRequiredFiles
+        }
+
+        let rawSamples = Self.downmixedSamples(from: buffer, frameCount: frameCount)
+        self.samples = Self.motionProxySamples(from: rawSamples)
+        self.sampleRate = format.sampleRate
+        self.duration = Double(frameCount) / format.sampleRate
+    }
+
+    init(samples: [Float], sampleRate: Double) {
+        self.samples = samples
+        self.sampleRate = sampleRate
+        self.duration = sampleRate > 0 ? Double(samples.count) / sampleRate : 0
+    }
+
+    private static func downmixedSamples(
+        from buffer: AVAudioPCMBuffer,
+        frameCount: Int
+    ) -> [Float] {
+        let channelCount = max(1, Int(buffer.format.channelCount))
+
+        if let floatChannelData = buffer.floatChannelData {
+            var downmixed = [Float](repeating: 0, count: frameCount)
+            for channel in 0..<channelCount {
+                let channelData = floatChannelData[channel]
+                for frame in 0..<frameCount {
+                    downmixed[frame] += channelData[frame]
+                }
+            }
+            return downmixed.map { $0 / Float(channelCount) }
+        }
+
+        if let int16ChannelData = buffer.int16ChannelData {
+            var downmixed = [Float](repeating: 0, count: frameCount)
+            for channel in 0..<channelCount {
+                let channelData = int16ChannelData[channel]
+                for frame in 0..<frameCount {
+                    downmixed[frame] += Float(channelData[frame]) / Float(Int16.max)
+                }
+            }
+            return downmixed.map { $0 / Float(channelCount) }
+        }
+
+        return []
+    }
+
+    private static func motionProxySamples(from rawSamples: [Float]) -> [Float] {
+        let frameSize = 256
+        guard !rawSamples.isEmpty else { return [] }
+
+        var envelope: [Float] = []
+        envelope.reserveCapacity((rawSamples.count / frameSize) + 1)
+
+        var index = 0
+        while index < rawSamples.count {
+            let endIndex = min(index + frameSize, rawSamples.count)
+            let frame = rawSamples[index..<endIndex]
+            let averageAmplitude = frame.reduce(Float(0)) { $0 + abs($1) } / Float(max(1, frame.count))
+            envelope.append(averageAmplitude)
+            index = endIndex
+        }
+
+        let sortedEnvelope = envelope.sorted()
+        let percentileIndex = min(sortedEnvelope.count - 1, max(0, Int(Double(sortedEnvelope.count - 1) * 0.94)))
+        let referenceLevel = max(Float(0.004), sortedEnvelope[percentileIndex])
+        var smoothed: Float = 0
+        var proxySamples: [Float] = []
+        proxySamples.reserveCapacity(envelope.count * frameSize)
+
+        for amplitude in envelope {
+            let normalized = min(1, amplitude / referenceLevel)
+            let gated = normalized < 0.07 ? Float(0) : powf(normalized, 0.72) * 0.16
+            smoothed = (smoothed * 0.68) + (gated * 0.32)
+            proxySamples.append(contentsOf: repeatElement(smoothed, count: frameSize))
+        }
+
+        return proxySamples
+    }
+}
+
+struct ScratchLabDemoAnalysisFrame: Equatable, Sendable {
+    let inputLevel: Float
+    let direction: ScratchMotionDirection
+    let feedback: ScratchMotionFeedback?
+    let didLoop: Bool
+}
+
+final class ScratchLabDemoModeAnalyzer {
+    private let sampleBuffer: ScratchLabDemoAudioSampleBuffer
+    private let motionAnalyzer = ScratchMotionAnalyzer()
+    private var cursor = 0
+
+    init(sampleBuffer: ScratchLabDemoAudioSampleBuffer) {
+        self.sampleBuffer = sampleBuffer
+    }
+
+    var duration: TimeInterval {
+        sampleBuffer.duration
+    }
+
+    var sampleRate: Double {
+        sampleBuffer.sampleRate
+    }
+
+    func reset() {
+        cursor = 0
+        motionAnalyzer.reset()
+    }
+
+    func processNextFrame(frameCount requestedFrameCount: Int) -> ScratchLabDemoAnalysisFrame {
+        guard !sampleBuffer.samples.isEmpty,
+              sampleBuffer.sampleRate > 0 else {
+            return ScratchLabDemoAnalysisFrame(
+                inputLevel: 0,
+                direction: .neutral,
+                feedback: nil,
+                didLoop: false
+            )
+        }
+
+        let frameCount = max(1, requestedFrameCount)
+        var didLoop = false
+        var chunk: [Float] = []
+        chunk.reserveCapacity(frameCount)
+
+        while chunk.count < frameCount {
+            if cursor >= sampleBuffer.samples.count {
+                cursor = 0
+                motionAnalyzer.reset()
+                didLoop = true
+            }
+            let remaining = frameCount - chunk.count
+            let endIndex = min(cursor + remaining, sampleBuffer.samples.count)
+            chunk.append(contentsOf: sampleBuffer.samples[cursor..<endIndex])
+            cursor = endIndex
+        }
+
+        let feedback = motionAnalyzer.process(samples: chunk, sampleRate: sampleBuffer.sampleRate)
+        return ScratchLabDemoAnalysisFrame(
+            inputLevel: Self.rmsLevel(for: chunk),
+            direction: motionAnalyzer.currentDirection,
+            feedback: feedback,
+            didLoop: didLoop
+        )
+    }
+
+    private static func rmsLevel(for samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        let meanSquare = samples.reduce(Float(0)) { $0 + ($1 * $1) } / Float(samples.count)
+        return min(1, sqrtf(meanSquare) * 5)
+    }
+}
+
+@MainActor
+final class ScratchLabDemoModeController: ObservableObject {
+    @Published private(set) var inputLevel: Float = 0
+    @Published private(set) var motionDirection: ScratchMotionDirection = .neutral
+    @Published private(set) var motionFeedback: ScratchMotionFeedback?
+    @Published private(set) var statusMessage = "Loading bundled baby scratch demo."
+    @Published private(set) var isReady = false
+
+    let instruction: ScratchCoachInstruction
+    let demoPlayer: ScratchCoachDemoAudioPlayer
+
+    private let audioFileName: String
+    private let audioURLProvider: ScratchCoachDemoAudioPlayer.ResourceURLProvider
+    private var analyzer: ScratchLabDemoModeAnalyzer?
+    private var analysisTimer: Timer?
+
+    init(
+        audioFileName: String = ScratchLabDemoSessionBuilder.demoAudioFileName,
+        audioURLProvider: @escaping ScratchCoachDemoAudioPlayer.ResourceURLProvider = { audioName in
+            ScratchCoachDemoAudioPlayer.bundledDemoAudioURL(named: audioName, in: .main)
+        },
+        demoPlayer: ScratchCoachDemoAudioPlayer? = nil
+    ) {
+        self.audioFileName = audioFileName
+        self.audioURLProvider = audioURLProvider
+        self.demoPlayer = demoPlayer ?? ScratchCoachDemoAudioPlayer()
+        self.instruction = ScratchCoachInstructionStore.shared.instruction(
+            for: CaptureSessionScratchType.babyScratch.rawValue,
+            scratchDisplayName: CaptureSessionScratchType.babyScratch.title
+        )
+    }
+
+    deinit {
+        analysisTimer?.invalidate()
+    }
+
+    func startDemo() {
+        stopDemo()
+        guard let audioURL = audioURLProvider(audioFileName) else {
+            statusMessage = "Bundled demo audio is unavailable."
+            isReady = false
+            return
+        }
+
+        do {
+            analyzer = ScratchLabDemoModeAnalyzer(
+                sampleBuffer: try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+            )
+            demoPlayer.configure(with: instruction)
+            demoPlayer.replay()
+            isReady = true
+            statusMessage = "Bundled baby scratch demo is playing through the analyzer."
+            startAnalysisTimer()
+        } catch {
+            statusMessage = "ScratchLab could not load the bundled demo."
+            isReady = false
+        }
+    }
+
+    func stopDemo() {
+        analysisTimer?.invalidate()
+        analysisTimer = nil
+        demoPlayer.stop()
+        analyzer?.reset()
+        inputLevel = 0
+        motionDirection = .neutral
+        motionFeedback = nil
+    }
+
+    func replayDemo() {
+        analyzer?.reset()
+        motionFeedback = nil
+        motionDirection = .neutral
+        inputLevel = 0
+        demoPlayer.replay()
+        if analysisTimer == nil {
+            startAnalysisTimer()
+        }
+        statusMessage = "Bundled baby scratch demo is playing through the analyzer."
+    }
+
+    func pauseDemo() {
+        demoPlayer.pause()
+        analysisTimer?.invalidate()
+        analysisTimer = nil
+        statusMessage = "Demo paused."
+    }
+
+    private func startAnalysisTimer() {
+        analysisTimer?.invalidate()
+        analysisTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.processNextAnalysisFrame()
+            }
+        }
+    }
+
+    private func processNextAnalysisFrame() {
+        guard let analyzer else { return }
+        if !demoPlayer.isActivelyPlayingAudio, demoPlayer.playbackState != .paused {
+            demoPlayer.replay()
+        }
+
+        let frameCount = max(1, Int((analyzer.sampleRate / 30.0).rounded()))
+        let frame = analyzer.processNextFrame(frameCount: frameCount)
+        inputLevel = (inputLevel * 0.64) + (frame.inputLevel * 0.36)
+        motionDirection = frame.direction
+        if let feedback = frame.feedback {
+            motionFeedback = feedback
+        }
+        if frame.didLoop {
+            demoPlayer.replay()
+        }
+    }
+}
+
+struct ScratchLabDemoSessionBuilder: Sendable {
+    static let demoAudioFileName = "baby_noBeat.wav"
+    private static let demoSessionName = "ScratchLab Demo"
+    private static let demoPerformerName = "App Review Demo"
+    private static let demoBPM = 79
+    private static let videoFrameRate: Int32 = 10
+    private static let videoSize = CGSize(width: 160, height: 90)
+
+    typealias AudioURLProvider = @Sendable (String) -> URL?
+
+    private let audioURLProvider: AudioURLProvider
+
+    init(
+        audioURLProvider: @escaping AudioURLProvider = { audioName in
+            ScratchCoachDemoAudioPlayer.bundledDemoAudioURL(named: audioName, in: .main)
+        }
+    ) {
+        self.audioURLProvider = audioURLProvider
+    }
+
+    func makePackage(
+        rootDirectory: URL? = nil,
+        sessionID: String = CaptureCore.LocalRecordingNaming.sessionID(),
+        now: Date = Date()
+    ) throws -> SessionExportPackage {
+        let fileManager = FileManager.default
+        guard let bundledAudioURL = audioURLProvider(Self.demoAudioFileName) else {
+            throw SessionExportError.missingRequiredFiles
+        }
+
+        let demoRoot = try makeDemoRootDirectory(
+            rootDirectory: rootDirectory,
+            sessionID: sessionID,
+            fileManager: fileManager
+        )
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: sessionID, takeNumber: 1)
+        let files = try CaptureCore.LocalRecordingFiles.make(
+            in: demoRoot,
+            sessionID: sessionID,
+            takeNumber: takeIdentity.takeNumber,
+            roleLabel: "demo",
+            mediaExtension: "mov",
+            fileManager: fileManager
+        )
+        let audioURL = files.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        try fileManager.copyItem(at: bundledAudioURL, to: audioURL)
+
+        let audioFile = try AVAudioFile(forReading: audioURL)
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let duration = sampleRate > 0
+            ? max(1, Double(audioFile.length) / sampleRate)
+            : 1
+        try Self.writeDemoVideo(at: files.mediaURL, duration: duration)
+
+        let endedAt = now.addingTimeInterval(duration)
+        var config = CaptureSessionConfig(
+            performerName: Self.demoPerformerName,
+            bpm: Self.demoBPM,
+            scratchType: .babyScratch,
+            drillMode: .referenceOnly,
+            captureMode: .calibrationNoClick,
+            beatEngineMode: .silent,
+            timingPrintedToRecording: .notPrinted,
+            takeDurationSeconds: duration,
+            takeCount: 1,
+            handedness: .right,
+            notes: "Bundled demo session.",
+            sessionID: sessionID,
+            createdAt: now,
+            updatedAt: endedAt
+        )
+        config.applyCapturedTakeMetrics(
+            takeCount: 1,
+            totalDurationSeconds: duration,
+            updatedAt: endedAt
+        )
+
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: config,
+            takeIdentity: takeIdentity,
+            files: files,
+            recordingRole: "demo_mode",
+            platform: Self.platformLabel,
+            appSurface: "ScratchLab Demo Mode",
+            sourceDeviceName: "Bundled Demo",
+            cameraPosition: nil,
+            audioInputName: "Bundled baby scratch audio",
+            videoDeviceUniqueID: nil,
+            videoDeviceName: "Generated demo deck view",
+            audioDeviceUniqueID: nil,
+            audioDeviceName: "Bundled baby scratch audio",
+            captureTiming: nil,
+            startedAt: now
+        ).finalized(
+            endedAt: endedAt,
+            mediaFileName: files.mediaURL.lastPathComponent,
+            captureErrorDescription: nil
+        )
+        try sidecar.encodedData().write(to: files.sidecarURL, options: .atomic)
+
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "demo_mode",
+            platform: Self.platformLabel,
+            sessionName: Self.demoSessionName,
+            totalDurationSeconds: duration,
+            deviceInfo: SessionExportDeviceInfo(
+                sourceDeviceName: sidecar.sourceDeviceName,
+                appSurface: sidecar.appSurface,
+                cameraPosition: sidecar.cameraPosition,
+                audioInputName: sidecar.audioInputName,
+                videoDeviceUniqueID: sidecar.videoDeviceUniqueID,
+                videoDeviceName: sidecar.videoDeviceName,
+                audioDeviceUniqueID: sidecar.audioDeviceUniqueID,
+                audioDeviceName: sidecar.audioDeviceName
+            )
+        )
+        let take = SessionExportTake(
+            takeID: takeIdentity.takeID,
+            takeNumber: takeIdentity.takeNumber,
+            bpm: Self.demoBPM,
+            mediaURL: files.mediaURL,
+            audioArtifactURL: audioURL,
+            sidecarURL: files.sidecarURL,
+            watchCaptureSession: nil,
+            drillName: "Try Demo",
+            duration: duration,
+            quality: CaptureQuality.clean.rawValue,
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: CaptureWatchSyncState.notRequested.rawValue,
+            recordingStatus: "completed",
+            verbalSlateUsed: false,
+            syncClapUsed: false,
+            note: "Bundled baby scratch demo.",
+            captureTiming: nil
+        )
+
+        return SessionExportPackage(
+            metadata: metadata,
+            takes: [take],
+            calibrationData: nil
+        )
+    }
+
+    private func makeDemoRootDirectory(
+        rootDirectory: URL?,
+        sessionID: String,
+        fileManager: FileManager
+    ) throws -> URL {
+        let baseDirectory = rootDirectory
+            ?? (fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory)
+                .appendingPathComponent("ScratchLabDemoSessions", isDirectory: true)
+        let demoRoot = baseDirectory.appendingPathComponent(sessionID, isDirectory: true)
+        if fileManager.fileExists(atPath: demoRoot.path) {
+            try fileManager.removeItem(at: demoRoot)
+        }
+        try fileManager.createDirectory(at: demoRoot, withIntermediateDirectories: true)
+        return demoRoot
+    }
+
+    private static var platformLabel: String {
+        #if os(macOS)
+        return "macOS"
+        #elseif os(iOS)
+        return "iOS"
+        #else
+        return "Apple"
+        #endif
+    }
+
+    private static func writeDemoVideo(at url: URL, duration: TimeInterval) throws {
+        try? FileManager.default.removeItem(at: url)
+
+        let width = Int(videoSize.width)
+        let height = Int(videoSize.height)
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: width,
+                AVVideoHeightKey: height
+            ]
+        )
+        input.expectsMediaDataInRealTime = false
+
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: attributes
+        )
+
+        guard writer.canAdd(input) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+        writer.add(input)
+
+        guard writer.startWriting() else {
+            throw writer.error ?? SessionExportError.unableToPrepareExport
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        let frameCount = max(1, Int(ceil(duration * Double(videoFrameRate))))
+        for frameIndex in 0..<frameCount {
+            while !input.isReadyForMoreMediaData {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+            let presentationTime = CMTime(value: CMTimeValue(frameIndex), timescale: videoFrameRate)
+            let pixelBuffer = try makeDemoPixelBuffer(
+                width: width,
+                height: height,
+                frameIndex: frameIndex,
+                frameCount: frameCount
+            )
+            guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
+                throw writer.error ?? SessionExportError.unableToPrepareExport
+            }
+        }
+
+        input.markAsFinished()
+        let semaphore = DispatchSemaphore(value: 0)
+        writer.finishWriting {
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        guard writer.status == .completed else {
+            throw writer.error ?? SessionExportError.unableToPrepareExport
+        }
+    }
+
+    private static func makeDemoPixelBuffer(
+        width: Int,
+        height: Int,
+        frameIndex: Int,
+        frameCount: Int
+    ) throws -> CVPixelBuffer {
+        var pixelBuffer: CVPixelBuffer?
+        CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            nil,
+            &pixelBuffer
+        )
+        guard let pixelBuffer else {
+            throw SessionExportError.unableToPrepareExport
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+        let pixels = baseAddress.assumingMemoryBound(to: UInt32.self)
+        let pixelsPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer) / MemoryLayout<UInt32>.size
+        let progress = Double(frameIndex) / Double(max(1, frameCount - 1))
+        let playheadX = Int(progress * Double(max(1, width - 1)))
+        let background = bgra(red: 8, green: 12, blue: 18)
+        let gridLine = bgra(red: 24, green: 32, blue: 44)
+        let accent = bgra(red: 250, green: 204, blue: 21)
+        let secondary = bgra(red: 34, green: 197, blue: 94)
+
+        for y in 0..<height {
+            let row = pixels.advanced(by: y * pixelsPerRow)
+            for x in 0..<width {
+                let isGrid = x % 20 == 0 || y % 18 == 0
+                let wave = 0.5 + (sin((Double(x) * 0.14) + (Double(frameIndex) * 0.22)) * 0.5)
+                let waveHeight = Int(wave * Double(height / 3))
+                let centerY = height / 2
+                let isWave = abs(y - centerY) <= max(1, waveHeight / 8)
+                let isPlayhead = abs(x - playheadX) <= 1
+                row[x] = isPlayhead ? accent : (isWave ? secondary : (isGrid ? gridLine : background))
+            }
+        }
+
+        return pixelBuffer
+    }
+
+    private static func bgra(red: UInt8, green: UInt8, blue: UInt8, alpha: UInt8 = 255) -> UInt32 {
+        UInt32(blue) | (UInt32(green) << 8) | (UInt32(red) << 16) | (UInt32(alpha) << 24)
+    }
+}
+
 struct RoutineSessionDraft: Codable, Equatable, Identifiable, Sendable {
     var id: String { config.sessionID }
     var config: CaptureSessionConfig

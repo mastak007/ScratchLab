@@ -137,6 +137,7 @@ struct MacAnalyzerView: View {
     @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.testLab.rawValue
     @AppStorage("scratchlab.mac.stageLayout") private var stageLayoutRaw = StageLayout.desktopDeck.rawValue
     @AppStorage("scratchlab.mac.practiceDuration") private var practiceDurationRaw = PracticeDuration.fiveMinutes.rawValue
+    @AppStorage("scratchlab.mac.liveInputEnabled") private var liveInputEnabled = false
     @AppStorage("scratchlab.mac.lastPerformerName") private var lastPerformerName = ""
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openWindow) private var openWindow
@@ -153,7 +154,9 @@ struct MacAnalyzerView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var coachDemoPlayer = ScratchCoachDemoAudioPlayer()
+    @StateObject private var demoModeController = ScratchLabDemoModeController()
     @State private var exportMixMode: ExportMixMode = .scratchOnly
+    @State private var isBuildingDemoExportPackage = false
     @State private var isPracticeSessionActive = false
     @State private var practiceTimeRemaining: TimeInterval = PracticeDuration.fiveMinutes.duration
     @State private var practiceDetectionCount = 0
@@ -244,7 +247,11 @@ struct MacAnalyzerView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: routineSessionStore.alertState?.id)
         .onAppear {
-            captureEngine.start()
+            if liveInputEnabled {
+                startMacLiveInput()
+            } else {
+                captureEngine.statusMessage = "Try Demo is ready without camera or microphone. Start live input when hardware is connected."
+            }
             performerBroadcaster.refreshAdvertising()
             sessionUploadManager.refresh()
             captureEngine.setPerformerMonitorStreamingEnabled(!performerBroadcaster.connectedPeerNames.isEmpty)
@@ -256,7 +263,7 @@ struct MacAnalyzerView: View {
             if !isPracticeSessionActive {
                 practiceTimeRemaining = practiceDuration.duration
             }
-            if stageLayout == .desktopDeck {
+            if liveInputEnabled, stageLayout == .desktopDeck {
                 captureEngine.preferMacCameraForDesktopDeck()
             }
         }
@@ -271,23 +278,26 @@ struct MacAnalyzerView: View {
         .onDisappear {
             beatEngine.stop()
             coachDemoPlayer.stop()
+            demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             captureEngine.setPerformerMonitorStreamingEnabled(false)
         }
         .onChange(of: stageLayoutRaw) { _, newValue in
-            guard StageLayout(rawValue: newValue) == .desktopDeck else { return }
+            guard liveInputEnabled, StageLayout(rawValue: newValue) == .desktopDeck else { return }
             captureEngine.preferMacCameraForDesktopDeck()
         }
         .onChange(of: workspaceTabRaw) { _, newValue in
             guard WorkspaceTab(rawValue: newValue) != .testLab else { return }
             coachDemoPlayer.stop()
+            demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase != .active else { return }
             coachDemoPlayer.stop()
+            demoModeController.stopDemo()
             practiceBeatStore.handleAppDidBecomeInactive()
         }
         .onChange(of: practiceDurationRaw) { _, _ in
@@ -302,7 +312,7 @@ struct MacAnalyzerView: View {
             coachDemoPlayer.stop()
         }
         .onReceive(captureEngine.$availableVideoDevices) { _ in
-            guard stageLayout == .desktopDeck else { return }
+            guard liveInputEnabled, stageLayout == .desktopDeck else { return }
             captureEngine.preferMacCameraForDesktopDeck()
         }
         .onReceive(performerBroadcaster.$connectedPeerNames) { peers in
@@ -369,6 +379,7 @@ struct MacAnalyzerView: View {
     private var testLabSidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                macDemoModeCard
                 testLabHeaderCard
                 testLabPracticeCard
                 testLabAudioCard
@@ -378,6 +389,93 @@ struct MacAnalyzerView: View {
             }
             .padding(24)
         }
+    }
+
+    private var macDemoModeCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Try Demo")
+                        .font(.system(size: 24, weight: .semibold))
+
+                    Text("See scratch feedback instantly")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                Label("No hardware", systemImage: "checkmark.seal.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .systemGreen))
+            }
+
+            HStack(spacing: 10) {
+                macDemoMetric(title: "Feedback", value: demoModeFeedbackTitle)
+                macDemoMetric(title: "Direction", value: demoModeController.motionDirection.label)
+            }
+
+            Text(demoModeController.statusMessage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Button {
+                    startMacDemo()
+                } label: {
+                    Label(demoModeController.isReady ? "Replay Demo" : "Try Demo", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    demoModeController.pauseDemo()
+                } label: {
+                    Label("Pause", systemImage: "pause.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!demoModeController.demoPlayer.isPlaying)
+            }
+
+            Button {
+                exportMacDemoSession()
+            } label: {
+                HStack(spacing: 8) {
+                    if isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+
+                    Text(demoModeExportButtonTitle)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func macDemoMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var analyzerSidebar: some View {
@@ -428,6 +526,13 @@ struct MacAnalyzerView: View {
 
             Spacer()
 
+            Button(liveInputEnabled ? "Live Input Enabled" : "Start Live Input") {
+                startMacLiveInput()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(liveInputEnabled)
+
             Button("Open Routine Capture") {
                 workspaceTab = .routineLab
             }
@@ -469,11 +574,64 @@ struct MacAnalyzerView: View {
         )
     }
 
+    @ViewBuilder
     private var testLabCameraStage: some View {
-        liveCameraStage(
-            title: "Scratch Rating Camera",
-            subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
-        )
+        if liveInputEnabled {
+            liveCameraStage(
+                title: "Scratch Rating Camera",
+                subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
+            )
+        } else {
+            macDemoStage
+        }
+    }
+
+    private var macDemoStage: some View {
+        cameraStageCard(
+            title: "Demo Feedback Stage",
+            subtitle: "Bundled Baby Scratch audio · no camera or microphone required"
+        ) {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(nsColor: .windowBackgroundColor),
+                        Color(nsColor: .controlBackgroundColor)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                VStack(spacing: 20) {
+                    ZStack {
+                        Circle()
+                            .stroke(demoModeFeedbackColor.opacity(0.24), lineWidth: 16)
+                            .frame(width: 170, height: 170)
+
+                        Circle()
+                            .trim(from: 0, to: CGFloat(max(0.08, min(1, demoModeController.inputLevel))))
+                            .stroke(demoModeFeedbackColor, style: StrokeStyle(lineWidth: 16, lineCap: .round))
+                            .frame(width: 170, height: 170)
+                            .rotationEffect(.degrees(-90))
+
+                        Image(systemName: "waveform")
+                            .font(.system(size: 42, weight: .bold))
+                            .foregroundStyle(demoModeFeedbackColor)
+                    }
+
+                    VStack(spacing: 6) {
+                        Text(demoModeFeedbackTitle)
+                            .font(.system(size: 38, weight: .semibold))
+                            .foregroundStyle(.white)
+
+                        Text(demoModeController.isReady ? "Coach animation and feedback are running from bundled data." : "Click Try Demo to start the bundled review flow.")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(24)
+            }
+        }
     }
 
     private func liveCameraStage(title: String, subtitle: String) -> some View {
@@ -510,6 +668,28 @@ struct MacAnalyzerView: View {
         captureEngine.availableVideoDevices
             .first(where: { $0.uniqueID == captureEngine.selectedVideoDeviceUniqueID })?
             .localizedName ?? "No camera selected"
+    }
+
+    private var demoModeFeedbackTitle: String {
+        demoModeController.motionFeedback?.balance.rawValue ?? ScratchMotionBalance.listening.rawValue
+    }
+
+    private var demoModeFeedbackColor: Color {
+        switch demoModeController.motionFeedback?.balance ?? .listening {
+        case .listening:
+            return Color(nsColor: .systemBlue)
+        case .balanced:
+            return Color(nsColor: .systemGreen)
+        case .unbalanced:
+            return Color(nsColor: .systemRed)
+        }
+    }
+
+    private var demoModeExportButtonTitle: String {
+        if isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing {
+            return "Preparing Demo ZIP"
+        }
+        return "Export Demo ZIP"
     }
 
     private var selectedAudioDevice: AVCaptureDevice? {
@@ -755,6 +935,44 @@ struct MacAnalyzerView: View {
         let scratchLabel = session.config.scratchType?.title ?? "Scratch type later"
         let bpmLabel = session.config.bpm.map { "\($0) BPM" } ?? "BPM later"
         return "\(scratchLabel) · \(bpmLabel)"
+    }
+
+    private func startMacLiveInput() {
+        liveInputEnabled = true
+        demoModeController.stopDemo()
+        captureEngine.start()
+        if stageLayout == .desktopDeck {
+            captureEngine.preferMacCameraForDesktopDeck()
+        }
+    }
+
+    private func startMacDemo() {
+        if demoModeController.isReady {
+            demoModeController.replayDemo()
+        } else {
+            demoModeController.startDemo()
+        }
+    }
+
+    private func exportMacDemoSession() {
+        guard !isBuildingDemoExportPackage, !sessionExportCoordinator.isPreparing else { return }
+        isBuildingDemoExportPackage = true
+
+        Task {
+            do {
+                let package = try await Task.detached(priority: .userInitiated) {
+                    try ScratchLabDemoSessionBuilder().makePackage()
+                }.value
+                isBuildingDemoExportPackage = false
+                sessionExportCoordinator.prepareShare(
+                    for: .package(package),
+                    options: SessionExportOptions(mixMode: .scratchOnly)
+                )
+            } catch {
+                isBuildingDemoExportPackage = false
+                sessionExportCoordinator.showFailure(.unableToPrepareExport)
+            }
+        }
     }
 
     private func shareLastRoutineSession() {
