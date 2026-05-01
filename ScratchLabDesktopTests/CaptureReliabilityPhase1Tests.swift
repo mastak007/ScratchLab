@@ -3084,6 +3084,83 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(SessionExportOptions().mixMode, .scratchOnly)
     }
 
+    func testReleaseExportModeUISourceRestrictsAdvancedModesBehindDebugGate() throws {
+        let modelSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let companionSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let modelSource = try String(contentsOf: modelSourceURL, encoding: .utf8)
+        let companionSource = try String(contentsOf: companionSourceURL, encoding: .utf8)
+        let macSource = try String(contentsOf: macSourceURL, encoding: .utf8)
+
+        XCTAssertTrue(modelSource.contains("static var appReviewVisibleModes: [ExportMixMode]"))
+        XCTAssertTrue(modelSource.contains("#if DEBUG"))
+        XCTAssertTrue(modelSource.contains("return allCases"))
+        XCTAssertTrue(modelSource.contains("return [.scratchOnly]"))
+        XCTAssertTrue(companionSource.contains("ForEach(ExportMixMode.appReviewVisibleModes)"))
+        XCTAssertTrue(macSource.contains("ForEach(ExportMixMode.appReviewVisibleModes)"))
+        XCTAssertTrue(companionSource.contains("exportMixMode = .scratchOnly"))
+        XCTAssertTrue(macSource.contains("exportMixMode = .scratchOnly"))
+        XCTAssertFalse(companionSource.contains("ForEach(ExportMixMode.allCases)"))
+        XCTAssertFalse(macSource.contains("ForEach(ExportMixMode.allCases)"))
+    }
+
+    @MainActor
+    func testLocalProgressUpdatesWithGameCenterDisabledByDefault() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let manager = ProgressManager(defaults: defaults)
+        manager.createProfile(displayName: "Reviewer")
+
+        manager.activateGameCenterIfNeeded()
+        XCTAssertFalse(manager.isGameCenterEnabled)
+        XCTAssertNil(manager.gameCenterPlayerID)
+
+        manager.recordScratchAttempt(scratchID: "baby_scratch", accuracy: 92, duration: 30)
+
+        XCTAssertEqual(manager.totalScratchAttempts, 1)
+        XCTAssertEqual(manager.totalPracticeTime, 30, accuracy: 0.001)
+        XCTAssertEqual(manager.currentStreak, 1)
+        XCTAssertEqual(manager.playerProfile?.experience, 90)
+        XCTAssertEqual(manager.babyScratchProgress?.practiceCount, 1)
+        XCTAssertEqual(manager.babyScratchProgress?.bestAccuracy ?? 0, 92, accuracy: 0.001)
+        XCTAssertTrue(manager.babyScratchProgress?.isMastered ?? false)
+        XCTAssertFalse(manager.isGameCenterEnabled)
+        XCTAssertNil(manager.gameCenterPlayerID)
+
+        let reloaded = ProgressManager(defaults: defaults)
+        XCTAssertEqual(reloaded.totalScratchAttempts, 1)
+        XCTAssertEqual(reloaded.totalPracticeTime, 30, accuracy: 0.001)
+        XCTAssertEqual(reloaded.playerProfile?.experience, 90)
+        XCTAssertEqual(reloaded.babyScratchProgress?.practiceCount, 1)
+    }
+
+    func testGameCenterDashboardIsDisabledForAppReviewBuilds() throws {
+        let infoURL = projectRootURL().appendingPathComponent("ScratchLab/Info.plist")
+        let data = try Data(contentsOf: infoURL)
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+
+        XCTAssertFalse(plist["GCSupportsGameCenterDashboard"] as? Bool ?? false)
+    }
+
+    func testGameCenterLeaderboardCodeIsDebugAndFeatureFlagGated() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/ProgressManager.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("#if DEBUG\nimport GameKit\n#endif"))
+        XCTAssertTrue(source.contains("SCRATCHLAB_ENABLE_GAME_CENTER"))
+        XCTAssertTrue(source.contains("private var gameCenterFeatureEnabled: Bool"))
+        XCTAssertTrue(source.contains("#if DEBUG\n    private let gameCenterLeaderboardID = \"scratchlab_highscores\"\n    #endif"))
+        XCTAssertTrue(source.contains("#if DEBUG\n        if gameCenterFeatureEnabled"))
+        XCTAssertTrue(source.contains("#if DEBUG\n    private func reportScoreToGameCenter"))
+        XCTAssertTrue(source.contains("GKLeaderboard.submitScore"))
+        XCTAssertTrue(source.contains("func showGameCenterLeaderboard(from viewController: UIViewController)"))
+        XCTAssertTrue(source.contains("#if DEBUG\n        guard gameCenterFeatureEnabled else { return }"))
+        XCTAssertTrue(source.contains("GKGameCenterViewController"))
+        XCTAssertFalse(source.contains("leaderboardIDs: [\"scratchlab_highscores\"]"))
+        XCTAssertFalse(source.contains("leaderboardID: \"scratchlab_highscores\""))
+    }
+
     func testScratchOnlyExportMetadataMarksCleanCaptureWhenTimingNotPrinted() throws {
         let root = try makeTemporaryDirectory()
         let videoURL = try makeLocalRecordingTake(

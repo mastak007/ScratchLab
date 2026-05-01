@@ -1795,12 +1795,25 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                #if DEBUG
                 Picker("Export mix", selection: $exportMixMode) {
-                    ForEach(ExportMixMode.allCases) { mode in
+                    ForEach(ExportMixMode.appReviewVisibleModes) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.menu)
+                #else
+                HStack {
+                    Text("Export mix")
+                    Spacer()
+                    Text(ExportMixMode.scratchOnly.title)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .onAppear {
+                    exportMixMode = .scratchOnly
+                }
+                #endif
 
                 if let validationReport = sessionExportCoordinator.validationReport,
                    !validationReport.issues.isEmpty {

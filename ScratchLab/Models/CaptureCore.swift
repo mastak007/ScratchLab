@@ -231,6 +231,14 @@ enum ExportMixMode: String, CaseIterable, Codable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
+    static var appReviewVisibleModes: [ExportMixMode] {
+        #if DEBUG
+        return allCases
+        #else
+        return [.scratchOnly]
+        #endif
+    }
+
     var title: String {
         switch self {
         case .scratchOnly:

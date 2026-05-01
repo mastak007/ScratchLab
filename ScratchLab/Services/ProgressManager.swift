@@ -4,7 +4,9 @@
 
 import Foundation
 import SwiftUI
+#if DEBUG
 import GameKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -42,9 +44,23 @@ class ProgressManager: ObservableObject {
     private let historyKey = "sessionHistory"
     private let mvpScratchID = "baby_scratch"
     private let mvpLevelID = 1
+    private let userDefaults: UserDefaults
     private var didSetupGameCenter = false
+
+    #if DEBUG
+    private let gameCenterLeaderboardID = "scratchlab_highscores"
+    #endif
+
+    private var gameCenterFeatureEnabled: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["SCRATCHLAB_ENABLE_GAME_CENTER"] == "1"
+        #else
+        return false
+        #endif
+    }
     
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.userDefaults = defaults
         loadProgress()
     }
     
@@ -182,11 +198,14 @@ class ProgressManager: ObservableObject {
         
         saveProgress()
         
-        // Report to Game Center
-        activateGameCenterIfNeeded()
-        if isGameCenterEnabled {
-            reportScoreToGameCenter(result.totalScore)
+        #if DEBUG
+        if gameCenterFeatureEnabled {
+            activateGameCenterIfNeeded()
+            if isGameCenterEnabled {
+                reportScoreToGameCenter(result.totalScore)
+            }
         }
+        #endif
     }
     
     func recordBattleResult(won: Bool, opponentID: String?) {
@@ -303,17 +322,17 @@ class ProgressManager: ObservableObject {
         
         // Save profile
         if let profile = playerProfile, let data = try? encoder.encode(profile) {
-            UserDefaults.standard.set(data, forKey: profileKey)
+            userDefaults.set(data, forKey: profileKey)
         }
         
         // Save scratch progress
         if let data = try? encoder.encode(scratchProgress) {
-            UserDefaults.standard.set(data, forKey: scratchProgressKey)
+            userDefaults.set(data, forKey: scratchProgressKey)
         }
         
         // Save level progress
         if let data = try? encoder.encode(levelProgress) {
-            UserDefaults.standard.set(data, forKey: levelProgressKey)
+            userDefaults.set(data, forKey: levelProgressKey)
         }
         
         // Save stats
@@ -323,11 +342,11 @@ class ProgressManager: ObservableObject {
             "currentStreak": currentStreak,
             "lastPracticeDate": lastPracticeDate?.timeIntervalSince1970 ?? 0
         ]
-        UserDefaults.standard.set(stats, forKey: statsKey)
+        userDefaults.set(stats, forKey: statsKey)
         
         // Save history
         if let data = try? encoder.encode(sessionHistory) {
-            UserDefaults.standard.set(data, forKey: historyKey)
+            userDefaults.set(data, forKey: historyKey)
         }
     }
     
@@ -335,25 +354,25 @@ class ProgressManager: ObservableObject {
         let decoder = JSONDecoder()
         
         // Load profile
-        if let data = UserDefaults.standard.data(forKey: profileKey),
+        if let data = userDefaults.data(forKey: profileKey),
            let profile = try? decoder.decode(PlayerProfile.self, from: data) {
             playerProfile = profile
         }
         
         // Load scratch progress
-        if let data = UserDefaults.standard.data(forKey: scratchProgressKey),
+        if let data = userDefaults.data(forKey: scratchProgressKey),
            let progress = try? decoder.decode([String: ScratchProgress].self, from: data) {
             scratchProgress = progress
         }
         
         // Load level progress
-        if let data = UserDefaults.standard.data(forKey: levelProgressKey),
+        if let data = userDefaults.data(forKey: levelProgressKey),
            let progress = try? decoder.decode([Int: LevelProgress].self, from: data) {
             levelProgress = progress
         }
         
         // Load stats
-        if let stats = UserDefaults.standard.dictionary(forKey: statsKey) {
+        if let stats = userDefaults.dictionary(forKey: statsKey) {
             totalPracticeTime = stats["totalPracticeTime"] as? TimeInterval ?? 0
             totalScratchAttempts = stats["totalScratchAttempts"] as? Int ?? 0
             currentStreak = stats["currentStreak"] as? Int ?? 0
@@ -363,7 +382,7 @@ class ProgressManager: ObservableObject {
         }
         
         // Load history
-        if let data = UserDefaults.standard.data(forKey: historyKey),
+        if let data = userDefaults.data(forKey: historyKey),
            let history = try? decoder.decode([SessionResult].self, from: data) {
             sessionHistory = history
         }
@@ -382,15 +401,16 @@ class ProgressManager: ObservableObject {
         currentStreak = 0
         lastPracticeDate = nil
         
-        UserDefaults.standard.removeObject(forKey: profileKey)
-        UserDefaults.standard.removeObject(forKey: scratchProgressKey)
-        UserDefaults.standard.removeObject(forKey: levelProgressKey)
-        UserDefaults.standard.removeObject(forKey: statsKey)
-        UserDefaults.standard.removeObject(forKey: historyKey)
+        userDefaults.removeObject(forKey: profileKey)
+        userDefaults.removeObject(forKey: scratchProgressKey)
+        userDefaults.removeObject(forKey: levelProgressKey)
+        userDefaults.removeObject(forKey: statsKey)
+        userDefaults.removeObject(forKey: historyKey)
     }
     
     // MARK: - Game Center
     
+    #if DEBUG
     private func setupGameCenter() {
         GKLocalPlayer.local.authenticateHandler = { [weak self] viewController, error in
             Task { @MainActor in
@@ -407,31 +427,45 @@ class ProgressManager: ObservableObject {
             }
         }
     }
+    #endif
 
     func activateGameCenterIfNeeded() {
+        guard gameCenterFeatureEnabled else {
+            isGameCenterEnabled = false
+            gameCenterPlayerID = nil
+            return
+        }
+
+        #if DEBUG
         guard !didSetupGameCenter else { return }
         didSetupGameCenter = true
         setupGameCenter()
+        #endif
     }
     
+    #if DEBUG
     private func reportScoreToGameCenter(_ score: Int) {
         guard isGameCenterEnabled else { return }
         
-        GKLeaderboard.submitScore(score, context: 0, player: GKLocalPlayer.local, leaderboardIDs: ["scratchlab_highscores"]) { error in
+        GKLeaderboard.submitScore(score, context: 0, player: GKLocalPlayer.local, leaderboardIDs: [gameCenterLeaderboardID]) { error in
             if let error = error {
                 print("Error submitting score: \(error)")
             }
         }
     }
+    #endif
     
     #if canImport(UIKit)
     func showGameCenterLeaderboard(from viewController: UIViewController) {
+        #if DEBUG
+        guard gameCenterFeatureEnabled else { return }
         activateGameCenterIfNeeded()
         guard isGameCenterEnabled else { return }
         
-        let gcViewController = GKGameCenterViewController(leaderboardID: "scratchlab_highscores", playerScope: .global, timeScope: .allTime)
+        let gcViewController = GKGameCenterViewController(leaderboardID: gameCenterLeaderboardID, playerScope: .global, timeScope: .allTime)
         gcViewController.gameCenterDelegate = viewController as? GKGameCenterControllerDelegate
         viewController.present(gcViewController, animated: true)
+        #endif
     }
     #endif
 }

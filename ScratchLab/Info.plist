@@ -43,7 +43,7 @@
 	<key>CFBundleVersion</key>
 	<string>15</string>
 	<key>GCSupportsGameCenterDashboard</key>
-	<true/>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSApplicationCategory</key>

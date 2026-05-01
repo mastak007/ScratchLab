@@ -2937,13 +2937,22 @@ private struct SessionCompleteView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(.white.opacity(0.72))
 
+                        #if DEBUG
                         Picker("Export mix", selection: $exportMixMode) {
-                            ForEach(ExportMixMode.allCases) { mode in
+                            ForEach(ExportMixMode.appReviewVisibleModes) { mode in
                                 Text(mode.title).tag(mode)
                             }
                         }
                         .pickerStyle(.menu)
                         .tint(.white)
+                        #else
+                        Text(ExportMixMode.scratchOnly.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .onAppear {
+                                exportMixMode = .scratchOnly
+                            }
+                        #endif
                     }
 
                     if !exportBlockingIssues.isEmpty {
