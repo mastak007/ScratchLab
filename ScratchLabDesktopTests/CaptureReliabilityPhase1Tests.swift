@@ -1616,12 +1616,59 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testPracticeModeSourceDoesNotExposePlaceholderTutorialEntryPoints() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let forbiddenFragments = [
+            "Watch Tutorial First",
+            "Watch Tutorial",
+            "Tutorial Video",
+            "showingTutorial",
+            "TutorialOverlayView",
+            "tutorialVideoName",
+            "play.circle.fill",
+        ]
 
-        XCTAssertFalse(source.contains("Watch Tutorial First"))
-        XCTAssertFalse(source.contains("Watch Tutorial"))
-        XCTAssertFalse(source.contains("Tutorial Video"))
-        XCTAssertFalse(source.contains("showingTutorial"))
+        for fragment in forbiddenFragments {
+            XCTAssertFalse(source.contains(fragment), "PracticeModeView.swift exposes \(fragment)")
+        }
+        XCTAssertTrue(source.contains("SessionSetupOverlay("))
+        XCTAssertTrue(source.contains("ScratchCoachCard("))
+        XCTAssertTrue(source.contains("onStart: { startSession() }"))
+    }
+
+    func testScratchDefinitionsDoNotExposeTutorialVideoAssetReferencesInRelease() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Models/Scratch.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("tutorialVideoName"))
         XCTAssertFalse(source.contains("TutorialOverlayView"))
+        XCTAssertFalse(source.localizedCaseInsensitiveContains("tutorial video"))
+        XCTAssertEqual(ScratchLibrary.shared.allScratches.count, 20)
+        XCTAssertNotNil(ScratchLibrary.shared.scratch(byID: "baby_scratch"))
+    }
+
+    func testPracticeModeSourceKeepsLaunchFlowWithoutTutorialAssets() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("SessionSetupOverlay("))
+        XCTAssertTrue(source.contains("ScratchCoachCard("))
+        XCTAssertTrue(source.contains("onStart: { startSession() }"))
+        XCTAssertTrue(source.contains("private func startSession()"))
+        XCTAssertFalse(source.contains("Bundle.main.url(forResource: activeScratch.tutorialVideoName"))
+        XCTAssertFalse(source.contains("tutorialVideoName"))
+    }
+
+    func testPythonBytecodeCachesAreIgnoredAndUntracked() throws {
+        let gitignoreURL = projectRootURL().appendingPathComponent(".gitignore")
+        let gitignore = try String(contentsOf: gitignoreURL, encoding: .utf8)
+
+        XCTAssertTrue(gitignore.contains("__pycache__/"))
+        XCTAssertTrue(gitignore.contains("*.pyc"))
+
+        let indexURL = projectRootURL().appendingPathComponent(".git/index")
+        let indexData = try Data(contentsOf: indexURL)
+
+        XCTAssertNil(indexData.range(of: Data("scripts/__pycache__".utf8)))
+        XCTAssertNil(indexData.range(of: Data(".pyc".utf8)))
     }
 
     func testLevelSelectSourceUsesSafeAreaAwareScrollableHeaderLayout() throws {

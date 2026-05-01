@@ -608,7 +608,7 @@ struct NowPlayingBar: View {
                 
                 // Playback controls
                 Button(action: { trackManager.togglePlayback() }) {
-                    Image(systemName: trackManager.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    Image(systemName: trackManager.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 40))
                         .foregroundColor(Color(hex: track.genre.color))
                 }
