@@ -900,27 +900,6 @@ struct SettingsView: View {
     }
 }
 
-// Placeholder navigation destinations
-struct OnlineBattleLobbyView: View {
-    var body: some View {
-        ZStack {
-            BackgroundView()
-            Text("Online Battle Lobby")
-                .foregroundColor(.white)
-        }
-    }
-}
-
-struct TutorialHubView: View {
-    var body: some View {
-        ZStack {
-            BackgroundView()
-            Text("Tutorial Hub")
-                .foregroundColor(.white)
-        }
-    }
-}
-
 private struct PerformerMonitorZonePacket: Codable, Identifiable {
     let role: String
     let title: String

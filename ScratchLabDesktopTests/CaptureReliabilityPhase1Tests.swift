@@ -1486,6 +1486,66 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(practiceSource.contains("ScratchAnalyzer("))
     }
 
+    // MARK: - App Store P1 Regression Tests
+
+    func testInfoPlistDoesNotDeclareGameCenterDashboardKey() throws {
+        let plistURL = projectRootURL().appendingPathComponent("ScratchLab/Info.plist")
+        let source = try String(contentsOf: plistURL, encoding: .utf8)
+        XCTAssertFalse(
+            source.contains("GCSupportsGameCenterDashboard"),
+            "GCSupportsGameCenterDashboard must not appear in Info.plist — no Game Center entitlement exists"
+        )
+    }
+
+    func testMainMenuViewDoesNotContainPlaceholderStubs() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertFalse(
+            source.contains("OnlineBattleLobbyView"),
+            "OnlineBattleLobbyView placeholder must be removed (Rule 2.3.1)"
+        )
+        XCTAssertFalse(
+            source.contains("TutorialHubView"),
+            "TutorialHubView placeholder must be removed (Rule 2.3.1)"
+        )
+    }
+
+    func testIOSAppTargetDoesNotIncludeAIBattleModeView() throws {
+        let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
+        let source = try String(contentsOf: projectURL, encoding: .utf8)
+        XCTAssertFalse(
+            source.contains("AIBattleModeView.swift in Sources"),
+            "AIBattleModeView.swift must not be compiled into the iOS app target (Rule 2.5.1)"
+        )
+    }
+
+    func testIOSAppTargetDoesNotIncludeFormulaPlaygroundView() throws {
+        let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
+        let source = try String(contentsOf: projectURL, encoding: .utf8)
+
+        // FormulaPlaygroundView has no navigation path in the iOS app — remove it from Sources.
+        // The four Formula model files (AST/Catalog/Parser/Renderer) must stay because
+        // ScratchRenderTimeline and ScratchRenderEvent are used by PracticeModeView and LevelSelectView.
+        XCTAssertFalse(
+            source.contains("A1000022 /* FormulaPlaygroundView.swift in Sources */"),
+            "FormulaPlaygroundView must not be compiled into the iOS app target (Rule 2.5.1)"
+        )
+
+        // Formula model files must still be present in the iOS target.
+        XCTAssertTrue(
+            source.contains("A1000018 /* ScratchFormulaAST.swift in Sources */"),
+            "ScratchFormulaAST.swift must remain in iOS target — used by ScratchRenderTimeline"
+        )
+        XCTAssertTrue(
+            source.contains("A1000021 /* ScratchFormulaRenderer.swift in Sources */"),
+            "ScratchFormulaRenderer.swift must remain in iOS target — provides ScratchRenderTimeline/ScratchRenderEvent"
+        )
+
+        // Desktop test entries must still be present.
+        XCTAssertTrue(source.contains("B5AA0004A1B2C3D4E5F60709 /* ScratchFormulaAST.swift in Sources */"))
+        XCTAssertTrue(source.contains("B5AA0005A1B2C3D4E5F60709 /* ScratchFormulaCatalog.swift in Sources */"))
+    }
+
     func testLegacySampleAndBackingTrackSelectorsRenderMissingAssetEmptyStates() throws {
         let sampleSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/SampleManager.swift")
         let trackSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/BackingTrackManager.swift")
@@ -3373,6 +3433,52 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("tracks(withMediaType:"))
         XCTAssertTrue(source.contains("loadTracks(withMediaType: .audio)"))
         XCTAssertTrue(source.contains("loadTracks(withMediaType: .video)"))
+    }
+
+    func testSessionExportCoordinatorUsesAsyncAVAssetFormatDescriptionLoading() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let directPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*\.formatDescriptions\b"#
+
+        XCTAssertNil(source.range(of: directPropertyPattern, options: .regularExpression))
+        XCTAssertTrue(source.contains("load(.formatDescriptions)"))
+    }
+
+    func testAppSourcesAvoidDeprecatedSynchronousAVFoundationAssetLoading() throws {
+        let sourceRoots = [
+            projectRootURL().appendingPathComponent("ScratchLab"),
+            projectRootURL().appendingPathComponent("ScratchLabDesktop")
+        ]
+        let directTrackPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*\.(formatDescriptions|naturalSize|preferredTransform|nominalFrameRate|timeRange)\b"#
+        let directAssetPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*(Asset|asset|Track|track)\.(duration|commonMetadata|metadata)\b"#
+        let fileManager = FileManager.default
+        var failures: [String] = []
+
+        for root in sourceRoots {
+            guard let enumerator = fileManager.enumerator(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                XCTFail("Missing source root: \(root.path)")
+                continue
+            }
+
+            for case let sourceURL as URL in enumerator where sourceURL.pathExtension == "swift" {
+                let source = try String(contentsOf: sourceURL, encoding: .utf8)
+                if source.contains("tracks(withMediaType:") {
+                    failures.append(sourceURL.path)
+                }
+                if source.range(of: directTrackPropertyPattern, options: .regularExpression) != nil {
+                    failures.append(sourceURL.path)
+                }
+                if source.range(of: directAssetPropertyPattern, options: .regularExpression) != nil {
+                    failures.append(sourceURL.path)
+                }
+            }
+        }
+
+        XCTAssertTrue(failures.isEmpty, "Deprecated synchronous AVFoundation loading in: \(failures.sorted().joined(separator: ", "))")
     }
 
     @MainActor
