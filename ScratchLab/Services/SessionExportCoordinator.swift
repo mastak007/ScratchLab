@@ -2090,8 +2090,11 @@ struct SessionArchiveBuilder: Sendable {
                 }
                 return audioTrack
             }
+            let loadedDescriptions: [CMFormatDescription] = try runAsyncProbe {
+                try await audioTrack.load(.formatDescriptions)
+            }
             guard
-                let formatDescription = audioTrack.formatDescriptions.first as! CMAudioFormatDescription?,
+                let formatDescription = loadedDescriptions.first,
                 let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)
             else {
                 throw SessionExportError.missingRequiredFiles
