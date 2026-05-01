@@ -1949,10 +1949,79 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(project.contains("CoachInstructions"))
         XCTAssertTrue(project.contains("CoachInstructions in Resources"))
+        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */"))
+        XCTAssertTrue(project.contains("219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */"))
         XCTAssertTrue(project.contains("CoachDemoAudio"))
         XCTAssertTrue(project.contains("CoachDemoAudio in Resources"))
         XCTAssertTrue(project.contains("09C738A56A342FC5A7BBBEA3 /* Resources */"))
         XCTAssertTrue(project.contains("A6000003 /* Resources */"))
+    }
+
+    func testCoachInstructionResourcesContainNoProvenanceMetadataAndDecode() throws {
+        let resourceFolder = projectRootURL().appendingPathComponent("ScratchLab/Resources/CoachInstructions")
+        let fileNames = Set(try FileManager.default.contentsOfDirectory(atPath: resourceFolder.path))
+        let expectedFileNames: Set<String> = [
+            "baby.json",
+            "chirpflare.json",
+        ]
+        let forbiddenFragments = [
+            "sourceReference",
+            "rightsStatus",
+            "reviewStatus",
+            "sourceRoot",
+            "sourceMKV",
+            "makemkv",
+            "MakeMKV",
+            "qbert",
+            "QBERT",
+            "Qbert",
+            "cxl",
+            "CXL",
+        ]
+
+        XCTAssertTrue(expectedFileNames.isSubset(of: fileNames))
+
+        for fileName in expectedFileNames {
+            let fileURL = resourceFolder.appendingPathComponent(fileName)
+            let data = try Data(contentsOf: fileURL)
+            let content = try XCTUnwrap(String(data: data, encoding: .utf8))
+            let payload = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            let instruction = try JSONDecoder().decode(ScratchCoachInstruction.self, from: data)
+
+            XCTAssertFalse(instruction.scratchType.isEmpty)
+            XCTAssertFalse(instruction.scratchDisplayName.isEmpty)
+            XCTAssertFalse(instruction.instructionSummary.isEmpty)
+            XCTAssertFalse(instruction.coachScript.isEmpty)
+            XCTAssertFalse(instruction.steps.isEmpty)
+            XCTAssertFalse(instruction.demoAudioFile?.isEmpty ?? true)
+
+            for fragment in forbiddenFragments {
+                XCTAssertFalse(
+                    content.localizedCaseInsensitiveContains(fragment),
+                    "\(fileName) contains \(fragment)"
+                )
+                XCTAssertFalse(
+                    payload.keys.contains { $0.localizedCaseInsensitiveCompare(fragment) == .orderedSame },
+                    "\(fileName) contains key \(fragment)"
+                )
+            }
+        }
+    }
+
+    func testHostedDesktopBundleContainsCoachInstructionResources() throws {
+        for resourceName in ["baby", "chirpflare"] {
+            let fileURL = try XCTUnwrap(
+                Bundle.main.url(
+                    forResource: resourceName,
+                    withExtension: "json",
+                    subdirectory: "CoachInstructions"
+                )
+            )
+            let data = try Data(contentsOf: fileURL)
+            _ = try JSONDecoder().decode(ScratchCoachInstruction.self, from: data)
+        }
     }
 
     func testCoachDemoAudioResourceFolderShipsOnlyRuntimeWavs() throws {

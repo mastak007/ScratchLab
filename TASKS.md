@@ -5,6 +5,11 @@ Work top-to-bottom. Only take the first unchecked task that is implementation-re
 
 If a task is blocked, ambiguous, too large, or points at a file that does not exist, stop and explain the blocker.
 
+- [x] Remove coach instruction provenance metadata
+  - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
+  - Done when: `baby.json` and `chirpflare.json` contain only runtime-safe instruction data, CoachInstructions resource scans clean for source/provenance/review strings, both JSON files decode as `ScratchCoachInstruction`, iOS/macOS target bundling is covered, the CoachInstructions folder remains bundled, `./scripts/build.sh` passes, and `git diff --check` passes
+  - Completed: root cause was that App Review needed an explicit guard proving bundled CoachInstructions cannot ship source/provenance/review metadata. The bundled JSON was already clean, so no runtime JSON fields or coach playback behavior changed. Added regressions that decode the source JSON, scan for the exact forbidden provenance fragments/keys, assert both `baby.json` and `chirpflare.json` are present, assert the hosted macOS bundle can load/decode both resources, and strengthen the project-file assertions that both app resource phases include `CoachInstructions`. Verification: requested CoachInstructions/project grep returned no matches, focused tests passed, `./scripts/build.sh` passed end-to-end, and `git diff --check` passed.
+
 - [x] Disable Game Center leaderboard for App Review build
   - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Info.plist`, `ScratchLab/Services/ProgressManager.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`
   - Done when: `GCSupportsGameCenterDashboard` is false, Release builds do not authenticate Game Center, submit leaderboard scores, show Game Center UI, or expose `scratchlab_highscores` through reachable code, local progress tracking continues to update, GameKit leaderboard calls are gated behind Debug plus an explicit feature flag, focused regressions pass, Release app targets compile, requested Game Center grep shows only safe references, and `./scripts/build.sh` passes
