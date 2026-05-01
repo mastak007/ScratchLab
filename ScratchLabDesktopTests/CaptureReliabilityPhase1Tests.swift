@@ -3366,6 +3366,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(macSource.contains("ForEach(ExportMixMode.allCases)"))
     }
 
+    func testSessionExportCoordinatorUsesAsyncAVAssetTrackLoading() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("tracks(withMediaType:"))
+        XCTAssertTrue(source.contains("loadTracks(withMediaType: .audio)"))
+        XCTAssertTrue(source.contains("loadTracks(withMediaType: .video)"))
+    }
+
     @MainActor
     func testLocalProgressUpdatesWithGameCenterDisabledByDefault() throws {
         let defaults = try makeEphemeralUserDefaults()

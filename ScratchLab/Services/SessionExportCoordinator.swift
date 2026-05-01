@@ -2083,8 +2083,12 @@ struct SessionArchiveBuilder: Sendable {
 
         do {
             let asset = AVURLAsset(url: mediaURL)
-            guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
-                throw SessionExportError.missingRequiredFiles
+            let audioTrack = try runAsyncProbe {
+                let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+                guard let audioTrack = audioTracks.first else {
+                    throw SessionExportError.missingRequiredFiles
+                }
+                return audioTrack
             }
             guard
                 let formatDescription = audioTrack.formatDescriptions.first as! CMAudioFormatDescription?,
