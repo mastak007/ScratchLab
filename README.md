@@ -96,25 +96,25 @@ The validator fails if:
 - `scripts/test_capture_pipeline.py`: fixture-driven regression coverage for session create/rename/validate behavior
 - `scripts/dataset_processor/label_clip.py`: create `.meta.json` sidecars for loose audio/video clips before ingest
 - `scripts/dataset_processor/process_dataset.py`: offline processor for ScratchLab export ZIPs and manually labeled loose clips
-- `scripts/dataset_processor/ingest_makemkv_scratch.py`: first-pass normalization of cleaner MakeMKV DVD rips into canonical per-angle video plus per-audio-stream WAV metadata folders
-- `scripts/dataset_processor/build_coach_demo_audio.py`: trim bundled `baby` and `chirpflare` ScratchLab Coach demo WAVs from clean MakeMKV source files using Chapter 2 plus a fixed offset
+- `scripts/dataset_processor/ingest_media_scratch.py`: first-pass normalization of local source media into canonical per-angle video plus per-audio-stream WAV metadata folders
+- `scripts/dataset_processor/build_coach_demo_audio.py`: trim bundled `baby` and `chirpflare` ScratchLab Coach demo WAVs from clean source media source files using Chapter 2 plus a fixed offset
 
 ## Offline Dataset Processor
 
-Use the offline dataset processor when you need to turn ScratchLab export ZIPs, older manually labeled audio/video clips, or cleaner MakeMKV DVD rips into a clean dataset layout outside the apps.
+Use the offline dataset processor when you need to turn ScratchLab export ZIPs, older manually labeled audio/video clips, or local source media into a clean dataset layout outside the apps.
 
 Examples:
 
 ```bash
-python3 scripts/dataset_processor/label_clip.py data/loose_clips/clip_001.mov --performer Qbert --scratch-type baby --bpm 90 --beat-mode withBeat --confidence 0.9
+python3 scripts/dataset_processor/label_clip.py data/loose_clips/clip_001.mov --performer "CXL Dataset" --scratch-type baby --bpm 90 --beat-mode withBeat --confidence 0.9
 python3 scripts/dataset_processor/process_dataset.py --input data/raw_zips --output data/processed_dataset --mode process
 python3 scripts/dataset_processor/process_dataset.py --input data/loose_clips --output data/processed_dataset --mode process --allow-loose-clips
-python3 scripts/dataset_processor/ingest_makemkv_scratch.py --input-root "$HOME/Movies/QBERT DISC 1 CLEAN" --output-root "$HOME/Movies/QBERT DATASET/processed_makemkv" --inspect-streams --audio-map "$HOME/Movies/QBERT DATASET/audio_map.json"
-python3 scripts/dataset_processor/ingest_makemkv_scratch.py --input-root "$HOME/Movies/QBERT DISC 1 CLEAN" --output-root "$HOME/Movies/QBERT DATASET/processed_makemkv" --audio-map "$HOME/Movies/QBERT DATASET/audio_map.json" --performer "Qbert"
-python3 scripts/dataset_processor/build_coach_demo_audio.py --source-root "$HOME/Movies/QBERT DISC 1 CLEAN" --output-root ScratchLab/Resources/CoachDemoAudio --offset 2.0 --force
+python3 scripts/dataset_processor/ingest_media_scratch.py --input-root "$HOME/Movies/CXL Dataset Source" --output-root "$HOME/Movies/CXL Dataset/processed_media" --inspect-streams --audio-map "$HOME/Movies/CXL Dataset/audio_map.json"
+python3 scripts/dataset_processor/ingest_media_scratch.py --input-root "$HOME/Movies/CXL Dataset Source" --output-root "$HOME/Movies/CXL Dataset/processed_media" --audio-map "$HOME/Movies/CXL Dataset/audio_map.json" --performer "CXL Dataset"
+python3 scripts/dataset_processor/build_coach_demo_audio.py --source-root "$HOME/Movies/CXL Dataset Source" --output-root ScratchLab/Resources/CoachDemoAudio --offset 2.0 --force
 ```
 
-See `scripts/dataset_processor/README.md` for the sidecar schema, MakeMKV stream-mapping ingest rules, coach demo audio trim helper, rejection rules, and output layout.
+See `scripts/dataset_processor/README.md` for the sidecar schema, source media stream-mapping ingest rules, coach demo audio trim helper, rejection rules, and output layout.
 Future offline segmentation planning is documented in `scripts/dataset_processor/SEGMENTATION_PLAN.md`; it does not change the current whole-take dataset output.
 
 ## Troubleshooting

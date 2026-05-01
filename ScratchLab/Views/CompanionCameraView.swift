@@ -2699,7 +2699,7 @@ private struct TakeReviewView: View {
                             .font(.system(size: 24, weight: .bold))
                             .foregroundColor(.white)
 
-                        LazyVGrid(columns: reviewStatusColumns, spacing: 10) {
+                        LazyVGrid(columns: reviewColumns, spacing: 10) {
                             ReadinessPill(title: review.syncStatus, color: review.syncStatus == "Ready" ? Color(hex: "22C55E") : Color(hex: "F59E0B"))
                             ReadinessPill(title: review.audioPresent ? "Audio Present" : "Missing Audio", color: review.audioPresent ? Color(hex: "22C55E") : Color(hex: "EF4444"))
                             ReadinessPill(title: review.motionStatusTitle, color: review.motionPresent ? Color(hex: "22C55E") : Color(hex: "F59E0B"))
@@ -2795,7 +2795,7 @@ private struct TakeReviewView: View {
         }
     }
 
-    private var reviewStatusColumns: [GridItem] {
+    private var reviewColumns: [GridItem] {
         [GridItem(.flexible()), GridItem(.flexible())]
     }
 

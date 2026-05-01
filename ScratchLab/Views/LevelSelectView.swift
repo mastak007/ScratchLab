@@ -37,7 +37,6 @@ struct LevelSelectView: View {
                     hasReverseSound: true
                 )
             ),
-            tutorialVideoName: nil,
             referenceAudioName: nil,
             backingTrackName: "boom_bap_95bpm",
             tips: [

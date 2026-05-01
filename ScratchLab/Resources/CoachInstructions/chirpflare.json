@@ -12,9 +12,6 @@
   "commonMistake": "Letting the fader click outrun the record motion so the rhythm sounds rushed.",
   "practiceChallenge": "Play 8 chirp flares at one BPM and keep every click lined up with the same part of the record move.",
   "difficulty": "intermediate",
-  "sourceReference": "scratchlab_manual_rewrite_v1",
-  "rightsStatus": "original_text",
-  "reviewStatus": "ready",
   "demoAudioFile": "chirpflare_noBeat.wav",
   "demoAudioRole": "noBeat"
 }

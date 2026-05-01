@@ -2,8 +2,8 @@
 //  ScratchAnalyzer.swift
 //  ScratchLab
 //
-//  Compares user scratch attempts against reference samples (QBert, CXL, Karl)
-//  to determine skill level and provide feedback.
+//  Compares user scratch attempts against optional local reference samples to
+//  determine skill level and provide feedback.
 //
 
 import Foundation
@@ -17,19 +17,19 @@ struct ReferenceSample: Identifiable {
     let id: String
     let url: URL
     let tier: SkillTier
-    let source: String // "qbert", "cxl", "karl"
+    let source: String
     var features: ScratchFeatureSet?
     
     enum SkillTier: String, CaseIterable, Comparable {
-        case legend = "Legend"      // QBert
-        case champion = "Champion"  // CXL
-        case beginner = "Beginner"  // Karl
+        case professional = "Professional"
+        case advanced = "Advanced"
+        case learner = "Learner"
         
         var rank: Int {
             switch self {
-            case .legend: return 3
-            case .champion: return 2
-            case .beginner: return 1
+            case .professional: return 3
+            case .advanced: return 2
+            case .learner: return 1
             }
         }
         
@@ -107,9 +107,9 @@ struct ScratchComparisonResult {
     /// User-friendly tier description
     var tierDescription: String {
         switch matchedTier {
-        case .legend: return "Your scratch sounds like a legend! 🔥"
-        case .champion: return "Champion level technique! 🏆"
-        case .beginner: return "Keep practicing - you're learning! 💪"
+        case .professional: return "Professional reference match."
+        case .advanced: return "Advanced reference match."
+        case .learner: return "Keep practicing - you're learning."
         }
     }
 }
@@ -165,13 +165,13 @@ class ScratchAnalyzer: ObservableObject {
         
         let basePath = URL(fileURLWithPath: bundlePath)
         let referencePaths: [(String, ReferenceSample.SkillTier, String)] = [
-            ("reference_pro", .legend, "qbert"),
-            ("reference_champ", .champion, "cxl"),
-            ("reference_beginner", .beginner, "karl")
+            ("pro_reference", .professional, "Reference Set A"),
+            ("advanced_reference", .advanced, "Reference Set B"),
+            ("learner_reference", .learner, "Reference Set C")
         ]
         
         var allSamples: [ReferenceSample] = []
-        var discoveredReferenceFolder = false
+        var foundReferenceFolder = false
         var processed = 0
         let totalExpected = 31 // Known count from dataset
         
@@ -183,7 +183,7 @@ class ScratchAnalyzer: ObservableObject {
                 continue
             }
 
-            discoveredReferenceFolder = true
+            foundReferenceFolder = true
             
             let contents = try FileManager.default.contentsOfDirectory(
                 at: folderURL,
@@ -205,7 +205,7 @@ class ScratchAnalyzer: ObservableObject {
             }
         }
 
-        guard discoveredReferenceFolder, !allSamples.isEmpty else {
+        guard foundReferenceFolder, !allSamples.isEmpty else {
             isLoaded = false
             loadingProgress = 0
             throw AnalyzerError.resourceNotFound
@@ -240,14 +240,14 @@ class ScratchAnalyzer: ObservableObject {
             let source: String
             
             if folderName.contains("pro") {
-                tier = .legend
-                source = "qbert"
-            } else if folderName.contains("champ") {
-                tier = .champion
-                source = "cxl"
-            } else if folderName.contains("beginner") {
-                tier = .beginner
-                source = "karl"
+                tier = .professional
+                source = "Reference Set A"
+            } else if folderName.contains("advanced") {
+                tier = .advanced
+                source = "Reference Set B"
+            } else if folderName.contains("learner") {
+                tier = .learner
+                source = "Reference Set C"
             } else {
                 continue
             }
@@ -417,7 +417,7 @@ class ScratchAnalyzer: ObservableObject {
         
         // Determine matched tier based on which tier has highest average score
         let tierScores = calculateTierScores(similarityScores: similarityScores)
-        let matchedTier = tierScores.max(by: { $0.value < $1.value })?.key ?? .beginner
+        let matchedTier = tierScores.max(by: { $0.value < $1.value })?.key ?? .learner
         
         // Generate feedback
         let feedback = generateFeedback(
@@ -497,9 +497,9 @@ class ScratchAnalyzer: ObservableObject {
     
     private func calculateTierScores(similarityScores: [String: Float]) -> [ReferenceSample.SkillTier: Float] {
         var tierTotals: [ReferenceSample.SkillTier: (sum: Float, count: Int)] = [
-            .legend: (0, 0),
-            .champion: (0, 0),
-            .beginner: (0, 0)
+            .professional: (0, 0),
+            .advanced: (0, 0),
+            .learner: (0, 0)
         ]
         
         for reference in referencesamples {
@@ -533,7 +533,7 @@ class ScratchAnalyzer: ObservableObject {
         if overallScore >= 85 {
             feedback.append(.init(
                 category: .positive,
-                message: "Excellent technique! Your scratch closely matches \(match.source.capitalized)'s style.",
+                message: "Excellent technique! Your scratch closely matches \(match.source)'s style.",
                 priority: 1
             ))
         } else if overallScore >= 70 {

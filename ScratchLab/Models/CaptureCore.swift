@@ -1185,9 +1185,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
     let commonMistake: String
     let practiceChallenge: String
     let difficulty: String
-    let sourceReference: String
-    let rightsStatus: String
-    let reviewStatus: String
     let demoAudioFile: String?
     let demoAudioRole: String
     let poseKeyframesFile: String?
@@ -1204,9 +1201,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
         case commonMistake
         case practiceChallenge
         case difficulty
-        case sourceReference
-        case rightsStatus
-        case reviewStatus
         case demoAudioFile
         case demoAudioRole
         case poseKeyframesFile
@@ -1224,9 +1218,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
         commonMistake: String,
         practiceChallenge: String,
         difficulty: String,
-        sourceReference: String,
-        rightsStatus: String,
-        reviewStatus: String,
         demoAudioFile: String? = nil,
         demoAudioRole: String = "noBeat",
         poseKeyframesFile: String? = nil,
@@ -1242,9 +1233,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
         self.commonMistake = commonMistake
         self.practiceChallenge = practiceChallenge
         self.difficulty = difficulty
-        self.sourceReference = sourceReference
-        self.rightsStatus = rightsStatus
-        self.reviewStatus = reviewStatus
         self.demoAudioFile = demoAudioFile
         self.demoAudioRole = demoAudioRole
         self.poseKeyframesFile = poseKeyframesFile
@@ -1263,9 +1251,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
         commonMistake = try container.decode(String.self, forKey: .commonMistake)
         practiceChallenge = try container.decode(String.self, forKey: .practiceChallenge)
         difficulty = try container.decode(String.self, forKey: .difficulty)
-        sourceReference = try container.decode(String.self, forKey: .sourceReference)
-        rightsStatus = try container.decode(String.self, forKey: .rightsStatus)
-        reviewStatus = try container.decode(String.self, forKey: .reviewStatus)
         demoAudioFile = try container.decodeIfPresent(String.self, forKey: .demoAudioFile)
         demoAudioRole = try container.decodeIfPresent(String.self, forKey: .demoAudioRole) ?? "noBeat"
         poseKeyframesFile = try container.decodeIfPresent(String.self, forKey: .poseKeyframesFile)
@@ -1293,9 +1278,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
             commonMistake: "",
             practiceChallenge: "",
             difficulty: "coach",
-            sourceReference: "local_fallback",
-            rightsStatus: "original_text",
-            reviewStatus: "fallback",
             demoAudioFile: nil,
             demoAudioRole: "noBeat"
         )
@@ -1314,9 +1296,6 @@ struct ScratchCoachInstruction: Codable, Equatable, Sendable {
             commonMistake: "",
             practiceChallenge: "",
             difficulty: "coach",
-            sourceReference: "local_fallback",
-            rightsStatus: "original_text",
-            reviewStatus: "fallback",
             demoAudioFile: nil,
             demoAudioRole: "noBeat"
         )

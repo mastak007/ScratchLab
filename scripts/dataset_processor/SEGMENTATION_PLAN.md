@@ -120,7 +120,7 @@ Planning-only example:
   "parentOutputPath": "accepted/baby/90bpm/take_0001",
   "sourceType": "scratchlab_zip",
   "sourceFile": "session_export.zip",
-  "performer": "Qbert",
+  "performer": "CXL Dataset",
   "scratchType": "baby",
   "bpm": 90,
   "beatMode": "withBeat",

@@ -18,7 +18,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSOR_SCRIPT = REPO_ROOT / "scripts" / "dataset_processor" / "process_dataset.py"
 LABEL_SCRIPT = REPO_ROOT / "scripts" / "dataset_processor" / "label_clip.py"
-INGEST_MAKEMKV_SCRIPT = REPO_ROOT / "scripts" / "dataset_processor" / "ingest_makemkv_scratch.py"
+INGEST_MEDIA_SCRIPT = REPO_ROOT / "scripts" / "dataset_processor" / "ingest_media_scratch.py"
 
 
 def load_module(name: str, path: Path):
@@ -31,7 +31,7 @@ def load_module(name: str, path: Path):
     return module
 
 
-INGEST_MAKEMKV_MODULE = load_module("ingest_makemkv_scratch_test_module", INGEST_MAKEMKV_SCRIPT)
+INGEST_MEDIA_MODULE = load_module("ingest_media_scratch_test_module", INGEST_MEDIA_SCRIPT)
 
 
 class DatasetProcessorTests(unittest.TestCase):
@@ -104,8 +104,8 @@ class DatasetProcessorTests(unittest.TestCase):
         self.write_text_file(path, json.dumps(payload, indent=2) + "\n")
         return path
 
-    def write_fake_mkv_file(self, path: Path) -> None:
-        self.write_binary_file(path, b"fake mkv bytes")
+    def write_fake_media_file(self, path: Path) -> None:
+        self.write_binary_file(path, b"fake media bytes")
 
     def write_wav_file(self, path: Path, *, frame_count: int = 22_050) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,13 +250,13 @@ class DatasetProcessorTests(unittest.TestCase):
             "inspect_streams": False,
             "force": False,
             "dry_run": False,
-            "performer": "Qbert",
+            "performer": "CXL Dataset",
         }
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
 
     def make_ingester(self, **overrides: object):
-        return INGEST_MAKEMKV_MODULE.MakeMKVScratchIngester(self.make_ingest_args(**overrides))
+        return INGEST_MEDIA_MODULE.MediaScratchIngester(self.make_ingest_args(**overrides))
 
     def test_valid_loose_video_metadata_accepted(self) -> None:
         self.write_binary_file(self.input_root / "clip_001.mov", b"video bytes")
@@ -332,7 +332,7 @@ class DatasetProcessorTests(unittest.TestCase):
         self.run_labeler(
             str(clip_path),
             "--performer",
-            "Qbert",
+            "CXL Dataset",
             "--scratch-type",
             "baby",
             "--bpm",
@@ -346,7 +346,7 @@ class DatasetProcessorTests(unittest.TestCase):
         sidecar_path = self.input_root / "clip_006.meta.json"
         self.assertTrue(sidecar_path.exists())
         metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        self.assertEqual(metadata["performer"], "Qbert")
+        self.assertEqual(metadata["performer"], "CXL Dataset")
         self.assertEqual(metadata["scratchType"], "baby")
         self.assertEqual(metadata["bpm"], 90)
         self.assertEqual(metadata["beatMode"], "withBeat")
@@ -364,7 +364,7 @@ class DatasetProcessorTests(unittest.TestCase):
         result = self.run_labeler(
             str(clip_path),
             "--performer",
-            "Qbert",
+            "CXL Dataset",
             "--scratch-type",
             "baby",
             "--bpm",
@@ -390,7 +390,7 @@ class DatasetProcessorTests(unittest.TestCase):
         result = self.run_labeler(
             str(clip_path),
             "--performer",
-            "Qbert",
+            "CXL Dataset",
             "--scratch-type",
             "baby",
             "--bpm",
@@ -404,7 +404,7 @@ class DatasetProcessorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        self.assertEqual(metadata["performer"], "Qbert")
+        self.assertEqual(metadata["performer"], "CXL Dataset")
 
     def test_label_clip_rejects_invalid_confidence(self) -> None:
         clip_path = self.input_root / "clip_009.mov"
@@ -413,7 +413,7 @@ class DatasetProcessorTests(unittest.TestCase):
         result = self.run_labeler(
             str(clip_path),
             "--performer",
-            "Qbert",
+            "CXL Dataset",
             "--scratch-type",
             "baby",
             "--bpm",
@@ -438,7 +438,7 @@ class DatasetProcessorTests(unittest.TestCase):
             "--input-dir",
             str(batch_root),
             "--performer",
-            "Qbert",
+            "CXL Dataset",
             "--scratch-type",
             "baby",
             "--bpm",
@@ -464,7 +464,7 @@ class DatasetProcessorTests(unittest.TestCase):
         self.run_labeler(
             str(clip_path),
             "--performer",
-            "Qbert",
+            "CXL Dataset",
             "--scratch-type",
             "baby",
             "--beat-mode",
@@ -478,7 +478,7 @@ class DatasetProcessorTests(unittest.TestCase):
         self.assertIsNone(metadata["bpm"])
 
     def test_ingest_folder_name_parsing_with_bpm(self) -> None:
-        descriptor = INGEST_MAKEMKV_MODULE.parse_folder_descriptor("Chirp flare_92bpm")
+        descriptor = INGEST_MEDIA_MODULE.parse_folder_descriptor("Chirp flare_92bpm")
 
         self.assertEqual(descriptor.scratch_display_name, "Chirp flare")
         self.assertEqual(descriptor.scratch_type, "chirp_flare")
@@ -487,7 +487,7 @@ class DatasetProcessorTests(unittest.TestCase):
         self.assertEqual(descriptor.warnings, [])
 
     def test_ingest_folder_name_parsing_without_bpm(self) -> None:
-        descriptor = INGEST_MAKEMKV_MODULE.parse_folder_descriptor("Transformer")
+        descriptor = INGEST_MEDIA_MODULE.parse_folder_descriptor("Transformer")
 
         self.assertEqual(descriptor.scratch_display_name, "Transformer")
         self.assertEqual(descriptor.scratch_type, "transformer")
@@ -497,67 +497,66 @@ class DatasetProcessorTests(unittest.TestCase):
 
     def test_ingest_filename_classification_variants(self) -> None:
         self.assertEqual(
-            INGEST_MAKEMKV_MODULE.classify_filename("Angle 1 beat performance.mkv"),
-            INGEST_MAKEMKV_MODULE.AUDIO_ROLE_WITH_BEAT,
+            INGEST_MEDIA_MODULE.classify_filename("Angle 1 beat performance.mov"),
+            INGEST_MEDIA_MODULE.AUDIO_ROLE_WITH_BEAT,
         )
         self.assertEqual(
-            INGEST_MAKEMKV_MODULE.classify_filename("Angle 3 no beat performance.mkv"),
-            INGEST_MAKEMKV_MODULE.AUDIO_ROLE_NO_BEAT,
+            INGEST_MEDIA_MODULE.classify_filename("Angle 3 no beat performance.mov"),
+            INGEST_MEDIA_MODULE.AUDIO_ROLE_NO_BEAT,
         )
 
     def test_ingest_assigns_camera_angles_deterministically(self) -> None:
         source_clips = [
-            INGEST_MAKEMKV_MODULE.SourceClip(
+            INGEST_MEDIA_MODULE.SourceClip(
                 source_path=Path(name),
-                probe_info=INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+                probe_info=INGEST_MEDIA_MODULE.MediaProbeInfo(
                     has_video=True,
                     video_stream_index=0,
                     audio_streams=[
-                        INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0)
+                        INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0)
                     ],
                 ),
             )
-            for name in ("d_cam.mkv", "b_cam.mkv", "a_cam.mkv", "c_cam.mkv")
+            for name in ("d_cam.mov", "b_cam.mov", "a_cam.mov", "c_cam.mov")
         ]
 
-        available_angles = INGEST_MAKEMKV_MODULE.assign_camera_angles(source_clips)
+        available_angles = INGEST_MEDIA_MODULE.assign_camera_angles(source_clips)
 
         self.assertEqual(available_angles, ["angle_1", "angle_2", "angle_3", "angle_4"])
         by_name = {clip.source_path.name: clip.camera_angle for clip in source_clips}
-        self.assertEqual(by_name["a_cam.mkv"], "angle_1")
-        self.assertEqual(by_name["b_cam.mkv"], "angle_2")
-        self.assertEqual(by_name["c_cam.mkv"], "angle_3")
-        self.assertEqual(by_name["d_cam.mkv"], "angle_4")
+        self.assertEqual(by_name["a_cam.mov"], "angle_1")
+        self.assertEqual(by_name["b_cam.mov"], "angle_2")
+        self.assertEqual(by_name["c_cam.mov"], "angle_3")
+        self.assertEqual(by_name["d_cam.mov"], "angle_4")
 
     def test_ingest_ignores_generated_files(self) -> None:
         scratch_root = self.input_root / "Dicing_85bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_1_no_beat.mkv")
-        self.write_fake_mkv_file(scratch_root / "angle_1_no_beat_performance.mkv")
-        self.write_fake_mkv_file(scratch_root / "angle_1_no_beat_performance_clean.mkv")
-        self.write_fake_mkv_file(scratch_root / "angle_1_no_beat_instruction.mkv")
+        self.write_fake_media_file(scratch_root / "angle_1_no_beat.mov")
+        self.write_fake_media_file(scratch_root / "angle_1_no_beat_performance.mov")
+        self.write_fake_media_file(scratch_root / "angle_1_no_beat_performance_clean.mov")
+        self.write_fake_media_file(scratch_root / "angle_1_no_beat_instruction.mov")
 
-        discovered = self.make_ingester().discover_source_folders()
+        found = self.make_ingester().find_source_folders()
 
-        self.assertIn(scratch_root.resolve(), discovered)
-        self.assertEqual([path.name for path in discovered[scratch_root.resolve()]], ["angle_1_no_beat.mkv"])
+        self.assertIn(scratch_root.resolve(), found)
+        self.assertEqual([path.name for path in found[scratch_root.resolve()]], ["angle_1_no_beat.mov"])
 
     def test_ingest_generated_metadata_fields(self) -> None:
-        folder_descriptor = INGEST_MAKEMKV_MODULE.parse_folder_descriptor("Chirp flare_92bpm")
-        metadata = INGEST_MAKEMKV_MODULE.build_audio_metadata(
-            source_path=self.input_root / "Chirp flare_92bpm" / "angle_a.mkv",
+        folder_descriptor = INGEST_MEDIA_MODULE.parse_folder_descriptor("Chirp flare_92bpm")
+        metadata = INGEST_MEDIA_MODULE.build_audio_metadata(
+            source_path=self.input_root / "Chirp flare_92bpm" / "angle_a.mov",
             input_root=self.input_root,
             source_folder_name="Chirp flare_92bpm",
-            performer="Qbert",
+            performer="CXL Dataset",
             folder_descriptor=folder_descriptor,
             camera_angle="angle_1",
             camera_angle_count=4,
-            linked_video_file="angle_1_video.mkv",
-            audio_stream=INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=42.75),
-            audio_stream_role=INGEST_MAKEMKV_MODULE.AUDIO_ROLE_NO_BEAT,
+            linked_video_file="angle_1_video.mov",
+            audio_stream=INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=42.75),
+            audio_stream_role=INGEST_MEDIA_MODULE.AUDIO_ROLE_NO_BEAT,
         )
 
-        self.assertEqual(metadata["sourceType"], "makemkv_dvd_rip")
-        self.assertEqual(metadata["sourceCollection"], "qbert_makemkv_dvd")
+        self.assertEqual(metadata["sourceType"], "media_file_ingest")
         self.assertEqual(metadata["scratchDisplayName"], "Chirp flare")
         self.assertEqual(metadata["scratchType"], "chirp_flare")
         self.assertEqual(metadata["bpm"], 92)
@@ -565,7 +564,7 @@ class DatasetProcessorTests(unittest.TestCase):
         self.assertEqual(metadata["beatMode"], "noBeat")
         self.assertEqual(metadata["audioStreamRole"], "noBeat")
         self.assertEqual(metadata["audioStreamIndex"], 2)
-        self.assertEqual(metadata["linkedVideoFile"], "angle_1_video.mkv")
+        self.assertEqual(metadata["linkedVideoFile"], "angle_1_video.mov")
         self.assertEqual(metadata["cameraAngle"], "angle_1")
         self.assertEqual(metadata["cameraAngleCount"], 4)
         self.assertEqual(metadata["trainingUse"], "primary_training")
@@ -575,7 +574,7 @@ class DatasetProcessorTests(unittest.TestCase):
 
     def test_ingest_multistream_clip_creates_three_wavs(self) -> None:
         scratch_root = self.input_root / "Chirp flare_92bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_a.mkv")
+        self.write_fake_media_file(scratch_root / "angle_a.mov")
         audio_map_path = self.write_audio_map_file(
             {
                 "default": {
@@ -589,13 +588,13 @@ class DatasetProcessorTests(unittest.TestCase):
         ingester = self.make_ingester(audio_map=str(audio_map_path))
 
         def fake_probe(source_path: Path):
-            return INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+            return INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
                 ],
                 title=source_path.stem,
             )
@@ -624,7 +623,7 @@ class DatasetProcessorTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         output_directory = self.output_root / "chirp_flare" / "92bpm"
-        self.assertTrue((output_directory / "angle_1_video.mkv").exists())
+        self.assertTrue((output_directory / "angle_1_video.mov").exists())
         self.assertTrue((output_directory / "angle_1_withBeat.wav").exists())
         self.assertTrue((output_directory / "angle_1_noBeat.wav").exists())
         self.assertTrue((output_directory / "angle_1_beatOnly.wav").exists())
@@ -634,20 +633,20 @@ class DatasetProcessorTests(unittest.TestCase):
 
     def test_ingest_metadata_records_stream_index_and_role(self) -> None:
         scratch_root = self.input_root / "Crabs_92bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_a.mkv")
+        self.write_fake_media_file(scratch_root / "angle_a.mov")
         audio_map_path = self.write_audio_map_file(
             {"default": {"0:1": "withBeat", "0:2": "noBeat", "0:3": "beatOnly"}}
         )
         ingester = self.make_ingester(audio_map=str(audio_map_path))
 
         def fake_probe(source_path: Path):
-            return INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+            return INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
                 ],
                 title=source_path.stem,
             )
@@ -681,24 +680,24 @@ class DatasetProcessorTests(unittest.TestCase):
         self.assertEqual(beat_only_meta["audioStreamIndex"], 3)
         self.assertEqual(beat_only_meta["audioStreamRole"], "beatOnly")
         self.assertEqual(beat_only_meta["trainingUse"], "beat_reference")
-        self.assertEqual(with_beat_meta["linkedVideoFile"], "angle_1_video.mkv")
+        self.assertEqual(with_beat_meta["linkedVideoFile"], "angle_1_video.mov")
 
     def test_ingest_manifest_generation(self) -> None:
         scratch_root = self.input_root / "Chirp flare_92bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_a.mkv")
+        self.write_fake_media_file(scratch_root / "angle_a.mov")
         audio_map_path = self.write_audio_map_file(
             {"default": {"0:1": "withBeat", "0:2": "noBeat", "0:3": "beatOnly"}}
         )
         ingester = self.make_ingester(audio_map=str(audio_map_path))
 
         def fake_probe(source_path: Path):
-            return INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+            return INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
                 ],
                 title=source_path.stem,
             )
@@ -730,11 +729,11 @@ class DatasetProcessorTests(unittest.TestCase):
             {item["audioStreamRole"] for item in manifest["generatedItems"]},
             {"withBeat", "noBeat", "beatOnly"},
         )
-        self.assertTrue(all(item["video"] == "angle_1_video.mkv" for item in manifest["generatedItems"]))
+        self.assertTrue(all(item["video"] == "angle_1_video.mov" for item in manifest["generatedItems"]))
 
     def test_ingest_dry_run_writes_nothing(self) -> None:
         scratch_root = self.input_root / "Transformer_85bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_1.mkv")
+        self.write_fake_media_file(scratch_root / "angle_1.mov")
         audio_map_path = self.write_audio_map_file(
             {"default": {"0:1": "withBeat", "0:2": "noBeat", "0:3": "beatOnly"}}
         )
@@ -743,13 +742,13 @@ class DatasetProcessorTests(unittest.TestCase):
         with mock.patch.object(ingester, "ensure_tools", return_value=None), mock.patch.object(
             ingester,
             "probe_media_info",
-            return_value=INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+            return_value=INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=18.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=18.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=18.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=18.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=18.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=18.0),
                 ],
                 title="Title 01",
             ),
@@ -761,7 +760,7 @@ class DatasetProcessorTests(unittest.TestCase):
 
     def test_ingest_inspect_streams_writes_nothing(self) -> None:
         scratch_root = self.input_root / "Transformer_85bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_1.mkv")
+        self.write_fake_media_file(scratch_root / "angle_1.mov")
         audio_map_path = self.write_audio_map_file(
             {"default": {"0:1": "withBeat", "0:2": "noBeat", "0:3": "beatOnly"}}
         )
@@ -771,13 +770,13 @@ class DatasetProcessorTests(unittest.TestCase):
         with mock.patch.object(ingester, "ensure_tools", return_value=None), mock.patch.object(
             ingester,
             "probe_media_info",
-            return_value=INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+            return_value=INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=18.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=18.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=18.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=18.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=18.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=18.0),
                 ],
                 title="Title 01",
             ),
@@ -791,15 +790,15 @@ class DatasetProcessorTests(unittest.TestCase):
         self.assertFalse(self.output_root.exists())
 
     def test_ingest_filename_only_classification_is_not_used_when_multiple_audio_streams_exist(self) -> None:
-        source_clip = INGEST_MAKEMKV_MODULE.SourceClip(
-            source_path=self.input_root / "Crabs_92bpm" / "beat performance.mkv",
-            probe_info=INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+        source_clip = INGEST_MEDIA_MODULE.SourceClip(
+            source_path=self.input_root / "Crabs_92bpm" / "beat performance.mov",
+            probe_info=INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
                 ],
             ),
             camera_angle="angle_1",
@@ -816,20 +815,20 @@ class DatasetProcessorTests(unittest.TestCase):
 
     def test_ingest_isolated_scratch_is_not_emitted_anywhere(self) -> None:
         scratch_root = self.input_root / "Dicing_85bpm"
-        self.write_fake_mkv_file(scratch_root / "angle_a.mkv")
+        self.write_fake_media_file(scratch_root / "angle_a.mov")
         audio_map_path = self.write_audio_map_file(
             {"default": {"0:1": "withBeat", "0:2": "noBeat", "0:3": "beatOnly"}}
         )
         ingester = self.make_ingester(audio_map=str(audio_map_path))
 
         def fake_probe(source_path: Path):
-            return INGEST_MAKEMKV_MODULE.MediaProbeInfo(
+            return INGEST_MEDIA_MODULE.MediaProbeInfo(
                 has_video=True,
                 video_stream_index=0,
                 audio_streams=[
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
-                    INGEST_MAKEMKV_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=1, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=2, codec_name="aac", duration=30.0),
+                    INGEST_MEDIA_MODULE.AudioStreamInfo(stream_index=3, codec_name="aac", duration=30.0),
                 ],
                 title=source_path.stem,
             )

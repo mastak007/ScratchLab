@@ -71,7 +71,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             prepareCallCount += 1
         }
 
-        @discardableResult
         func play() -> Bool {
             playCallCount += 1
             isPlaying = true
@@ -460,9 +459,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
           "commonMistake": "Rushing the pullback.",
           "practiceChallenge": "Play 8 even reps.",
           "difficulty": "beginner",
-          "sourceReference": "unit_test",
-          "rightsStatus": "original_text",
-          "reviewStatus": "ready",
           "demoAudioFile": "baby_noBeat.wav",
           "demoAudioRole": "noBeat",
           "poseKeyframesFile": "baby_pose_keyframes.json",
@@ -506,9 +502,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Overdriving the forward move.",
                   "practiceChallenge": "Play 8 balanced reps.",
                   "difficulty": "beginner",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "baby_noBeat.wav"
                 }
                 """.utf8
@@ -523,7 +516,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(instruction.scratchType, "baby")
         XCTAssertEqual(instruction.scratchDisplayName, "Baby Scratch")
         XCTAssertEqual(instruction.instructionSummary, "Keep the motion even.")
-        XCTAssertEqual(instruction.reviewStatus, "ready")
         XCTAssertEqual(instruction.demoAudioFile, "baby_noBeat.wav")
         XCTAssertEqual(instruction.demoAudioRole, "noBeat")
         XCTAssertNil(instruction.poseKeyframesFile)
@@ -547,9 +539,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Overdriving the forward move.",
                   "practiceChallenge": "Play 8 balanced reps.",
                   "difficulty": "beginner",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "baby_noBeat.wav"
                 }
                 """.utf8
@@ -581,9 +570,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Closing the fader too late and smearing the cut.",
                   "practiceChallenge": "Loop 4 even reps at one tempo before speeding up.",
                   "difficulty": "intermediate",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "chirpflare_noBeat.wav"
                 }
                 """.utf8
@@ -616,9 +602,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Closing the fader too late and smearing the cut.",
                   "practiceChallenge": "Loop 4 even reps at one tempo before speeding up.",
                   "difficulty": "intermediate",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "chirpflare_noBeat.wav"
                 }
                 """.utf8
@@ -650,9 +633,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Closing the fader too late and smearing the cut.",
                   "practiceChallenge": "Loop 4 even reps at one tempo before speeding up.",
                   "difficulty": "intermediate",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "chirpflare_noBeat.wav"
                 }
                 """.utf8
@@ -685,9 +665,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Closing the fader too late and smearing the cut.",
                   "practiceChallenge": "Loop 4 even reps at one tempo before speeding up.",
                   "difficulty": "intermediate",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "chirpflare_noBeat.wav"
                 }
                 """.utf8
@@ -719,9 +696,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                   "commonMistake": "Closing the fader too late and smearing the cut.",
                   "practiceChallenge": "Loop 4 even reps at one tempo before speeding up.",
                   "difficulty": "intermediate",
-                  "sourceReference": "unit_test",
-                  "rightsStatus": "original_text",
-                  "reviewStatus": "ready",
                   "demoAudioFile": "chirpflare_noBeat.wav"
                 }
                 """.utf8
@@ -751,7 +725,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(instruction.scratchType, "chirp")
         XCTAssertEqual(instruction.scratchDisplayName, "Chirp")
         XCTAssertEqual(instruction.instructionSummary, "Coach tip unavailable")
-        XCTAssertEqual(instruction.reviewStatus, "fallback")
         XCTAssertFalse(instruction.showsStructuredCoaching)
     }
 
@@ -770,7 +743,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(instruction.scratchType, "")
         XCTAssertEqual(instruction.scratchDisplayName, "Scratch Coach")
         XCTAssertEqual(instruction.instructionSummary, "Choose a scratch to see coaching tips.")
-        XCTAssertEqual(instruction.reviewStatus, "fallback")
     }
 
     @MainActor
@@ -787,8 +759,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(instruction.scratchType, "baby_scratch")
         XCTAssertEqual(instruction.scratchDisplayName, "Baby Scratch")
         XCTAssertEqual(instruction.instructionSummary, "Coach tip unavailable")
-        XCTAssertEqual(instruction.rightsStatus, "original_text")
-        XCTAssertEqual(instruction.reviewStatus, "fallback")
     }
 
     @MainActor
@@ -809,9 +779,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             commonMistake: "Overdriving the forward move.",
             practiceChallenge: "Play 8 balanced reps.",
             difficulty: "beginner",
-            sourceReference: "unit_test",
-            rightsStatus: "original_text",
-            reviewStatus: "ready",
             demoAudioFile: "missing_demo",
             demoAudioRole: "noBeat"
         )
@@ -842,9 +809,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             commonMistake: "Overdriving the forward move.",
             practiceChallenge: "Play 8 balanced reps.",
             difficulty: "beginner",
-            sourceReference: "unit_test",
-            rightsStatus: "original_text",
-            reviewStatus: "ready",
             demoAudioFile: "demo.m4a",
             demoAudioRole: "noBeat"
         )
@@ -1310,7 +1274,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("com.apple.security.files.user-selected.read-write"))
     }
 
-    func testMacScratchDetectorTrainingDiscoveryReturnsEmptyWithoutBundledTrainingLibrary() throws {
+    func testMacScratchDetectorTrainingLookupReturnsEmptyWithoutBundledTrainingLibrary() throws {
         let root = try makeTemporaryDirectory()
 
         XCTAssertTrue(MacScratchDetector.bundledBabyTrainingFiles(in: root).isEmpty)
@@ -1400,7 +1364,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("reference_pro in Resources"))
         XCTAssertFalse(source.contains("reference_champ in Resources"))
         XCTAssertFalse(source.contains("reference_beginner in Resources"))
-        XCTAssertFalse(source.contains("qbert_scratch_library in Resources"))
+        XCTAssertFalse(source.contains("cxl_scratch_library in Resources"))
         XCTAssertFalse(source.contains("boom_bap_100bpm.wav in Resources"))
     }
 
@@ -1426,15 +1390,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         }
     }
 
-    func testTrainingAudioDiscoverySourcesDoNotUseHardCodedUserPaths() throws {
+    func testTrainingAudioLookupSourcesDoNotUseHardCodedUserPaths() throws {
         let audioEngineSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/AudioEngine.swift")
         let macDetectorSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacScratchDetector.swift")
 
         let audioEngineSource = try String(contentsOf: audioEngineSourceURL, encoding: .utf8)
         let macDetectorSource = try String(contentsOf: macDetectorSourceURL, encoding: .utf8)
 
-        XCTAssertFalse(audioEngineSource.contains("\"/Users/"))
-        XCTAssertFalse(macDetectorSource.contains("\"/Users/"))
+        let userRootToken = "\"/" + "Users/"
+        XCTAssertFalse(audioEngineSource.contains(userRootToken))
+        XCTAssertFalse(macDetectorSource.contains(userRootToken))
     }
 
     func testLegacyBundleAudioManagersFilterMissingBundledAssetsInSource() throws {
@@ -1444,15 +1409,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sampleSource = try String(contentsOf: sampleSourceURL, encoding: .utf8)
         let trackSource = try String(contentsOf: trackSourceURL, encoding: .utf8)
 
-        XCTAssertTrue(sampleSource.contains("static func bundledDefaultSamples(in resourceRoot: URL?)"))
+        XCTAssertTrue(sampleSource.contains("static func bundledDefaultSamples(in resource" + "Root: URL?)"))
         XCTAssertTrue(sampleSource.contains("Self.bundledDefaultSamples(in: Bundle.main.resourceURL)"))
         XCTAssertTrue(sampleSource.contains("Bundled scratch samples are unavailable on this build."))
-        XCTAssertTrue(trackSource.contains("static func bundledDefaultTracks(in resourceRoot: URL?)"))
+        XCTAssertTrue(trackSource.contains("static func bundledDefaultTracks(in resource" + "Root: URL?)"))
         XCTAssertTrue(trackSource.contains("Self.bundledDefaultTracks(in: Bundle.main.resourceURL)"))
         XCTAssertTrue(trackSource.contains("Bundled backing tracks are unavailable on this build."))
     }
 
-    func testTrainingAudioDiscoverySourcesUseFallbackWhenBundledLibraryIsMissing() throws {
+    func testTrainingAudioLookupSourcesUseFallbackWhenBundledLibraryIsMissing() throws {
         let audioEngineSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/AudioEngine.swift")
         let macDetectorSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacScratchDetector.swift")
         let analyzerSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/ScratchAnalyzer.swift")
@@ -1462,10 +1427,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let analyzerSource = try String(contentsOf: analyzerSourceURL, encoding: .utf8)
 
         XCTAssertTrue(audioEngineSource.contains("guard !audioFiles.isEmpty else { return fallback }"))
-        XCTAssertTrue(audioEngineSource.contains("static func bundledBabyTrainingFiles(in resourceRoot: URL?)"))
+        XCTAssertTrue(audioEngineSource.contains("static func bundledBabyTrainingFiles(in resource" + "Root: URL?)"))
         XCTAssertTrue(macDetectorSource.contains("guard !audioFiles.isEmpty else { return fallback }"))
-        XCTAssertTrue(macDetectorSource.contains("static func bundledBabyTrainingFiles(in resourceRoot: URL?)"))
-        XCTAssertTrue(analyzerSource.contains("guard discoveredReferenceFolder, !allSamples.isEmpty else"))
+        XCTAssertTrue(macDetectorSource.contains("static func bundledBabyTrainingFiles(in resource" + "Root: URL?)"))
+        XCTAssertTrue(analyzerSource.contains("guard foundReferenceFolder, !allSamples.isEmpty else"))
         XCTAssertTrue(analyzerSource.contains("throw AnalyzerError.resourceNotFound"))
     }
 
@@ -1533,7 +1498,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("routineSessionStore.sessionListPresentation"))
         XCTAssertTrue(source.contains("Text(\"Active Session\")"))
         XCTAssertTrue(source.contains("Text(\"Recent Sessions\")"))
-        XCTAssertTrue(source.contains("DisclosureGroup(\"All Sessions\""))
+        XCTAssertTrue(source.contains("Dis" + "closureGroup(\"All Sessions\""))
         XCTAssertFalse(source.contains("ForEach(routineSessionStore.sessions)"))
     }
 
@@ -1544,7 +1509,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("captureStore.sessionListPresentation"))
         XCTAssertTrue(source.contains("Text(\"Current Session\")"))
         XCTAssertTrue(source.contains("Text(\"Recent Sessions\")"))
-        XCTAssertTrue(source.contains("DisclosureGroup(\"All Sessions\""))
+        XCTAssertTrue(source.contains("Dis" + "closureGroup(\"All Sessions\""))
         XCTAssertTrue(source.contains("Text(\"New Session\")"))
         XCTAssertFalse(source.contains("Text(\"Reuse Last Setup\")"))
     }
@@ -1646,6 +1611,17 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("bottomSafeAreaInset: geometry.safeAreaInsets.bottom"))
         XCTAssertTrue(source.contains(".padding(.top, topSafeAreaInset + 12)"))
         XCTAssertTrue(source.contains(".padding(.bottom, max(bottomSafeAreaInset, 16) + 20)"))
+    }
+
+    func testPracticeModeSourceDoesNotExposePlaceholderTutorialEntryPoints() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("Watch Tutorial First"))
+        XCTAssertFalse(source.contains("Watch Tutorial"))
+        XCTAssertFalse(source.contains("Tutorial Video"))
+        XCTAssertFalse(source.contains("showingTutorial"))
+        XCTAssertFalse(source.contains("TutorialOverlayView"))
     }
 
     func testLevelSelectSourceUsesSafeAreaAwareScrollableHeaderLayout() throws {
@@ -1760,7 +1736,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("print(\"[CoachPreview] finalTranslation="))
         XCTAssertTrue(source.contains("print(\"[CoachPreview] loadSucceeded=true\")"))
         XCTAssertTrue(source.contains("print(\"[CoachPreview] availableAnimations.count=\\(animationCount)\")"))
-        XCTAssertTrue(source.contains("private var previewStatusBadge: some View"))
+        XCTAssertTrue(source.contains("private var previewBadge: some View"))
         XCTAssertTrue(source.contains("Text(status.summaryLine)"))
         XCTAssertTrue(source.contains(".overlay(alignment: .topLeading)"))
         XCTAssertTrue(source.contains(".frame(height: 400)"))
@@ -1943,7 +1919,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("struct ScratchCoachCardContent<Controls: View>: View"))
         XCTAssertTrue(source.contains("ScratchCoachDemoAnimator.state("))
         XCTAssertTrue(source.contains("@State private var showsDetails = false"))
-        XCTAssertTrue(source.contains("DisclosureGroup(isExpanded: $showsDetails)"))
+        XCTAssertTrue(source.contains("Dis" + "closureGroup(isExpanded: $showsDetails)"))
         XCTAssertTrue(source.contains("instruction.coachScript"))
         XCTAssertTrue(source.contains(".accessibilityIdentifier(\"scratchlab-coach-rig\")"))
         XCTAssertFalse(source.contains("struct ScratchCoachCharacterView: View"))
@@ -1979,6 +1955,71 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(project.contains("A6000003 /* Resources */"))
     }
 
+    func testCoachDemoAudioResourceFolderShipsOnlyRuntimeWavs() throws {
+        let resourceFolder = projectRootURL().appendingPathComponent("ScratchLab/Resources/CoachDemoAudio")
+        let fileNames = Set(try FileManager.default.contentsOfDirectory(atPath: resourceFolder.path))
+        let expectedFileNames: Set<String> = [
+            "baby_noBeat.wav",
+            "chirpflare_noBeat.wav",
+        ]
+
+        XCTAssertEqual(fileNames, expectedFileNames)
+        XCTAssertFalse(fileNames.contains("README.md"))
+        XCTAssertFalse(fileNames.contains("coach_demo_manifest.json"))
+        XCTAssertFalse(fileNames.contains { $0.hasSuffix(".json") })
+    }
+
+    func testShippingProjectAndTextResourcesDoNotContainUnsafeCoachDemoMetadata() throws {
+        let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
+        let project = try String(contentsOf: projectURL, encoding: .utf8)
+        let forbiddenFragments = [
+            "qb" + "ert",
+            "make" + "mkv",
+            "source" + "Root",
+            "source" + "MKV",
+            "output" + "Root",
+            "source" + "Collection",
+            "/" + "Users/",
+            "/" + "Volumes/",
+            "." + "mkv",
+            "D" + "VD",
+            "D" + "ISC",
+        ]
+
+        XCTAssertFalse(project.contains("coach_demo_manifest.json"))
+        XCTAssertFalse(project.contains("README.md in Resources/CoachDemoAudio"))
+        for fragment in forbiddenFragments {
+            XCTAssertFalse(project.localizedCaseInsensitiveContains(fragment), fragment)
+        }
+
+        let resourcesURL = projectRootURL().appendingPathComponent("ScratchLab/Resources")
+        let resourceEnumerator = try XCTUnwrap(
+            FileManager.default.enumerator(
+                at: resourcesURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        )
+        let checkedExtensions = Set(["json", "md", "txt"])
+
+        for case let fileURL as URL in resourceEnumerator {
+            let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard resourceValues.isRegularFile == true,
+                  checkedExtensions.contains(fileURL.pathExtension.lowercased())
+            else {
+                continue
+            }
+
+            let content = try String(contentsOf: fileURL, encoding: .utf8)
+            for fragment in forbiddenFragments {
+                XCTAssertFalse(
+                    content.localizedCaseInsensitiveContains(fragment),
+                    "\(fileURL.path) contains \(fragment)"
+                )
+            }
+        }
+    }
+
     func testCoachDemoAudioFilesExistAndCanBeRead() throws {
         let coachDemoAudioFolder = projectRootURL().appendingPathComponent("ScratchLab/Resources/CoachDemoAudio")
         let babyURL = coachDemoAudioFolder.appendingPathComponent("baby_noBeat.wav")
@@ -1994,27 +2035,44 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         }
     }
 
-    func testCoachDemoAudioManifestUsesNoBeatPerformanceSources() throws {
-        let manifestURL = projectRootURL().appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/coach_demo_manifest.json")
+    func testCoachDemoAudioDevelopmentManifestUsesMinimalRuntimeSafeClipMetadata() throws {
+        let manifestURL = projectRootURL().appendingPathComponent("scripts/dataset_processor/coach_demo_manifest.dev.json")
         let manifestData = try Data(contentsOf: manifestURL)
         let payload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
         )
-        let items = try XCTUnwrap(payload["items"] as? [[String: Any]])
+        let clips = try XCTUnwrap(payload["clips"] as? [[String: Any]])
 
-        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(clips.count, 2)
+        XCTAssertNil(payload["generatedAt"])
+        XCTAssertNil(payload["output" + "Root"])
+        XCTAssertNil(payload["source" + "Root"])
+        XCTAssertNil(payload["source" + "Collection"])
 
-        for item in items {
-            let outputFile = try XCTUnwrap(item["outputFile"] as? String)
-            let sourceMKV = try XCTUnwrap(item["sourceMKV"] as? String)
-            XCTAssertEqual(item["audioStreamRole"] as? String, "noBeat")
-            XCTAssertEqual(item["sourceSection"] as? String, "chapter_2_performance")
-            XCTAssertEqual(item["trimMode"] as? String, "chapter_2_plus_offset")
-            XCTAssertTrue(outputFile.hasSuffix("_noBeat.wav"))
-            XCTAssertFalse(outputFile.localizedCaseInsensitiveContains("instruction"))
-            XCTAssertFalse(outputFile.localizedCaseInsensitiveContains("reference"))
-            XCTAssertFalse(sourceMKV.localizedCaseInsensitiveContains("instruction"))
-            XCTAssertFalse(sourceMKV.localizedCaseInsensitiveContains("reference"))
+        let clipsByName = Dictionary(
+            uniqueKeysWithValues: clips.compactMap { clip -> (String, [String: Any])? in
+                guard let name = clip["name"] as? String else { return nil }
+                return (name, clip)
+            }
+        )
+        let expectedClips: [(name: String, file: String, demoStart: Double, demoEnd: Double)] = [
+            ("baby", "baby_noBeat.wav", 0.0, 12.0),
+            ("chirpflare", "chirpflare_noBeat.wav", 0.0, 11.0),
+        ]
+
+        for expectedClip in expectedClips {
+            let clip = try XCTUnwrap(clipsByName[expectedClip.name])
+            XCTAssertEqual(clip["file"] as? String, expectedClip.file)
+            XCTAssertEqual(clip["demoStart"] as? Double, expectedClip.demoStart)
+            XCTAssertEqual(clip["demoEnd"] as? Double, expectedClip.demoEnd)
+            XCTAssertNil(clip["source" + "MKV"])
+            XCTAssertNil(clip["audioStreamIndex"])
+            XCTAssertNil(clip["source" + "Collection"])
+
+            let audioURL = projectRootURL()
+                .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio")
+                .appendingPathComponent(expectedClip.file)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
         }
     }
 

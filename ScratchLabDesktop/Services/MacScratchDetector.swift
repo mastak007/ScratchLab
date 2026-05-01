@@ -522,7 +522,7 @@ final class MacScratchDetector {
     static func bundledBabyTrainingFiles(in resourceRoot: URL?) -> [URL] {
         guard let resourceRoot else { return [] }
 
-        let bundledURL = resourceRoot.appendingPathComponent("qbert_scratch_library/baby_scratch", isDirectory: true)
+        let bundledURL = resourceRoot.appendingPathComponent("scratch_training_library/baby_scratch", isDirectory: true)
         var seen: Set<String> = []
         return trainingAudioFiles(in: bundledURL)
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }

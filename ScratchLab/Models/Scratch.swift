@@ -14,7 +14,6 @@ struct Scratch: Identifiable, Codable, Equatable {
     let technique: ScratchTechnique
     let faderRequired: Bool
     let patternSignature: PatternSignature
-    let tutorialVideoName: String?
     let referenceAudioName: String?
     let backingTrackName: String
     let tips: [String]
@@ -114,7 +113,6 @@ class ScratchLibrary {
                     rhythmPattern: [1.0, 1.0],
                     frequencyProfile: .init(dominantFrequencyRange: 200...2000, hasSharpAttack: false, hasReverseSound: true)
                 ),
-                tutorialVideoName: "baby_scratch_tutorial",
                 referenceAudioName: "baby_scratch_ref",
                 backingTrackName: "boom_bap_100bpm",
                 tips: [
@@ -140,7 +138,6 @@ class ScratchLibrary {
                     rhythmPattern: [1.0],
                     frequencyProfile: .init(dominantFrequencyRange: 200...2000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "forward_scratch_tutorial",
                 referenceAudioName: "forward_scratch_ref",
                 backingTrackName: "boom_bap_100bpm",
                 tips: [
@@ -165,7 +162,6 @@ class ScratchLibrary {
                     rhythmPattern: [1.0],
                     frequencyProfile: .init(dominantFrequencyRange: 200...2000, hasSharpAttack: true, hasReverseSound: true)
                 ),
-                tutorialVideoName: "backward_scratch_tutorial",
                 referenceAudioName: "backward_scratch_ref",
                 backingTrackName: "boom_bap_100bpm",
                 tips: [
@@ -190,7 +186,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.3, 0.7],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3000, hasSharpAttack: false, hasReverseSound: true)
                 ),
-                tutorialVideoName: "release_scratch_tutorial",
                 referenceAudioName: "release_scratch_ref",
                 backingTrackName: "boom_bap_100bpm",
                 tips: [
@@ -219,7 +214,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.5, 0.5],
                     frequencyProfile: .init(dominantFrequencyRange: 200...2500, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "tear_tutorial",
                 referenceAudioName: "tear_ref",
                 backingTrackName: "boom_bap_95bpm",
                 tips: [
@@ -244,7 +238,6 @@ class ScratchLibrary {
                     rhythmPattern: [1.0],
                     frequencyProfile: .init(dominantFrequencyRange: 500...3000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "chirp_tutorial",
                 referenceAudioName: "chirp_ref",
                 backingTrackName: "boom_bap_95bpm",
                 tips: [
@@ -269,7 +262,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.16, 0.16, 0.16, 0.16, 0.16, 0.16],
                     frequencyProfile: .init(dominantFrequencyRange: 300...4000, hasSharpAttack: false, hasReverseSound: true)
                 ),
-                tutorialVideoName: "scribble_tutorial",
                 referenceAudioName: "scribble_ref",
                 backingTrackName: "boom_bap_95bpm",
                 tips: [
@@ -294,7 +286,6 @@ class ScratchLibrary {
                     rhythmPattern: [1.0],
                     frequencyProfile: .init(dominantFrequencyRange: 200...2000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "stab_tutorial",
                 referenceAudioName: "stab_ref",
                 backingTrackName: "boom_bap_95bpm",
                 tips: [
@@ -323,7 +314,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.33, 0.33, 0.33],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "transform_tutorial",
                 referenceAudioName: "transform_ref",
                 backingTrackName: "electro_100bpm",
                 tips: [
@@ -348,7 +338,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.25, 0.25, 0.25, 0.25],
                     frequencyProfile: .init(dominantFrequencyRange: 300...3500, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "crab_tutorial",
                 referenceAudioName: "crab_ref",
                 backingTrackName: "electro_100bpm",
                 tips: [
@@ -373,7 +362,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.5, 0.5],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "flare_1click_tutorial",
                 referenceAudioName: "flare_1click_ref",
                 backingTrackName: "electro_100bpm",
                 tips: [
@@ -398,7 +386,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.25, 0.25, 0.25, 0.25],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3000, hasSharpAttack: true, hasReverseSound: true)
                 ),
-                tutorialVideoName: "orbit_tutorial",
                 referenceAudioName: "orbit_ref",
                 backingTrackName: "electro_100bpm",
                 tips: [
@@ -427,7 +414,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.33, 0.33, 0.33],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3500, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "flare_2click_tutorial",
                 referenceAudioName: "flare_2click_ref",
                 backingTrackName: "trap_110bpm",
                 tips: [
@@ -452,7 +438,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.25, 0.25, 0.25, 0.25],
                     frequencyProfile: .init(dominantFrequencyRange: 300...3500, hasSharpAttack: true, hasReverseSound: true)
                 ),
-                tutorialVideoName: "twiddle_tutorial",
                 referenceAudioName: "twiddle_ref",
                 backingTrackName: "trap_110bpm",
                 tips: [
@@ -477,7 +462,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.25, 0.25, 0.25, 0.25],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3000, hasSharpAttack: true, hasReverseSound: true)
                 ),
-                tutorialVideoName: "boomerang_tutorial",
                 referenceAudioName: "boomerang_ref",
                 backingTrackName: "trap_110bpm",
                 tips: [
@@ -502,7 +486,6 @@ class ScratchLibrary {
                     rhythmPattern: [1.0],
                     frequencyProfile: .init(dominantFrequencyRange: 100...2000, hasSharpAttack: false, hasReverseSound: false)
                 ),
-                tutorialVideoName: "hydroplane_tutorial",
                 referenceAudioName: "hydroplane_ref",
                 backingTrackName: "trap_110bpm",
                 tips: [
@@ -531,7 +514,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.25, 0.25, 0.25, 0.25],
                     frequencyProfile: .init(dominantFrequencyRange: 200...4000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "flare_3click_tutorial",
                 referenceAudioName: "flare_3click_ref",
                 backingTrackName: "dnb_120bpm",
                 tips: [
@@ -556,7 +538,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125],
                     frequencyProfile: .init(dominantFrequencyRange: 200...4000, hasSharpAttack: true, hasReverseSound: true)
                 ),
-                tutorialVideoName: "autobahn_tutorial",
                 referenceAudioName: "autobahn_ref",
                 backingTrackName: "dnb_120bpm",
                 tips: [
@@ -581,7 +562,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.33, 0.33, 0.33],
                     frequencyProfile: .init(dominantFrequencyRange: 200...3000, hasSharpAttack: true, hasReverseSound: false)
                 ),
-                tutorialVideoName: "military_tutorial",
                 referenceAudioName: "military_ref",
                 backingTrackName: "dnb_120bpm",
                 tips: [
@@ -606,7 +586,6 @@ class ScratchLibrary {
                     rhythmPattern: [0.15, 0.15, 0.2, 0.2, 0.15, 0.15],
                     frequencyProfile: .init(dominantFrequencyRange: 200...4000, hasSharpAttack: true, hasReverseSound: true)
                 ),
-                tutorialVideoName: "prizm_tutorial",
                 referenceAudioName: "prizm_ref",
                 backingTrackName: "dnb_120bpm",
                 tips: [

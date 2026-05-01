@@ -62,7 +62,7 @@ private enum CoachPreviewError: LocalizedError {
     }
 }
 
-private struct CoachPreviewStatus: Equatable {
+private struct CoachPreviewState: Equatable {
     enum Phase: String {
         case waiting = "Waiting"
         case loading = "Loading"
@@ -76,7 +76,7 @@ private struct CoachPreviewStatus: Equatable {
     let scale: Float?
     let modelHeight: Float?
 
-    static let idle = CoachPreviewStatus(
+    static let idle = CoachPreviewState(
         phase: .waiting,
         message: "Waiting to load coach preview.",
         animationCount: nil,
@@ -299,8 +299,8 @@ private enum CoachPreviewLoader {
         return entity.visualBounds(relativeTo: nil)
     }
 
-    static func failureStatus(for error: Error) -> CoachPreviewStatus {
-        return CoachPreviewStatus(
+    static func failureStatus(for error: Error) -> CoachPreviewState {
+        return CoachPreviewState(
             phase: .failed,
             message: error.localizedDescription,
             animationCount: nil,
@@ -309,8 +309,8 @@ private enum CoachPreviewLoader {
         )
     }
 
-    static func loadingStatus() -> CoachPreviewStatus {
-        CoachPreviewStatus(
+    static func loadingStatus() -> CoachPreviewState {
+        CoachPreviewState(
             phase: .loading,
             message: "Loading coach preview.",
             animationCount: nil,
@@ -319,8 +319,8 @@ private enum CoachPreviewLoader {
         )
     }
 
-    static func loadedStatus(for loadedCoach: LoadedCoachEntity) -> CoachPreviewStatus {
-        return CoachPreviewStatus(
+    static func loadedStatus(for loadedCoach: LoadedCoachEntity) -> CoachPreviewState {
+        return CoachPreviewState(
             phase: .loaded,
             message: loadedCoach.startedAnimation
                 ? "Coach animation is ready."
@@ -389,7 +389,7 @@ private enum CoachPreviewLoader {
 struct CoachPreviewView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var audioEngine: AudioEngine
-    @State private var status = CoachPreviewStatus.idle
+    @State private var status = CoachPreviewState.idle
     @State private var motionMode: CoachMotionMode = .idleLoop
     @State private var motionDemoTask: Task<Void, Never>?
     @State private var motionDemoToken = 0
@@ -458,7 +458,7 @@ struct CoachPreviewView: View {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
                 .overlay(alignment: .topLeading) {
-                    previewStatusBadge
+                    previewBadge
                 }
         }
         .frame(height: 400)
@@ -704,7 +704,7 @@ struct CoachPreviewView: View {
         .frame(height: 92)
     }
 
-    private var previewStatusBadge: some View {
+    private var previewBadge: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(status.summaryLine)
                 .font(.system(size: 11, weight: .semibold))
@@ -723,7 +723,7 @@ struct CoachPreviewView: View {
         .padding(14)
     }
 
-    private func summaryColor(for phase: CoachPreviewStatus.Phase) -> Color {
+    private func summaryColor(for phase: CoachPreviewState.Phase) -> Color {
         switch phase {
         case .waiting:
             return .white.opacity(0.68)
@@ -1327,7 +1327,7 @@ private struct CoachPreviewARViewContainer: UIViewRepresentable {
     let animationMode: CoachPreviewAnimationMode
     let scratchValue: Double
     let scratchVelocityApprox: Double
-    var onStatusChange: ((CoachPreviewStatus) -> Void)? = nil
+    var onStatusChange: ((CoachPreviewState) -> Void)? = nil
 
     final class Coordinator {
         var loadTask: Task<Void, Never>?
@@ -1442,7 +1442,7 @@ private struct CoachPreviewARViewContainer: UIViewRepresentable {
     }
 
     @MainActor
-    private func publish(_ status: CoachPreviewStatus) {
+    private func publish(_ status: CoachPreviewState) {
         onStatusChange?(status)
     }
 

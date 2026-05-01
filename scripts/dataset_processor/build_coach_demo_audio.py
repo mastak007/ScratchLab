@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build ScratchLab Coach demo audio clips from clean MakeMKV source files."""
+"""Build ScratchLab Coach demo audio clips from development-only source media."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -18,22 +17,28 @@ from pathlib import Path
 class CoachDemoSource:
     scratch_type: str
     output_file: str
-    source_mkv: str
+    source_media: str
     audio_stream_index: int
+    demo_start: float
+    demo_end: float
 
 
 DEMO_SOURCES = [
     CoachDemoSource(
         scratch_type="baby",
         output_file="baby_noBeat.wav",
-        source_mkv="Baby_79bpm/title_t00.mkv",
+        source_media="Baby_79bpm/title_t00.mov",
         audio_stream_index=2,
+        demo_start=0.0,
+        demo_end=12.0,
     ),
     CoachDemoSource(
         scratch_type="chirpflare",
         output_file="chirpflare_noBeat.wav",
-        source_mkv="ChirpFlare_92bpm/title_t52.mkv",
+        source_media="ChirpFlare_92bpm/title_t52.mov",
         audio_stream_index=2,
+        demo_start=0.0,
+        demo_end=11.0,
     ),
 ]
 
@@ -41,22 +46,28 @@ DEMO_SOURCES = [
 def parse_args() -> argparse.Namespace:
     repo_root = Path(__file__).resolve().parents[2]
     default_output_root = repo_root / "ScratchLab" / "Resources" / "CoachDemoAudio"
+    default_manifest_path = Path(__file__).resolve().with_name("coach_demo_manifest.dev.json")
 
     parser = argparse.ArgumentParser(
         description=(
-            "Trim MakeMKV no-beat performance audio into bundled ScratchLab Coach "
-            "demo WAVs without modifying the source MKVs."
+            "Trim development-only no-beat performance audio into bundled "
+            "ScratchLab Coach demo WAVs without modifying source media."
         )
     )
     parser.add_argument(
         "--source-root",
         required=True,
-        help="Root folder containing the clean MakeMKV scratch folders.",
+        help="Root folder containing source media for local demo generation.",
     )
     parser.add_argument(
         "--output-root",
         default=str(default_output_root),
-        help="Destination folder for bundled coach demo WAVs and the manifest.",
+        help="Destination folder for bundled coach demo WAVs.",
+    )
+    parser.add_argument(
+        "--manifest-output",
+        default=str(default_manifest_path),
+        help="Development-only manifest path. This must stay outside app resources.",
     )
     parser.add_argument(
         "--offset",
@@ -157,7 +168,7 @@ def main() -> int:
 
     source_root = Path(args.source_root).expanduser().resolve()
     output_root = Path(args.output_root).expanduser().resolve()
-    manifest_path = output_root / "coach_demo_manifest.json"
+    manifest_path = Path(args.manifest_output).expanduser().resolve()
 
     if not source_root.exists():
         raise SystemExit(f"Source root does not exist: {source_root}")
@@ -170,28 +181,21 @@ def main() -> int:
         output_root.mkdir(parents=True, exist_ok=True)
 
     for source in DEMO_SOURCES:
-        source_file = source_root / source.source_mkv
+        source_file = source_root / source.source_media
         output_file = output_root / source.output_file
 
         if not source_file.exists():
-            raise SystemExit(f"Missing source MKV: {source_file}")
+            raise SystemExit(f"Missing source media: {source_file}")
 
         chapter_start = chapter_two_start(source_file)
         performance_start = chapter_start + args.offset
 
         manifest_items.append(
             {
-                "scratchType": source.scratch_type,
-                "outputFile": source.output_file,
-                "sourceMKV": source.source_mkv,
-                "audioStreamIndex": source.audio_stream_index,
-                "audioStreamRole": "noBeat",
-                "sourceCollection": "qbert_makemkv_dvd",
-                "sourceSection": "chapter_2_performance",
-                "trimMode": "chapter_2_plus_offset",
-                "chapter2Start": round(chapter_start, 6),
-                "extraOffset": args.offset,
-                "performanceStart": round(performance_start, 6),
+                "name": source.scratch_type,
+                "file": source.output_file,
+                "demoStart": source.demo_start,
+                "demoEnd": source.demo_end,
             }
         )
 
@@ -201,7 +205,7 @@ def main() -> int:
 
         print(
             f"{'plan' if args.dry_run else 'write'} "
-            f"{output_file.name} from {source.source_mkv} stream {source.audio_stream_index} "
+            f"{output_file.name} from {source.source_media} stream {source.audio_stream_index} "
             f"starting at {performance_start:.3f}s"
         )
 
@@ -216,17 +220,14 @@ def main() -> int:
         )
 
     manifest = {
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "outputRoot": str(output_root),
-        "sourceRoot": str(source_root),
-        "sourceCollection": "qbert_makemkv_dvd",
-        "items": manifest_items,
+        "clips": manifest_items,
     }
 
     if args.dry_run:
         print(json.dumps(manifest, indent=2))
         return 0
 
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {manifest_path}")
     return 0

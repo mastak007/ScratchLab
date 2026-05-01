@@ -509,7 +509,7 @@ struct ScratchCoachCardContent<Controls: View>: View {
 
     private var difficultyLabel: String? {
         let trimmedDifficulty = instruction.difficulty.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDifficulty.isEmpty, instruction.reviewStatus != "fallback" else { return nil }
+        guard !trimmedDifficulty.isEmpty, trimmedDifficulty.lowercased() != "coach" else { return nil }
         return trimmedDifficulty.replacingOccurrences(of: "_", with: " ").uppercased()
     }
 

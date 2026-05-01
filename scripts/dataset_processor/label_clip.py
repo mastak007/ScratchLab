@@ -104,7 +104,7 @@ def resolve_single_media_path(raw_path: str) -> tuple[Path | None, str | None]:
     return media_path, None
 
 
-def discover_batch_media(input_dir: str, recursive: bool) -> tuple[list[Path], str | None]:
+def find_batch_media(input_dir: str, recursive: bool) -> tuple[list[Path], str | None]:
     root = Path(input_dir).expanduser().resolve()
     if not root.exists():
         return [], f"Input directory does not exist: {root}"
@@ -140,7 +140,7 @@ def label_single_clip(args: argparse.Namespace, payload: dict[str, Any]) -> int:
 
 
 def label_batch(args: argparse.Namespace, payload: dict[str, Any]) -> int:
-    media_paths, error = discover_batch_media(args.input_dir, args.recursive)
+    media_paths, error = find_batch_media(args.input_dir, args.recursive)
     if error is not None:
         print(error, file=sys.stderr)
         return 1

@@ -1,0 +1,16 @@
+{
+  "clips": [
+    {
+      "name": "baby",
+      "file": "baby_noBeat.wav",
+      "demoStart": 0.0,
+      "demoEnd": 12.0
+    },
+    {
+      "name": "chirpflare",
+      "file": "chirpflare_noBeat.wav",
+      "demoStart": 0.0,
+      "demoEnd": 11.0
+    }
+  ]
+}

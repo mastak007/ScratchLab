@@ -1037,7 +1037,7 @@ class ScratchPatternMatcher {
         }
         
         if waveformAccuracy < 70 {
-            feedback.append("Watch the tutorial video - your movement pattern needs adjustment")
+            feedback.append("Review the coach tips - your movement pattern needs adjustment")
         }
         
         if rhythmAccuracy < 70 {
@@ -1293,14 +1293,8 @@ class ScratchPatternMatcher {
 
     static func bundledBabyTrainingFiles(in resourceRoot: URL?) -> [URL] {
         guard let resourceRoot else { return [] }
-
-        var urls = babyTrainingFiles(in: resourceRoot)
-        if urls.isEmpty, hasLegacyTrainingSubfolders(in: resourceRoot) {
-            urls.append(contentsOf: allTrainingAudioFiles(under: resourceRoot))
-        }
-
         var seen: Set<String> = []
-        return urls
+        return babyTrainingFiles(in: resourceRoot)
             .sorted {
                 if $0.deletingLastPathComponent().lastPathComponent == $1.deletingLastPathComponent().lastPathComponent {
                     return $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
@@ -1315,14 +1309,8 @@ class ScratchPatternMatcher {
     }
     
     private static func babyTrainingFiles(in root: URL) -> [URL] {
-        let folderURL = root.appendingPathComponent("qbert_scratch_library/baby_scratch", isDirectory: true)
+        let folderURL = root.appendingPathComponent("scratch_training_library/baby_scratch", isDirectory: true)
         return trainingAudioFiles(in: folderURL)
-    }
-
-    private static func hasLegacyTrainingSubfolders(in root: URL) -> Bool {
-        let fm = FileManager.default
-        let required = ["reference_pro", "reference_champ", "reference_beginner"]
-        return required.allSatisfy { fm.fileExists(atPath: root.appendingPathComponent($0).path) }
     }
     
     private static func trainingAudioFiles(in folder: URL) -> [URL] {
@@ -1334,18 +1322,6 @@ class ScratchPatternMatcher {
         return files
             .filter(isTrainingAudioFile)
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-    }
-
-    private static func allTrainingAudioFiles(under root: URL) -> [URL] {
-        let folders = ["reference_pro", "reference_champ", "reference_beginner"]
-        var urls: [URL] = []
-        
-        for folder in folders {
-            let folderURL = root.appendingPathComponent(folder, isDirectory: true)
-            urls.append(contentsOf: trainingAudioFiles(in: folderURL))
-        }
-        
-        return urls
     }
 
     private static func isTrainingAudioFile(_ url: URL) -> Bool {

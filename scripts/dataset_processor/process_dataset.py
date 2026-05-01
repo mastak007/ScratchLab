@@ -266,7 +266,7 @@ class DatasetProcessor:
 
         self.output_path.mkdir(parents=True, exist_ok=True)
 
-        zip_paths, loose_groups = self.discover_inputs()
+        zip_paths, loose_groups = self.find_inputs()
         if not zip_paths and not loose_groups:
             self.write_manifest()
             print("No supported input files were found.", file=sys.stderr)
@@ -290,11 +290,11 @@ class DatasetProcessor:
 
         return 0
 
-    def discover_inputs(self) -> tuple[list[Path], list[dict[str, Any]]]:
+    def find_inputs(self) -> tuple[list[Path], list[dict[str, Any]]]:
         if self.input_path.is_file():
             if self.input_path.suffix.lower() == ".zip":
                 return [self.input_path], []
-            return [], self.discover_loose_groups([self.input_path])
+            return [], self.find_loose_groups([self.input_path])
 
         zip_paths: list[Path] = []
         loose_files: list[Path] = []
@@ -311,7 +311,7 @@ class DatasetProcessor:
             elif suffix in MEDIA_SUFFIXES or lower_name.endswith(".meta.json") or lower_name.endswith(".motion.json"):
                 loose_files.append(path)
 
-        return zip_paths, self.discover_loose_groups(loose_files)
+        return zip_paths, self.find_loose_groups(loose_files)
 
     def is_ignored_path(self, path: Path) -> bool:
         try:
@@ -320,7 +320,7 @@ class DatasetProcessor:
         except ValueError:
             return False
 
-    def discover_loose_groups(self, candidate_paths: list[Path]) -> list[dict[str, Any]]:
+    def find_loose_groups(self, candidate_paths: list[Path]) -> list[dict[str, Any]]:
         groups: dict[tuple[Path, str], dict[str, Any]] = {}
 
         for path in candidate_paths:

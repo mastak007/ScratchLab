@@ -486,7 +486,7 @@ struct MacAnalyzerView: View {
                     DeckGamificationOverlay(detector: captureEngine)
                 }
 
-                previewStatusPill
+                previewPill
                     .padding(24)
             }
         }
@@ -2698,7 +2698,7 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private var previewStatusPill: some View {
+    private var previewPill: some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(captureEngine.handMotionState.color)

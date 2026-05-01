@@ -28,7 +28,6 @@ struct PracticeModeView: View {
     // Session state
     @State private var isSessionActive = false
     @State private var isPaused = false
-    @State private var showingTutorial = false
     @State private var showingCaptureHelp = false
     @State private var showingQuickStartAgain = false
     @State private var showingResults = false
@@ -386,11 +385,6 @@ struct PracticeModeView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 
-                // Tutorial overlay
-                if showingTutorial {
-                    TutorialOverlayView(scratch: activeScratch, onDismiss: { showingTutorial = false })
-                }
-                
                 // Results screen
                 if showingResults {
                     ResultsOverlayView(
@@ -414,8 +408,7 @@ struct PracticeModeView: View {
                     PauseOverlayView(
                         onResume: { resumeSession() },
                         onRestart: { resetSession(); startSession() },
-                        onExit: { dismiss() },
-                        onTutorial: { showingTutorial = true }
+                        onExit: { dismiss() }
                     )
                 }
                 
@@ -442,7 +435,6 @@ struct PracticeModeView: View {
                         onSelectInputSource: { source in audioEngine.selectInputSource(source) },
                         onShowCoachPreview: { showingCoachPreview = true },
                         onStart: { startSession() },
-                        onTutorial: { showingTutorial = true },
                         onBack: { dismiss() }
                     )
                 }
@@ -1498,7 +1490,6 @@ struct SessionSetupOverlay: View {
     let onSelectInputSource: (AudioInputSource) -> Void
     let onShowCoachPreview: () -> Void
     let onStart: () -> Void
-    let onTutorial: () -> Void
     let onBack: () -> Void
     
     var body: some View {
@@ -1665,14 +1656,6 @@ struct SessionSetupOverlay: View {
                                 .cornerRadius(16)
                         }
 
-                        Button(action: onTutorial) {
-                            HStack {
-                                Image(systemName: "play.circle.fill")
-                                Text("Watch Tutorial First")
-                            }
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
-                        }
                     }
                     .padding(.horizontal, 24)
 
@@ -1985,7 +1968,6 @@ struct PauseOverlayView: View {
     let onResume: () -> Void
     let onRestart: () -> Void
     let onExit: () -> Void
-    let onTutorial: () -> Void
     
     var body: some View {
         ZStack {
@@ -1999,7 +1981,6 @@ struct PauseOverlayView: View {
                 
                 VStack(spacing: 12) {
                     PauseButton(title: "Resume", icon: "play.fill", color: Color(hex: "4CAF50"), action: onResume)
-                    PauseButton(title: "Watch Tutorial", icon: "play.circle", color: Color(hex: "2196F3"), action: onTutorial)
                     PauseButton(title: "Restart", icon: "arrow.counterclockwise", color: Color(hex: "FF9800"), action: onRestart)
                     PauseButton(title: "Exit", icon: "xmark", color: Color(hex: "F44336"), action: onExit)
                 }
@@ -2258,100 +2239,6 @@ struct CaptureHelpView: View {
     private func showQuickStartAgain() {
         dismiss()
         onShowQuickStartAgain()
-    }
-}
-
-// MARK: - Tutorial Overlay
-
-struct TutorialOverlayView: View {
-    let scratch: Scratch
-    let onDismiss: () -> Void
-    
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.95)
-                .ignoresSafeArea()
-            
-            VStack(spacing: 24) {
-                // Close button
-                HStack {
-                    Spacer()
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                }
-                .padding(.horizontal, 20)
-                
-                // Video placeholder
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.white.opacity(0.1))
-                        .aspectRatio(16/9, contentMode: .fit)
-                    
-                    VStack(spacing: 12) {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.white.opacity(0.8))
-                        
-                        Text("Tutorial Video")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                }
-                .padding(.horizontal, 20)
-                
-                // Scratch info
-                VStack(spacing: 16) {
-                    Text(scratch.name)
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text(scratch.description)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-                
-                // Tips
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("TIPS")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(Color(hex: "FFD700"))
-                    
-                    ForEach(scratch.tips, id: \.self) { tip in
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(Color(hex: "4CAF50"))
-                            Text(tip)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.white.opacity(0.8))
-                        }
-                    }
-                }
-                .padding(20)
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(16)
-                .padding(.horizontal, 20)
-                
-                Spacer()
-                
-                // Got it button
-                Button(action: onDismiss) {
-                    Text("GOT IT")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Color(hex: "FFD700"))
-                        .cornerRadius(12)
-                }
-                .padding(.horizontal, 40)
-                .padding(.bottom, 40)
-            }
-        }
     }
 }
 

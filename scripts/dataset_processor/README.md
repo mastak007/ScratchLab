@@ -4,9 +4,9 @@
 
 `label_clip.py` is the companion helper for creating loose-clip `.meta.json` sidecars quickly before running the processor.
 
-`ingest_makemkv_scratch.py` is the companion helper for first-pass normalization of cleaner MakeMKV DVD rips into canonical ScratchLab dataset-ready folders with one remuxed angle video, per-stream WAV extraction, metadata sidecars, and manifests.
+`ingest_media_scratch.py` is the companion helper for first-pass normalization of local source media into canonical ScratchLab dataset-ready folders with one remuxed angle video, per-stream WAV extraction, metadata sidecars, and manifests.
 
-`build_coach_demo_audio.py` is a small helper for trimming bundled ScratchLab Coach demo WAVs from clean MakeMKV source files using Chapter 2 plus a fixed offset, so the app ships scratch-only demo clips instead of full instructional takes.
+`build_coach_demo_audio.py` is a small helper for refreshing bundled ScratchLab Coach demo WAVs from local development-only media. Its development manifest stays beside the script and must not be bundled.
 
 ## Supported Inputs
 
@@ -69,13 +69,13 @@ Use `label_clip.py` to write `.meta.json` files next to older loose clips withou
 Single-file labeling:
 
 ```bash
-python3 scripts/dataset_processor/label_clip.py data/loose_clips/clip_001.mov --performer Qbert --scratch-type baby --bpm 90 --beat-mode withBeat --confidence 0.9
+python3 scripts/dataset_processor/label_clip.py data/loose_clips/clip_001.mov --performer "CXL Dataset" --scratch-type baby --bpm 90 --beat-mode withBeat --confidence 0.9
 ```
 
 Batch labeling:
 
 ```bash
-python3 scripts/dataset_processor/label_clip.py --input-dir data/loose_clips/baby_90 --performer Qbert --scratch-type baby --bpm 90 --beat-mode withBeat --label-source batch_manual --confidence 0.9
+python3 scripts/dataset_processor/label_clip.py --input-dir data/loose_clips/baby_90 --performer "CXL Dataset" --scratch-type baby --bpm 90 --beat-mode withBeat --label-source batch_manual --confidence 0.9
 ```
 
 Labeling rules:
@@ -101,16 +101,16 @@ This processor does not segment takes yet.
 
 Future segmentation planning lives in `scripts/dataset_processor/SEGMENTATION_PLAN.md`. That plan is documentation-only and preserves the current non-destructive whole-take dataset contract until a separate offline segmenter is implemented later.
 
-## MakeMKV Scratch Ingest
+## Source Media Scratch Ingest
 
-Use `ingest_makemkv_scratch.py` when you have cleaner MakeMKV scratch folders and want a first-pass normalization into one canonical offline dataset layout before later review or training work.
+Use `ingest_media_scratch.py` when you have cleaner source media scratch folders and want a first-pass normalization into one canonical offline dataset layout before later review or training work.
 
 Workflow:
 
-1. Rip everything first with MakeMKV.
+1. Prepare source media locally.
 2. Keep each scratch under one parent folder.
-3. Run `--inspect-streams` first to list each MKV's audio streams and the currently proposed roles.
-4. Confirm the stream roles and provide an `--audio-map` when the MKVs contain multiple audio streams.
+3. Run `--inspect-streams` first to list each media file's audio streams and the currently proposed roles.
+4. Confirm the stream roles and provide an `--audio-map` when files contain multiple audio streams.
 5. Run the real ingest only after the stream-role mapping is correct.
 6. Treat the output as `reviewStatus = needs_review` until you confirm angle and stream labels.
 
@@ -133,7 +133,7 @@ Audio stream roles:
 
 Audio mapping:
 
-- When an MKV contains multiple audio streams, the ingester does not rely on filename-only beat/no-beat guesses.
+- When a media file contains multiple audio streams, the ingester does not rely on filename-only beat/no-beat guesses.
 - Use `--inspect-streams` to list `0:<stream_index>`, codec, duration, and the current proposed role for each audio stream.
 - Provide `--audio-map path/to/audio_map.json` to map stream indexes to `withBeat`, `noBeat`, or `beatOnly`.
 
@@ -156,8 +156,8 @@ Example `audio_map.json`:
 
 Single-stream fallback:
 
-- If an MKV only has one audio stream and no `--audio-map` is supplied, explicit filename markers still fall back to `withBeat` or `noBeat`.
-- That fallback is intentionally not used for multi-stream MakeMKV files.
+- If a media file only has one audio stream and no `--audio-map` is supplied, explicit filename markers still fall back to `withBeat` or `noBeat`.
+- That fallback is intentionally not used for multi-stream source media files.
 
 Current scope:
 
@@ -169,26 +169,26 @@ Current scope:
 
 Angle handling:
 
-- source MKVs are sorted by filename and assigned deterministic `angle_1`, `angle_2`, `angle_3`, and `angle_4`
-- each source MKV is preserved once as `angle_n_video.mkv`
+- source media files are sorted by filename and assigned deterministic `angle_1`, `angle_2`, `angle_3`, and `angle_4`
+- each source media file is preserved once as `angle_n_video.mov`
 - each mapped audio stream is extracted separately as `angle_n_withBeat.wav`, `angle_n_noBeat.wav`, or `angle_n_beatOnly.wav`
 - each WAV gets its own `*.meta.json` sidecar with `audioStreamIndex`, `audioStreamRole`, `beatMode`, `trainingUse`, and `linkedVideoFile`
-- the tool warns when the discovered angle count is not `4`
+- the tool warns when the found angle count is not `4`
 
 Output layout:
 
 ```text
-processed_makemkv/
+processed_media/
   chirp_flare/
     92bpm/
-      angle_1_video.mkv
+      angle_1_video.mov
       angle_1_withBeat.wav
       angle_1_withBeat.meta.json
       angle_1_noBeat.wav
       angle_1_noBeat.meta.json
       angle_1_beatOnly.wav
       angle_1_beatOnly.meta.json
-      angle_2_video.mkv
+      angle_2_video.mov
       angle_2_withBeat.wav
       angle_2_noBeat.wav
       angle_2_beatOnly.wav
@@ -202,11 +202,12 @@ Use `build_coach_demo_audio.py` only when you need to refresh the bundled Scratc
 Current scope:
 
 - trims only the supported app demo scratches: `baby` and `chirpflare`
-- reads Chapter 2 start times from the clean MakeMKV source MKVs with `ffprobe`
+- reads the configured performance start section from local source media with `ffprobe`
 - adds a small fixed offset so the exported clip starts after the explanation/talking boundary
 - extracts the `noBeat` audio stream only
 - writes bundled app outputs under `ScratchLab/Resources/CoachDemoAudio/`
-- keeps the original MakeMKV and dataset source files untouched
+- writes the development-only manifest outside app resources
+- keeps the original source media files untouched
 
 Current assumptions:
 
@@ -218,13 +219,13 @@ Example:
 
 ```bash
 python3 scripts/dataset_processor/build_coach_demo_audio.py \
-  --source-root "$HOME/Movies/QBERT DISC 1 CLEAN" \
+  --source-root "$HOME/Movies/CXL Dataset Source" \
   --output-root ScratchLab/Resources/CoachDemoAudio \
   --offset 2.0 \
   --force
 ```
 
-The helper also writes `coach_demo_manifest.json` beside the bundled WAVs so the repo keeps the source MKV path, stream index, Chapter 2 start, and trim offset used for each shipped Coach demo asset.
+The helper also writes `coach_demo_manifest.dev.json` beside this script with only the runtime-safe clip name, bundled filename, and demo timing window. That development manifest must stay outside app resources.
 
 ## Output Layout
 
@@ -309,28 +310,28 @@ python3 scripts/dataset_processor/process_dataset.py --input data/loose_clips --
 Label loose clips, then process them:
 
 ```bash
-python3 scripts/dataset_processor/label_clip.py --input-dir data/loose_clips/baby_90 --performer Qbert --scratch-type baby --bpm 90 --beat-mode withBeat --label-source batch_manual --confidence 0.9
+python3 scripts/dataset_processor/label_clip.py --input-dir data/loose_clips/baby_90 --performer "CXL Dataset" --scratch-type baby --bpm 90 --beat-mode withBeat --label-source batch_manual --confidence 0.9
 python3 scripts/dataset_processor/process_dataset.py --input data/loose_clips --output data/processed_dataset --mode process --allow-loose-clips
 ```
 
-Ingest cleaner MakeMKV DVD folders:
+Ingest cleaner source media folders:
 
 ```bash
-python3 scripts/dataset_processor/ingest_makemkv_scratch.py \
-  --input-root "$HOME/Movies/QBERT DISC 1 CLEAN" \
-  --output-root "$HOME/Movies/QBERT DATASET/processed_makemkv" \
+python3 scripts/dataset_processor/ingest_media_scratch.py \
+  --input-root "$HOME/Movies/CXL Dataset Source" \
+  --output-root "$HOME/Movies/CXL Dataset/processed_media" \
   --inspect-streams \
-  --audio-map "$HOME/Movies/QBERT DATASET/audio_map.json"
+  --audio-map "$HOME/Movies/CXL Dataset/audio_map.json"
 ```
 
 Run the real ingest after confirming the stream roles:
 
 ```bash
-python3 scripts/dataset_processor/ingest_makemkv_scratch.py \
-  --input-root "$HOME/Movies/QBERT DISC 1 CLEAN" \
-  --output-root "$HOME/Movies/QBERT DATASET/processed_makemkv" \
-  --audio-map "$HOME/Movies/QBERT DATASET/audio_map.json" \
-  --performer "Qbert"
+python3 scripts/dataset_processor/ingest_media_scratch.py \
+  --input-root "$HOME/Movies/CXL Dataset Source" \
+  --output-root "$HOME/Movies/CXL Dataset/processed_media" \
+  --audio-map "$HOME/Movies/CXL Dataset/audio_map.json" \
+  --performer "CXL Dataset"
 ```
 
 Validate mixed inputs without copying media:
