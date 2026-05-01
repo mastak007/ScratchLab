@@ -1292,9 +1292,9 @@ class ScratchPatternMatcher {
     }
 
     static func bundledBabyTrainingFiles(in resourceRoot: URL?) -> [URL] {
-        guard let resourceRoot else { return [] }
+        guard let resourceRoot, let trainingPath = babyTrainingFolderPath else { return [] }
         var seen: Set<String> = []
-        return babyTrainingFiles(in: resourceRoot)
+        return babyTrainingFiles(in: resourceRoot, trainingPath: trainingPath)
             .sorted {
                 if $0.deletingLastPathComponent().lastPathComponent == $1.deletingLastPathComponent().lastPathComponent {
                     return $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
@@ -1307,9 +1307,17 @@ class ScratchPatternMatcher {
     private func findBabyTrainingFiles() -> [URL] {
         Self.bundledBabyTrainingFiles(in: Bundle.main.resourceURL)
     }
+
+    private static var babyTrainingFolderPath: String? {
+        #if DEBUG
+        return "internal_training/baby_scratch"
+        #else
+        return nil
+        #endif
+    }
     
-    private static func babyTrainingFiles(in root: URL) -> [URL] {
-        let folderURL = root.appendingPathComponent("scratch_training_library/baby_scratch", isDirectory: true)
+    private static func babyTrainingFiles(in root: URL, trainingPath: String) -> [URL] {
+        let folderURL = root.appendingPathComponent(trainingPath, isDirectory: true)
         return trainingAudioFiles(in: folderURL)
     }
     

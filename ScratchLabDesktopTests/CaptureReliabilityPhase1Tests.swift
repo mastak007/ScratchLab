@@ -1434,6 +1434,38 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(analyzerSource.contains("throw AnalyzerError.resourceNotFound"))
     }
 
+    func testTrainingAudioLookupSourcesGateTrainingPathsOutOfRelease() throws {
+        let audioEngineSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/AudioEngine.swift")
+        let macDetectorSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacScratchDetector.swift")
+
+        let audioEngineSource = try String(contentsOf: audioEngineSourceURL, encoding: .utf8)
+        let macDetectorSource = try String(contentsOf: macDetectorSourceURL, encoding: .utf8)
+        let runtimeSources = [
+            "AudioEngine.swift": audioEngineSource,
+            "MacScratchDetector.swift": macDetectorSource,
+        ]
+        let forbiddenRuntimePathFragments = [
+            "cxl_scratch_library",
+            "scratch_training_library",
+            "reference_pro",
+            "reference_champ",
+            "reference_beginner",
+        ]
+
+        for (fileName, source) in runtimeSources {
+            XCTAssertTrue(source.contains("guard let resourceRoot, let trainingPath = babyTrainingFolderPath else { return [] }"), fileName)
+            XCTAssertTrue(source.contains("private static var babyTrainingFolderPath: String?"), fileName)
+            XCTAssertTrue(source.contains("#if DEBUG"), fileName)
+            XCTAssertTrue(source.contains("return \"internal_training/baby_scratch\""), fileName)
+            XCTAssertTrue(source.contains("#else\n        return nil\n        #endif"), fileName)
+            XCTAssertTrue(source.contains("appendingPathComponent(trainingPath, isDirectory: true)"), fileName)
+
+            for fragment in forbiddenRuntimePathFragments {
+                XCTAssertFalse(source.localizedCaseInsensitiveContains(fragment), "\(fileName) contains \(fragment)")
+            }
+        }
+    }
+
     func testLegacySampleAndBackingTrackSelectorsAreNotRoutedFromShippedMenus() throws {
         let mainMenuSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let levelSelectSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/LevelSelectView.swift")
