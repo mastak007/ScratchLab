@@ -1,0 +1,4 @@
+bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes
+70,1,camA_70.mov,,audio_70.wav,watch_70.csv,true,true,fixture opening take
+90,1,camA_90.mov,,audio_90.wav,,true,true,fixture middle take
+110,1,camA_110.mov,,audio_110.wav,,true,true,fixture closing take

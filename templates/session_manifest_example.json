@@ -1,0 +1,183 @@
+{
+  "spec_version": "capture_spec_v1",
+  "dj_name": "DJ Prime Cuts",
+  "dj_token": "DJPRIMECUTS",
+  "date": "2026-04-12",
+  "scratch_type": "baby",
+  "allowed_bpms": [
+    70,
+    90,
+    110
+  ],
+  "segment_count": 3,
+  "verbal_slate_required": true,
+  "sync_clap_required": true,
+  "session_root": "sessions/DJPRIMECUTS/2026-04-12/baby_scratch",
+  "notes": "Pilot session example",
+  "takes": [
+    {
+      "dj_name": "DJ Prime Cuts",
+      "date": "2026-04-12",
+      "scratch_type": "baby",
+      "bpm": 70,
+      "take_number": 1,
+      "segment_count": 3,
+      "camera_id": "camA",
+      "audio_source": "serato",
+      "watch_source": "none",
+      "verbal_slate_used": true,
+      "sync_clap_used": true,
+      "notes": "clean take",
+      "files": {
+        "camA": "video/DJPRIMECUTS_baby_070_take01_camA.mov",
+        "serato": "audio/DJPRIMECUTS_baby_070_take01_serato.wav"
+      },
+      "artifacts": {
+        "camA": {
+          "path": "video/DJPRIMECUTS_baby_070_take01_camA.mov",
+          "bytes": 12345678,
+          "sha256": "abc123",
+          "probe": {
+            "kind": "video",
+            "duration_seconds": 61.2,
+            "width": 1920,
+            "height": 1080,
+            "frame_rate_fps": 30.0,
+            "codec": "h264"
+          }
+        },
+        "serato": {
+          "path": "audio/DJPRIMECUTS_baby_070_take01_serato.wav",
+          "bytes": 3456789,
+          "sha256": "def456",
+          "probe": {
+            "kind": "audio",
+            "duration_seconds": 61.2,
+            "sample_rate_hz": 44100,
+            "channel_count": 2,
+            "frame_count": 2698920,
+            "sample_width_bytes": 2
+          }
+        }
+      }
+    },
+    {
+      "dj_name": "DJ Prime Cuts",
+      "date": "2026-04-12",
+      "scratch_type": "baby",
+      "bpm": 90,
+      "take_number": 1,
+      "segment_count": 3,
+      "camera_id": "camA+camB",
+      "audio_source": "serato",
+      "watch_source": "watch",
+      "verbal_slate_used": true,
+      "sync_clap_used": true,
+      "notes": "watch and second camera used",
+      "files": {
+        "camA": "video/DJPRIMECUTS_baby_090_take01_camA.mov",
+        "camB": "video/DJPRIMECUTS_baby_090_take01_camB.mov",
+        "serato": "audio/DJPRIMECUTS_baby_090_take01_serato.wav",
+        "watch": "watch/DJPRIMECUTS_baby_090_take01_watch.csv"
+      },
+      "artifacts": {
+        "camA": {
+          "path": "video/DJPRIMECUTS_baby_090_take01_camA.mov",
+          "bytes": 12345678,
+          "sha256": "abc123",
+          "probe": {
+            "kind": "video",
+            "duration_seconds": 61.2,
+            "width": 1920,
+            "height": 1080,
+            "frame_rate_fps": 30.0,
+            "codec": "h264"
+          }
+        },
+        "camB": {
+          "path": "video/DJPRIMECUTS_baby_090_take01_camB.mov",
+          "bytes": 12345679,
+          "sha256": "abc124",
+          "probe": {
+            "kind": "video",
+            "duration_seconds": 61.2,
+            "width": 1920,
+            "height": 1080,
+            "frame_rate_fps": 30.0,
+            "codec": "h264"
+          }
+        },
+        "serato": {
+          "path": "audio/DJPRIMECUTS_baby_090_take01_serato.wav",
+          "bytes": 3456789,
+          "sha256": "def456",
+          "probe": {
+            "kind": "audio",
+            "duration_seconds": 61.2,
+            "sample_rate_hz": 44100,
+            "channel_count": 2,
+            "frame_count": 2698920,
+            "sample_width_bytes": 2
+          }
+        },
+        "watch": {
+          "path": "watch/DJPRIMECUTS_baby_090_take01_watch.csv",
+          "bytes": 45678,
+          "sha256": "ghi789",
+          "probe": {
+            "kind": "csv",
+            "row_count": 6102,
+            "data_row_count": 6101,
+            "column_count": 18
+          }
+        }
+      }
+    },
+    {
+      "dj_name": "DJ Prime Cuts",
+      "date": "2026-04-12",
+      "scratch_type": "baby",
+      "bpm": 110,
+      "take_number": 1,
+      "segment_count": 3,
+      "camera_id": "camA",
+      "audio_source": "serato",
+      "watch_source": "none",
+      "verbal_slate_used": true,
+      "sync_clap_used": true,
+      "notes": "",
+      "files": {
+        "camA": "video/DJPRIMECUTS_baby_110_take01_camA.mov",
+        "serato": "audio/DJPRIMECUTS_baby_110_take01_serato.wav"
+      },
+      "artifacts": {
+        "camA": {
+          "path": "video/DJPRIMECUTS_baby_110_take01_camA.mov",
+          "bytes": 12345678,
+          "sha256": "abc123",
+          "probe": {
+            "kind": "video",
+            "duration_seconds": 61.2,
+            "width": 1920,
+            "height": 1080,
+            "frame_rate_fps": 30.0,
+            "codec": "h264"
+          }
+        },
+        "serato": {
+          "path": "audio/DJPRIMECUTS_baby_110_take01_serato.wav",
+          "bytes": 3456789,
+          "sha256": "def456",
+          "probe": {
+            "kind": "audio",
+            "duration_seconds": 61.2,
+            "sample_rate_hz": 44100,
+            "channel_count": 2,
+            "frame_count": 2698920,
+            "sample_width_bytes": 2
+          }
+        }
+      }
+    }
+  ]
+}

@@ -51,6 +51,129 @@ struct BackingTrack: Identifiable, Codable, Equatable {
 // MARK: - Backing Track Manager
 class BackingTrackManager: ObservableObject {
     static let shared = BackingTrackManager()
+
+    static let bundledDefaultTracksCatalog: [BackingTrack] = [
+        BackingTrack(
+            id: "boom_bap_100bpm",
+            name: "boom_bap_100bpm",
+            displayName: "Golden Era",
+            fileName: "boom_bap_100bpm.wav",
+            bpm: 100,
+            genre: .boomBap,
+            duration: 180,
+            difficulty: 1
+        ),
+        BackingTrack(
+            id: "boom_bap_95bpm",
+            name: "boom_bap_95bpm",
+            displayName: "Street Knowledge",
+            fileName: "boom_bap_95bpm.mp3",
+            bpm: 95,
+            genre: .boomBap,
+            duration: 180,
+            difficulty: 2
+        ),
+        BackingTrack(
+            id: "electro_100bpm",
+            name: "electro_100bpm",
+            displayName: "Electric Dreams",
+            fileName: "electro_100bpm.mp3",
+            bpm: 100,
+            genre: .electro,
+            duration: 180,
+            difficulty: 3
+        ),
+        BackingTrack(
+            id: "electro_105bpm",
+            name: "electro_105bpm",
+            displayName: "Robot Funk",
+            fileName: "electro_105bpm.mp3",
+            bpm: 105,
+            genre: .electro,
+            duration: 180,
+            difficulty: 3
+        ),
+        BackingTrack(
+            id: "trap_110bpm",
+            name: "trap_110bpm",
+            displayName: "808 Mafia",
+            fileName: "trap_110bpm.mp3",
+            bpm: 110,
+            genre: .trap,
+            duration: 180,
+            difficulty: 4
+        ),
+        BackingTrack(
+            id: "trap_140bpm",
+            name: "trap_140bpm",
+            displayName: "ATL Heat",
+            fileName: "trap_140bpm.mp3",
+            bpm: 140,
+            genre: .trap,
+            duration: 180,
+            difficulty: 5
+        ),
+        BackingTrack(
+            id: "dnb_120bpm",
+            name: "dnb_120bpm",
+            displayName: "Liquid Smooth",
+            fileName: "dnb_120bpm.mp3",
+            bpm: 120,
+            genre: .dnb,
+            duration: 180,
+            difficulty: 4
+        ),
+        BackingTrack(
+            id: "dnb_174bpm",
+            name: "dnb_174bpm",
+            displayName: "Jungle Warfare",
+            fileName: "dnb_174bpm.mp3",
+            bpm: 174,
+            genre: .dnb,
+            duration: 180,
+            difficulty: 5
+        ),
+        BackingTrack(
+            id: "house_120bpm",
+            name: "house_120bpm",
+            displayName: "Deep Groove",
+            fileName: "house_120bpm.mp3",
+            bpm: 120,
+            genre: .house,
+            duration: 180,
+            difficulty: 3
+        ),
+        BackingTrack(
+            id: "house_128bpm",
+            name: "house_128bpm",
+            displayName: "Club Classic",
+            fileName: "house_128bpm.mp3",
+            bpm: 128,
+            genre: .house,
+            duration: 180,
+            difficulty: 3
+        ),
+        BackingTrack(
+            id: "breakbeat_100bpm",
+            name: "breakbeat_100bpm",
+            displayName: "Amen Brother",
+            fileName: "breakbeat_100bpm.mp3",
+            bpm: 100,
+            genre: .breakbeat,
+            duration: 180,
+            difficulty: 2
+        ),
+        BackingTrack(
+            id: "breakbeat_130bpm",
+            name: "breakbeat_130bpm",
+            displayName: "Funky Drummer",
+            fileName: "breakbeat_130bpm.mp3",
+            bpm: 130,
+            genre: .breakbeat,
+            duration: 180,
+            difficulty: 4
+        )
+    ]
     
     // Available tracks
     @Published var availableTracks: [BackingTrack] = []
@@ -79,146 +202,38 @@ class BackingTrackManager: ObservableObject {
     }
     
     // MARK: - Setup
+
+    static func bundledDefaultTracks(in resourceRoot: URL?) -> [BackingTrack] {
+        bundledDefaultTracksCatalog.filter { bundledTrackURL(for: $0, in: resourceRoot) != nil }
+    }
+
+    static func bundledTrackURL(for track: BackingTrack, in resourceRoot: URL?) -> URL? {
+        guard let resourceRoot else { return nil }
+
+        let primaryURL = resourceRoot.appendingPathComponent(track.fileName)
+        if FileManager.default.fileExists(atPath: primaryURL.path) {
+            return primaryURL
+        }
+
+        let fallbackExtensions = ["mp3", "m4a", "wav"]
+        for ext in fallbackExtensions {
+            let fallbackURL = resourceRoot.appendingPathComponent("\(track.name).\(ext)")
+            if FileManager.default.fileExists(atPath: fallbackURL.path) {
+                return fallbackURL
+            }
+        }
+
+        return nil
+    }
     
     private func loadDefaultTracks() {
-        availableTracks = [
-            // Boom Bap (90-95 BPM) - Classic hip-hop feel
-            BackingTrack(
-                id: "boom_bap_90bpm",
-                name: "boom_bap_90bpm",
-                displayName: "Golden Era",
-                fileName: "boom_bap_90bpm.mp3",
-                bpm: 90,
-                genre: .boomBap,
-                duration: 180,
-                difficulty: 1
-            ),
-            BackingTrack(
-                id: "boom_bap_95bpm",
-                name: "boom_bap_95bpm",
-                displayName: "Street Knowledge",
-                fileName: "boom_bap_95bpm.mp3",
-                bpm: 95,
-                genre: .boomBap,
-                duration: 180,
-                difficulty: 2
-            ),
-            
-            // Electro (100-105 BPM)
-            BackingTrack(
-                id: "electro_100bpm",
-                name: "electro_100bpm",
-                displayName: "Electric Dreams",
-                fileName: "electro_100bpm.mp3",
-                bpm: 100,
-                genre: .electro,
-                duration: 180,
-                difficulty: 3
-            ),
-            BackingTrack(
-                id: "electro_105bpm",
-                name: "electro_105bpm",
-                displayName: "Robot Funk",
-                fileName: "electro_105bpm.mp3",
-                bpm: 105,
-                genre: .electro,
-                duration: 180,
-                difficulty: 3
-            ),
-            
-            // Trap (110-140 BPM)
-            BackingTrack(
-                id: "trap_110bpm",
-                name: "trap_110bpm",
-                displayName: "808 Mafia",
-                fileName: "trap_110bpm.mp3",
-                bpm: 110,
-                genre: .trap,
-                duration: 180,
-                difficulty: 4
-            ),
-            BackingTrack(
-                id: "trap_140bpm",
-                name: "trap_140bpm",
-                displayName: "ATL Heat",
-                fileName: "trap_140bpm.mp3",
-                bpm: 140,
-                genre: .trap,
-                duration: 180,
-                difficulty: 5
-            ),
-            
-            // Drum & Bass (120-174 BPM)
-            BackingTrack(
-                id: "dnb_120bpm",
-                name: "dnb_120bpm",
-                displayName: "Liquid Smooth",
-                fileName: "dnb_120bpm.mp3",
-                bpm: 120,
-                genre: .dnb,
-                duration: 180,
-                difficulty: 4
-            ),
-            BackingTrack(
-                id: "dnb_174bpm",
-                name: "dnb_174bpm",
-                displayName: "Jungle Warfare",
-                fileName: "dnb_174bpm.mp3",
-                bpm: 174,
-                genre: .dnb,
-                duration: 180,
-                difficulty: 5
-            ),
-            
-            // House (120-128 BPM)
-            BackingTrack(
-                id: "house_120bpm",
-                name: "house_120bpm",
-                displayName: "Deep Groove",
-                fileName: "house_120bpm.mp3",
-                bpm: 120,
-                genre: .house,
-                duration: 180,
-                difficulty: 3
-            ),
-            BackingTrack(
-                id: "house_128bpm",
-                name: "house_128bpm",
-                displayName: "Club Classic",
-                fileName: "house_128bpm.mp3",
-                bpm: 128,
-                genre: .house,
-                duration: 180,
-                difficulty: 3
-            ),
-            
-            // Breakbeat (90-140 BPM)
-            BackingTrack(
-                id: "breakbeat_100bpm",
-                name: "breakbeat_100bpm",
-                displayName: "Amen Brother",
-                fileName: "breakbeat_100bpm.mp3",
-                bpm: 100,
-                genre: .breakbeat,
-                duration: 180,
-                difficulty: 2
-            ),
-            BackingTrack(
-                id: "breakbeat_130bpm",
-                name: "breakbeat_130bpm",
-                displayName: "Funky Drummer",
-                fileName: "breakbeat_130bpm.mp3",
-                bpm: 130,
-                genre: .breakbeat,
-                duration: 180,
-                difficulty: 4
-            )
-        ]
-        
-        // Set default
-        if selectedTrack == nil {
-            selectedTrack = availableTracks.first
+        availableTracks = Self.bundledDefaultTracks(in: Bundle.main.resourceURL)
+
+        if let selectedTrack, availableTracks.contains(where: { $0.id == selectedTrack.id }) {
+            return
         }
+
+        selectedTrack = availableTracks.first
     }
     
     private func loadSelectedTrack() {
@@ -238,8 +253,10 @@ class BackingTrackManager: ObservableObject {
     }
     
     func loadTrack(_ track: BackingTrack) {
-        guard let url = Bundle.main.url(forResource: track.name, withExtension: "mp3") else {
-            print("Backing track not found: \(track.name)")
+        guard let url = Self.bundledTrackURL(for: track, in: Bundle.main.resourceURL) else {
+            audioPlayer = nil
+            isPlaying = false
+            print("Backing track not found: \(track.fileName)")
             return
         }
         
@@ -401,23 +418,39 @@ struct BackingTrackSelectionView: View {
                     // Track list
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(filteredTracks) { track in
-                                BackingTrackRow(
-                                    track: track,
-                                    isSelected: trackManager.selectedTrack?.id == track.id,
-                                    isPlaying: trackManager.isPlaying && trackManager.selectedTrack?.id == track.id,
-                                    onSelect: {
-                                        trackManager.selectTrack(track)
-                                    },
-                                    onPlay: {
-                                        if trackManager.selectedTrack?.id == track.id {
-                                            trackManager.togglePlayback()
-                                        } else {
+                            if filteredTracks.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Bundled backing tracks are unavailable on this build.")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.white)
+
+                                    Text("This legacy screen now hides any track that is not actually bundled with the app.")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.62))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(16)
+                                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            } else {
+                                ForEach(filteredTracks) { track in
+                                    BackingTrackRow(
+                                        track: track,
+                                        isSelected: trackManager.selectedTrack?.id == track.id,
+                                        isPlaying: trackManager.isPlaying && trackManager.selectedTrack?.id == track.id,
+                                        onSelect: {
                                             trackManager.selectTrack(track)
-                                            trackManager.play()
+                                        },
+                                        onPlay: {
+                                            if trackManager.selectedTrack?.id == track.id {
+                                                trackManager.togglePlayback()
+                                            } else {
+                                                trackManager.selectTrack(track)
+                                                trackManager.play()
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                         .padding(.horizontal, 20)
@@ -464,7 +497,7 @@ struct GenreFilterButton: View {
             HStack(spacing: 6) {
                 Text(icon)
                 Text(title)
-                    .font(.custom("Futura-Bold", size: 11))
+                    .font(.system(size: 11, weight: .bold))
             }
             .foregroundColor(isSelected ? .black : .white)
             .padding(.horizontal, 14)
@@ -501,7 +534,7 @@ struct BackingTrackRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(track.displayName)
-                        .font(.custom("Futura-Bold", size: 16))
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.white)
                     
                     Text(track.genre.icon)
@@ -515,7 +548,7 @@ struct BackingTrackRow: View {
                             .font(.caption2)
                         Text("\(track.bpm) BPM")
                     }
-                    .font(.custom("Futura-Medium", size: 11))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
                     
                     // Difficulty
@@ -563,11 +596,11 @@ struct NowPlayingBar: View {
                 // Track info
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.displayName)
-                        .font(.custom("Futura-Bold", size: 14))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.white)
                     
                     Text("\(track.bpm) BPM • Beat \(trackManager.currentBeat)")
-                        .font(.custom("Futura-Medium", size: 11))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                 }
                 
@@ -591,6 +624,10 @@ struct NowPlayingBar: View {
     }
 }
 
-#Preview {
-    BackingTrackSelectionView()
+#if DEBUG
+struct BackingTrackSelectionView_Previews: PreviewProvider {
+    static var previews: some View {
+        BackingTrackSelectionView()
+    }
 }
+#endif

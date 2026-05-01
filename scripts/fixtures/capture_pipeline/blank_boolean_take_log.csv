@@ -1,0 +1,2 @@
+bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes
+70,1,camA_70.mov,,audio_70.wav,,,true,fixture row with blank slate boolean

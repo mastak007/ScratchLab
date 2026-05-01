@@ -1,0 +1,18 @@
+{
+  "spec_version": "capture_spec_v1",
+  "dj_name": "",
+  "dj_token": "",
+  "date": "",
+  "scratch_type": "baby",
+  "allowed_bpms": [
+    70,
+    90,
+    110
+  ],
+  "segment_count": 3,
+  "verbal_slate_required": true,
+  "sync_clap_required": true,
+  "session_root": "",
+  "notes": "",
+  "takes": []
+}

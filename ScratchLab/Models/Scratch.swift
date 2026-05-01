@@ -24,6 +24,14 @@ struct Scratch: Identifiable, Codable, Equatable {
     var bestAccuracy: Double = 0.0
     var practiceCount: Int = 0
     var isMastered: Bool = false
+
+    private static let formulaReferenceDurationSeconds = 0.5
+
+    var formulaDefaultBeats: Double {
+        let normalizedBeats = patternSignature.expectedDuration / Self.formulaReferenceDurationSeconds
+        let roundedBeats = (normalizedBeats * 10).rounded() / 10
+        return max(0.2, roundedBeats)
+    }
 }
 
 // MARK: - Scratch Difficulty
@@ -108,7 +116,7 @@ class ScratchLibrary {
                 ),
                 tutorialVideoName: "baby_scratch_tutorial",
                 referenceAudioName: "baby_scratch_ref",
-                backingTrackName: "boom_bap_90bpm",
+                backingTrackName: "boom_bap_100bpm",
                 tips: [
                     "Keep your wrist loose",
                     "Use your fingers, not your whole arm",
@@ -134,7 +142,7 @@ class ScratchLibrary {
                 ),
                 tutorialVideoName: "forward_scratch_tutorial",
                 referenceAudioName: "forward_scratch_ref",
-                backingTrackName: "boom_bap_90bpm",
+                backingTrackName: "boom_bap_100bpm",
                 tips: [
                     "Quick push forward",
                     "Slow, silent return",
@@ -159,7 +167,7 @@ class ScratchLibrary {
                 ),
                 tutorialVideoName: "backward_scratch_tutorial",
                 referenceAudioName: "backward_scratch_ref",
-                backingTrackName: "boom_bap_90bpm",
+                backingTrackName: "boom_bap_100bpm",
                 tips: [
                     "Quick pull backward",
                     "Control the release",
@@ -184,7 +192,7 @@ class ScratchLibrary {
                 ),
                 tutorialVideoName: "release_scratch_tutorial",
                 referenceAudioName: "release_scratch_ref",
-                backingTrackName: "boom_bap_90bpm",
+                backingTrackName: "boom_bap_100bpm",
                 tips: [
                     "Let the motor do the work on the release",
                     "Time your release with the beat",

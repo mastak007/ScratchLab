@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "D06C83C8-FFE9-4256-9D14-0B69ECF3639C",
+      "name" : "Test Scheme Action",
+      "options" : {
+        "language" : "en"
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:ScratchLab.xcodeproj",
+      "identifier" : "14AA15152CB136619CDCFA95",
+      "name" : "ScratchLabDesktop"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:ScratchLab.xcodeproj",
+        "identifier" : "2010EE0010EE0010EE0010EE",
+        "name" : "ScratchLabDesktopTests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -20,12 +20,18 @@
     "performanceAntipatternCheckerEnabled" : true,
     "targetForVariableExpansion" : {
       "containerPath" : "container:ScratchLab.xcodeproj",
-      "identifier" : "A6000001",
-      "name" : "ScratchLab"
+      "identifier" : "14AA15152CB136619CDCFA95",
+      "name" : "ScratchLabDesktop"
     }
   },
   "testTargets" : [
-
+    {
+      "target" : {
+        "containerPath" : "container:ScratchLab.xcodeproj",
+        "identifier" : "2010EE0010EE0010EE0010EE",
+        "name" : "ScratchLabDesktopTests"
+      }
+    }
   ],
   "version" : 1
 }

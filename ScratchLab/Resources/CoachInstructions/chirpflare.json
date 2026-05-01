@@ -1,0 +1,20 @@
+{
+  "scratchType": "chirpflare",
+  "scratchDisplayName": "Chirp Flare",
+  "instructionSummary": "The chirp flare layers a chirp record motion with one quick fader click, so the rhythm stays tight while the record hand keeps moving.",
+  "coachScript": "Build the record motion first, then add the single click. Let the record hand stay calm and let the fader hand add the accent instead of racing ahead.",
+  "steps": [
+    "Start the forward chirp motion with the record hand.",
+    "Open the fader just enough to let the sound speak.",
+    "Close and reopen quickly to create one clear flare click.",
+    "Reset the record and repeat at a controlled tempo."
+  ],
+  "commonMistake": "Letting the fader click outrun the record motion so the rhythm sounds rushed.",
+  "practiceChallenge": "Play 8 chirp flares at one BPM and keep every click lined up with the same part of the record move.",
+  "difficulty": "intermediate",
+  "sourceReference": "scratchlab_manual_rewrite_v1",
+  "rightsStatus": "original_text",
+  "reviewStatus": "ready",
+  "demoAudioFile": "chirpflare_noBeat.wav",
+  "demoAudioRole": "noBeat"
+}

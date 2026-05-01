@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>ScratchLab</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>15</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_scrcamfeed._tcp</string>
+		<string>_scrcamfeed._tcp.</string>
+		<string>_scrmonfeed._tcp</string>
+		<string>_scrmonfeed._tcp.</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>ScratchLab uses the camera to frame the deck view, align deck calibration, and record routine captures.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>ScratchLab uses local network access to connect to nearby ScratchLab devices for companion camera and Performer Monitor.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ScratchLab uses the selected audio input to record scratch audio and analyze routine captures.</string>
+</dict>
+</plist>

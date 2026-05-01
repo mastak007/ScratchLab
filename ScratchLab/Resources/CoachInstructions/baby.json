@@ -1,0 +1,20 @@
+{
+  "scratchType": "baby",
+  "scratchDisplayName": "Baby Scratch",
+  "instructionSummary": "The baby scratch is the base movement for scratch control: one clean push forward and one clean pull back with the fader left open.",
+  "coachScript": "Keep the record hand loose. Match the length and weight of the forward and backward sound so the scratch feels balanced before you add speed.",
+  "steps": [
+    "Set the fader open and keep it there.",
+    "Push the record forward with one smooth sound.",
+    "Pull the record back with the same distance and pressure.",
+    "Repeat slowly until both directions sound even."
+  ],
+  "commonMistake": "Driving the forward motion harder than the pullback so the scratch loses balance.",
+  "practiceChallenge": "Land 8 steady baby scratches in a row without changing the volume or the pace.",
+  "difficulty": "beginner",
+  "sourceReference": "scratchlab_manual_rewrite_v1",
+  "rightsStatus": "original_text",
+  "reviewStatus": "ready",
+  "demoAudioFile": "baby_noBeat.wav",
+  "demoAudioRole": "noBeat"
+}

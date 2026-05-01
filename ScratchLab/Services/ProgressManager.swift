@@ -5,6 +5,9 @@
 import Foundation
 import SwiftUI
 import GameKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Progress Manager
 @MainActor
@@ -37,10 +40,12 @@ class ProgressManager: ObservableObject {
     private let levelProgressKey = "levelProgress"
     private let statsKey = "playerStats"
     private let historyKey = "sessionHistory"
+    private let mvpScratchID = "baby_scratch"
+    private let mvpLevelID = 1
+    private var didSetupGameCenter = false
     
     init() {
         loadProgress()
-        setupGameCenter()
     }
     
     // MARK: - Profile Management
@@ -72,12 +77,16 @@ class ProgressManager: ObservableObject {
             if scratchProgress[scratch.id] == nil {
                 scratchProgress[scratch.id] = ScratchProgress(
                     scratchID: scratch.id,
-                    isUnlocked: scratch.level == 1, // Level 1 scratches start unlocked
+                    isUnlocked: scratch.id == mvpScratchID,
                     bestAccuracy: 0,
                     practiceCount: 0,
                     isMastered: false,
                     totalPracticeTime: 0
                 )
+            } else {
+                guard var existing = scratchProgress[scratch.id] else { continue }
+                existing.isUnlocked = (scratch.id == mvpScratchID)
+                scratchProgress[scratch.id] = existing
             }
         }
         
@@ -86,12 +95,16 @@ class ProgressManager: ObservableObject {
             if levelProgress[level.id] == nil {
                 levelProgress[level.id] = LevelProgress(
                     levelID: level.id,
-                    isUnlocked: level.id == 1, // Level 1 starts unlocked
+                    isUnlocked: level.id == mvpLevelID,
                     scratchesMastered: 0,
                     comboCompleted: false,
                     comboAccuracy: 0,
                     totalStars: 0
                 )
+            } else {
+                guard var existing = levelProgress[level.id] else { continue }
+                existing.isUnlocked = (level.id == mvpLevelID)
+                levelProgress[level.id] = existing
             }
         }
     }
@@ -99,7 +112,7 @@ class ProgressManager: ObservableObject {
     // MARK: - Progress Updates
     
     func recordScratchAttempt(scratchID: String, accuracy: Double, duration: TimeInterval) {
-        guard var progress = scratchProgress[scratchID] else { return }
+        guard scratchID == mvpScratchID, var progress = scratchProgress[mvpScratchID] else { return }
         
         // Update practice count
         progress.practiceCount += 1
@@ -114,10 +127,12 @@ class ProgressManager: ObservableObject {
         if accuracy >= 90 && !progress.isMastered {
             progress.isMastered = true
             progress.masteredDate = Date()
-            playerProfile?.scratchesMastered.append(scratchID)
+            if !(playerProfile?.scratchesMastered.contains(mvpScratchID) ?? false) {
+                playerProfile?.scratchesMastered.append(mvpScratchID)
+            }
             
             // Check if this unlocks the combo or next scratches
-            checkAndUnlockContent(afterMastering: scratchID)
+            checkAndUnlockContent(afterMastering: mvpScratchID)
         }
         
         // Update practice time
@@ -133,11 +148,13 @@ class ProgressManager: ObservableObject {
         checkLevelUp()
         
         // Save
-        scratchProgress[scratchID] = progress
+        progress.addAttempt(accuracy: accuracy)
+        scratchProgress[mvpScratchID] = progress
         saveProgress()
     }
     
     func recordComboAttempt(levelID: Int, accuracy: Double) {
+        guard levelID == mvpLevelID else { return }
         guard var progress = levelProgress[levelID] else { return }
         
         if accuracy > progress.comboAccuracy {
@@ -146,23 +163,6 @@ class ProgressManager: ObservableObject {
         
         if accuracy >= 90 && !progress.comboCompleted {
             progress.comboCompleted = true
-            
-            // Unlock next level
-            let nextLevelID = levelID + 1
-            if var nextLevel = levelProgress[nextLevelID] {
-                nextLevel.isUnlocked = true
-                levelProgress[nextLevelID] = nextLevel
-                
-                // Unlock all scratches in next level
-                if let level = Level.level(nextLevelID) {
-                    for scratchID in level.scratchIDs {
-                        if var scratchProg = scratchProgress[scratchID] {
-                            scratchProg.isUnlocked = true
-                            scratchProgress[scratchID] = scratchProg
-                        }
-                    }
-                }
-            }
         }
         
         levelProgress[levelID] = progress
@@ -183,6 +183,7 @@ class ProgressManager: ObservableObject {
         saveProgress()
         
         // Report to Game Center
+        activateGameCenterIfNeeded()
         if isGameCenterEnabled {
             reportScoreToGameCenter(result.totalScore)
         }
@@ -205,8 +206,8 @@ class ProgressManager: ObservableObject {
         let levelID = scratch.level
         guard var levelProg = levelProgress[levelID] else { return }
         
-        // Count mastered scratches in this level
-        let levelScratchIDs = ScratchLibrary.shared.scratchesForLevel(levelID).map { $0.id }
+        // MVP progression tracks only Baby Scratch during v1.
+        let levelScratchIDs = [mvpScratchID]
         let masteredCount = levelScratchIDs.filter { scratchProgress[$0]?.isMastered == true }.count
         
         levelProg.scratchesMastered = masteredCount
@@ -261,6 +262,7 @@ class ProgressManager: ObservableObject {
     // MARK: - Data Helpers
     
     func isScratchUnlocked(_ scratchID: String) -> Bool {
+        guard scratchID == mvpScratchID else { return false }
         return scratchProgress[scratchID]?.isUnlocked ?? false
     }
     
@@ -269,14 +271,13 @@ class ProgressManager: ObservableObject {
     }
     
     func isLevelUnlocked(_ levelID: Int) -> Bool {
+        guard levelID == mvpLevelID else { return false }
         return levelProgress[levelID]?.isUnlocked ?? false
     }
     
     func isComboAvailable(_ levelID: Int) -> Bool {
-        guard let level = Level.level(levelID) else { return false }
-        
-        // All scratches in level must be mastered
-        return level.scratchIDs.allSatisfy { isScratchMastered($0) }
+        guard levelID == mvpLevelID else { return false }
+        return isScratchMastered(mvpScratchID)
     }
     
     func getProgressForScratch(_ scratchID: String) -> ScratchProgress? {
@@ -285,6 +286,14 @@ class ProgressManager: ObservableObject {
     
     func getProgressForLevel(_ levelID: Int) -> LevelProgress? {
         return levelProgress[levelID]
+    }
+
+    var babyScratchProgress: ScratchProgress? {
+        return scratchProgress[mvpScratchID]
+    }
+
+    var babyComboProgress: LevelProgress? {
+        return levelProgress[mvpLevelID]
     }
     
     // MARK: - Persistence
@@ -398,6 +407,12 @@ class ProgressManager: ObservableObject {
             }
         }
     }
+
+    func activateGameCenterIfNeeded() {
+        guard !didSetupGameCenter else { return }
+        didSetupGameCenter = true
+        setupGameCenter()
+    }
     
     private func reportScoreToGameCenter(_ score: Int) {
         guard isGameCenterEnabled else { return }
@@ -409,13 +424,16 @@ class ProgressManager: ObservableObject {
         }
     }
     
+    #if canImport(UIKit)
     func showGameCenterLeaderboard(from viewController: UIViewController) {
+        activateGameCenterIfNeeded()
         guard isGameCenterEnabled else { return }
         
         let gcViewController = GKGameCenterViewController(leaderboardID: "scratchlab_highscores", playerScope: .global, timeScope: .allTime)
         gcViewController.gameCenterDelegate = viewController as? GKGameCenterControllerDelegate
         viewController.present(gcViewController, animated: true)
     }
+    #endif
 }
 
 // MARK: - Scratch Progress Model
@@ -458,6 +476,6 @@ struct LevelProgress: Codable {
     var totalStars: Int // 0-3 stars based on performance
     
     var isComplete: Bool {
-        return scratchesMastered >= 4 && comboCompleted
+        return scratchesMastered >= 1 && comboCompleted
     }
 }

@@ -6,6 +6,8 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>ScratchLab</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -24,6 +26,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -35,56 +39,50 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>15</string>
 	<key>GCSupportsGameCenterDashboard</key>
 	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSApplicationCategory</key>
+	<string>public.app-category.music</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_scrcamfeed._tcp</string>
+		<string>_scrcamfeed._tcp.</string>
+		<string>_scrmonfeed._tcp</string>
+		<string>_scrmonfeed._tcp.</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>ScratchLab uses the camera to detect your DJ equipment and display gamification overlays on your setup.</string>
+	<string>ScratchLab uses the camera to capture deck video, align guide boxes, and record scratch sessions.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ScratchLab uses local network access to connect with DJ software for audio routing.</string>
+	<string>ScratchLab uses local network access to connect to nearby ScratchLab devices for companion camera, performer monitor, and watch relay.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ScratchLab needs microphone access to analyze your scratching and provide real-time feedback on your technique.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ScratchLab needs access to your photo library to save and share your battle recordings.</string>
+	<string>ScratchLab uses the microphone or selected audio input to record scratch audio and analyze takes.</string>
 	<key>UIAppFonts</key>
 	<array/>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-		<key>UISceneConfigurations</key>
-		<dict/>
-	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
-		<string>bluetooth-central</string>
-		<string>nearby-interaction</string>
-		<string>bluetooth-peripheral</string>
-		<string>fetch</string>
-		<string>processing</string>
-		<string>external-accessory</string>
-		<string>location</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 		<key>UIImageName</key>
-		<string>LaunchLogo</string>
+		<string>ScratchLabLogo</string>
 	</dict>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
-		<string>armv7</string>
 		<string>microphone</string>
 	</array>
 	<key>UIStatusBarStyle</key>

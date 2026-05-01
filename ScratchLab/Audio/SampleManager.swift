@@ -36,6 +36,129 @@ struct ScratchSample: Identifiable, Codable, Equatable {
 // MARK: - Sample Manager
 class SampleManager: ObservableObject {
     static let shared = SampleManager()
+
+    static let bundledDefaultSamplesCatalog: [ScratchSample] = [
+        ScratchSample(
+            id: "fresh",
+            name: "fresh",
+            displayName: "Fresh",
+            fileName: "fresh.wav",
+            category: .classic,
+            duration: 0.8,
+            description: "The classic 'Fresh' vocal sample",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "ahhh",
+            name: "ahhh",
+            displayName: "Ahhh",
+            fileName: "ahhh.wav",
+            category: .classic,
+            duration: 1.2,
+            description: "Long vocal 'Ahhh' - great for transforms",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "ah_yeah",
+            name: "ah_yeah",
+            displayName: "Ah Yeah",
+            fileName: "ah_yeah.wav",
+            category: .classic,
+            duration: 0.9,
+            description: "Classic hip-hop vocal",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "wickid",
+            name: "wickid",
+            displayName: "Wickid",
+            fileName: "wickid.wav",
+            category: .classic,
+            duration: 0.7,
+            description: "Sharp vocal hit",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "yeah_boy",
+            name: "yeah_boy",
+            displayName: "Yeah Boy",
+            fileName: "yeah_boy.wav",
+            category: .vocal,
+            duration: 0.6,
+            description: "Hype vocal sample",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "unh",
+            name: "unh",
+            displayName: "Unh",
+            fileName: "unh.wav",
+            category: .vocal,
+            duration: 0.3,
+            description: "Short grunt - perfect for stabs",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "check_it_out",
+            name: "check_it_out",
+            displayName: "Check It Out",
+            fileName: "check_it_out.wav",
+            category: .vocal,
+            duration: 0.8,
+            description: "Classic phrase",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "lets_go",
+            name: "lets_go",
+            displayName: "Let's Go",
+            fileName: "lets_go.wav",
+            category: .vocal,
+            duration: 0.5,
+            description: "Energy vocal",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "horn",
+            name: "horn",
+            displayName: "Air Horn",
+            fileName: "horn.wav",
+            category: .sfx,
+            duration: 1.0,
+            description: "Classic air horn",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "laser",
+            name: "laser",
+            displayName: "Laser",
+            fileName: "laser.wav",
+            category: .sfx,
+            duration: 0.4,
+            description: "Sci-fi laser sound",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "808_kick",
+            name: "808_kick",
+            displayName: "808 Kick",
+            fileName: "808_kick.wav",
+            category: .sfx,
+            duration: 0.5,
+            description: "Deep 808 kick drum",
+            isDefault: true
+        ),
+        ScratchSample(
+            id: "snare_hit",
+            name: "snare_hit",
+            displayName: "Snare Hit",
+            fileName: "snare_hit.wav",
+            category: .sfx,
+            duration: 0.3,
+            description: "Punchy snare",
+            isDefault: true
+        )
+    ]
     
     // Available samples
     @Published var availableSamples: [ScratchSample] = []
@@ -69,141 +192,25 @@ class SampleManager: ObservableObject {
             try? fileManager.createDirectory(at: samplesDirectory, withIntermediateDirectories: true)
         }
     }
+
+    static func bundledDefaultSamples(in resourceRoot: URL?) -> [ScratchSample] {
+        bundledDefaultSamplesCatalog.filter { bundledDefaultSampleURL(for: $0, in: resourceRoot) != nil }
+    }
+
+    static func bundledDefaultSampleURL(for sample: ScratchSample, in resourceRoot: URL?) -> URL? {
+        guard let resourceRoot else { return nil }
+        let url = resourceRoot.appendingPathComponent(sample.fileName)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
     
     private func loadDefaultSamples() {
-        // These are the classic DJ scratch samples that will be bundled with the app
-        availableSamples = [
-            // Classic Samples
-            ScratchSample(
-                id: "fresh",
-                name: "fresh",
-                displayName: "Fresh",
-                fileName: "fresh.wav",
-                category: .classic,
-                duration: 0.8,
-                description: "The classic 'Fresh' vocal sample",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "ahhh",
-                name: "ahhh",
-                displayName: "Ahhh",
-                fileName: "ahhh.wav",
-                category: .classic,
-                duration: 1.2,
-                description: "Long vocal 'Ahhh' - great for transforms",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "ah_yeah",
-                name: "ah_yeah",
-                displayName: "Ah Yeah",
-                fileName: "ah_yeah.wav",
-                category: .classic,
-                duration: 0.9,
-                description: "Classic hip-hop vocal",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "wickid",
-                name: "wickid",
-                displayName: "Wickid",
-                fileName: "wickid.wav",
-                category: .classic,
-                duration: 0.7,
-                description: "Sharp vocal hit",
-                isDefault: true
-            ),
-            
-            // Vocal Samples
-            ScratchSample(
-                id: "yeah_boy",
-                name: "yeah_boy",
-                displayName: "Yeah Boy",
-                fileName: "yeah_boy.wav",
-                category: .vocal,
-                duration: 0.6,
-                description: "Hype vocal sample",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "unh",
-                name: "unh",
-                displayName: "Unh",
-                fileName: "unh.wav",
-                category: .vocal,
-                duration: 0.3,
-                description: "Short grunt - perfect for stabs",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "check_it_out",
-                name: "check_it_out",
-                displayName: "Check It Out",
-                fileName: "check_it_out.wav",
-                category: .vocal,
-                duration: 0.8,
-                description: "Classic phrase",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "lets_go",
-                name: "lets_go",
-                displayName: "Let's Go",
-                fileName: "lets_go.wav",
-                category: .vocal,
-                duration: 0.5,
-                description: "Energy vocal",
-                isDefault: true
-            ),
-            
-            // SFX Samples
-            ScratchSample(
-                id: "horn",
-                name: "horn",
-                displayName: "Air Horn",
-                fileName: "horn.wav",
-                category: .sfx,
-                duration: 1.0,
-                description: "Classic air horn",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "laser",
-                name: "laser",
-                displayName: "Laser",
-                fileName: "laser.wav",
-                category: .sfx,
-                duration: 0.4,
-                description: "Sci-fi laser sound",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "808_kick",
-                name: "808_kick",
-                displayName: "808 Kick",
-                fileName: "808_kick.wav",
-                category: .sfx,
-                duration: 0.5,
-                description: "Deep 808 kick drum",
-                isDefault: true
-            ),
-            ScratchSample(
-                id: "snare_hit",
-                name: "snare_hit",
-                displayName: "Snare Hit",
-                fileName: "snare_hit.wav",
-                category: .sfx,
-                duration: 0.3,
-                description: "Punchy snare",
-                isDefault: true
-            )
-        ]
-        
-        // Set default selected sample
-        if selectedSample == nil {
-            selectedSample = availableSamples.first
+        availableSamples = Self.bundledDefaultSamples(in: Bundle.main.resourceURL)
+
+        if let selectedSample, availableSamples.contains(where: { $0.id == selectedSample.id }) {
+            return
         }
+
+        selectedSample = availableSamples.first
     }
     
     private func loadCustomSamples() {
@@ -260,8 +267,7 @@ class SampleManager: ObservableObject {
     
     func getSampleURL(_ sample: ScratchSample) -> URL? {
         if sample.isDefault {
-            // Look in app bundle
-            return Bundle.main.url(forResource: sample.name, withExtension: "wav")
+            return Self.bundledDefaultSampleURL(for: sample, in: Bundle.main.resourceURL)
         } else {
             // Look in documents
             return samplesDirectory.appendingPathComponent(sample.fileName)
@@ -344,8 +350,13 @@ class SampleManager: ObservableObject {
     // MARK: - Helpers
     
     private func getAudioDuration(url: URL) -> TimeInterval? {
-        let asset = AVURLAsset(url: url)
-        return asset.duration.seconds
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            return player.duration
+        } catch {
+            print("Error reading audio duration: \(error)")
+            return nil
+        }
     }
     
     func samplesForCategory(_ category: ScratchSample.SampleCategory) -> [ScratchSample] {
@@ -386,30 +397,47 @@ struct SampleSelectionView: View {
                     // Sample list
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(sampleManager.samplesForCategory(selectedCategory)) { sample in
-                                SampleRow(
-                                    sample: sample,
-                                    isSelected: sampleManager.selectedSample?.id == sample.id,
-                                    onSelect: {
-                                        sampleManager.selectSample(sample)
-                                    },
-                                    onPreview: {
-                                        sampleManager.previewSample(sample)
-                                    },
-                                    onDelete: sample.isDefault ? nil : {
-                                        sampleManager.deleteCustomSample(sample)
-                                    }
-                                )
+                            if categorySamples.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(selectedCategory == .custom ? "No custom samples yet." : "Bundled scratch samples are unavailable on this build.")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(.white)
+
+                                    Text(selectedCategory == .custom
+                                        ? "Import a local audio file to use it here."
+                                        : "This screen will only show bundled scratch samples that actually ship with the app.")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.62))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(16)
+                                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            } else {
+                                ForEach(categorySamples) { sample in
+                                    SampleRow(
+                                        sample: sample,
+                                        isSelected: sampleManager.selectedSample?.id == sample.id,
+                                        onSelect: {
+                                            sampleManager.selectSample(sample)
+                                        },
+                                        onPreview: {
+                                            sampleManager.previewSample(sample)
+                                        },
+                                        onDelete: sample.isDefault ? nil : {
+                                            sampleManager.deleteCustomSample(sample)
+                                        }
+                                    )
+                                }
                             }
-                            
-                            // Import button for custom category
+
                             if selectedCategory == .custom {
                                 Button(action: { showingImporter = true }) {
                                     HStack {
                                         Image(systemName: "plus.circle.fill")
                                         Text("Import Custom Sample")
                                     }
-                                    .font(.custom("Futura-Medium", size: 14))
+                                    .font(.system(size: 14, weight: .medium))
                                     .foregroundColor(Color(hex: "FFD700"))
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 16)
@@ -440,6 +468,10 @@ struct SampleSelectionView: View {
             }
         }
     }
+
+    private var categorySamples: [ScratchSample] {
+        sampleManager.samplesForCategory(selectedCategory)
+    }
     
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {
@@ -469,7 +501,7 @@ struct CategoryTab: View {
             HStack(spacing: 6) {
                 Text(category.icon)
                 Text(category.rawValue)
-                    .font(.custom("Futura-Bold", size: 12))
+                    .font(.system(size: 12, weight: .bold))
             }
             .foregroundColor(isSelected ? .black : .white)
             .padding(.horizontal, 16)
@@ -516,16 +548,16 @@ struct SampleRow: View {
             // Sample info
             VStack(alignment: .leading, spacing: 4) {
                 Text(sample.displayName)
-                    .font(.custom("Futura-Bold", size: 16))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
                 
                 Text(sample.description)
-                    .font(.custom("Futura-Medium", size: 11))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
                 
                 // Duration
                 Text(String(format: "%.1fs", sample.duration))
-                    .font(.custom("Futura-Medium", size: 10))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.white.opacity(0.4))
             }
             
@@ -572,11 +604,11 @@ struct SampleSetupInstructionsView: View {
                         // Header
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Setting Up Your Scratch Sample")
-                                .font(.custom("Futura-Bold", size: 24))
+                                .font(.system(size: 24, weight: .bold))
                                 .foregroundColor(.white)
                             
                             Text("To practice scratching, you need to load a sample on your DJ software or turntable.")
-                                .font(.custom("Futura-Medium", size: 14))
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.white.opacity(0.7))
                         }
                         
@@ -610,7 +642,7 @@ struct SampleSetupInstructionsView: View {
                         // Software-specific tips
                         VStack(alignment: .leading, spacing: 16) {
                             Text("Software Tips")
-                                .font(.custom("Futura-Bold", size: 18))
+                                .font(.system(size: 18, weight: .bold))
                                 .foregroundColor(.white)
                             
                             SoftwareTip(
@@ -663,17 +695,17 @@ struct SetupStep: View {
                     .frame(width: 32, height: 32)
                 
                 Text("\(number)")
-                    .font(.custom("Futura-Bold", size: 16))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.black)
             }
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.custom("Futura-Bold", size: 16))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
                 
                 Text(description)
-                    .font(.custom("Futura-Medium", size: 13))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.white.opacity(0.6))
             }
         }
@@ -687,12 +719,12 @@ struct SoftwareTip: View {
     var body: some View {
         HStack {
             Text(name)
-                .font(.custom("Futura-Bold", size: 13))
+                .font(.system(size: 13, weight: .bold))
                 .foregroundColor(Color(hex: "FFD700"))
                 .frame(width: 100, alignment: .leading)
             
             Text(tip)
-                .font(.custom("Futura-Medium", size: 13))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.white.opacity(0.7))
         }
         .padding(12)
@@ -701,6 +733,10 @@ struct SoftwareTip: View {
     }
 }
 
-#Preview {
-    SampleSelectionView()
+#if DEBUG
+struct SampleSelectionView_Previews: PreviewProvider {
+    static var previews: some View {
+        SampleSelectionView()
+    }
 }
+#endif

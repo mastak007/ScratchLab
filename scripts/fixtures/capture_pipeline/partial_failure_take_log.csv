@@ -1,0 +1,3 @@
+bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes
+70,1,camA_70.mov,,audio_70.wav,watch_70.csv,true,true,clean row before failure
+90,1,,,audio_90.wav,,true,true,missing camA should roll back the whole run

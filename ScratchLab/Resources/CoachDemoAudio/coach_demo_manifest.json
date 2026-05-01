@@ -1,0 +1,34 @@
+{
+  "generatedAt": "2026-04-27T03:08:45.007801+00:00",
+  "outputRoot": "/Users/karlwatson/Downloads/ScratchLab/ScratchLab/Resources/CoachDemoAudio",
+  "sourceRoot": "/Users/karlwatson/Movies/QBERT DISC 1 CLEAN",
+  "sourceCollection": "qbert_makemkv_dvd",
+  "items": [
+    {
+      "scratchType": "baby",
+      "outputFile": "baby_noBeat.wav",
+      "sourceMKV": "Baby_79bpm/title_t00.mkv",
+      "audioStreamIndex": 2,
+      "audioStreamRole": "noBeat",
+      "sourceCollection": "qbert_makemkv_dvd",
+      "sourceSection": "chapter_2_performance",
+      "trimMode": "chapter_2_plus_offset",
+      "chapter2Start": 35.035,
+      "extraOffset": 2.0,
+      "performanceStart": 37.035
+    },
+    {
+      "scratchType": "chirpflare",
+      "outputFile": "chirpflare_noBeat.wav",
+      "sourceMKV": "ChirpFlare_92bpm/title_t52.mkv",
+      "audioStreamIndex": 2,
+      "audioStreamRole": "noBeat",
+      "sourceCollection": "qbert_makemkv_dvd",
+      "sourceSection": "chapter_2_performance",
+      "trimMode": "chapter_2_plus_offset",
+      "chapter2Start": 31.5315,
+      "extraOffset": 2.0,
+      "performanceStart": 33.5315
+    }
+  ]
+}

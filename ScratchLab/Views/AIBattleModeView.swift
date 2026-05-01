@@ -23,11 +23,11 @@ struct AIBattleSetupView: View {
                     // Header
                     VStack(spacing: 8) {
                         Text("AI BATTLE")
-                            .font(.custom("Futura-Bold", size: 28))
+                            .font(.system(size: 28, weight: .bold))
                             .foregroundColor(.white)
                         
                         Text("Challenge an AI opponent")
-                            .font(.custom("Futura-Medium", size: 14))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                     }
                     .padding(.top, 20)
@@ -35,7 +35,7 @@ struct AIBattleSetupView: View {
                     // Character selection
                     VStack(alignment: .leading, spacing: 16) {
                         Text("CHOOSE OPPONENT")
-                            .font(.custom("Futura-Bold", size: 12))
+                            .font(.system(size: 12, weight: .bold))
                             .foregroundColor(.white.opacity(0.5))
                             .padding(.horizontal, 20)
                         
@@ -61,7 +61,7 @@ struct AIBattleSetupView: View {
                     // Scratch selection
                     VStack(alignment: .leading, spacing: 16) {
                         Text("SELECT SCRATCH")
-                            .font(.custom("Futura-Bold", size: 12))
+                            .font(.system(size: 12, weight: .bold))
                             .foregroundColor(.white.opacity(0.5))
                             .padding(.horizontal, 20)
                         
@@ -83,7 +83,7 @@ struct AIBattleSetupView: View {
                             Image(systemName: "flame.fill")
                             Text("START BATTLE")
                         }
-                        .font(.custom("Futura-Bold", size: 18))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 18)
@@ -189,7 +189,7 @@ struct AICharacterCard: View {
                 
                 // Character name
                 Text(character.rawValue)
-                    .font(.custom("Futura-Bold", size: 12))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundColor(isUnlocked ? .white : .white.opacity(0.4))
                 
                 // Difficulty indicator
@@ -223,7 +223,7 @@ struct ScratchSelectionCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text(scratch.name)
-                        .font(.custom("Futura-Bold", size: 14))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.white)
                     
                     Spacer()
@@ -235,7 +235,7 @@ struct ScratchSelectionCard: View {
                 }
                 
                 Text("Level \(scratch.level)")
-                    .font(.custom("Futura-Medium", size: 11))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
             }
             .padding(16)
@@ -350,10 +350,10 @@ struct AIBattleView: View {
             // Player score
             VStack(spacing: 4) {
                 Text("YOU")
-                    .font(.custom("Futura-Bold", size: 12))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundColor(.white.opacity(0.6))
                 Text("\(playerScore)")
-                    .font(.custom("Futura-Bold", size: 32))
+                    .font(.system(size: 32, weight: .bold))
                     .foregroundColor(.white)
             }
             .frame(maxWidth: .infinity)
@@ -361,25 +361,25 @@ struct AIBattleView: View {
             // VS / Round indicator
             VStack(spacing: 4) {
                 Text("ROUND \(currentRound)/\(totalRounds)")
-                    .font(.custom("Futura-Medium", size: 10))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundColor(Color(hex: "FFD700"))
                 
                 Text("VS")
-                    .font(.custom("Futura-Bold", size: 24))
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundColor(.white)
                 
                 Text(scratch.name)
-                    .font(.custom("Futura-Medium", size: 10))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
             }
             
             // AI score
             VStack(spacing: 4) {
                 Text(opponent.rawValue.uppercased())
-                    .font(.custom("Futura-Bold", size: 12))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundColor(Color(hex: opponent.primaryColor).opacity(0.8))
                 Text("\(aiScore)")
-                    .font(.custom("Futura-Bold", size: 32))
+                    .font(.system(size: 32, weight: .bold))
                     .foregroundColor(Color(hex: opponent.primaryColor))
             }
             .frame(maxWidth: .infinity)
@@ -411,11 +411,11 @@ struct AIBattleView: View {
             
             VStack(spacing: 8) {
                 Text(opponent.rawValue)
-                    .font(.custom("Futura-Bold", size: 28))
+                    .font(.system(size: 28, weight: .bold))
                     .foregroundColor(.white)
                 
                 Text(opponent.description)
-                    .font(.custom("Futura-Medium", size: 14))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.white.opacity(0.6))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
@@ -436,13 +436,13 @@ struct AIBattleView: View {
                     Text("\(totalRounds) rounds")
                 }
             }
-            .font(.custom("Futura-Medium", size: 14))
+            .font(.system(size: 14, weight: .medium))
             .foregroundColor(.white.opacity(0.7))
             
             // Start button
             Button(action: { startBattle() }) {
                 Text("BATTLE!")
-                    .font(.custom("Futura-Bold", size: 20))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.black)
                     .frame(width: 200)
                     .padding(.vertical, 16)
@@ -452,7 +452,7 @@ struct AIBattleView: View {
             
             Button(action: { dismiss() }) {
                 Text("Back")
-                    .font(.custom("Futura-Medium", size: 14))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
             }
         }
@@ -463,11 +463,11 @@ struct AIBattleView: View {
     private var countdownView: some View {
         VStack(spacing: 20) {
             Text("GET READY!")
-                .font(.custom("Futura-Bold", size: 24))
+                .font(.system(size: 24, weight: .bold))
                 .foregroundColor(.white)
             
             Text("\(countdownNumber)")
-                .font(.custom("Futura-Bold", size: 120))
+                .font(.system(size: 120, weight: .bold))
                 .foregroundColor(Color(hex: "FFD700"))
         }
     }
@@ -489,35 +489,35 @@ struct AIBattleView: View {
                     .rotationEffect(.degrees(-90))
                 
                 Text("\(Int(timeRemaining))")
-                    .font(.custom("Futura-Bold", size: 48))
+                    .font(.system(size: 48, weight: .bold))
                     .foregroundColor(.white)
             }
             
             Text("YOUR TURN")
-                .font(.custom("Futura-Bold", size: 24))
+                .font(.system(size: 24, weight: .bold))
                 .foregroundColor(Color(hex: "FFD700"))
             
             Text("Perform the \(scratch.name) scratch!")
-                .font(.custom("Futura-Medium", size: 16))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundColor(.white.opacity(0.7))
             
             // Live stats
             HStack(spacing: 40) {
                 VStack {
                     Text("\(Int(playerAccuracy))%")
-                        .font(.custom("Futura-Bold", size: 24))
+                        .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.white)
                     Text("Accuracy")
-                        .font(.custom("Futura-Medium", size: 11))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                 }
                 
                 VStack {
                     Text("\(playerAttempts)")
-                        .font(.custom("Futura-Bold", size: 24))
+                        .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.white)
                     Text("Attempts")
-                        .font(.custom("Futura-Medium", size: 11))
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                 }
             }
@@ -556,11 +556,11 @@ struct AIBattleView: View {
             
             VStack(spacing: 8) {
                 Text("\(opponent.rawValue.uppercased())'S TURN")
-                    .font(.custom("Futura-Bold", size: 24))
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundColor(Color(hex: opponent.primaryColor))
                 
                 Text("Watch and learn...")
-                    .font(.custom("Futura-Medium", size: 14))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.white.opacity(0.6))
             }
             
@@ -581,30 +581,30 @@ struct AIBattleView: View {
                 .font(.system(size: 80))
             
             Text(playerWonRound ? "ROUND WIN!" : "ROUND LOST")
-                .font(.custom("Futura-Bold", size: 32))
+                .font(.system(size: 32, weight: .bold))
                 .foregroundColor(playerWonRound ? Color(hex: "4CAF50") : Color(hex: "F44336"))
             
             // Score comparison
             HStack(spacing: 40) {
                 VStack {
                     Text("YOU")
-                        .font(.custom("Futura-Medium", size: 12))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                     Text("\(playerScore)")
-                        .font(.custom("Futura-Bold", size: 36))
+                        .font(.system(size: 36, weight: .bold))
                         .foregroundColor(.white)
                 }
                 
                 Text("-")
-                    .font(.custom("Futura-Bold", size: 36))
+                    .font(.system(size: 36, weight: .bold))
                     .foregroundColor(.white.opacity(0.3))
                 
                 VStack {
                     Text(opponent.rawValue.uppercased())
-                        .font(.custom("Futura-Medium", size: 12))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Color(hex: opponent.primaryColor).opacity(0.8))
                     Text("\(aiScore)")
-                        .font(.custom("Futura-Bold", size: 36))
+                        .font(.system(size: 36, weight: .bold))
                         .foregroundColor(Color(hex: opponent.primaryColor))
                 }
             }
@@ -612,7 +612,7 @@ struct AIBattleView: View {
             if currentRound < totalRounds {
                 Button(action: { nextRound() }) {
                     Text("NEXT ROUND")
-                        .font(.custom("Futura-Bold", size: 18))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.black)
                         .frame(width: 200)
                         .padding(.vertical, 16)
@@ -633,16 +633,16 @@ struct AIBattleView: View {
                 .font(.system(size: 100))
             
             Text(playerWon ? "VICTORY!" : "DEFEAT")
-                .font(.custom("Futura-Bold", size: 40))
+                .font(.system(size: 40, weight: .bold))
                 .foregroundColor(playerWon ? Color(hex: "FFD700") : Color(hex: "F44336"))
             
             if playerWon {
                 Text("You defeated \(opponent.rawValue)!")
-                    .font(.custom("Futura-Medium", size: 16))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.white.opacity(0.7))
             } else {
                 Text("\(opponent.rawValue) wins this time")
-                    .font(.custom("Futura-Medium", size: 16))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.white.opacity(0.7))
             }
             
@@ -650,19 +650,19 @@ struct AIBattleView: View {
             HStack(spacing: 60) {
                 VStack {
                     Text("YOU")
-                        .font(.custom("Futura-Medium", size: 14))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                     Text("\(playerScore)")
-                        .font(.custom("Futura-Bold", size: 48))
+                        .font(.system(size: 48, weight: .bold))
                         .foregroundColor(.white)
                 }
                 
                 VStack {
                     Text(opponent.rawValue.uppercased())
-                        .font(.custom("Futura-Medium", size: 14))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(Color(hex: opponent.primaryColor).opacity(0.8))
                     Text("\(aiScore)")
-                        .font(.custom("Futura-Bold", size: 48))
+                        .font(.system(size: 48, weight: .bold))
                         .foregroundColor(Color(hex: opponent.primaryColor))
                 }
             }
@@ -670,7 +670,7 @@ struct AIBattleView: View {
             VStack(spacing: 12) {
                 Button(action: { resetBattle() }) {
                     Text("REMATCH")
-                        .font(.custom("Futura-Bold", size: 18))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.black)
                         .frame(width: 200)
                         .padding(.vertical, 16)
@@ -680,7 +680,7 @@ struct AIBattleView: View {
                 
                 Button(action: { dismiss() }) {
                     Text("Back to Menu")
-                        .font(.custom("Futura-Medium", size: 14))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                 }
             }
@@ -776,9 +776,13 @@ struct AIBattleView: View {
     }
 }
 
-#Preview {
-    AIBattleSetupView()
-        .environmentObject(GameState())
-        .environmentObject(AudioEngine())
-        .environmentObject(ProgressManager())
+#if DEBUG
+struct AIBattleSetupView_Previews: PreviewProvider {
+    static var previews: some View {
+        AIBattleSetupView()
+            .environmentObject(GameState())
+            .environmentObject(AudioEngine())
+            .environmentObject(ProgressManager())
+    }
 }
+#endif

@@ -171,6 +171,7 @@ class ScratchAnalyzer: ObservableObject {
         ]
         
         var allSamples: [ReferenceSample] = []
+        var discoveredReferenceFolder = false
         var processed = 0
         let totalExpected = 31 // Known count from dataset
         
@@ -181,6 +182,8 @@ class ScratchAnalyzer: ObservableObject {
                 print("Warning: Reference folder not found: \(folder)")
                 continue
             }
+
+            discoveredReferenceFolder = true
             
             let contents = try FileManager.default.contentsOfDirectory(
                 at: folderURL,
@@ -200,6 +203,12 @@ class ScratchAnalyzer: ObservableObject {
                 processed += 1
                 loadingProgress = Float(processed) / Float(totalExpected)
             }
+        }
+
+        guard discoveredReferenceFolder, !allSamples.isEmpty else {
+            isLoaded = false
+            loadingProgress = 0
+            throw AnalyzerError.resourceNotFound
         }
         
         referencesamples = allSamples

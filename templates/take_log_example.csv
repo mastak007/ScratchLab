@@ -1,0 +1,4 @@
+bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes
+70,1,IMG_0070.MOV,,SERATO_0070.WAV,,true,true,clean take
+90,1,IMG_0090.MOV,IMG_0090_B.MOV,SERATO_0090.WAV,WATCH_0090.CSV,true,true,watch and second camera used
+110,1,IMG_0110.MOV,,SERATO_0110.WAV,,true,true,

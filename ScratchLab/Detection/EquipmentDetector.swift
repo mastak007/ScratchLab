@@ -177,7 +177,7 @@ class EquipmentDetector: NSObject, ObservableObject {
             self?.processContourResults(request.results as? [VNContoursObservation])
         }
         
-        try? handler.perform([rectangleRequest])
+        try? handler.perform([rectangleRequest, circleRequest])
     }
     
     private func processDetectionResults(_ results: [Any]?) {
@@ -294,7 +294,7 @@ class EquipmentDetector: NSObject, ObservableObject {
                 
                 DispatchQueue.main.async {
                     // Update bounding box for UI overlay
-                    if var detection = self?.lastDetection {
+                    if let detection = self?.lastDetection {
                         self?.lastDetection = EquipmentDetectionResult(
                             equipmentType: detection.equipmentType,
                             confidence: updated.confidence,
@@ -378,12 +378,12 @@ struct EquipmentDetectionOverlay: View {
                             .font(.title3)
                         
                         Text(detection.equipmentType.rawValue)
-                            .font(.custom("Futura-Bold", size: 14))
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundColor(.white)
                     }
                     
                     Text("\(Int(detection.confidence * 100))% confidence")
-                        .font(.custom("Futura-Medium", size: 10))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
                 }
                 .padding(.horizontal, 12)
@@ -411,11 +411,11 @@ struct EquipmentDetectionOverlay: View {
                     }
                     
                     Text("Scanning for equipment...")
-                        .font(.custom("Futura-Medium", size: 14))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.white)
                     
                     Text("Point camera at your turntable or controller")
-                        .font(.custom("Futura-Medium", size: 12))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                 }
                 .padding(24)
@@ -494,7 +494,7 @@ struct EquipmentSelectionSheet: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         Text("What equipment are you using?")
-                            .font(.custom("Futura-Medium", size: 14))
+                            .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                             .padding(.top, 20)
                         
@@ -509,11 +509,11 @@ struct EquipmentSelectionSheet: View {
                                     
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(equipment.rawValue)
-                                            .font(.custom("Futura-Bold", size: 16))
+                                            .font(.system(size: 16, weight: .bold))
                                             .foregroundColor(.white)
                                         
                                         Text(equipmentDescription(equipment))
-                                            .font(.custom("Futura-Medium", size: 12))
+                                            .font(.system(size: 12, weight: .medium))
                                             .foregroundColor(.white.opacity(0.6))
                                     }
                                     
