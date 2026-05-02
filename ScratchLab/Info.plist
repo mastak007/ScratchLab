@@ -39,7 +39,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.1</string>
 	<key>CFBundleVersion</key>
-	<string>16</string>
+	<string>17</string>
 	<key>LSApplicationCategory</key>
 	<string>public.app-category.music</string>
 	<key>LSApplicationCategoryType</key>

@@ -1724,25 +1724,575 @@ struct ScratchCoachDemoAnimationState: Equatable, Sendable {
     let crossfaderPosition: Double
     let crossfaderOpenState: Bool
 
+    static let babyScratchCrossfaderPosition: Double = 0.5
+
     static let neutral = ScratchCoachDemoAnimationState(
         recordPosition: 0,
         recordRotationDegrees: 0,
         crossfaderPosition: 0,
         crossfaderOpenState: false
     )
+
+    static let babyScratchOpen = ScratchCoachDemoAnimationState(
+        recordPosition: 0,
+        recordRotationDegrees: 0,
+        crossfaderPosition: babyScratchCrossfaderPosition,
+        crossfaderOpenState: true
+    )
+}
+
+struct ScratchLabBabyScratchDemoMotionState: Equatable, Sendable {
+    let recordPosition: Double
+    let recordRotationDegrees: Double
+    let inputLevel: Float
+    let direction: ScratchMotionDirection
+    let feedback: ScratchMotionFeedback
+
+    var animationState: ScratchCoachDemoAnimationState {
+        guard abs(recordPosition) > 0.0001 || direction != .neutral else {
+            return .neutral
+        }
+        return ScratchCoachDemoAnimationState(
+            recordPosition: recordPosition,
+            recordRotationDegrees: recordRotationDegrees,
+            crossfaderPosition: ScratchCoachDemoAnimationState.babyScratchCrossfaderPosition,
+            crossfaderOpenState: true
+        )
+    }
+}
+
+struct ScratchLabBabyScratchStrokeSegment: Equatable, Sendable {
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    let direction: ScratchMotionDirection
+    let holdAfter: TimeInterval
+    let startProgress: Double
+    let endProgress: Double
+
+    var duration: TimeInterval {
+        max(0, endTime - startTime)
+    }
+
+    var holdEndTime: TimeInterval {
+        endTime + holdAfter
+    }
+}
+
+struct BabyScratchReferenceMotionKeyframe: Equatable, Sendable {
+    let time: TimeInterval
+    let sourceTime: TimeInterval
+    let handViewerHour: Double
+    let stickerViewerHour: Double
+    let recordRotationDegrees: Double
+    let direction: ScratchMotionDirection
+    let isHold: Bool
+    let scratchProgress: Double
+}
+
+struct BabyScratchReferenceMotionPose: Equatable, Sendable {
+    let scratchProgress: Double
+    let handViewerHour: Double
+    let stickerViewerHour: Double
+    let recordRotationDegrees: Double
+    let direction: ScratchMotionDirection
+    let isHold: Bool
+    let strokeDuration: TimeInterval?
+}
+
+enum BabyScratchReferenceTimingSource: String, Equatable, Sendable {
+    case wavAudio = "wav_audio"
+}
+
+enum BabyScratchReferenceVideoAngleRole: String, Equatable, Sendable {
+    case primary
+    case validation
+}
+
+enum BabyScratchReferenceVideoUsage: String, Equatable, Sendable {
+    case visualReferenceOnly = "visual_reference_only"
+}
+
+enum BabyScratchReferenceValidationFocus: String, Equatable, Sendable {
+    case handPosition = "hand_position"
+    case recordStickerMovement = "record_sticker_movement"
+    case directionChanges = "direction_changes"
+    case holdPhases = "hold_phases"
+    case strokeSpeed = "stroke_speed"
+}
+
+struct BabyScratchReferenceVideoAngle: Equatable, Sendable {
+    let angleID: String
+    let path: String
+    let role: BabyScratchReferenceVideoAngleRole
+    let validationFocus: [BabyScratchReferenceValidationFocus]
+}
+
+struct BabyScratchReferenceAsset: Equatable, Sendable {
+    let scratchName: String
+    let bpm: Int
+    let demoStart: TimeInterval
+    let demoEnd: TimeInterval
+    let audioPath: String
+    let timingSource: BabyScratchReferenceTimingSource
+    let videoAngles: [BabyScratchReferenceVideoAngle]
+    let videoUsage: BabyScratchReferenceVideoUsage
+    let motionTimelinePath: String?
+    let embeddedMotionTimelineName: String?
+    let automaticVideoTrackingEnabled: Bool
+}
+
+struct BabyScratchReferenceMotionTimeline: Sendable {
+    static let handStartViewerHour: Double = 3
+    static let handEndViewerHour: Double = 5
+    static let stickerStartViewerHour: Double = 6
+    static let stickerEndViewerHour: Double = 8
+    static let recordRotationRangeDegrees: Double = 60
+    // The bundled WAV is trimmed to this source chapter, so app playback time 0 maps to demoStart.
+    static let demoStart: TimeInterval = 35.035
+    static let demoEnd: TimeInterval = 83.450033
+    static let phaseOffset: TimeInterval = 0
+    static let phraseDuration: TimeInterval = 6.08
+
+    static var sourceDuration: TimeInterval {
+        max(0, demoEnd - demoStart)
+    }
+
+    static let strokeSegments: [ScratchLabBabyScratchStrokeSegment] = [
+        ScratchLabBabyScratchStrokeSegment(startTime: 0.0400, endTime: 0.2000, direction: .forward, holdAfter: 0.1750, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 0.3750, endTime: 0.4800, direction: .backward, holdAfter: 0.3100, startProgress: 1, endProgress: 0),
+        ScratchLabBabyScratchStrokeSegment(startTime: 0.7900, endTime: 0.8500, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 0.8500, endTime: 0.9050, direction: .backward, holdAfter: 0.0300, startProgress: 1, endProgress: 0),
+        ScratchLabBabyScratchStrokeSegment(startTime: 0.9350, endTime: 0.9850, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 0.9850, endTime: 1.0450, direction: .backward, holdAfter: 0.3000, startProgress: 1, endProgress: 0),
+        ScratchLabBabyScratchStrokeSegment(startTime: 1.3450, endTime: 1.4400, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 1.4400, endTime: 1.5400, direction: .backward, holdAfter: 0.1000, startProgress: 1, endProgress: 0),
+        ScratchLabBabyScratchStrokeSegment(startTime: 1.6400, endTime: 1.7050, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 1.7050, endTime: 1.7700, direction: .backward, holdAfter: 0.1000, startProgress: 1, endProgress: 0),
+        ScratchLabBabyScratchStrokeSegment(startTime: 1.8700, endTime: 1.9900, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 1.9900, endTime: 2.1250, direction: .backward, holdAfter: 0.1300, startProgress: 1, endProgress: 0),
+        ScratchLabBabyScratchStrokeSegment(startTime: 2.2550, endTime: 2.3050, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
+        ScratchLabBabyScratchStrokeSegment(startTime: 2.3050, endTime: 2.3600, direction: .backward, holdAfter: 0.3000, startProgress: 1, endProgress: 0)
+    ]
+
+    static var keyframes: [BabyScratchReferenceMotionKeyframe] {
+        var frames: [BabyScratchReferenceMotionKeyframe] = []
+        frames.reserveCapacity(strokeSegments.count * 3)
+        for segment in strokeSegments {
+            frames.append(keyframe(
+                time: segment.startTime,
+                scratchProgress: segment.startProgress,
+                direction: segment.direction,
+                isHold: false
+            ))
+            frames.append(keyframe(
+                time: segment.endTime,
+                scratchProgress: segment.endProgress,
+                direction: segment.direction,
+                isHold: false
+            ))
+            frames.append(keyframe(
+                time: segment.holdEndTime,
+                scratchProgress: segment.endProgress,
+                direction: .neutral,
+                isHold: true
+            ))
+        }
+        frames.append(keyframe(
+            time: phraseDuration,
+            scratchProgress: 0,
+            direction: .neutral,
+            isHold: true
+        ))
+        return frames.sorted { $0.time < $1.time }
+    }
+
+    static func pose(at playbackTime: TimeInterval) -> BabyScratchReferenceMotionPose {
+        let phase = normalizedTime(
+            timelineTime(forPlaybackTime: playbackTime) + phaseOffset,
+            duration: phraseDuration
+        )
+        for segment in strokeSegments {
+            if phase >= segment.startTime && phase < segment.endTime {
+                let localProgress = segment.duration > 0
+                    ? (phase - segment.startTime) / segment.duration
+                    : 1
+                let easedProgress = smoothStep(localProgress)
+                let scratchProgress = interpolate(
+                    from: segment.startProgress,
+                    to: segment.endProgress,
+                    progress: easedProgress
+                )
+                return pose(
+                    scratchProgress: scratchProgress,
+                    direction: segment.direction,
+                    isHold: false,
+                    strokeDuration: segment.duration
+                )
+            }
+
+            if phase >= segment.endTime && phase < segment.holdEndTime {
+                return pose(
+                    scratchProgress: segment.endProgress,
+                    direction: .neutral,
+                    isHold: true,
+                    strokeDuration: segment.duration
+                )
+            }
+        }
+
+        return pose(
+            scratchProgress: 0,
+            direction: .neutral,
+            isHold: true,
+            strokeDuration: nil
+        )
+    }
+
+    static func sourceTime(forPlaybackTime playbackTime: TimeInterval) -> TimeInterval {
+        demoStart + normalizedTime(playbackTime, duration: sourceDuration)
+    }
+
+    static func timelineTime(forPlaybackTime playbackTime: TimeInterval) -> TimeInterval {
+        max(0, sourceTime(forPlaybackTime: playbackTime) - demoStart)
+    }
+
+    static func timelineTime(forSourceTime sourceTime: TimeInterval) -> TimeInterval {
+        max(0, min(sourceDuration, sourceTime - demoStart))
+    }
+
+    static func pose(
+        activeSegmentTime: TimeInterval,
+        activeSegmentDuration: TimeInterval,
+        direction: ScratchMotionDirection
+    ) -> BabyScratchReferenceMotionPose {
+        guard activeSegmentDuration > 0,
+              direction != .neutral else {
+            return pose(
+                scratchProgress: 0,
+                direction: .neutral,
+                isHold: true,
+                strokeDuration: nil
+            )
+        }
+
+        let rawProgress = max(0, min(1, activeSegmentTime / activeSegmentDuration))
+        let easedProgress = smoothStep(rawProgress)
+        let scratchProgress: Double
+        switch direction {
+        case .backward:
+            scratchProgress = 1 - easedProgress
+        default:
+            scratchProgress = easedProgress
+        }
+        return pose(
+            scratchProgress: scratchProgress,
+            direction: direction,
+            isHold: false,
+            strokeDuration: activeSegmentDuration
+        )
+    }
+
+    private static func keyframe(
+        time: TimeInterval,
+        scratchProgress: Double,
+        direction: ScratchMotionDirection,
+        isHold: Bool
+    ) -> BabyScratchReferenceMotionKeyframe {
+        BabyScratchReferenceMotionKeyframe(
+            time: time,
+            sourceTime: demoStart + time,
+            handViewerHour: handViewerHour(progress: scratchProgress),
+            stickerViewerHour: stickerViewerHour(progress: scratchProgress),
+            recordRotationDegrees: recordRotationDegrees(progress: scratchProgress),
+            direction: direction,
+            isHold: isHold,
+            scratchProgress: scratchProgress
+        )
+    }
+
+    private static func pose(
+        scratchProgress: Double,
+        direction: ScratchMotionDirection,
+        isHold: Bool,
+        strokeDuration: TimeInterval?
+    ) -> BabyScratchReferenceMotionPose {
+        let clampedProgress = max(0, min(1, scratchProgress))
+        return BabyScratchReferenceMotionPose(
+            scratchProgress: clampedProgress,
+            handViewerHour: handViewerHour(progress: clampedProgress),
+            stickerViewerHour: stickerViewerHour(progress: clampedProgress),
+            recordRotationDegrees: recordRotationDegrees(progress: clampedProgress),
+            direction: direction,
+            isHold: isHold,
+            strokeDuration: strokeDuration
+        )
+    }
+
+    private static func handViewerHour(progress: Double) -> Double {
+        interpolate(from: handStartViewerHour, to: handEndViewerHour, progress: progress)
+    }
+
+    private static func stickerViewerHour(progress: Double) -> Double {
+        interpolate(from: stickerStartViewerHour, to: stickerEndViewerHour, progress: progress)
+    }
+
+    private static func recordRotationDegrees(progress: Double) -> Double {
+        interpolate(from: 0, to: recordRotationRangeDegrees, progress: progress)
+    }
+
+    private static func normalizedTime(
+        _ playbackTime: TimeInterval,
+        duration: TimeInterval
+    ) -> TimeInterval {
+        guard duration > 0 else { return 0 }
+        let remainder = playbackTime.truncatingRemainder(dividingBy: duration)
+        return remainder >= 0 ? remainder : remainder + duration
+    }
+
+    private static func smoothStep(_ value: Double) -> Double {
+        let progress = max(0, min(1, value))
+        return progress * progress * (3 - (2 * progress))
+    }
+
+    private static func interpolate(from start: Double, to end: Double, progress: Double) -> Double {
+        start + ((end - start) * max(0, min(1, progress)))
+    }
+}
+
+#if DEBUG
+extension BabyScratchReferenceAsset {
+    // Reference angles are development-only inputs for validating the hand-authored timeline.
+    // Demo Mode keeps rendering the animated coach rig and never plays these MKVs.
+    static let babyScratch79BPM = BabyScratchReferenceAsset(
+        scratchName: "Baby Scratch",
+        bpm: 79,
+        demoStart: BabyScratchReferenceMotionTimeline.demoStart,
+        demoEnd: BabyScratchReferenceMotionTimeline.demoEnd,
+        audioPath: "processed_makemkv/baby/79bpm/angle_1_noBeat.wav",
+        timingSource: .wavAudio,
+        videoAngles: [
+            BabyScratchReferenceVideoAngle(
+                angleID: "angle_1",
+                path: "processed_makemkv/baby/79bpm/angle_1_video.mkv",
+                role: .primary,
+                validationFocus: [
+                    .handPosition,
+                    .recordStickerMovement,
+                    .directionChanges,
+                    .holdPhases,
+                    .strokeSpeed
+                ]
+            ),
+            BabyScratchReferenceVideoAngle(
+                angleID: "angle_2",
+                path: "processed_makemkv/baby/79bpm/angle_2_video.mkv",
+                role: .validation,
+                validationFocus: [
+                    .handPosition,
+                    .directionChanges
+                ]
+            ),
+            BabyScratchReferenceVideoAngle(
+                angleID: "angle_3",
+                path: "processed_makemkv/baby/79bpm/angle_3_video.mkv",
+                role: .validation,
+                validationFocus: [
+                    .recordStickerMovement,
+                    .holdPhases
+                ]
+            ),
+            BabyScratchReferenceVideoAngle(
+                angleID: "angle_4",
+                path: "processed_makemkv/baby/79bpm/angle_4_video.mkv",
+                role: .validation,
+                validationFocus: [
+                    .directionChanges,
+                    .holdPhases,
+                    .strokeSpeed
+                ]
+            )
+        ],
+        videoUsage: .visualReferenceOnly,
+        motionTimelinePath: nil,
+        embeddedMotionTimelineName: "BabyScratchReferenceMotionTimeline",
+        automaticVideoTrackingEnabled: false
+    )
+}
+#endif
+
+struct ScratchLabBabyScratchDemoMotionPattern: Sendable {
+    static let babyScratchStrokeTimeline = BabyScratchReferenceMotionTimeline.strokeSegments
+    static let babyScratchStrokeTimelineDuration = BabyScratchReferenceMotionTimeline.phraseDuration
+    static let babyScratchDemoPhaseOffset = BabyScratchReferenceMotionTimeline.phaseOffset
+    static let minimumActiveLevel: Float = 0.20
+    static let maximumHoldAfter: TimeInterval = 0.30
+
+    static func state(
+        activePhaseTime: TimeInterval,
+        activityLevel: Float = 1
+    ) -> ScratchLabBabyScratchDemoMotionState {
+        state(playbackTime: activePhaseTime, activityLevel: activityLevel)
+    }
+
+    static func state(
+        playbackTime: TimeInterval,
+        activityLevel: Float = 1
+    ) -> ScratchLabBabyScratchDemoMotionState {
+        let normalizedActivity = max(0, min(1, activityLevel))
+        let isActive = normalizedActivity >= minimumActiveLevel
+        guard isActive else {
+            let inactiveState = ScratchLabBabyScratchDemoMotionState(
+                recordPosition: 0,
+                recordRotationDegrees: 0,
+                inputLevel: normalizedActivity,
+                direction: .neutral,
+                feedback: listeningFeedback(direction: .neutral)
+            )
+            assert(!(isActive == false && inactiveState.animationState != .neutral))
+            return inactiveState
+        }
+
+        let timelineState = BabyScratchReferenceMotionTimeline.pose(at: playbackTime)
+        let inputLevel = min(1, max(0.12, strokeInputLevel(progress: timelineState.scratchProgress)) * max(0.42, normalizedActivity))
+        let balance: ScratchMotionBalance = timelineState.direction == .backward ? .balanced : .listening
+        let feedback = ScratchMotionFeedback(
+            direction: timelineState.direction,
+            balance: balance,
+            forwardDuration: balance == .balanced ? timelineState.strokeDuration : nil,
+            backwardDuration: balance == .balanced ? timelineState.strokeDuration : nil,
+            timingError: balance == .balanced ? 0 : nil,
+            forwardPeakAmplitude: balance == .balanced ? inputLevel : nil,
+            backwardPeakAmplitude: balance == .balanced ? inputLevel : nil
+        )
+
+        return ScratchLabBabyScratchDemoMotionState(
+            recordPosition: timelineState.scratchProgress,
+            recordRotationDegrees: timelineState.recordRotationDegrees,
+            inputLevel: inputLevel,
+            direction: timelineState.direction,
+            feedback: feedback
+        )
+    }
+
+    static func timelinePhase(playbackTime: TimeInterval) -> TimeInterval {
+        normalizedTime(
+            BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: playbackTime) + babyScratchDemoPhaseOffset,
+            duration: babyScratchStrokeTimelineDuration
+        )
+    }
+
+    static func isHoldWindow(playbackTime: TimeInterval) -> Bool {
+        return babyScratchStrokeTimeline.contains { segment in
+            let phase = timelinePhase(playbackTime: playbackTime)
+            return phase >= segment.endTime && phase < segment.holdEndTime
+        }
+    }
+
+    static func isMovingStrokeWindow(playbackTime: TimeInterval) -> Bool {
+        return babyScratchStrokeTimeline.contains { segment in
+            let phase = timelinePhase(playbackTime: playbackTime)
+            return phase >= segment.startTime && phase < segment.endTime
+        }
+    }
+
+    static func state(
+        activeSegmentTime: TimeInterval,
+        activeSegmentDuration: TimeInterval,
+        strokeDirection: ScratchMotionDirection,
+        activityLevel: Float
+    ) -> ScratchLabBabyScratchDemoMotionState {
+        let normalizedActivity = max(0, min(1, activityLevel))
+        let isActive = normalizedActivity >= minimumActiveLevel
+        guard isActive,
+              activeSegmentDuration > 0,
+              strokeDirection != .neutral else {
+            let inactiveState = ScratchLabBabyScratchDemoMotionState(
+                recordPosition: 0,
+                recordRotationDegrees: 0,
+                inputLevel: normalizedActivity,
+                direction: .neutral,
+                feedback: listeningFeedback(direction: .neutral)
+            )
+            assert(!(isActive == false && inactiveState.animationState != .neutral))
+            return inactiveState
+        }
+
+        let timelineState = BabyScratchReferenceMotionTimeline.pose(
+            activeSegmentTime: activeSegmentTime,
+            activeSegmentDuration: activeSegmentDuration,
+            direction: strokeDirection
+        )
+        let strokeLevel = strokeInputLevel(progress: timelineState.scratchProgress)
+        let inputLevel = min(1, max(0.12, strokeLevel) * max(0.42, normalizedActivity))
+        let balance: ScratchMotionBalance = strokeDirection == .backward ? .balanced : .listening
+        let feedback = ScratchMotionFeedback(
+            direction: timelineState.direction,
+            balance: balance,
+            forwardDuration: balance == .balanced ? activeSegmentDuration : nil,
+            backwardDuration: balance == .balanced ? activeSegmentDuration : nil,
+            timingError: balance == .balanced ? 0 : nil,
+            forwardPeakAmplitude: balance == .balanced ? inputLevel : nil,
+            backwardPeakAmplitude: balance == .balanced ? inputLevel : nil
+        )
+
+        return ScratchLabBabyScratchDemoMotionState(
+            recordPosition: timelineState.scratchProgress,
+            recordRotationDegrees: timelineState.recordRotationDegrees,
+            inputLevel: inputLevel,
+            direction: timelineState.direction,
+            feedback: feedback
+        )
+    }
+
+    private static func normalizedTime(
+        _ playbackTime: TimeInterval,
+        duration: TimeInterval
+    ) -> TimeInterval {
+        guard duration > 0 else { return 0 }
+        let remainder = playbackTime.truncatingRemainder(dividingBy: duration)
+        return remainder >= 0 ? remainder : remainder + duration
+    }
+
+    private static func smoothStep(_ value: Double) -> Double {
+        let progress = max(0, min(1, value))
+        return progress * progress * (3 - (2 * progress))
+    }
+
+    private static func strokeInputLevel(progress: Double) -> Float {
+        let centered = sin(max(0, min(1, progress)) * .pi)
+        return Float(0.34 + (centered * 0.44))
+    }
+
+    private static func listeningFeedback(
+        direction: ScratchMotionDirection
+    ) -> ScratchMotionFeedback {
+        ScratchMotionFeedback(
+            direction: direction,
+            balance: .listening,
+            forwardDuration: nil,
+            backwardDuration: nil,
+            timingError: nil,
+            forwardPeakAmplitude: nil,
+            backwardPeakAmplitude: nil
+        )
+    }
 }
 
 struct ScratchCoachDemoAnimator: Sendable {
     static func state(
         scratchType: String,
         playbackTime: TimeInterval,
-        isPlaying: Bool
+        isPlaying: Bool,
+        activityLevel: Float = 1
     ) -> ScratchCoachDemoAnimationState {
         guard isPlaying else { return .neutral }
 
         switch normalizedScratchType(scratchType) {
         case "baby":
-            return babyState(playbackTime: playbackTime)
+            return babyState(
+                playbackTime: playbackTime,
+                activityLevel: activityLevel
+            )
         case "chirpflare":
             return chirpFlareState(playbackTime: playbackTime)
         default:
@@ -1750,18 +2300,16 @@ struct ScratchCoachDemoAnimator: Sendable {
         }
     }
 
-    private static func babyState(playbackTime: TimeInterval) -> ScratchCoachDemoAnimationState {
-        let recordMotion = recordMotionState(
+    private static func babyState(
+        playbackTime: TimeInterval,
+        activityLevel: Float
+    ) -> ScratchCoachDemoAnimationState {
+        let motionState = ScratchLabBabyScratchDemoMotionPattern.state(
             playbackTime: playbackTime,
-            cycleDuration: 1.0,
-            rotationAmplitude: 26
+            activityLevel: activityLevel
         )
-        return ScratchCoachDemoAnimationState(
-            recordPosition: recordMotion.position,
-            recordRotationDegrees: recordMotion.rotationDegrees,
-            crossfaderPosition: 1,
-            crossfaderOpenState: true
-        )
+        let animationState = motionState.animationState
+        return animationState == .neutral ? .babyScratchOpen : animationState
     }
 
     private static func chirpFlareState(playbackTime: TimeInterval) -> ScratchCoachDemoAnimationState {
@@ -1842,6 +2390,15 @@ struct ScratchLabDemoAudioSampleBuffer: Sendable {
     let samples: [Float]
     let sampleRate: Double
     let duration: TimeInterval
+    private let activityEnvelope: [Float]
+    private let activitySegmentTimes: [TimeInterval]
+    private let activitySegmentDurations: [TimeInterval]
+    private let activitySegmentDirections: [ScratchMotionDirection]
+    private let activityFrameDuration: TimeInterval
+
+    private static let activityFrameSize = 1_024
+    private static let activeEnergyThresholdOn: Float = 0.20
+    private static let activeEnergyThresholdOff: Float = 0.10
 
     init(audioURL: URL) throws {
         let audioFile = try AVAudioFile(forReading: audioURL)
@@ -1862,15 +2419,33 @@ struct ScratchLabDemoAudioSampleBuffer: Sendable {
         }
 
         let rawSamples = Self.downmixedSamples(from: buffer, frameCount: frameCount)
-        self.samples = Self.motionProxySamples(from: rawSamples)
+        let activityProfile = Self.activityProfile(
+            from: rawSamples,
+            sampleRate: format.sampleRate
+        )
+        self.samples = rawSamples
         self.sampleRate = format.sampleRate
         self.duration = Double(frameCount) / format.sampleRate
+        self.activityEnvelope = activityProfile.envelope
+        self.activitySegmentTimes = activityProfile.segmentTimes
+        self.activitySegmentDurations = activityProfile.segmentDurations
+        self.activitySegmentDirections = activityProfile.segmentDirections
+        self.activityFrameDuration = activityProfile.frameDuration
     }
 
     init(samples: [Float], sampleRate: Double) {
+        let activityProfile = Self.activityProfile(
+            from: samples,
+            sampleRate: sampleRate
+        )
         self.samples = samples
         self.sampleRate = sampleRate
         self.duration = sampleRate > 0 ? Double(samples.count) / sampleRate : 0
+        self.activityEnvelope = activityProfile.envelope
+        self.activitySegmentTimes = activityProfile.segmentTimes
+        self.activitySegmentDurations = activityProfile.segmentDurations
+        self.activitySegmentDirections = activityProfile.segmentDirections
+        self.activityFrameDuration = activityProfile.frameDuration
     }
 
     private static func downmixedSamples(
@@ -1904,37 +2479,257 @@ struct ScratchLabDemoAudioSampleBuffer: Sendable {
         return []
     }
 
-    private static func motionProxySamples(from rawSamples: [Float]) -> [Float] {
-        let frameSize = 256
-        guard !rawSamples.isEmpty else { return [] }
-
-        var envelope: [Float] = []
-        envelope.reserveCapacity((rawSamples.count / frameSize) + 1)
-
-        var index = 0
-        while index < rawSamples.count {
-            let endIndex = min(index + frameSize, rawSamples.count)
-            let frame = rawSamples[index..<endIndex]
-            let averageAmplitude = frame.reduce(Float(0)) { $0 + abs($1) } / Float(max(1, frame.count))
-            envelope.append(averageAmplitude)
-            index = endIndex
+    func activityState(
+        at playbackTime: TimeInterval,
+        windowDuration _: TimeInterval
+    ) -> (
+        level: Float,
+        activeSegmentTime: TimeInterval,
+        activeSegmentDuration: TimeInterval,
+        strokeDirection: ScratchMotionDirection
+    ) {
+        guard !activityEnvelope.isEmpty,
+              !activitySegmentTimes.isEmpty,
+              !activitySegmentDurations.isEmpty,
+              !activitySegmentDirections.isEmpty,
+              activityFrameDuration > 0 else {
+            return (0, 0, 0, .neutral)
         }
 
-        let sortedEnvelope = envelope.sorted()
-        let percentileIndex = min(sortedEnvelope.count - 1, max(0, Int(Double(sortedEnvelope.count - 1) * 0.94)))
-        let referenceLevel = max(Float(0.004), sortedEnvelope[percentileIndex])
-        var smoothed: Float = 0
-        var proxySamples: [Float] = []
-        proxySamples.reserveCapacity(envelope.count * frameSize)
-
-        for amplitude in envelope {
-            let normalized = min(1, amplitude / referenceLevel)
-            let gated = normalized < 0.07 ? Float(0) : powf(normalized, 0.72) * 0.16
-            smoothed = (smoothed * 0.68) + (gated * 0.32)
-            proxySamples.append(contentsOf: repeatElement(smoothed, count: frameSize))
+        let normalizedTime = normalizedPlaybackTime(playbackTime)
+        let envelopePosition = normalizedTime / activityFrameDuration
+        let lowerIndex = min(
+            activityEnvelope.count - 1,
+            max(0, Int(floor(envelopePosition)))
+        )
+        let upperIndex = min(activityEnvelope.count - 1, lowerIndex + 1)
+        let interpolation = Float(envelopePosition - floor(envelopePosition))
+        let nearestIndex = min(
+            activityEnvelope.count - 1,
+            max(0, Int(envelopePosition.rounded()))
+        )
+        let interpolatedLevel = activityEnvelope[lowerIndex]
+            + ((activityEnvelope[upperIndex] - activityEnvelope[lowerIndex]) * interpolation)
+        let segmentDirection = activitySegmentDirections[nearestIndex]
+        let segmentDuration = activitySegmentDurations[nearestIndex]
+        let segmentTime: TimeInterval
+        if activitySegmentDirections[lowerIndex] == activitySegmentDirections[upperIndex],
+           segmentDirection != .neutral {
+            let timeInterpolation = TimeInterval(interpolation)
+            segmentTime = activitySegmentTimes[lowerIndex]
+                + ((activitySegmentTimes[upperIndex] - activitySegmentTimes[lowerIndex]) * timeInterpolation)
+        } else {
+            segmentTime = activitySegmentTimes[nearestIndex]
         }
 
-        return proxySamples
+        guard interpolatedLevel >= Self.activeEnergyThresholdOff else {
+            return (0, segmentTime, segmentDuration, .neutral)
+        }
+        return (interpolatedLevel, segmentTime, segmentDuration, segmentDirection)
+    }
+
+    func coachRigAnimationState(
+        scratchType: String,
+        playbackTime: TimeInterval,
+        isPlaying: Bool,
+        windowDuration: TimeInterval = 1.0 / 30.0
+    ) -> ScratchCoachDemoAnimationState {
+        let normalizedScratchType = Self.normalizedScratchType(scratchType)
+        guard isPlaying else {
+            if normalizedScratchType == "baby" {
+                return .babyScratchOpen
+            }
+            return .neutral
+        }
+
+        let activityState = activityState(
+            at: playbackTime,
+            windowDuration: windowDuration
+        )
+
+        switch normalizedScratchType {
+        case "baby":
+            let normalizedTime = normalizedPlaybackTime(playbackTime)
+            let activeMotionState = ScratchLabBabyScratchDemoMotionPattern.state(
+                playbackTime: normalizedTime,
+                activityLevel: activityState.level
+            )
+            if activeMotionState.direction != .neutral {
+                let animationState = activeMotionState.animationState
+                return animationState == .neutral ? .babyScratchOpen : animationState
+            }
+
+            let holdMotionState = ScratchLabBabyScratchDemoMotionPattern.state(
+                playbackTime: normalizedTime,
+                activityLevel: 1
+            )
+            if ScratchLabBabyScratchDemoMotionPattern.isHoldWindow(playbackTime: normalizedTime),
+               holdMotionState.animationState != .neutral,
+               hasRecentBabyScratchActivity(
+                at: normalizedTime,
+                lookbackDuration: ScratchLabBabyScratchDemoMotionPattern.maximumHoldAfter + 0.06
+               ) {
+                return holdMotionState.animationState
+            }
+
+            return .babyScratchOpen
+        default:
+            guard activityState.level >= ScratchLabBabyScratchDemoMotionPattern.minimumActiveLevel,
+                  activityState.strokeDirection != .neutral else {
+                return .neutral
+            }
+            return ScratchCoachDemoAnimator.state(
+                scratchType: scratchType,
+                playbackTime: activityState.activeSegmentTime,
+                isPlaying: true,
+                activityLevel: activityState.level
+            )
+        }
+    }
+
+    private static func normalizedScratchType(_ scratchType: String) -> String {
+        let normalizedScratchType = normalizeScratchType(input: scratchType)
+        switch normalizedScratchType {
+        case "baby", "babyscratch":
+            return "baby"
+        default:
+            return normalizedScratchType
+        }
+    }
+
+    private func normalizedPlaybackTime(_ playbackTime: TimeInterval) -> TimeInterval {
+        guard duration > 0 else { return 0 }
+        let remainder = playbackTime.truncatingRemainder(dividingBy: duration)
+        return remainder >= 0 ? remainder : remainder + duration
+    }
+
+    private func hasRecentBabyScratchActivity(
+        at playbackTime: TimeInterval,
+        lookbackDuration: TimeInterval
+    ) -> Bool {
+        guard !activityEnvelope.isEmpty,
+              activityFrameDuration > 0,
+              lookbackDuration > 0 else {
+            return false
+        }
+
+        let normalizedTime = normalizedPlaybackTime(playbackTime)
+        let currentFrame = min(
+            activityEnvelope.count - 1,
+            max(0, Int((normalizedTime / activityFrameDuration).rounded()))
+        )
+        let lookbackFrames = max(1, Int(ceil(lookbackDuration / activityFrameDuration)))
+
+        for offset in 0...lookbackFrames {
+            let rawIndex = currentFrame - offset
+            let wrappedIndex = ((rawIndex % activityEnvelope.count) + activityEnvelope.count)
+                % activityEnvelope.count
+            if activityEnvelope[wrappedIndex] >= ScratchLabBabyScratchDemoMotionPattern.minimumActiveLevel {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func activityProfile(
+        from samples: [Float],
+        sampleRate: Double
+    ) -> (
+        envelope: [Float],
+        segmentTimes: [TimeInterval],
+        segmentDurations: [TimeInterval],
+        segmentDirections: [ScratchMotionDirection],
+        frameDuration: TimeInterval
+    ) {
+        guard !samples.isEmpty,
+              sampleRate > 0 else {
+            return ([], [], [], [], 0)
+        }
+
+        let frameSize = min(samples.count, max(1, Self.activityFrameSize))
+        let frameDuration = Double(frameSize) / sampleRate
+        var rawEnergy: [Float] = []
+        rawEnergy.reserveCapacity((samples.count / frameSize) + 1)
+
+        var sampleIndex = 0
+        while sampleIndex < samples.count {
+            let endIndex = min(sampleIndex + frameSize, samples.count)
+            var meanSquare: Float = 0
+            var peak: Float = 0
+            for sample in samples[sampleIndex..<endIndex] {
+                let absoluteSample = abs(sample)
+                meanSquare += sample * sample
+                peak = max(peak, absoluteSample)
+            }
+            meanSquare /= Float(max(1, endIndex - sampleIndex))
+            let rms = sqrtf(meanSquare)
+            rawEnergy.append((rms * 0.72) + (peak * 0.28))
+            sampleIndex = endIndex
+        }
+
+        guard !rawEnergy.isEmpty else {
+            return ([], [], [], [], frameDuration)
+        }
+
+        let sortedEnergy = rawEnergy.sorted()
+        let percentileIndex = min(
+            sortedEnergy.count - 1,
+            max(0, Int(Double(sortedEnergy.count - 1) * 0.94))
+        )
+        let referenceEnergy = max(0.004, sortedEnergy[percentileIndex])
+        let normalizedEnergy = rawEnergy.map { min(1, $0 / referenceEnergy) }
+
+        var isActive = false
+        var activeFrames = [Bool](repeating: false, count: normalizedEnergy.count)
+        for (energyIndex, energy) in normalizedEnergy.enumerated() {
+            if energy > Self.activeEnergyThresholdOn {
+                isActive = true
+            } else if energy < Self.activeEnergyThresholdOff {
+                isActive = false
+            }
+            activeFrames[energyIndex] = isActive
+        }
+
+        var envelope = [Float](repeating: 0, count: normalizedEnergy.count)
+        var segmentTimes = [TimeInterval](repeating: 0, count: normalizedEnergy.count)
+        var segmentDurations = [TimeInterval](repeating: 0, count: normalizedEnergy.count)
+        var segmentDirections = [ScratchMotionDirection](repeating: .neutral, count: normalizedEnergy.count)
+        var segmentIndex = 0
+        var activityIndex = 0
+
+        while activityIndex < activeFrames.count {
+            guard activeFrames[activityIndex] else {
+                activityIndex += 1
+                continue
+            }
+
+            let segmentStart = activityIndex
+            while activityIndex < activeFrames.count,
+                  activeFrames[activityIndex] {
+                activityIndex += 1
+            }
+            let segmentEnd = activityIndex
+            let segmentDuration = Double(segmentEnd - segmentStart) * frameDuration
+            let segmentDirection: ScratchMotionDirection = segmentIndex.isMultiple(of: 2) ? .forward : .backward
+            var smoothed: Float = 0
+
+            for frameIndex in segmentStart..<segmentEnd {
+                let energy = normalizedEnergy[frameIndex]
+                if energy > smoothed {
+                    smoothed = (smoothed * 0.42) + (energy * 0.58)
+                } else {
+                    smoothed = (smoothed * 0.86) + (energy * 0.14)
+                }
+                envelope[frameIndex] = max(Self.activeEnergyThresholdOn, smoothed)
+                segmentTimes[frameIndex] = (Double(frameIndex - segmentStart) + 0.5) * frameDuration
+                segmentDurations[frameIndex] = segmentDuration
+                segmentDirections[frameIndex] = segmentDirection
+            }
+            segmentIndex += 1
+        }
+
+        return (envelope, segmentTimes, segmentDurations, segmentDirections, frameDuration)
     }
 }
 
@@ -1942,13 +2737,13 @@ struct ScratchLabDemoAnalysisFrame: Equatable, Sendable {
     let inputLevel: Float
     let direction: ScratchMotionDirection
     let feedback: ScratchMotionFeedback?
+    let animationState: ScratchCoachDemoAnimationState
     let didLoop: Bool
 }
 
 final class ScratchLabDemoModeAnalyzer {
     private let sampleBuffer: ScratchLabDemoAudioSampleBuffer
-    private let motionAnalyzer = ScratchMotionAnalyzer()
-    private var cursor = 0
+    private var cursorTime: TimeInterval = 0
 
     init(sampleBuffer: ScratchLabDemoAudioSampleBuffer) {
         self.sampleBuffer = sampleBuffer
@@ -1963,8 +2758,7 @@ final class ScratchLabDemoModeAnalyzer {
     }
 
     func reset() {
-        cursor = 0
-        motionAnalyzer.reset()
+        cursorTime = 0
     }
 
     func processNextFrame(frameCount requestedFrameCount: Int) -> ScratchLabDemoAnalysisFrame {
@@ -1974,40 +2768,64 @@ final class ScratchLabDemoModeAnalyzer {
                 inputLevel: 0,
                 direction: .neutral,
                 feedback: nil,
+                animationState: .neutral,
                 didLoop: false
             )
         }
 
-        let frameCount = max(1, requestedFrameCount)
-        var didLoop = false
-        var chunk: [Float] = []
-        chunk.reserveCapacity(frameCount)
+        let frameDuration = Double(max(1, requestedFrameCount)) / sampleBuffer.sampleRate
+        let frame = processFrame(
+            playbackTime: cursorTime,
+            windowDuration: frameDuration
+        )
 
-        while chunk.count < frameCount {
-            if cursor >= sampleBuffer.samples.count {
-                cursor = 0
-                motionAnalyzer.reset()
-                didLoop = true
-            }
-            let remaining = frameCount - chunk.count
-            let endIndex = min(cursor + remaining, sampleBuffer.samples.count)
-            chunk.append(contentsOf: sampleBuffer.samples[cursor..<endIndex])
-            cursor = endIndex
+        var didLoop = false
+        cursorTime += frameDuration
+        if sampleBuffer.duration > 0,
+           cursorTime >= sampleBuffer.duration {
+            cursorTime = cursorTime.truncatingRemainder(dividingBy: sampleBuffer.duration)
+            didLoop = true
         }
 
-        let feedback = motionAnalyzer.process(samples: chunk, sampleRate: sampleBuffer.sampleRate)
         return ScratchLabDemoAnalysisFrame(
-            inputLevel: Self.rmsLevel(for: chunk),
-            direction: motionAnalyzer.currentDirection,
-            feedback: feedback,
+            inputLevel: frame.inputLevel,
+            direction: frame.direction,
+            feedback: frame.feedback,
+            animationState: frame.animationState,
             didLoop: didLoop
         )
     }
 
-    private static func rmsLevel(for samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        let meanSquare = samples.reduce(Float(0)) { $0 + ($1 * $1) } / Float(samples.count)
-        return min(1, sqrtf(meanSquare) * 5)
+    func processFrame(
+        playbackTime: TimeInterval,
+        windowDuration: TimeInterval
+    ) -> ScratchLabDemoAnalysisFrame {
+        guard !sampleBuffer.samples.isEmpty,
+              sampleBuffer.sampleRate > 0 else {
+            return ScratchLabDemoAnalysisFrame(
+                inputLevel: 0,
+                direction: .neutral,
+                feedback: nil,
+                animationState: .neutral,
+                didLoop: false
+            )
+        }
+
+        let activityState = sampleBuffer.activityState(
+            at: playbackTime,
+            windowDuration: windowDuration
+        )
+        let motionState = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: playbackTime,
+            activityLevel: activityState.level
+        )
+        return ScratchLabDemoAnalysisFrame(
+            inputLevel: motionState.inputLevel,
+            direction: motionState.direction,
+            feedback: motionState.feedback,
+            animationState: motionState.animationState,
+            didLoop: false
+        )
     }
 }
 
@@ -2062,7 +2880,7 @@ final class ScratchLabDemoModeController: ObservableObject {
             demoPlayer.configure(with: instruction)
             demoPlayer.replay()
             isReady = true
-            statusMessage = "Bundled baby scratch demo is playing through the analyzer."
+            statusMessage = "Bundled baby scratch demo is playing with synced coach feedback."
             startAnalysisTimer()
         } catch {
             statusMessage = "ScratchLab could not load the bundled demo."
@@ -2089,7 +2907,7 @@ final class ScratchLabDemoModeController: ObservableObject {
         if analysisTimer == nil {
             startAnalysisTimer()
         }
-        statusMessage = "Bundled baby scratch demo is playing through the analyzer."
+        statusMessage = "Bundled baby scratch demo is playing with synced coach feedback."
     }
 
     func pauseDemo() {
@@ -2097,6 +2915,21 @@ final class ScratchLabDemoModeController: ObservableObject {
         analysisTimer?.invalidate()
         analysisTimer = nil
         statusMessage = "Demo paused."
+    }
+
+    func coachAnimationState(
+        playbackTime: TimeInterval,
+        isPlaying: Bool
+    ) -> ScratchCoachDemoAnimationState {
+        guard isPlaying,
+              let analyzer else {
+            return .neutral
+        }
+
+        return analyzer.processFrame(
+            playbackTime: playbackTime,
+            windowDuration: 1.0 / 30.0
+        ).animationState
     }
 
     private func startAnalysisTimer() {
@@ -2114,8 +2947,10 @@ final class ScratchLabDemoModeController: ObservableObject {
             demoPlayer.replay()
         }
 
-        let frameCount = max(1, Int((analyzer.sampleRate / 30.0).rounded()))
-        let frame = analyzer.processNextFrame(frameCount: frameCount)
+        let frame = analyzer.processFrame(
+            playbackTime: demoPlayer.currentPlaybackTime,
+            windowDuration: 1.0 / 30.0
+        )
         inputLevel = (inputLevel * 0.64) + (frame.inputLevel * 0.36)
         motionDirection = frame.direction
         if let feedback = frame.feedback {

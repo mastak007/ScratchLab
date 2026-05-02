@@ -89,21 +89,114 @@ private struct ScratchCoachRigLimb: View {
     }
 }
 
+struct ScratchCoachRigGeometry {
+    // Clock positions are authored in coach/deck space and converted to front-facing viewer space using 180° rotation.
+    static let clockPerspectiveRotationHours: Double = 6
+    static let babyScratchHandStartCoachHour: Double = 9
+    static let babyScratchHandEndCoachHour: Double = 11
+    static let babyScratchStickerStartCoachHour: Double = 12
+    static let babyScratchStickerEndCoachHour: Double = 2
+    static let babyScratchHandStartAngleDegrees = viewerAngleDegrees(coachHour: babyScratchHandStartCoachHour)
+    static let babyScratchHandEndAngleDegrees = viewerAngleDegrees(coachHour: babyScratchHandEndCoachHour)
+    static let babyScratchStickerStartAngleDegrees = viewerAngleDegrees(coachHour: babyScratchStickerStartCoachHour)
+    static let babyScratchStickerEndAngleDegrees = viewerAngleDegrees(coachHour: babyScratchStickerEndCoachHour)
+    static let recordHandRadiusMultiplier: CGFloat = 0.92
+    static let recordStickerRadiusMultiplier: CGFloat = 0.72
+
+    static func recordHandUnitPoint(progress: Double) -> CGPoint {
+        unitPoint(
+            angleDegrees: interpolatedAngle(
+                start: babyScratchHandStartAngleDegrees,
+                end: babyScratchHandEndAngleDegrees,
+                progress: progress
+            ),
+            radiusMultiplier: recordHandRadiusMultiplier
+        )
+    }
+
+    static func recordHandPoint(center: CGPoint, radius: CGFloat, progress: Double) -> CGPoint {
+        let unitPoint = recordHandUnitPoint(progress: progress)
+        return CGPoint(
+            x: center.x + radius * unitPoint.x,
+            y: center.y + radius * unitPoint.y
+        )
+    }
+
+    static func recordStickerUnitPoint(progress: Double = 0) -> CGPoint {
+        unitPoint(
+            angleDegrees: interpolatedAngle(
+                start: babyScratchStickerStartAngleDegrees,
+                end: babyScratchStickerEndAngleDegrees,
+                progress: progress
+            ),
+            radiusMultiplier: recordStickerRadiusMultiplier
+        )
+    }
+
+    static func recordStickerRotationDegrees(progress: Double) -> Double {
+        interpolatedAngle(
+            start: babyScratchStickerStartAngleDegrees,
+            end: babyScratchStickerEndAngleDegrees,
+            progress: progress
+        ) - babyScratchStickerStartAngleDegrees
+    }
+
+    static func frontFacingViewerHour(coachHour: Double) -> Double {
+        let shiftedHour = coachHour + clockPerspectiveRotationHours
+        let wrappedHour = shiftedHour.truncatingRemainder(dividingBy: 12)
+        return wrappedHour == 0 ? 12 : wrappedHour
+    }
+
+    static func viewerAngleDegrees(coachHour: Double) -> Double {
+        let viewerHour = frontFacingViewerHour(coachHour: coachHour)
+        return (viewerHour - 3) * 30
+    }
+
+    private static func interpolatedAngle(
+        start: Double,
+        end: Double,
+        progress: Double
+    ) -> Double {
+        let clampedProgress = max(0, min(1, progress))
+        return start + ((end - start) * clampedProgress)
+    }
+
+    private static func unitPoint(
+        angleDegrees: Double,
+        radiusMultiplier: CGFloat
+    ) -> CGPoint {
+        let radians = angleDegrees * .pi / 180
+        return CGPoint(
+            x: CGFloat(cos(radians)) * radiusMultiplier,
+            y: CGFloat(sin(radians)) * radiusMultiplier
+        )
+    }
+}
+
 struct ScratchCoachRigView: View {
     let instruction: ScratchCoachInstruction
     let playbackTimeProvider: () -> TimeInterval
     let isPlayingProvider: () -> Bool
+    let animationStateProvider: ((TimeInterval, Bool) -> ScratchCoachDemoAnimationState?)?
     let theme: ScratchCoachCardTheme
 
+    @State private var demoMotionSampleBuffer: ScratchLabDemoAudioSampleBuffer?
+    @State private var loadedDemoMotionAudioFile: String?
+
     private let sceneHeight: CGFloat = 196
-    private let platterTravel: CGFloat = 24
+    private static let babyScratchCrossfaderPosition = ScratchCoachDemoAnimationState.babyScratchCrossfaderPosition
+    private static let babyScratchLeftHandPose = CGPoint(x: 0.50, y: 0.66)
+    private static let recordHandBasePose = ScratchCoachRigGeometry.recordHandUnitPoint(progress: 0)
+    private static let recordStickerBasePose = ScratchCoachRigGeometry.recordStickerUnitPoint(progress: 0)
+    private static let volumeFaderYRatio: CGFloat = 0.46
+    private static let crossfaderYRatio: CGFloat = 0.80
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
             let isPlaying = isPlayingProvider()
-            let animationState = ScratchCoachDemoAnimator.state(
-                scratchType: instruction.scratchType,
-                playbackTime: isPlaying ? playbackTimeProvider() : 0,
+            let playbackTime = isPlaying ? playbackTimeProvider() : 0
+            let animationState = resolvedAnimationState(
+                playbackTime: playbackTime,
                 isPlaying: isPlaying
             )
 
@@ -157,6 +250,91 @@ struct ScratchCoachRigView: View {
             .background(theme.controllerFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .accessibilityIdentifier("scratchlab-coach-rig")
         }
+        .task(id: demoMotionProfileTaskID) {
+            await loadDemoMotionProfileIfNeeded()
+        }
+    }
+
+    private var hasCustomAnimationStateProvider: Bool {
+        if case .some = animationStateProvider {
+            return true
+        }
+        return false
+    }
+
+    private var demoMotionProfileTaskID: String {
+        guard !hasCustomAnimationStateProvider else { return "" }
+        return Self.normalizedDemoAudioFileName(instruction.demoAudioFile) ?? ""
+    }
+
+    private func resolvedAnimationState(
+        playbackTime: TimeInterval,
+        isPlaying: Bool
+    ) -> ScratchCoachDemoAnimationState {
+        if let providedState = animationStateProvider?(playbackTime, isPlaying) {
+            return providedState
+        }
+
+        guard isPlaying else {
+            return isBabyScratch ? .babyScratchOpen : .neutral
+        }
+
+        if Self.normalizedDemoAudioFileName(instruction.demoAudioFile) != nil {
+            return demoMotionSampleBuffer?.coachRigAnimationState(
+                scratchType: instruction.scratchType,
+                playbackTime: playbackTime,
+                isPlaying: isPlaying
+            ) ?? (isBabyScratch ? .babyScratchOpen : .neutral)
+        }
+
+        return ScratchCoachDemoAnimator.state(
+            scratchType: instruction.scratchType,
+            playbackTime: playbackTime,
+            isPlaying: isPlaying
+        )
+    }
+
+    @MainActor
+    private func loadDemoMotionProfileIfNeeded() async {
+        guard !hasCustomAnimationStateProvider,
+              let audioFileName = Self.normalizedDemoAudioFileName(instruction.demoAudioFile) else {
+            loadedDemoMotionAudioFile = nil
+            demoMotionSampleBuffer = nil
+            return
+        }
+
+        guard loadedDemoMotionAudioFile != audioFileName || demoMotionSampleBuffer == nil else {
+            return
+        }
+
+        loadedDemoMotionAudioFile = audioFileName
+        demoMotionSampleBuffer = nil
+
+        guard let audioURL = ScratchCoachDemoAudioPlayer.bundledDemoAudioURL(named: audioFileName, in: .main) else {
+            return
+        }
+
+        let sampleBuffer = await Task.detached(priority: .utility) {
+            try? ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+        }.value
+
+        guard loadedDemoMotionAudioFile == audioFileName else { return }
+        demoMotionSampleBuffer = sampleBuffer
+    }
+
+    private static func normalizedDemoAudioFileName(_ audioFileName: String?) -> String? {
+        guard let audioFileName else { return nil }
+        let trimmedName = audioFileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? nil : trimmedName
+    }
+
+    private var isBabyScratch: Bool {
+        switch normalizeScratchType(input: instruction.scratchType) {
+        case "baby", "babyscratch":
+            return true
+        default:
+            return false
+        }
     }
 
     @ViewBuilder
@@ -166,6 +344,7 @@ struct ScratchCoachRigView: View {
         isPlaying: Bool
     ) -> some View {
         let normalizedScratchType = normalizeScratchType(input: instruction.scratchType)
+        let isBabyScratch = normalizedScratchType == "baby" || normalizedScratchType == "babyscratch"
         let shoulderLineY = size.height * 0.29
         let torsoTopY = size.height * 0.33
         let boothTopY = size.height * 0.50
@@ -180,7 +359,7 @@ struct ScratchCoachRigView: View {
         )
         let crossfaderTrack = CGRect(
             x: mixerRect.minX + mixerRect.width * 0.18,
-            y: boothTopY + boothHeight * 0.71,
+            y: mixerRect.minY + mixerRect.height * Self.crossfaderYRatio,
             width: mixerRect.width * 0.64,
             height: 6
         )
@@ -189,13 +368,17 @@ struct ScratchCoachRigView: View {
         let shoulderRight = CGPoint(x: size.width * 0.60, y: shoulderLineY)
         let elbowLeft = CGPoint(x: size.width * 0.37, y: size.height * 0.43)
         let elbowRight = CGPoint(x: size.width * 0.67, y: size.height * 0.41)
-        let recordHand = CGPoint(
-            x: platterCenter.x + CGFloat(animationState.recordPosition) * platterTravel,
-            y: platterCenter.y - platterRadius * 0.78
+        let recordHand = recordHandPoint(
+            center: platterCenter,
+            radius: platterRadius,
+            animationState: animationState,
+            isBabyScratch: isBabyScratch
         )
-        let faderHand = CGPoint(
-            x: crossfaderKnobX,
-            y: crossfaderTrack.midY - 16
+        let faderHand = faderHandPoint(
+            mixerRect: mixerRect,
+            crossfaderTrack: crossfaderTrack,
+            crossfaderKnobX: crossfaderKnobX,
+            isBabyScratch: isBabyScratch
         )
 
         ZStack {
@@ -215,7 +398,12 @@ struct ScratchCoachRigView: View {
                         .position(x: size.width * 0.5, y: boothTopY + boothHeight * 0.5)
                 }
 
-            platter(center: platterCenter, radius: platterRadius, animationState: animationState)
+            platter(
+                center: platterCenter,
+                radius: platterRadius,
+                animationState: animationState,
+                isBabyScratch: isBabyScratch
+            )
             mixer(rect: mixerRect, track: crossfaderTrack, knobX: crossfaderKnobX, isOpen: animationState.crossfaderOpenState)
 
             torso(in: size, shoulderLineY: shoulderLineY, torsoTopY: torsoTopY)
@@ -250,8 +438,11 @@ struct ScratchCoachRigView: View {
 
             if isPlaying {
                 cueTrail(
-                    from: CGPoint(x: platterCenter.x - platterRadius * 0.54, y: platterCenter.y - platterRadius * 0.94),
-                    to: CGPoint(x: recordHand.x + 6, y: recordHand.y + 10)
+                    from: CGPoint(
+                        x: platterCenter.x + platterRadius * (Self.recordHandBasePose.x - 0.08),
+                        y: platterCenter.y + platterRadius * Self.recordHandBasePose.y
+                    ),
+                    to: CGPoint(x: recordHand.x + 10, y: recordHand.y)
                 )
 
                 if normalizedScratchType == "chirpflare" {
@@ -263,6 +454,47 @@ struct ScratchCoachRigView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func recordHandPoint(
+        center: CGPoint,
+        radius: CGFloat,
+        animationState: ScratchCoachDemoAnimationState,
+        isBabyScratch: Bool
+    ) -> CGPoint {
+        if isBabyScratch {
+            return ScratchCoachRigGeometry.recordHandPoint(
+                center: center,
+                radius: radius,
+                progress: animationState.recordPosition
+            )
+        }
+
+        return CGPoint(
+            x: center.x + radius * Self.recordHandBasePose.x,
+            y: center.y
+                + radius * Self.recordHandBasePose.y
+                + CGFloat(animationState.recordPosition) * 24
+        )
+    }
+
+    private func faderHandPoint(
+        mixerRect: CGRect,
+        crossfaderTrack: CGRect,
+        crossfaderKnobX: CGFloat,
+        isBabyScratch: Bool
+    ) -> CGPoint {
+        guard isBabyScratch else {
+            return CGPoint(
+                x: crossfaderKnobX,
+                y: crossfaderTrack.midY - 16
+            )
+        }
+
+        return CGPoint(
+            x: mixerRect.minX + mixerRect.width * Self.babyScratchLeftHandPose.x,
+            y: mixerRect.minY + mixerRect.height * Self.babyScratchLeftHandPose.y
+        )
     }
 
     @ViewBuilder
@@ -281,8 +513,15 @@ struct ScratchCoachRigView: View {
     private func platter(
         center: CGPoint,
         radius: CGFloat,
-        animationState: ScratchCoachDemoAnimationState
+        animationState: ScratchCoachDemoAnimationState,
+        isBabyScratch: Bool
     ) -> some View {
+        let recordMarkerOffset = recordMarkerOffset(
+            radius: radius,
+            animationState: animationState,
+            isBabyScratch: isBabyScratch
+        )
+
         ZStack {
             Circle()
                 .fill(theme.primaryTextColor.opacity(0.06))
@@ -292,28 +531,68 @@ struct ScratchCoachRigView: View {
                 .stroke(theme.primaryTextColor.opacity(0.15), lineWidth: 2)
                 .frame(width: radius * 2.02, height: radius * 2.02)
 
-            Circle()
-                .stroke(theme.accentColor.opacity(0.84), lineWidth: 3)
-                .frame(width: radius * 1.68, height: radius * 1.68)
-                .rotationEffect(.degrees(animationState.recordRotationDegrees))
+            ZStack {
+                Circle()
+                    .stroke(theme.accentColor.opacity(0.84), lineWidth: 3)
+                    .frame(width: radius * 1.68, height: radius * 1.68)
 
-            Capsule()
-                .fill(theme.primaryTextColor.opacity(0.26))
-                .frame(width: radius * 1.10, height: 4)
-                .rotationEffect(.degrees(-26 + animationState.recordPosition * 18))
-                .offset(x: radius * 0.52, y: -radius * 0.34)
+                recordStickerLineMarker(radius: radius)
+                    .offset(
+                        x: radius * Self.recordStickerBasePose.x,
+                        y: radius * Self.recordStickerBasePose.y
+                    )
+            }
+            .rotationEffect(.degrees(animationState.recordRotationDegrees))
 
             Circle()
                 .fill(theme.accentColor.opacity(0.94))
                 .frame(width: 10, height: 10)
-                .offset(x: CGFloat(animationState.recordPosition) * platterTravel, y: radius * 0.72)
+                .offset(
+                    x: recordMarkerOffset.x,
+                    y: recordMarkerOffset.y
+                )
 
             Capsule()
                 .fill(theme.accentColor.opacity(0.82))
                 .frame(width: 20, height: 8)
-                .offset(x: CGFloat(animationState.recordPosition) * platterTravel, y: -radius * 0.92)
+                .offset(
+                    x: recordMarkerOffset.x,
+                    y: recordMarkerOffset.y - 2
+                )
         }
         .position(center)
+    }
+
+    private func recordStickerLineMarker(radius: CGFloat) -> some View {
+        Capsule()
+            .fill(theme.primaryTextColor.opacity(0.96))
+            .frame(width: 5, height: max(14, radius * 0.46))
+            .overlay {
+                Capsule()
+                    .stroke(theme.accentColor.opacity(0.88), lineWidth: 1.5)
+            }
+    }
+
+    private func recordMarkerOffset(
+        radius: CGFloat,
+        animationState: ScratchCoachDemoAnimationState,
+        isBabyScratch: Bool
+    ) -> CGPoint {
+        if isBabyScratch {
+            let unitPoint = ScratchCoachRigGeometry.recordHandUnitPoint(
+                progress: animationState.recordPosition
+            )
+            return CGPoint(
+                x: radius * unitPoint.x,
+                y: radius * unitPoint.y
+            )
+        }
+
+        return CGPoint(
+            x: radius * Self.recordHandBasePose.x,
+            y: radius * Self.recordHandBasePose.y
+                + CGFloat(animationState.recordPosition) * 24
+        )
     }
 
     @ViewBuilder
@@ -324,6 +603,11 @@ struct ScratchCoachRigView: View {
         isOpen: Bool
     ) -> some View {
         ZStack {
+            let volumeFaderHeight = rect.height * 0.34
+            let volumeFaderY = rect.height * Self.volumeFaderYRatio
+            let crossfaderY = rect.height * Self.crossfaderYRatio
+            let localKnobX = knobX - track.minX
+
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(theme.primaryTextColor.opacity(0.06))
                 .frame(width: rect.width, height: rect.height)
@@ -332,30 +616,31 @@ struct ScratchCoachRigView: View {
                 .stroke(theme.primaryTextColor.opacity(0.08), lineWidth: 1)
                 .frame(width: rect.width, height: rect.height)
 
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    knob
-                    knob
-                    knob
-                }
-
-                HStack(spacing: 11) {
-                    channelMeter(active: true)
-                    channelMeter(active: false)
-                }
-
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(theme.controllerTrackColor)
-                        .frame(width: track.width, height: 6)
-
-                    Circle()
-                        .fill(isOpen ? theme.accentColor : theme.inactiveKnobColor)
-                        .frame(width: 18, height: 18)
-                        .shadow(color: theme.accentColor.opacity(isOpen ? 0.35 : 0), radius: 5, y: 1)
-                        .offset(x: knobX - track.minX)
-                }
+            HStack(spacing: 10) {
+                knob
+                knob
+                knob
             }
+            .position(x: rect.width * 0.5, y: rect.height * 0.19)
+
+            HStack(spacing: 11) {
+                channelVolumeFader(active: true, height: volumeFaderHeight)
+                channelVolumeFader(active: false, height: volumeFaderHeight)
+            }
+            .position(x: rect.width * 0.5, y: volumeFaderY)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(theme.controllerTrackColor)
+                    .frame(width: track.width, height: 6)
+
+                Circle()
+                    .fill(isOpen ? theme.accentColor : theme.inactiveKnobColor)
+                    .frame(width: 18, height: 18)
+                    .shadow(color: theme.accentColor.opacity(isOpen ? 0.35 : 0), radius: 5, y: 1)
+                    .offset(x: localKnobX)
+            }
+            .position(x: rect.width * 0.5, y: crossfaderY)
         }
         .position(x: rect.midX, y: rect.midY)
     }
@@ -370,15 +655,21 @@ struct ScratchCoachRigView: View {
             }
     }
 
-    private func channelMeter(active: Bool) -> some View {
+    private func channelVolumeFader(active: Bool, height: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
             .fill(theme.detailFill)
-            .frame(width: 12, height: 36)
+            .frame(width: 12, height: height)
             .overlay(alignment: .bottom) {
                 Capsule()
                     .fill(active ? theme.accentColor.opacity(0.86) : theme.primaryTextColor.opacity(0.18))
-                    .frame(width: 8, height: active ? 18 : 10)
+                    .frame(width: 8, height: active ? height * 0.50 : height * 0.28)
                     .padding(.bottom, 3)
+            }
+            .overlay {
+                Circle()
+                    .fill(theme.primaryTextColor.opacity(active ? 0.42 : 0.24))
+                    .frame(width: 16, height: 16)
+                    .offset(y: active ? -(height * 0.04) : height * 0.18)
             }
     }
 
@@ -486,6 +777,7 @@ struct ScratchCoachCardContent<Controls: View>: View {
     let demoStatusMessage: String
     let playbackTimeProvider: () -> TimeInterval
     let isPlayingProvider: () -> Bool
+    let animationStateProvider: ((TimeInterval, Bool) -> ScratchCoachDemoAnimationState?)?
     let theme: ScratchCoachCardTheme
 
     private let controls: Controls
@@ -496,6 +788,7 @@ struct ScratchCoachCardContent<Controls: View>: View {
         demoStatusMessage: String,
         playbackTimeProvider: @escaping () -> TimeInterval,
         isPlayingProvider: @escaping () -> Bool,
+        animationStateProvider: ((TimeInterval, Bool) -> ScratchCoachDemoAnimationState?)? = nil,
         theme: ScratchCoachCardTheme,
         @ViewBuilder controls: () -> Controls
     ) {
@@ -503,6 +796,7 @@ struct ScratchCoachCardContent<Controls: View>: View {
         self.demoStatusMessage = demoStatusMessage
         self.playbackTimeProvider = playbackTimeProvider
         self.isPlayingProvider = isPlayingProvider
+        self.animationStateProvider = animationStateProvider
         self.theme = theme
         self.controls = controls()
     }
@@ -541,6 +835,7 @@ struct ScratchCoachCardContent<Controls: View>: View {
                 instruction: instruction,
                 playbackTimeProvider: playbackTimeProvider,
                 isPlayingProvider: isPlayingProvider,
+                animationStateProvider: animationStateProvider,
                 theme: theme
             )
 

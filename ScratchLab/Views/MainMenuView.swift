@@ -495,6 +495,12 @@ private struct DemoModeView: View {
             demoStatusMessage: "Coach animation follows the bundled baby scratch demo.",
             playbackTimeProvider: { demoController.demoPlayer.currentPlaybackTime },
             isPlayingProvider: { demoController.demoPlayer.isActivelyPlayingAudio },
+            animationStateProvider: { playbackTime, isPlaying in
+                demoController.coachAnimationState(
+                    playbackTime: playbackTime,
+                    isPlaying: isPlaying
+                )
+            },
             theme: theme
         ) {
             HStack(spacing: 10) {
