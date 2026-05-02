@@ -1,0 +1,109 @@
+{
+  "demoEnd": 83.450033,
+  "demoStart": 35.035,
+  "phraseEnd": 2.126,
+  "phraseStart": 0.03,
+  "scratchID": "baby",
+  "strokes": [
+    {
+      "direction": "forward",
+      "endTime": 0.218,
+      "faderState": "open",
+      "speedClassification": "slow",
+      "startTime": 0.03
+    },
+    {
+      "direction": "backward",
+      "endTime": 0.503,
+      "faderState": "open",
+      "speedClassification": "slow",
+      "startTime": 0.36
+    },
+    {
+      "direction": "forward",
+      "endTime": 0.6566,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 0.523
+    },
+    {
+      "direction": "backward",
+      "endTime": 0.7902,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 0.6566
+    },
+    {
+      "direction": "forward",
+      "endTime": 0.9237,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 0.7902
+    },
+    {
+      "direction": "backward",
+      "endTime": 1.0573,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 0.9237
+    },
+    {
+      "direction": "forward",
+      "endTime": 1.1909,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.0573
+    },
+    {
+      "direction": "backward",
+      "endTime": 1.3245,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.1909
+    },
+    {
+      "direction": "forward",
+      "endTime": 1.4581,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.3245
+    },
+    {
+      "direction": "backward",
+      "endTime": 1.5917,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.4581
+    },
+    {
+      "direction": "forward",
+      "endTime": 1.7252,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.5917
+    },
+    {
+      "direction": "backward",
+      "endTime": 1.8588,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.7252
+    },
+    {
+      "direction": "forward",
+      "endTime": 1.9924,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.8588
+    },
+    {
+      "direction": "backward",
+      "endTime": 2.126,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.9924
+    }
+  ],
+  "timingBasis": "audio_transient_peaks",
+  "version": 1
+}

@@ -1,0 +1,124 @@
+{
+  "demoEnd": 83.450033,
+  "demoStart": 35.035,
+  "phraseEnd": 2.126,
+  "phraseStart": 0.03,
+  "scratchID": "baby",
+  "strokes": [
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 0.218,
+      "holdAfter": 0.142,
+      "startProgress": 0.0,
+      "startTime": 0.03
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 0.503,
+      "holdAfter": 0.02,
+      "startProgress": 1.0,
+      "startTime": 0.36
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 0.6566,
+      "holdAfter": 0.0,
+      "startProgress": 0.0,
+      "startTime": 0.523
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 0.7902,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 0.6566
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 0.9237,
+      "holdAfter": 0.0,
+      "startProgress": 0.0,
+      "startTime": 0.7902
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 1.0573,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 0.9237
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 1.1909,
+      "holdAfter": 0.0,
+      "startProgress": 0.0,
+      "startTime": 1.0573
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 1.3245,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 1.1909
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 1.4581,
+      "holdAfter": 0.0,
+      "startProgress": 0.0,
+      "startTime": 1.3245
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 1.5917,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 1.4581
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 1.7252,
+      "holdAfter": 0.0,
+      "startProgress": 0.0,
+      "startTime": 1.5917
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 1.8588,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 1.7252
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 1.9924,
+      "holdAfter": 0.0,
+      "startProgress": 0.0,
+      "startTime": 1.8588
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 2.126,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 1.9924
+    }
+  ],
+  "timelineDuration": 2.126,
+  "timingSource": "wav_transient_extraction",
+  "version": 1
+}

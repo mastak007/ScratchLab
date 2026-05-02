@@ -863,7 +863,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
         let backwardHoldState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
-            playbackTime: 0.60,
+            playbackTime: 0.52,
             isPlaying: true
         )
         let stoppedState = ScratchCoachDemoAnimator.state(
@@ -1840,7 +1840,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let coreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
         let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
         XCTAssertTrue(coreSource.contains("final class ScratchLabDemoModeAnalyzer"))
+        XCTAssertTrue(coreSource.contains("struct ScratchNotation"))
         XCTAssertTrue(coreSource.contains("struct BabyScratchReferenceMotionTimeline"))
+        XCTAssertTrue(coreSource.contains("struct BabyScratchExtractedStrokeResource"))
+        XCTAssertTrue(coreSource.contains("baby_scratch_strokes"))
+        XCTAssertTrue(coreSource.contains("baby_scratch"))
+        XCTAssertTrue(coreSource.contains("usesNotationResource"))
+        XCTAssertTrue(coreSource.contains("usesExtractedStrokeResource"))
+        XCTAssertTrue(coreSource.contains("fallbackStrokeSegments"))
         XCTAssertTrue(coreSource.contains("struct ScratchLabBabyScratchDemoMotionPattern"))
         XCTAssertTrue(coreSource.contains("static let demoStart: TimeInterval = 35.035"))
         XCTAssertTrue(coreSource.contains("static let demoEnd: TimeInterval = 83.450033"))
@@ -1919,19 +1926,19 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     func testDemoModeBabyScratchPatternIncludesHoldPhases() {
         let forwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.56,
+            playbackTime: 0.24,
             activityLevel: 1
         )
         let forwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.60,
+            playbackTime: 0.32,
             activityLevel: 1
         )
         let backwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.80,
+            playbackTime: 0.510,
             activityLevel: 1
         )
         let backwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.84,
+            playbackTime: 0.519,
             activityLevel: 1
         )
 
@@ -1943,7 +1950,126 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(backwardHoldA.animationState, .neutral)
     }
 
+    private func decodedBabyScratchStrokeResource() throws -> BabyScratchExtractedStrokeResource {
+        let resourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/CoachDemoMotion/baby_scratch_strokes.json")
+        let data = try Data(contentsOf: resourceURL)
+        return try JSONDecoder().decode(BabyScratchExtractedStrokeResource.self, from: data)
+    }
+
+    private func decodedBabyScratchNotation() throws -> ScratchNotation {
+        let resourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/Notation/baby_scratch.json")
+        let data = try Data(contentsOf: resourceURL)
+        return try JSONDecoder().decode(ScratchNotation.self, from: data)
+    }
+
+    func testBabyScratchNotationJSONDecodesAndContainsNoSourceProvenance() throws {
+        let resourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/Notation/baby_scratch.json")
+        let rawJSON = try String(contentsOf: resourceURL, encoding: .utf8)
+        let notation = try decodedBabyScratchNotation()
+
+        XCTAssertEqual(notation.scratchID, "baby")
+        XCTAssertEqual(notation.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
+        XCTAssertEqual(notation.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
+        XCTAssertEqual(notation.strokes.count, 14)
+        XCTAssertEqual(notation.strokes.count, notation.strokeSegments.count)
+        XCTAssertTrue(notation.strokes.allSatisfy { $0.faderState == .open })
+        let phraseStart = try XCTUnwrap(notation.phraseStart)
+        let phraseEnd = try XCTUnwrap(notation.phraseEnd)
+        let firstStroke = try XCTUnwrap(notation.strokes.first)
+        let lastStroke = try XCTUnwrap(notation.strokes.last)
+        XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
+        XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
+        XCTAssertLessThan(phraseEnd, 3.0)
+        XCTAssertEqual(notation.timelineDuration, phraseEnd, accuracy: 0.0001)
+        XCTAssertTrue(notation.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
+        let slowToFastGap = notation.strokes[2].startTime - notation.strokes[1].endTime
+        XCTAssertLessThan(slowToFastGap, 0.03)
+        XCTAssertEqual(notation.strokes[2].startTime, 0.523, accuracy: 0.0001)
+        XCTAssertFalse(rawJSON.contains("/Users/"))
+        XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("cxl"))
+        XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("makemkv"))
+        XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("qbert"))
+    }
+
+    func testBabyScratchNotationClassifiesNonUniformStrokeSpeeds() throws {
+        let notation = try decodedBabyScratchNotation()
+        let durations = notation.strokes.map(\.duration)
+        let roundedDurations = Set(durations.map { Int(($0 * 1_000).rounded()) })
+        let fastDurations = notation.strokes
+            .filter { $0.speedClassification == .fast }
+            .map(\.duration)
+        let slowDurations = notation.strokes
+            .filter { $0.speedClassification == .slow }
+            .map(\.duration)
+        let fastestSlow = try XCTUnwrap(slowDurations.min())
+        let slowestFast = try XCTUnwrap(fastDurations.max())
+        let firstTwoDurations = notation.strokes.prefix(2).map(\.duration)
+        let remainingDurations = notation.strokes.dropFirst(2).map(\.duration)
+        let firstTwoAverage = firstTwoDurations.reduce(0, +) / Double(firstTwoDurations.count)
+        let remainingAverage = remainingDurations.reduce(0, +) / Double(remainingDurations.count)
+        let roundedDurationsByTenThousand = durations.map { Int(($0 * 10_000).rounded()) }
+
+        XCTAssertGreaterThan(roundedDurations.count, 1)
+        XCTAssertLessThan(slowestFast, fastestSlow)
+        XCTAssertTrue(notation.strokes.prefix(2).allSatisfy { $0.speedClassification == .slow })
+        XCTAssertTrue(notation.strokes.dropFirst(2).allSatisfy { $0.speedClassification == .fast })
+        XCTAssertGreaterThan(firstTwoAverage, remainingAverage)
+        XCTAssertEqual(
+            roundedDurationsByTenThousand,
+            [1880, 1430, 1336, 1336, 1335, 1336, 1336, 1336, 1336, 1336, 1335, 1336, 1336, 1336]
+        )
+    }
+
+    func testBabyScratchExtractedMotionJSONDecodesAndContainsNoSourceProvenance() throws {
+        let resourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/CoachDemoMotion/baby_scratch_strokes.json")
+        let rawJSON = try String(contentsOf: resourceURL, encoding: .utf8)
+        let resource = try decodedBabyScratchStrokeResource()
+
+        XCTAssertEqual(resource.scratchID, "baby")
+        XCTAssertEqual(resource.timingSource, "wav_transient_extraction")
+        XCTAssertEqual(resource.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
+        XCTAssertEqual(resource.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
+        XCTAssertEqual(resource.strokes.count, 14)
+        XCTAssertEqual(resource.strokes.count, resource.strokeSegments.count)
+        let phraseStart = try XCTUnwrap(resource.phraseStart)
+        let phraseEnd = try XCTUnwrap(resource.phraseEnd)
+        let firstStroke = try XCTUnwrap(resource.strokes.first)
+        let lastStroke = try XCTUnwrap(resource.strokes.last)
+        XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
+        XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
+        XCTAssertEqual(resource.timelineDuration, phraseEnd, accuracy: 0.0001)
+        XCTAssertTrue(resource.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
+        XCTAssertLessThan(resource.strokes[2].startTime - resource.strokes[1].endTime, 0.03)
+        XCTAssertFalse(rawJSON.contains("/Users/"))
+        XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("cxl"))
+        XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("makemkv"))
+        XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("qbert"))
+    }
+
+    func testBabyScratchExtractedMotionResourceIsBundledForApps() throws {
+        let projectSource = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+        let resourcePhaseMatches = projectSource.components(
+            separatedBy: "Resources/CoachDemoMotion in Resources"
+        ).count - 1
+        let notationPhaseMatches = projectSource.components(
+            separatedBy: "Resources/Notation in Resources"
+        ).count - 1
+
+        XCTAssertTrue(projectSource.contains("Resources/CoachDemoMotion"))
+        XCTAssertGreaterThanOrEqual(resourcePhaseMatches, 2)
+        XCTAssertTrue(projectSource.contains("Resources/Notation"))
+        XCTAssertGreaterThanOrEqual(notationPhaseMatches, 2)
+    }
+
     func testBabyScratchReferenceMotionTimelineUsesChapterOffsetAndNonUniformSegments() throws {
+        let resource = try decodedBabyScratchNotation()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let keyframes = BabyScratchReferenceMotionTimeline.keyframes
         let durations = timeline.map(\.duration)
@@ -1953,7 +2079,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let audioFile = try AVAudioFile(forReading: audioURL)
         let bundledDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
 
-        XCTAssertEqual(timeline.count, 8)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesNotationResource)
+        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
+        XCTAssertEqual(timeline.count, resource.strokes.count)
         XCTAssertGreaterThan(keyframes.count, timeline.count)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoStart, 35.035, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoEnd, 83.450033, accuracy: 0.0001)
@@ -1962,99 +2090,87 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceTime(forPlaybackTime: 0), 35.035, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forSourceTime: 35.035), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
-        XCTAssertEqual(timeline[0].startTime, 0.0400, accuracy: 0.0001)
-        XCTAssertEqual(timeline[0].endTime, 0.2000, accuracy: 0.0001)
-        XCTAssertEqual(timeline[0].direction, .forward)
-        XCTAssertEqual(timeline[0].holdAfter, 0.1750, accuracy: 0.0001)
-        XCTAssertEqual(timeline[1].startTime, 0.3750, accuracy: 0.0001)
-        XCTAssertEqual(timeline[1].endTime, 0.4800, accuracy: 0.0001)
-        XCTAssertEqual(timeline[1].direction, .backward)
-        XCTAssertEqual(timeline[1].holdAfter, 0.3100, accuracy: 0.0001)
-        XCTAssertEqual(timeline[2].direction, .forward)
-        XCTAssertEqual(timeline[3].direction, .backward)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseDuration, resource.timelineDuration, accuracy: 0.0001)
+        XCTAssertEqual(timeline[0].startTime, resource.strokes[0].startTime, accuracy: 0.0001)
+        XCTAssertEqual(timeline[0].endTime, resource.strokes[0].endTime, accuracy: 0.0001)
+        XCTAssertEqual(timeline[0].direction, resource.strokes[0].motionDirection)
+        XCTAssertEqual(timeline[0].holdAfter, resource.strokeSegments[0].holdAfter, accuracy: 0.0001)
         XCTAssertGreaterThan(roundedDurations.count, 1)
-        XCTAssertLessThan(timeline[1].duration, timeline[0].duration)
+        XCTAssertGreaterThanOrEqual(timeline.count, 10)
+        XCTAssertLessThanOrEqual(timeline.count, 20)
         XCTAssertEqual(keyframes[0].sourceTime, 35.035 + timeline[0].startTime, accuracy: 0.0001)
         XCTAssertEqual(keyframes[0].handViewerHour, 3, accuracy: 0.0001)
         XCTAssertEqual(keyframes[0].stickerViewerHour, 6, accuracy: 0.0001)
         XCTAssertEqual(keyframes[1].handViewerHour, 5, accuracy: 0.0001)
         XCTAssertEqual(keyframes[1].stickerViewerHour, 8, accuracy: 0.0001)
         XCTAssertEqual(keyframes[1].recordRotationDegrees, 60, accuracy: 0.0001)
-        XCTAssertEqual(ScratchLabBabyScratchDemoMotionPattern.babyScratchStrokeTimelineDuration, 6.08, accuracy: 0.0001)
+        XCTAssertEqual(
+            ScratchLabBabyScratchDemoMotionPattern.babyScratchStrokeTimelineDuration,
+            resource.timelineDuration,
+            accuracy: 0.0001
+        )
         XCTAssertEqual(ScratchLabBabyScratchDemoMotionPattern.babyScratchDemoPhaseOffset, 0, accuracy: 0.0001)
         XCTAssertFalse(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: 0))
-        XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: 0.041))
-        XCTAssertFalse(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: 0.24))
-        XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: 0.42))
+        XCTAssertTrue(
+            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
+                playbackTime: timeline[0].startTime + 0.001
+            )
+        )
+        XCTAssertFalse(
+            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
+                playbackTime: timeline[0].endTime + min(0.02, max(0.001, timeline[0].holdAfter / 2))
+            )
+        )
+        XCTAssertTrue(
+            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
+                playbackTime: timeline[1].startTime + 0.001
+            )
+        )
     }
 
-    func testBabyScratchReferenceMotionTimelineDoesNotSkipAlternatingStrokes() {
+    func testBabyScratchReferenceMotionTimelineDoesNotSkipAlternatingStrokes() throws {
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        let expectedDirections: [ScratchMotionDirection] = [
-            .forward, .backward,
-            .forward, .backward,
-            .forward, .backward,
-            .forward, .backward
-        ]
+        let resource = try decodedBabyScratchNotation()
 
-        XCTAssertEqual(timeline.map(\.direction), expectedDirections)
-        XCTAssertEqual(timeline.count, 8)
-        XCTAssertEqual(timeline[0].endTime + timeline[0].holdAfter, timeline[1].startTime, accuracy: 0.0001)
-        XCTAssertEqual(timeline[2].endTime + timeline[2].holdAfter, timeline[3].startTime, accuracy: 0.0001)
-        XCTAssertEqual(timeline[4].endTime + timeline[4].holdAfter, timeline[5].startTime, accuracy: 0.0001)
-        XCTAssertEqual(timeline[6].endTime + timeline[6].holdAfter, timeline[7].startTime, accuracy: 0.0001)
-
-        let slowChigaDurations = [
-            timeline[0].duration + timeline[1].duration,
-            timeline[4].duration + timeline[5].duration
-        ]
-        let fastChigaDurations = [
-            timeline[2].duration + timeline[3].duration,
-            timeline[6].duration + timeline[7].duration
-        ]
-        XCTAssertLessThan(fastChigaDurations[0], slowChigaDurations[0])
-        XCTAssertLessThan(fastChigaDurations[1], slowChigaDurations[1])
+        XCTAssertEqual(timeline.count, resource.strokes.count)
+        XCTAssertGreaterThanOrEqual(timeline.count, 10)
+        XCTAssertLessThanOrEqual(timeline.count, 20)
+        XCTAssertEqual(timeline.map(\.direction), resource.strokeSegments.map(\.direction))
+        for index in 0..<timeline.count {
+            let expectedDirection: ScratchMotionDirection = index.isMultiple(of: 2) ? .forward : .backward
+            XCTAssertEqual(timeline[index].direction, expectedDirection)
+        }
         XCTAssertEqual(timeline[0].startProgress, 0, accuracy: 0.0001)
         for index in 0..<(timeline.count - 1) {
             XCTAssertEqual(timeline[index].endProgress, timeline[index + 1].startProgress, accuracy: 0.0001)
         }
-        XCTAssertLessThanOrEqual(timeline[3].startTime - timeline[2].endTime, 0.05)
-        XCTAssertLessThanOrEqual(timeline[5].startTime - timeline[4].endTime, 0.10)
+
+        let sortedByStartTime = timeline.sorted { $0.startTime < $1.startTime }
+        XCTAssertEqual(timeline, sortedByStartTime)
+        let gaps = zip(timeline, timeline.dropFirst()).map { next, following in
+            following.startTime - next.endTime
+        }
+        XCTAssertTrue(gaps.contains { $0 < 0.20 })
+        XCTAssertGreaterThan(Set(gaps.map { Int(($0 * 1_000).rounded()) }).count, 1)
     }
 
-    func testBabyScratchReferenceMotionTimelineUsesFourChigaEightStrokeCadenceWithoutGeometryChanges() {
+    func testBabyScratchReferenceMotionTimelineUsesNotationWithoutGeometryChanges() throws {
+        let resource = try decodedBabyScratchNotation()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        let oldCoarseSegmentCount = 12
-        let expectedTimings: [(TimeInterval, TimeInterval, ScratchMotionDirection)] = [
-            (0.0400, 0.2000, .forward),
-            (0.3750, 0.4800, .backward),
-            (0.7900, 0.8900, .forward),
-            (0.9350, 1.0450, .backward),
-            (1.3050, 1.5400, .forward),
-            (1.6400, 1.7700, .backward),
-            (1.8700, 1.9900, .forward),
-            (2.2550, 2.3600, .backward)
-        ]
+        let coreSource = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift"),
+            encoding: .utf8
+        )
 
-        XCTAssertEqual(timeline.count, 8)
-        XCTAssertLessThan(timeline.count, oldCoarseSegmentCount)
-        for (index, expectedTiming) in expectedTimings.enumerated() {
-            XCTAssertEqual(timeline[index].startTime, expectedTiming.0, accuracy: 0.0001)
-            XCTAssertEqual(timeline[index].endTime, expectedTiming.1, accuracy: 0.0001)
-            XCTAssertEqual(timeline[index].direction, expectedTiming.2)
-        }
-
-        let slowChiga1Duration = timeline[0].duration + timeline[1].duration
-        let fastChiga1Duration = timeline[2].duration + timeline[3].duration
-        let slowChiga2Duration = timeline[4].duration + timeline[5].duration
-        let fastChiga2Duration = timeline[6].duration + timeline[7].duration
-
-        XCTAssertLessThan(fastChiga1Duration, slowChiga1Duration)
-        XCTAssertLessThan(fastChiga2Duration, slowChiga2Duration)
-        XCTAssertEqual(timeline[0].startProgress, 0, accuracy: 0.0001)
-        XCTAssertEqual(timeline[1].startProgress, 1, accuracy: 0.0001)
-        XCTAssertEqual(timeline[6].startProgress, 0, accuracy: 0.0001)
-        XCTAssertEqual(timeline[7].startProgress, 1, accuracy: 0.0001)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesNotationResource)
+        XCTAssertTrue(coreSource.contains("ScratchNotation.loadBabyScratchFromBundle()"))
+        XCTAssertTrue(coreSource.contains("?? extractedStrokeResource?.strokeSegments"))
+        XCTAssertEqual(timeline.count, resource.strokes.count)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseDuration, resource.timelineDuration, accuracy: 0.0001)
+        XCTAssertFalse(coreSource.contains("0.9208"))
+        XCTAssertFalse(coreSource.contains("1.5750"))
+        XCTAssertFalse(coreSource.contains("2.3600"))
+        XCTAssertFalse(coreSource.contains("fast chiga"))
 
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.handStartViewerHour, 3, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.handEndViewerHour, 5, accuracy: 0.0001)
@@ -2089,8 +2205,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(manifest.audioPath, "processed_makemkv/baby/79bpm/angle_1_noBeat.wav")
         XCTAssertEqual(manifest.timingSource, .wavAudio)
         XCTAssertEqual(manifest.videoUsage, .visualReferenceOnly)
-        XCTAssertNil(manifest.motionTimelinePath)
-        XCTAssertEqual(manifest.embeddedMotionTimelineName, "BabyScratchReferenceMotionTimeline")
+        XCTAssertEqual(manifest.motionTimelinePath, "Notation/baby_scratch.json")
+        XCTAssertEqual(manifest.embeddedMotionTimelineName, "BabyScratchReferenceMotionTimelineFallback")
         XCTAssertFalse(manifest.automaticVideoTrackingEnabled)
         XCTAssertEqual(Set(manifest.videoAngles.map(\.path)), expectedAnglePaths)
         XCTAssertEqual(manifest.videoAngles.first?.angleID, "angle_1")
@@ -2160,19 +2276,26 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(coreSource.contains("struct BabyScratchReferenceAsset"))
         XCTAssertTrue(coreSource.contains("videoUsage: .visualReferenceOnly"))
-        XCTAssertTrue(coreSource.contains("embeddedMotionTimelineName: \"BabyScratchReferenceMotionTimeline\""))
+        XCTAssertTrue(coreSource.contains("motionTimelinePath: \"Notation/baby_scratch.json\""))
+        XCTAssertTrue(coreSource.contains("embeddedMotionTimelineName: \"BabyScratchReferenceMotionTimelineFallback\""))
         XCTAssertTrue(coreSource.contains("automaticVideoTrackingEnabled: false"))
         XCTAssertTrue(coreSource.contains("let timelineState = BabyScratchReferenceMotionTimeline.pose("))
         XCTAssertTrue(coachSource.contains("demoMotionSampleBuffer?.coachRigAnimationState("))
     }
 
-    func testBabyScratchReferenceMotionPoseLinksHandRecordAndStickerProgress() {
-        let firstStroke = BabyScratchReferenceMotionTimeline.strokeSegments[0]
+    func testBabyScratchReferenceMotionPoseLinksHandRecordAndStickerProgress() throws {
+        let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
+        let firstStroke = try XCTUnwrap(timeline.first)
+        let holdSegment = try XCTUnwrap(timeline.first { $0.holdAfter > 0.03 })
         let midPose = BabyScratchReferenceMotionTimeline.pose(
             at: firstStroke.startTime + (firstStroke.duration / 2)
         )
-        let holdPoseA = BabyScratchReferenceMotionTimeline.pose(at: 0.24)
-        let holdPoseB = BabyScratchReferenceMotionTimeline.pose(at: 0.32)
+        let holdPoseA = BabyScratchReferenceMotionTimeline.pose(
+            at: holdSegment.endTime + min(0.01, holdSegment.holdAfter / 3)
+        )
+        let holdPoseB = BabyScratchReferenceMotionTimeline.pose(
+            at: holdSegment.endTime + min(0.02, holdSegment.holdAfter * 2 / 3)
+        )
         let preScratchPose = BabyScratchReferenceMotionTimeline.pose(at: 0)
 
         XCTAssertEqual(preScratchPose.direction, .neutral)
@@ -2198,17 +2321,44 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(inactiveState.feedback.balance, .listening)
     }
 
-    func testDemoModeMotionFollowsAudioBurstTiming() {
+    func testDemoModeMotionFollowsAudioBurstTiming() throws {
+        let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
+        let firstForward = try XCTUnwrap(timeline.first { $0.direction == .forward })
+        let firstBackward = try XCTUnwrap(
+            timeline.first { $0.startTime > firstForward.startTime && $0.direction == .backward }
+        )
+        let secondForward = try XCTUnwrap(
+            timeline.first { $0.startTime > firstBackward.startTime && $0.direction == .forward }
+        )
+        let secondBackward = try XCTUnwrap(
+            timeline.first { $0.startTime > secondForward.startTime && $0.direction == .backward }
+        )
+        let firstHoldTime = firstForward.endTime + min(0.02, max(0.001, firstForward.holdAfter / 2))
+        func strokeTime(_ segment: ScratchLabBabyScratchStrokeSegment, progress: TimeInterval) -> TimeInterval {
+            segment.startTime + (segment.duration * progress)
+        }
         let sampleRate = 48_000
         let samples = Array(repeating: Float(0.35), count: sampleRate * 2)
         let sampleBuffer = ScratchLabDemoAudioSampleBuffer(samples: samples, sampleRate: Double(sampleRate))
         let analyzer = ScratchLabDemoModeAnalyzer(sampleBuffer: sampleBuffer)
 
-        let firstStrokeFrame = analyzer.processFrame(playbackTime: 0.18, windowDuration: 1.0 / 30.0)
-        let firstBackwardFrame = analyzer.processFrame(playbackTime: 0.46, windowDuration: 1.0 / 30.0)
-        let firstHoldFrame = analyzer.processFrame(playbackTime: 0.24, windowDuration: 1.0 / 30.0)
-        let secondForwardFrame = analyzer.processFrame(playbackTime: 0.875, windowDuration: 1.0 / 30.0)
-        let secondBackwardFrame = analyzer.processFrame(playbackTime: 1.02, windowDuration: 1.0 / 30.0)
+        let firstStrokeFrame = analyzer.processFrame(
+            playbackTime: strokeTime(firstForward, progress: 0.60),
+            windowDuration: 1.0 / 30.0
+        )
+        let firstBackwardFrame = analyzer.processFrame(
+            playbackTime: strokeTime(firstBackward, progress: 0.60),
+            windowDuration: 1.0 / 30.0
+        )
+        let firstHoldFrame = analyzer.processFrame(playbackTime: firstHoldTime, windowDuration: 1.0 / 30.0)
+        let secondForwardFrame = analyzer.processFrame(
+            playbackTime: strokeTime(secondForward, progress: 0.60),
+            windowDuration: 1.0 / 30.0
+        )
+        let secondBackwardFrame = analyzer.processFrame(
+            playbackTime: strokeTime(secondBackward, progress: 0.60),
+            windowDuration: 1.0 / 30.0
+        )
 
         XCTAssertEqual(firstStrokeFrame.direction, .forward)
         XCTAssertGreaterThan(firstStrokeFrame.animationState.recordPosition, 0.2)
@@ -2225,60 +2375,66 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let audioURL = projectRootURL()
             .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
         let sampleBuffer = try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+        let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
+        let firstForward = try XCTUnwrap(timeline.first { $0.direction == .forward })
+        let firstBackward = try XCTUnwrap(
+            timeline.first { $0.startTime > firstForward.startTime && $0.direction == .backward }
+        )
+        let secondForward = try XCTUnwrap(
+            timeline.first { $0.startTime > firstBackward.startTime && $0.direction == .forward }
+        )
+        let secondBackward = try XCTUnwrap(
+            timeline.first { $0.startTime > secondForward.startTime && $0.direction == .backward }
+        )
+        let laterForward = try XCTUnwrap(
+            timeline.first { $0.startTime > 1.3 && $0.direction == .forward }
+        )
+        let laterBackward = try XCTUnwrap(
+            timeline.first { $0.startTime > laterForward.startTime && $0.direction == .backward }
+        )
+        let firstHoldTime = firstForward.endTime + min(0.02, max(0.001, firstForward.holdAfter / 2))
+        func strokeTime(_ segment: ScratchLabBabyScratchStrokeSegment, progress: TimeInterval) -> TimeInterval {
+            segment.startTime + (segment.duration * progress)
+        }
 
         let firstForwardState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 0.18,
+            playbackTime: strokeTime(firstForward, progress: 0.60),
             isPlaying: true
         )
         let firstBackwardState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 0.46,
+            playbackTime: strokeTime(firstBackward, progress: 0.60),
             isPlaying: true
         )
         let firstHoldState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 0.24,
+            playbackTime: firstHoldTime,
             isPlaying: true
         )
         let secondForwardState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 0.875,
+            playbackTime: strokeTime(secondForward, progress: 0.60),
             isPlaying: true
         )
         let secondBackwardState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 1.02,
+            playbackTime: strokeTime(secondBackward, progress: 0.60),
             isPlaying: true
         )
         let laterForwardState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 1.50,
+            playbackTime: strokeTime(laterForward, progress: 0.60),
             isPlaying: true
         )
         let laterBackwardState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 1.74,
-            isPlaying: true
-        )
-        let finalFastForwardState = sampleBuffer.coachRigAnimationState(
-            scratchType: "baby",
-            playbackTime: 1.94,
-            isPlaying: true
-        )
-        let finalFastBackwardState = sampleBuffer.coachRigAnimationState(
-            scratchType: "baby",
-            playbackTime: 2.31,
-            isPlaying: true
-        )
-        let longSilenceState = sampleBuffer.coachRigAnimationState(
-            scratchType: "baby",
-            playbackTime: 3.20,
+            playbackTime: strokeTime(laterBackward, progress: 0.60),
             isPlaying: true
         )
         let pausedState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: 0.12,
+            playbackTime: firstForward.startTime + (firstForward.duration / 2),
             isPlaying: false
         )
 
@@ -2289,9 +2445,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertLessThan(secondBackwardState.recordPosition, secondForwardState.recordPosition)
         XCTAssertGreaterThan(laterForwardState.recordPosition, 0.2)
         XCTAssertLessThan(laterBackwardState.recordPosition, laterForwardState.recordPosition)
-        XCTAssertGreaterThan(finalFastForwardState.recordPosition, 0.2)
-        XCTAssertLessThan(finalFastBackwardState.recordPosition, finalFastForwardState.recordPosition)
-        XCTAssertEqual(longSilenceState, .babyScratchOpen)
         XCTAssertEqual(pausedState, .babyScratchOpen)
         XCTAssertEqual(
             firstForwardState.crossfaderPosition,
