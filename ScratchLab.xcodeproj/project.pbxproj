@@ -16,10 +16,18 @@
 		1F43B56CDA679F906F8F1F25 /* ScratchLabWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */; };
 		1F4E7DB75A0F6832D44313AA /* Archive+ReadingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */; };
 		2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */; };
+		7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */; };
+		7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */; };
+		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
+		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
+		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
+		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
 		203015F013837B25E7DAB626 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC2FA5C155AEA197428B94F6 /* Foundation.framework */; };
 		210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* MacCameraPreviewView.swift */; };
 		219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
 		219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
+		219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
+		219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
 		283607B7B4D70607A9ECD49F /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
 		2C64569FCF5593D3CB171D25 /* WatchMotionCaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */; };
 		2C64569FCF5593D3CB171D26 /* StagedCaptureRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */; };
@@ -103,6 +111,8 @@
 		B7E427E9960BFF0ECAA43B45 /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
 		B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
 		B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
+		B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
+		B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
 		C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
 		C68BC19238996C9C92EB97A3 /* WatchMotionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDD250716FA81582843E833 /* WatchMotionCapture.swift */; };
 		C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */; };
@@ -221,6 +231,8 @@
 		A2000030 /* StagingInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagingInspectorView.swift; sourceTree = "<group>"; };
 		A2000031 /* Resources/CoachInstructions */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachInstructions; sourceTree = "<group>"; };
 		A2000032 /* Resources/CoachDemoAudio */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoAudio; sourceTree = "<group>"; };
+		A2000035 /* Resources/CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
+		A2000036 /* Resources/Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
 		A2000033 /* ScratchCoachViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCoachViews.swift; sourceTree = "<group>"; };
 		A2000034 /* ScratchMotionAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionAnalysis.swift; sourceTree = "<group>"; };
 		A3000001 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -233,6 +245,14 @@
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
 		B2000006 /* MacScratchDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacScratchDetector.swift; sourceTree = "<group>"; };
+		7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTracker.swift; sourceTree = "<group>"; };
+		7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTrackerTests.swift; sourceTree = "<group>"; };
+		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
+		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
+		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
+		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
+		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
+		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
 		B2000007 /* CompanionCameraReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraReceiver.swift; sourceTree = "<group>"; };
 		B2000008 /* DJRigLayoutDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJRigLayoutDetector.swift; sourceTree = "<group>"; };
 		B2000009 /* DeckGamificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckGamificationOverlay.swift; sourceTree = "<group>"; };
@@ -286,6 +306,9 @@
 			isa = PBXGroup;
 			children = (
 				2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */,
+				7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */,
+				CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */,
+				SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -365,6 +388,8 @@
 				51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */,
 				A2000031 /* Resources/CoachInstructions */,
 				A2000032 /* Resources/CoachDemoAudio */,
+				A2000035 /* Resources/CoachDemoMotion */,
+				A2000036 /* Resources/Notation */,
 				A2000013 /* Info.plist */,
 				28D8D49DD481E6AE162278BE /* ThirdParty */,
 			);
@@ -478,6 +503,7 @@
 				B2000003 /* MacCameraPreviewView.swift */,
 				B2000004 /* HandMotionOverlay.swift */,
 				B2000009 /* DeckGamificationOverlay.swift */,
+				NV00000001NV0001NV000001 /* NotationVisualizerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -489,6 +515,9 @@
 				B2000006 /* MacScratchDetector.swift */,
 				B2000007 /* CompanionCameraReceiver.swift */,
 				B2000008 /* DJRigLayoutDetector.swift */,
+				7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */,
+				CXL0000000010001CXL00001 /* CXLNotationCapture.swift */,
+				SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -641,6 +670,8 @@
 				B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */,
 				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */,
+				B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */,
+				B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */,
 				772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */,
 			);
 		};
@@ -650,6 +681,8 @@
 				219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */,
 				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
+				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
+				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
 				A1000012 /* Assets.xcassets in Resources */,
 			);
 		};
@@ -674,6 +707,10 @@
 				D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */,
 				309F7737DD8317EA37CCFC73 /* CompanionCameraReceiver.swift in Sources */,
 				10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */,
+				7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */,
+				CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */,
+				NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */,
+				SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E5 /* CaptureCore.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
@@ -794,6 +831,9 @@
 			isa = PBXSourcesBuildPhase;
 			files = (
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
+				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
+				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
+				SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

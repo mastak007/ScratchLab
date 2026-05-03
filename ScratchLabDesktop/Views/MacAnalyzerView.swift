@@ -25,6 +25,7 @@ struct MacAnalyzerView: View {
     private enum WorkspaceTab: String, CaseIterable, Identifiable {
         case testLab
         case routineLab
+        case notationLab
 
         var id: String { rawValue }
 
@@ -32,6 +33,7 @@ struct MacAnalyzerView: View {
             switch self {
             case .testLab: return "Scratch Rating"
             case .routineLab: return "Routine Capture"
+            case .notationLab: return "Notation Coach"
             }
         }
 
@@ -39,6 +41,7 @@ struct MacAnalyzerView: View {
             switch self {
             case .testLab: return "checkmark.seal.fill"
             case .routineLab: return "waveform.badge.mic"
+            case .notationLab: return "music.note.list"
             }
         }
     }
@@ -212,6 +215,12 @@ struct MacAnalyzerView: View {
                     Label(WorkspaceTab.routineLab.title, systemImage: WorkspaceTab.routineLab.systemImage)
                 }
                 .tag(WorkspaceTab.routineLab)
+
+            notationLabWorkspace
+                .tabItem {
+                    Label(WorkspaceTab.notationLab.title, systemImage: WorkspaceTab.notationLab.systemImage)
+                }
+                .tag(WorkspaceTab.notationLab)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .background(
@@ -376,6 +385,10 @@ struct MacAnalyzerView: View {
         }
     }
 
+    private var notationLabWorkspace: some View {
+        NotationVisualizerView()
+    }
+
     private var testLabSidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -385,6 +398,7 @@ struct MacAnalyzerView: View {
                 testLabAudioCard
                 scratchCard
                 testLabRatingCard
+                cxlCaptureCard
                 testLabWorkflowCard
             }
             .padding(24)
@@ -2758,6 +2772,24 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
 
+            HStack(spacing: 8) {
+                testLabMetricBadge(
+                    title: "Direction",
+                    value: captureEngine.babyScratchGuidanceTitle,
+                    color: captureEngine.handMotionState.color
+                )
+                testLabMetricBadge(
+                    title: "Conf",
+                    value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
+                    color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
+                )
+                testLabMetricBadge(
+                    title: "Source",
+                    value: captureEngine.coachSignalSource,
+                    color: captureEngine.coachSignalSource == "Searching" ? .secondary : .green
+                )
+            }
+
             Text(captureEngine.babyScratchGuidanceCue)
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(captureEngine.handMotionState.color)
@@ -2867,9 +2899,22 @@ struct MacAnalyzerView: View {
                     color: captureEngine.visibleStarCount == 0 ? .secondary : .green
                 )
                 testLabMetricBadge(
-                    title: "Cue",
-                    value: captureEngine.handDetected ? "Live" : "Need hand",
+                    title: "Conf",
+                    value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
+                    color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
+                )
+            }
+
+            HStack(spacing: 8) {
+                testLabMetricBadge(
+                    title: "Direction",
+                    value: captureEngine.babyScratchGuidanceTitle,
                     color: captureEngine.handMotionState.color
+                )
+                testLabMetricBadge(
+                    title: "Source",
+                    value: captureEngine.coachSignalSource,
+                    color: captureEngine.coachSignalSource == "Searching" ? .secondary : .green
                 )
             }
 
@@ -2955,6 +3000,95 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var cxlCaptureCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("CXL Dataset Capture")
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(captureEngine.cxlIsRecording ? Color(nsColor: .systemRed) : Color.secondary)
+                    .frame(width: 8, height: 8)
+                Text(captureEngine.cxlIsRecording ? "Recording" : "Idle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(captureEngine.cxlIsRecording ? Color(nsColor: .systemRed) : .secondary)
+            }
+
+            if captureEngine.cxlIsRecording {
+                HStack(spacing: 8) {
+                    testLabMetricBadge(
+                        title: "Events",
+                        value: "\(captureEngine.cxlEventCount)",
+                        color: .green
+                    )
+                    testLabMetricBadge(
+                        title: "Samples",
+                        value: "\(captureEngine.cxlSampleCount)",
+                        color: .green
+                    )
+                }
+
+                Text(captureEngine.cxlSessionId)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            if let exportPath = captureEngine.cxlLastExportPath {
+                Text("Last export: \(exportPath)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let exportError = captureEngine.cxlLastExportError {
+                Text("Export failed: \(exportError)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                if captureEngine.cxlIsRecording {
+                    Button("Stop Capture") {
+                        captureEngine.stopCXLCapture()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Color(nsColor: .systemRed))
+                    .font(.system(size: 12, weight: .semibold))
+
+                    Button("Export Dataset") {
+                        captureEngine.exportCXLSession()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(nsColor: .systemBlue))
+                    .font(.system(size: 12, weight: .semibold))
+                } else {
+                    Button("Start CXL Capture") {
+                        captureEngine.startCXLCapture(mode: "scratchRating")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(nsColor: .systemGreen))
+                    .font(.system(size: 12, weight: .semibold))
+
+                    if captureEngine.cxlEventCount > 0 || captureEngine.cxlSampleCount > 0 {
+                        Button("Export Dataset") {
+                            captureEngine.exportCXLSession()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color(nsColor: .systemBlue))
+                        .font(.system(size: 12, weight: .semibold))
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
