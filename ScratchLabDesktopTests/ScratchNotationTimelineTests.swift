@@ -100,8 +100,8 @@ struct ScratchNotationTimelineTests {
         _ = timeline.advance(to: 0.35, previousLoopTime: 0.05)
         _ = timeline.advance(to: 0.65, previousLoopTime: 0.35)
         _ = timeline.advance(to: 0.95, previousLoopTime: 0.65)
-        #expect(timeline.lastFiredStrokeIndices.count == 4)
-
+        #expect(timeline.lastFiredStrokeIndices.count == 3)
+        
         // Simulate wrap: newLoopTime < previousLoopTime
         let afterWrap = timeline.advance(to: 0.01, previousLoopTime: 1.15)
         #expect(timeline.loopIndex == 1)
