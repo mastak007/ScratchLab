@@ -8,11 +8,13 @@ import Darwin
 
 enum MacWorkspaceRouting {
     static let workspaceTabStorageKey = "scratchlab.mac.workspaceTab"
-    static let testLabWorkspaceID = "testLab"
-    static let routineCaptureWorkspaceID = "routineLab"
+    static let practiceWorkspaceID = "practice"
+    static let captureWorkspaceID = "capture"
+    static let reviewWorkspaceID = "review"
+    static let advancedWorkspaceID = "advanced"
 
     static func showRoutineCapture(defaults: UserDefaults = .standard) {
-        defaults.set(routineCaptureWorkspaceID, forKey: workspaceTabStorageKey)
+        defaults.set(captureWorkspaceID, forKey: workspaceTabStorageKey)
     }
 }
 
@@ -23,27 +25,140 @@ struct MacAnalyzerView: View {
     ]
 
     private enum WorkspaceTab: String, CaseIterable, Identifiable {
-        case testLab
-        case routineLab
-        case notationLab
+        case practice
+        case capture
+        case review
+        case advanced
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .testLab: return "Scratch Rating"
-            case .routineLab: return "Routine Capture"
-            case .notationLab: return "Notation Coach"
+            case .practice: return "Practice"
+            case .capture: return "Capture"
+            case .review: return "Review"
+            case .advanced: return "Advanced"
             }
         }
 
         var systemImage: String {
             switch self {
-            case .testLab: return "checkmark.seal.fill"
-            case .routineLab: return "waveform.badge.mic"
-            case .notationLab: return "music.note.list"
+            case .practice: return "figure.disc.sports"
+            case .capture: return "record.circle"
+            case .review: return "checkmark.seal.fill"
+            case .advanced: return "slider.horizontal.3"
             }
         }
+
+        static func resolved(from storedValue: String) -> WorkspaceTab {
+            if let tab = WorkspaceTab(rawValue: storedValue) {
+                return tab
+            }
+
+            switch storedValue {
+            case "testLab":
+                return .practice
+            case "routineLab":
+                return .capture
+            case "notationLab":
+                return .advanced
+            default:
+                return .practice
+            }
+        }
+    }
+
+    private enum CaptureTarget: String, CaseIterable, Identifiable {
+        case autoDetect
+        case babyScratch
+        case chirp
+        case transform
+        case flare
+        case unknown
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .autoDetect: return "Auto Detect"
+            case .babyScratch: return "Baby Scratch"
+            case .chirp: return "Chirp"
+            case .transform: return "Transform"
+            case .flare: return "Flare"
+            case .unknown: return "Unknown"
+            }
+        }
+
+        var scratchType: CaptureSessionScratchType {
+            switch self {
+            case .autoDetect, .unknown:
+                return .unknown
+            case .babyScratch:
+                return .babyScratch
+            case .chirp:
+                return .chirp
+            case .transform:
+                return .transform
+            case .flare:
+                return .flare1Click
+            }
+        }
+
+        static func target(for scratchType: CaptureSessionScratchType?) -> CaptureTarget {
+            switch scratchType {
+            case .babyScratch:
+                return .babyScratch
+            case .chirp:
+                return .chirp
+            case .transform:
+                return .transform
+            case .flare1Click, .flare2Click, .flare3Click:
+                return .flare
+            case .unknown:
+                return .unknown
+            case .none:
+                return .autoDetect
+            default:
+                return .autoDetect
+            }
+        }
+    }
+
+    private enum CaptureTimingMode: String, CaseIterable, Identifiable {
+        case noBeat
+        case click
+        case beat
+        case calibration
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .noBeat: return "No Beat"
+            case .click: return "Click"
+            case .beat: return "Beat"
+            case .calibration: return "Calibration"
+            }
+        }
+    }
+
+    private enum ReviewCorrection: String, CaseIterable, Identifiable {
+        case babyScratch = "baby_scratch"
+        case chirp
+        case flare
+        case transform
+        case stab
+        case drag
+        case scribble
+        case tear
+        case orbit
+        case crab
+        case cut
+        case combo
+        case unknown
+        case manualLabel = "manual_label"
+
+        var id: String { rawValue }
     }
 
     private enum StageLayout: String, CaseIterable, Identifiable {
@@ -137,7 +252,7 @@ struct MacAnalyzerView: View {
         }
     }
 
-    @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.testLab.rawValue
+    @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.practice.rawValue
     @AppStorage("scratchlab.mac.stageLayout") private var stageLayoutRaw = StageLayout.desktopDeck.rawValue
     @AppStorage("scratchlab.mac.practiceDuration") private var practiceDurationRaw = PracticeDuration.fiveMinutes.rawValue
     @AppStorage("scratchlab.mac.liveInputEnabled") private var liveInputEnabled = false
@@ -156,8 +271,10 @@ struct MacAnalyzerView: View {
     @StateObject private var seratoWindowMover = SeratoWindowMover()
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
-    @StateObject private var coachDemoPlayer = ScratchCoachDemoAudioPlayer()
+    @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
     @StateObject private var demoModeController = ScratchLabDemoModeController()
+    @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
+    @ObservedObject private var runtimeDiagnostics = ScratchLabRuntimeDiagnostics.shared
     @State private var exportMixMode: ExportMixMode = .scratchOnly
     @State private var isBuildingDemoExportPackage = false
     @State private var isPracticeSessionActive = false
@@ -175,6 +292,11 @@ struct MacAnalyzerView: View {
     @State private var practiceTimer: Timer?
     @State private var routineCountInBeat: Int?
     @State private var isShowingAllRoutineSessions = false
+    @State private var captureTimingMode: CaptureTimingMode = .noBeat
+    @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
+    @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
+    @State private var reviewStatusMessage = "Review detected labels before export."
+    @State private var isShowingRawJSONInspector = false
     #if DEBUG
     @State private var isShowingStagingInspector = false
     #endif
@@ -204,23 +326,29 @@ struct MacAnalyzerView: View {
 
     var body: some View {
         TabView(selection: workspaceTabBinding) {
-            testLabWorkspace
+            practiceWorkspace
                 .tabItem {
-                    Label(WorkspaceTab.testLab.title, systemImage: WorkspaceTab.testLab.systemImage)
+                    Label(WorkspaceTab.practice.title, systemImage: WorkspaceTab.practice.systemImage)
                 }
-                .tag(WorkspaceTab.testLab)
+                .tag(WorkspaceTab.practice)
 
-            routineLabWorkspace
+            captureWorkspace
                 .tabItem {
-                    Label(WorkspaceTab.routineLab.title, systemImage: WorkspaceTab.routineLab.systemImage)
+                    Label(WorkspaceTab.capture.title, systemImage: WorkspaceTab.capture.systemImage)
                 }
-                .tag(WorkspaceTab.routineLab)
+                .tag(WorkspaceTab.capture)
 
-            notationLabWorkspace
+            reviewWorkspace
                 .tabItem {
-                    Label(WorkspaceTab.notationLab.title, systemImage: WorkspaceTab.notationLab.systemImage)
+                    Label(WorkspaceTab.review.title, systemImage: WorkspaceTab.review.systemImage)
                 }
-                .tag(WorkspaceTab.notationLab)
+                .tag(WorkspaceTab.review)
+
+            advancedWorkspace
+                .tabItem {
+                    Label(WorkspaceTab.advanced.title, systemImage: WorkspaceTab.advanced.systemImage)
+                }
+                .tag(WorkspaceTab.advanced)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .background(
@@ -259,7 +387,7 @@ struct MacAnalyzerView: View {
             if liveInputEnabled {
                 startMacLiveInput()
             } else {
-                captureEngine.statusMessage = "Try Demo is ready without camera or microphone. Start live input when hardware is connected."
+                captureEngine.statusMessage = "Try Demo is ready. No hardware is needed for the demo path. Start Live Input only when hardware is connected."
             }
             performerBroadcaster.refreshAdvertising()
             sessionUploadManager.refresh()
@@ -267,7 +395,7 @@ struct MacAnalyzerView: View {
             practiceBeatStore.configurePracticeContext(scratchID: CaptureSessionScratchType.babyScratch.rawValue)
             seratoWindowMover.refreshStatus()
             synchronizeSelectedRoutineSession()
-            coachDemoPlayer.configure(with: coachInstruction)
+            babyScratchDemo.configureBabyScratchIfNeeded()
             stageLayout = .desktopDeck
             if !isPracticeSessionActive {
                 practiceTimeRemaining = practiceDuration.duration
@@ -286,7 +414,7 @@ struct MacAnalyzerView: View {
         }
         .onDisappear {
             beatEngine.stop()
-            coachDemoPlayer.stop()
+            babyScratchDemo.stop()
             demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
@@ -297,15 +425,15 @@ struct MacAnalyzerView: View {
             captureEngine.preferMacCameraForDesktopDeck()
         }
         .onChange(of: workspaceTabRaw) { _, newValue in
-            guard WorkspaceTab(rawValue: newValue) != .testLab else { return }
-            coachDemoPlayer.stop()
+            guard WorkspaceTab.resolved(from: newValue) != .practice else { return }
+            babyScratchDemo.stop()
             demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase != .active else { return }
-            coachDemoPlayer.stop()
+            babyScratchDemo.stop()
             demoModeController.stopDemo()
             practiceBeatStore.handleAppDidBecomeInactive()
         }
@@ -314,11 +442,11 @@ struct MacAnalyzerView: View {
             practiceTimeRemaining = practiceDuration.duration
         }
         .onChange(of: coachDemoInstructionKey) { _, _ in
-            coachDemoPlayer.configure(with: coachInstruction)
+            babyScratchDemo.configureBabyScratchIfNeeded()
         }
         .onChange(of: coachDemoPlaybackBlocked) { _, isBlocked in
             guard isBlocked else { return }
-            coachDemoPlayer.stop()
+            babyScratchDemo.stop()
         }
         .onReceive(captureEngine.$availableVideoDevices) { _ in
             guard liveInputEnabled, stageLayout == .desktopDeck else { return }
@@ -338,6 +466,11 @@ struct MacAnalyzerView: View {
             guard routineSessionStore.selectedSessionID == config.sessionID else { return }
             routineSessionStore.updateSelectedSession(config: config)
         }
+        .sheet(isPresented: $isShowingRawJSONInspector, onDismiss: {
+            rawJSONInspector.close()
+        }) {
+            RawJSONInspectorView(viewModel: rawJSONInspector)
+        }
         #if DEBUG
         .sheet(isPresented: $isShowingStagingInspector) {
             StagingInspectorView(contexts: stagingInspectorContexts)
@@ -345,30 +478,30 @@ struct MacAnalyzerView: View {
         #endif
     }
 
-    private var testLabWorkspace: some View {
+    private var practiceWorkspace: some View {
         HSplitView {
-            testLabSidebar
+            practiceSidebar
                 .frame(minWidth: 300, idealWidth: 340, maxWidth: 400)
 
             VStack(spacing: 18) {
-                testLabStageHeader
-                testLabCameraStage
+                practiceStageHeader
+                practiceCameraStage
             }
             .padding(18)
             .background(Color.black)
         }
     }
 
-    private var routineLabWorkspace: some View {
+    private var captureWorkspace: some View {
         HSplitView {
-            analyzerSidebar
+            captureSidebar
                 .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
 
             VStack(spacing: 18) {
-                routineStageHeader
+                captureStageHeader
 
                 if !hasRoutineSessions {
-                    routineEmptyStateStage
+                    captureEmptyStateStage
                 } else if stageLayout == .desktopDeck {
                     localCameraStage
                 } else {
@@ -385,21 +518,34 @@ struct MacAnalyzerView: View {
         }
     }
 
-    private var notationLabWorkspace: some View {
-        NotationVisualizerView()
+    private var reviewWorkspace: some View {
+        HSplitView {
+            reviewSidebar
+                .frame(minWidth: 340, idealWidth: 380, maxWidth: 460)
+
+            reviewStage
+        }
     }
 
-    private var testLabSidebar: some View {
+    private var advancedWorkspace: some View {
+        HSplitView {
+            advancedSidebar
+                .frame(minWidth: 340, idealWidth: 380, maxWidth: 460)
+
+            NotationVisualizerView(demo: babyScratchDemo)
+        }
+    }
+
+    private var practiceSidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 macDemoModeCard
-                testLabHeaderCard
-                testLabPracticeCard
-                testLabAudioCard
+                practiceHeaderCard
+                practiceControlCard
+                practiceAudioCard
                 scratchCard
-                testLabRatingCard
-                cxlCaptureCard
-                testLabWorkflowCard
+                practiceFeedbackCard
+                practiceWorkflowCard
             }
             .padding(24)
         }
@@ -419,7 +565,7 @@ struct MacAnalyzerView: View {
 
                 Spacer(minLength: 12)
 
-                Label("No hardware", systemImage: "checkmark.seal.fill")
+                Label("No hardware needed for demo", systemImage: "checkmark.seal.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color(nsColor: .systemGreen))
             }
@@ -492,9 +638,44 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private var analyzerSidebar: some View {
+    private var captureSidebar: some View {
         VStack(alignment: .leading, spacing: 18) {
-            headerCard
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    captureSessionWorkflowCard
+                    captureInputStatusCard
+                    captureLatestTakeCard
+                    captureSessionListCard
+                    captureWorkflowSummaryCard
+                }
+                .padding(.bottom, 24)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+    }
+
+    private var reviewSidebar: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    reviewHeaderCard
+                    reviewSessionListCard
+                    reviewTakeCard
+                    reviewExportCard
+                }
+                .padding(.bottom, 24)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+    }
+
+    private var advancedSidebar: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            advancedHeaderCard
+            advancedToolsCard
+            performanceDiagnosticsCard
 
             if let activeSession = routineSessionPresentation.activeSession {
                 activeRoutineSessionCard(activeSession)
@@ -517,6 +698,7 @@ struct MacAnalyzerView: View {
                     .disabled(captureEngine.isRoutineRecording)
                     scratchCard
                     handMotionCard
+                    cxlCaptureCard
                     workflowCard
                 }
                 .padding(.bottom, 24)
@@ -526,14 +708,14 @@ struct MacAnalyzerView: View {
         .padding(.top, 24)
     }
 
-    private var testLabStageHeader: some View {
+    private var practiceStageHeader: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Scratch Rating Stage")
+                Text("Practice")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundColor(.white)
 
-                Text("Use one camera and one routed deck feed here for a quick Baby Scratch rating pass.")
+                Text("Try the Baby Scratch demo, listen to the coach, and start a simple practice run.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.68))
             }
@@ -547,37 +729,33 @@ struct MacAnalyzerView: View {
             .controlSize(.small)
             .disabled(liveInputEnabled)
 
-            Button("Open Routine Capture") {
-                workspaceTab = .routineLab
+            Button("Open Capture") {
+                workspaceTab = .capture
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
         }
     }
 
-    private var routineStageHeader: some View {
+    private var captureStageHeader: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text(stageLayout == .desktopDeck ? "Analyzer Stage" : "Dual Camera Stage")
+                Text("Capture Session")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundColor(.white)
 
-                Text(stageLayout == .desktopDeck
-                     ? "Use the built-in camera as the main deck view and line the guide boxes up with Deck Calibration."
-                     : "Keep both camera angles side by side while you check the rig.")
+                Text("Record clean takes with simple choices. Input routing, calibration, and raw details live in Advanced.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.68))
             }
 
             Spacer()
 
-            Picker("Layout", selection: stageLayoutBinding) {
-                ForEach(StageLayout.allCases) { layout in
-                    Text(layout.title).tag(layout)
-                }
+            Button("Review Takes") {
+                workspaceTab = .review
             }
-            .pickerStyle(.segmented)
-            .frame(width: 240)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
         }
     }
 
@@ -589,10 +767,10 @@ struct MacAnalyzerView: View {
     }
 
     @ViewBuilder
-    private var testLabCameraStage: some View {
+    private var practiceCameraStage: some View {
         if liveInputEnabled {
             liveCameraStage(
-                title: "Scratch Rating Camera",
+                title: "Practice Camera",
                 subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
             )
         } else {
@@ -637,7 +815,7 @@ struct MacAnalyzerView: View {
                             .font(.system(size: 38, weight: .semibold))
                             .foregroundStyle(.white)
 
-                        Text(demoModeController.isReady ? "Coach animation and feedback are running from bundled data." : "Click Try Demo to start the bundled review flow.")
+                        Text(demoModeController.isReady ? "Coach animation and feedback are running from bundled demo data." : "Click Try Demo to start the bundled demo flow.")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.white.opacity(0.72))
                             .multilineTextAlignment(.center)
@@ -724,6 +902,75 @@ struct MacAnalyzerView: View {
             || lowercasedName.contains("internal")
     }
 
+    private var selectedAudioLooksMixerHardware: Bool {
+        guard let selectedAudioDevice else { return false }
+        let lowercasedName = selectedAudioDevice.localizedName.lowercased()
+        return AudioRoutingOption.interfaceLoopback.matches(deviceName: selectedAudioDevice.localizedName)
+            || lowercasedName.contains("midi")
+            || lowercasedName.contains("djm")
+            || lowercasedName.contains("pioneer")
+            || lowercasedName.contains("rane")
+            || lowercasedName.contains("denon")
+    }
+
+    private var mixerStatusValue: String {
+        if selectedAudioLooksMixerHardware {
+            return "Mixer Ready"
+        }
+        return selectedAudioDevice == nil ? "Mixer Not Connected" : "Mixer Optional"
+    }
+
+    private var mixerStatusColor: Color {
+        selectedAudioLooksMixerHardware ? .green : .secondary
+    }
+
+    private var diagnosticsCameraValue: String {
+        guard captureEngine.isCameraActive else { return "false" }
+        if captureEngine.isRoutineRecording || captureEngine.cxlIsRecording {
+            return "true (Capture)"
+        }
+        if liveInputEnabled {
+            return "true (Live Input)"
+        }
+        return "true"
+    }
+
+    private var diagnosticsTickRateValue: String {
+        let tickRate = runtimeDiagnostics.notationTickRateHz
+        let idle = !liveInputEnabled
+            && babyScratchDemo.playbackState != .playing
+            && !captureEngine.isRoutineRecording
+            && !captureEngine.cxlIsRecording
+        if idle {
+            return String(format: "%.1f Hz (idle)", tickRate)
+        }
+        if liveInputEnabled
+            && babyScratchDemo.playbackState != .playing
+            && !captureEngine.isRoutineRecording
+            && !captureEngine.cxlIsRecording {
+            return String(format: "%.1f Hz (live preview)", tickRate)
+        }
+        return String(format: "%.1f Hz", tickRate)
+    }
+
+    private var hasReviewNotationPreview: Bool {
+        hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)
+    }
+
+    private var lastRoutineTakeDisplayName: String {
+        guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
+            return fallbackTakeDisplayName()
+        }
+        return lastRoutineRecordingURL.deletingPathExtension().lastPathComponent
+    }
+
+    private var selectedRawJSONURL: URL? {
+        guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
+            return nil
+        }
+        return CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRoutineRecordingURL)
+    }
+
     private var routineStartButtonTitle: String {
         if routineCountInBeat != nil {
             return "Cancel Count-in"
@@ -803,6 +1050,101 @@ struct MacAnalyzerView: View {
         routineSessionStore.selectedSession
     }
 
+    private var hasRecordedTake: Bool {
+        captureEngine.lastRoutineRecordingURL != nil
+    }
+
+    private var visibleTakeCount: Int {
+        max(routineSessionSetup.config.takeCount, hasRecordedTake ? 1 : 0)
+    }
+
+    private var selectedCaptureTimingMode: CaptureTimingMode {
+        if routineSessionSetup.captureMode == .calibrationNoClick {
+            return captureTimingMode == .calibration ? .calibration : .noBeat
+        }
+
+        if routineSessionSetup.beatEngineMode == .clickTrack {
+            return .click
+        }
+
+        if routineSessionSetup.beatEngineMode.beatEnabled {
+            return .beat
+        }
+
+        return .noBeat
+    }
+
+    private var mainCaptureButtonTitle: String {
+        if !liveInputEnabled {
+            return "Start Capture"
+        }
+        return captureEngine.isRoutineRecording ? "Stop" : "Record"
+    }
+
+    private var reviewTakeID: String {
+        captureEngine.lastRoutineRecordingURL?
+            .deletingPathExtension()
+            .lastPathComponent
+            ?? selectedRoutineSession?.id
+            ?? "No take"
+    }
+
+    private var reviewDetectedScratchLabel: String {
+        captureEngine.lastScratchDetection?.scratchName ?? "Unknown"
+    }
+
+    private var reviewConfidenceLabel: String {
+        guard let confidence = captureEngine.lastScratchDetection?.confidence else {
+            return "Low"
+        }
+        if confidence >= 75 {
+            return "High"
+        }
+        if confidence >= 45 {
+            return "Medium"
+        }
+        return "Low"
+    }
+
+    private var reviewConfidenceColor: Color {
+        switch reviewConfidenceLabel {
+        case "High":
+            return .green
+        case "Medium":
+            return .orange
+        default:
+            return .secondary
+        }
+    }
+
+    private var reviewDecisionSummary: String {
+        guard hasRecordedTake else {
+            return "No take ready for review"
+        }
+        if let decision = reviewDecisionByTakeID[reviewTakeID] {
+            return "Review label: \(decision.rawValue)"
+        }
+        return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
+    }
+
+    private var captureTargetBinding: Binding<CaptureTarget> {
+        Binding(
+            get: { CaptureTarget.target(for: routineSessionSetup.scratchType) },
+            set: { target in
+                routineSessionSetup.scratchType = target.scratchType
+            }
+        )
+    }
+
+    private var captureTimingModeBinding: Binding<CaptureTimingMode> {
+        Binding(
+            get: { selectedCaptureTimingMode },
+            set: { mode in
+                applyCaptureTimingMode(mode)
+            }
+        )
+    }
+
     private var routineSessionPresentation: SessionListPresentationModel<RoutineSessionDraft> {
         routineSessionStore.sessionListPresentation
     }
@@ -812,7 +1154,9 @@ struct MacAnalyzerView: View {
     }
 
     private var createNewSessionAction: () -> Void {
-        RoutineSessionUIActionFactory.makeCreateNewSessionAction(for: routineSessionStore)
+        RoutineSessionUIActionFactory.makeCreateNewSessionAction(for: routineSessionStore) { _ in
+            workspaceTab = .capture
+        }
     }
 
     private var audioRoutingStatusMessage: String {
@@ -846,7 +1190,7 @@ struct MacAnalyzerView: View {
     }
 
     private var workspaceTab: WorkspaceTab {
-        get { WorkspaceTab(rawValue: workspaceTabRaw) ?? .testLab }
+        get { WorkspaceTab.resolved(from: workspaceTabRaw) }
         nonmutating set { workspaceTabRaw = newValue.rawValue }
     }
 
@@ -872,13 +1216,13 @@ struct MacAnalyzerView: View {
     }
 
     private var coachScratchTypeID: String? {
-        workspaceTab == .testLab
+        workspaceTab == .practice
             ? CaptureSessionScratchType.babyScratch.rawValue
             : routineSessionSetup.scratchType?.rawValue
     }
 
     private var coachScratchDisplayName: String? {
-        workspaceTab == .testLab
+        workspaceTab == .practice
             ? CaptureSessionScratchType.babyScratch.title
             : routineSessionSetup.scratchType?.title
     }
@@ -908,8 +1252,11 @@ struct MacAnalyzerView: View {
         if practiceBeatStore.isPlaying {
             return "Stop the practice beat to hear the coach demo."
         }
-        if !coachDemoPlayer.isAudioAvailable {
+        if !babyScratchDemo.isAudioAvailable {
             return "Demo audio unavailable for this scratch."
+        }
+        if let lastErrorMessage = babyScratchDemo.lastErrorMessage {
+            return lastErrorMessage
         }
         return coachInstruction.demoAudioRole == "withBeat"
             ? "Coach demo includes beat and scratch together."
@@ -936,7 +1283,6 @@ struct MacAnalyzerView: View {
         captureEngine.rescanRoutineCaptures()
 
         guard let selectedRoutineSession else { return }
-        workspaceTab = .routineLab
         routineSessionSetup.applyPersistedConfig(selectedRoutineSession.config)
     }
 
@@ -949,6 +1295,187 @@ struct MacAnalyzerView: View {
         let scratchLabel = session.config.scratchType?.title ?? "Scratch type later"
         let bpmLabel = session.config.bpm.map { "\($0) BPM" } ?? "BPM later"
         return "\(scratchLabel) · \(bpmLabel)"
+    }
+
+    private func applyCaptureTimingMode(_ mode: CaptureTimingMode) {
+        captureTimingMode = mode
+
+        switch mode {
+        case .noBeat:
+            routineSessionSetup.captureMode = .calibrationNoClick
+            routineSessionSetup.beatEngineMode = .silent
+        case .click:
+            routineSessionSetup.captureMode = .timedClick
+            routineSessionSetup.beatEngineMode = .clickTrack
+            if routineSessionSetup.bpmValue == nil {
+                routineSessionSetup.bpmText = String(CaptureClickTrackDefaults.defaultTimedBPM)
+            }
+        case .beat:
+            routineSessionSetup.captureMode = .timedClick
+            routineSessionSetup.beatEngineMode = .boomBapTrainer
+            if routineSessionSetup.bpmValue == nil {
+                routineSessionSetup.bpmText = String(CaptureClickTrackDefaults.defaultTimedBPM)
+            }
+        case .calibration:
+            routineSessionSetup.captureMode = .calibrationNoClick
+            routineSessionSetup.beatEngineMode = .silent
+        }
+    }
+
+    private func handleMainCaptureAction() {
+        guard liveInputEnabled else {
+            startMacLiveInput()
+            return
+        }
+
+        if captureEngine.isRoutineRecording {
+            if captureEngine.cxlIsRecording {
+                captureEngine.stopCXLCapture()
+            }
+            Task {
+                await handleRoutineRecordingButton()
+            }
+            return
+        }
+
+        guard ensureCaptureSessionForRecording() != nil else {
+            return
+        }
+
+        if routineSessionSetup.scratchType == nil {
+            routineSessionSetup.scratchType = .unknown
+        }
+
+        guard routineMetadataStatusMessage == nil,
+              selectedAudioDevice != nil,
+              !captureEngine.selectedVideoDeviceUniqueID.isEmpty else {
+            Task {
+                await handleRoutineRecordingButton()
+            }
+            return
+        }
+
+        captureEngine.startCXLCapture(
+            scratchType: routineSessionSetup.scratchType?.rawValue ?? CaptureSessionScratchType.unknown.rawValue,
+            mode: selectedCaptureTimingMode.title,
+            bpm: routineSessionSetup.bpmValue
+        )
+
+        Task {
+            await handleRoutineRecordingButton()
+        }
+    }
+
+    private func markLastTakeSaved() {
+        guard hasRecordedTake else { return }
+        captureEngine.reportRoutineRecordingIssue("Take saved. Open Review to accept, correct, or leave the label unknown.")
+    }
+
+    private func prepareRetake() {
+        guard hasRecordedTake else { return }
+        captureEngine.reportRoutineRecordingIssue("Retake selected. Press Record to capture the next take; the previous take remains stored.")
+        workspaceTab = .capture
+    }
+
+    @discardableResult
+    private func ensureCaptureSessionForRecording() -> RoutineSessionDraft? {
+        if let selectedRoutineSession {
+            return selectedRoutineSession
+        }
+
+        let currentConfig = routineSessionSetup.config
+        guard let draft = routineSessionStore.createNewSessionFromUI() else {
+            return nil
+        }
+
+        var persistedConfig = currentConfig
+        persistedConfig.sessionID = draft.id
+        persistedConfig.createdAt = draft.config.createdAt
+        persistedConfig.updatedAt = draft.config.updatedAt
+        persistedConfig.takeCount = draft.config.takeCount
+        persistedConfig.takeDurationSeconds = draft.config.takeDurationSeconds
+        routineSessionSetup.applyPersistedConfig(persistedConfig)
+        captureEngine.recordingSessionConfig = persistedConfig
+        return RoutineSessionDraft(config: persistedConfig)
+    }
+
+    private func resolvedCaptureConfigForRecording(now: Date = Date()) -> CaptureSessionConfig {
+        var config = routineSessionSetup.config
+        if config.performerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            config.performerName = "Unknown Performer"
+        }
+        if config.scratchType == nil {
+            config.scratchType = .unknown
+        }
+        if config.captureMode == .timedClick, config.bpm == nil {
+            config.bpm = CaptureClickTrackDefaults.defaultTimedBPM
+        }
+        config.updatedAt = now
+        return config
+    }
+
+    private func acceptReviewLabel() {
+        guard hasRecordedTake else { return }
+        let acceptedLabel: ReviewCorrection
+        switch captureEngine.lastScratchDetection?.scratchName.lowercased() {
+        case .some(let label) where label.contains("baby"):
+            acceptedLabel = .babyScratch
+        case .some(let label) where label.contains("chirp"):
+            acceptedLabel = .chirp
+        case .some(let label) where label.contains("transform"):
+            acceptedLabel = .transform
+        case .some(let label) where label.contains("flare"):
+            acceptedLabel = .flare
+        default:
+            acceptedLabel = .unknown
+        }
+        guard persistReviewDecision(acceptedLabel, status: .accepted) else { return }
+        reviewStatusMessage = "Accepted \(acceptedLabel.rawValue) for \(reviewTakeID)."
+    }
+
+    private func correctReviewLabel() {
+        guard hasRecordedTake else { return }
+        guard persistReviewDecision(reviewCorrectionSelection, status: .corrected) else { return }
+        reviewStatusMessage = "Corrected \(reviewTakeID) to \(reviewCorrectionSelection.rawValue)."
+    }
+
+    private func leaveReviewLabelUnknown() {
+        guard hasRecordedTake else { return }
+        guard persistReviewDecision(.unknown, status: .unknown) else { return }
+        reviewStatusMessage = "Left \(reviewTakeID) as unknown."
+    }
+
+    @discardableResult
+    private func persistReviewDecision(
+        _ decision: ReviewCorrection,
+        status: CaptureCore.CaptureReviewDecision.Status
+    ) -> Bool {
+        guard let mediaURL = captureEngine.lastRoutineRecordingURL else {
+            reviewStatusMessage = "No recorded take is ready for review."
+            return false
+        }
+
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let sidecar = try decoder.decode(
+                CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: sidecarURL)
+            )
+            let updatedSidecar = sidecar.reviewed(
+                status: status,
+                label: decision.rawValue,
+                detectedLabel: captureEngine.lastScratchDetection?.scratchName,
+                confidence: captureEngine.lastScratchDetection?.confidence
+            )
+            try updatedSidecar.encodedData().write(to: sidecarURL, options: .atomic)
+            reviewDecisionByTakeID[reviewTakeID] = decision
+            return true
+        } catch {
+            reviewStatusMessage = "Could not save review for \(reviewTakeID): \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func startMacLiveInput() {
@@ -997,7 +1524,7 @@ struct MacAnalyzerView: View {
         sessionExportCoordinator.prepareShare(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
-                sessionName: routineSessionSetup.sessionName(defaultAppName: "Routine Capture"),
+                sessionName: routineSessionSetup.sessionName(defaultAppName: "Untitled Session"),
                 config: routineSessionSetup.config
             ),
             options: SessionExportOptions(mixMode: exportMixMode)
@@ -1012,7 +1539,7 @@ struct MacAnalyzerView: View {
         sessionExportCoordinator.saveArchiveCopy(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
-                sessionName: routineSessionSetup.sessionName(defaultAppName: "Routine Capture"),
+                sessionName: routineSessionSetup.sessionName(defaultAppName: "Untitled Session"),
                 config: routineSessionSetup.config
             ),
             options: SessionExportOptions(mixMode: exportMixMode)
@@ -1033,7 +1560,7 @@ struct MacAnalyzerView: View {
         sessionUploadManager.startUpload(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
-                sessionName: routineSessionSetup.sessionName(defaultAppName: "Routine Capture"),
+                sessionName: routineSessionSetup.sessionName(defaultAppName: "Untitled Session"),
                 config: routineSessionSetup.config
             )
         )
@@ -1061,9 +1588,9 @@ struct MacAnalyzerView: View {
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 
-    private var routineEmptyStateStage: some View {
+    private var captureEmptyStateStage: some View {
         cameraStageCard(
-            title: "Routine Sessions",
+            title: "Capture Session",
             subtitle: "Create a session before you start a scratch capture."
         ) {
             VStack(spacing: 16) {
@@ -1074,7 +1601,7 @@ struct MacAnalyzerView: View {
                         .font(.system(size: 26, weight: .semibold))
                         .foregroundColor(.white)
 
-                    Text("Start a scratch practice capture, add details, then export your session.")
+                    Text("Name the session, choose a target, then record the first take.")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white.opacity(0.74))
                         .multilineTextAlignment(.center)
@@ -1093,11 +1620,11 @@ struct MacAnalyzerView: View {
         }
     }
 
-    private var headerCard: some View {
+    private var advancedHeaderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Routine Capture")
+                    Text("Advanced")
                         .font(.system(size: 28, weight: .semibold))
 
                     Text("ScratchLab")
@@ -1121,7 +1648,7 @@ struct MacAnalyzerView: View {
                 }
             }
 
-            Text("Set up audio, align the camera, then record your routine.")
+            Text("Technical tools for input diagnostics, deck calibration, notation lab, export inspection, and timing checks.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
@@ -1172,6 +1699,74 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var advancedToolsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Technical Tools")
+                .font(.headline)
+
+            Text("Notation Lab, Input diagnostics, MIDI device mapping, Deck/mixer calibration, Export manifest info, App Review demo tools, Test Lab, Raw JSON/sidecar inspection, Watch motion diagnostics, Timing checks, and Advanced Capture Details live here instead of primary capture.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Button("Notation Lab") {
+                    babyScratchDemo.configureBabyScratchIfNeeded()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                #if DEBUG
+                Button("Raw JSON/sidecar inspection") {
+                    rawJSONInspector.openForCurrentSelection(selectedRawJSONURL)
+                    isShowingRawJSONInspector = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                #endif
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var performanceDiagnosticsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Performance Diagnostics")
+                .font(.headline)
+
+            VStack(spacing: 8) {
+                diagnosticRow(title: "Playback state", value: babyScratchDemo.playbackState.rawValue)
+                diagnosticRow(title: "Audio time", value: String(format: "%.3fs", babyScratchDemo.currentAudioTime))
+                diagnosticRow(title: "Notation playing", value: babyScratchDemo.playbackState == .playing ? "true" : "false")
+                diagnosticRow(title: "Coach playing", value: babyScratchDemo.isPlaying ? "true" : "false")
+                diagnosticRow(title: "Recording", value: (captureEngine.isRoutineRecording || captureEngine.cxlIsRecording) ? "true" : "false")
+                diagnosticRow(title: "Camera active", value: diagnosticsCameraValue)
+                diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", runtimeDiagnostics.notationLastTickDurationMS))
+                diagnosticRow(title: "Approx tick rate", value: diagnosticsTickRateValue)
+                diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", runtimeDiagnostics.coachLastUpdateDurationMS))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func diagnosticRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
     }
 
     private var routineSessionCard: some View {
@@ -1276,11 +1871,408 @@ struct MacAnalyzerView: View {
         .disabled(captureEngine.isRoutineRecording)
     }
 
-    private var testLabHeaderCard: some View {
+    private var captureSessionWorkflowCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Capture Session")
+                        .font(.system(size: 28, weight: .semibold))
+
+                    Text("Simple workflow for clean CXL takes.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                Button("New Session", action: createNewSessionAction)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.isRoutineRecording)
+            }
+
+            if selectedRoutineSession == nil {
+                Text("Press Record to create an Untitled Session automatically. ScratchLab will keep audio, video, watch, timing, detection, and export data attached to the same session ID.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("New Session", action: createNewSessionAction)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(captureEngine.isRoutineRecording)
+            } else {
+                TextField("Session name", text: routinePerformerBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(captureEngine.isRoutineRecording)
+
+                Picker("Target", selection: captureTargetBinding) {
+                    ForEach(CaptureTarget.allCases) { target in
+                        Text(target.title).tag(target)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(captureEngine.isRoutineRecording)
+
+                Picker("Mode", selection: captureTimingModeBinding) {
+                    ForEach(CaptureTimingMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(captureEngine.isRoutineRecording)
+
+                if selectedCaptureTimingMode == .click || selectedCaptureTimingMode == .beat {
+                    RoutineTempoEditor(
+                        bpmText: routineBPMTextBinding,
+                        presetBPMs: routineSessionSetup.allowedBPMList
+                    )
+                    .disabled(captureEngine.isRoutineRecording)
+                }
+
+                Label(captureEngine.routineRecordingStatus, systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let routineMetadataStatusMessage {
+                    Label(routineMetadataStatusMessage, systemImage: "exclamationmark.circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    handleMainCaptureAction()
+                } label: {
+                    Label(mainCaptureButtonTitle, systemImage: captureEngine.isRoutineRecording ? "stop.fill" : "record.circle")
+                        .font(.system(size: 18, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : Color(nsColor: .systemGreen))
+                .disabled(routineCountInBeat != nil)
+
+                HStack(spacing: 10) {
+                    Button("Save Take") {
+                        markLastTakeSaved()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
+
+                    Button("Retake") {
+                        prepareRetake()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
+
+                    Button("Review") {
+                        workspaceTab = .review
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
+                }
+
+                Button("Export Session") {
+                    shareLastRoutineSession()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!hasRecordedTake || captureEngine.isRoutineRecording || sessionExportCoordinator.isPreparing)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var captureInputStatusCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Input Status")
+                .font(.headline)
+
+            LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
+                captureInputStatusTile(
+                    title: "Audio",
+                    value: selectedAudioDevice == nil ? "Missing" : "Audio Ready",
+                    systemImage: selectedAudioDevice == nil ? "waveform.slash" : "waveform",
+                    color: selectedAudioDevice == nil ? .secondary : .green
+                )
+                captureInputStatusTile(
+                    title: "Camera",
+                    value: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "Missing" : "Camera Ready",
+                    systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "video.slash.fill" : "video.fill",
+                    color: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .secondary : .green
+                )
+                captureInputStatusTile(
+                    title: "Mixer MIDI",
+                    value: mixerStatusValue,
+                    systemImage: "slider.horizontal.3",
+                    color: mixerStatusColor
+                )
+                captureInputStatusTile(
+                    title: "Watch",
+                    value: relayedWatchCaptureStore.importedSessions.isEmpty ? "Optional" : "Watch Ready",
+                    systemImage: "applewatch",
+                    color: relayedWatchCaptureStore.importedSessions.isEmpty ? .secondary : .green
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var captureLatestTakeCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Last Take")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                testLabMetricBadge(title: "Take count", value: "\(visibleTakeCount)", color: visibleTakeCount == 0 ? .secondary : .green)
+                testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
+                testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
+            }
+
+            HStack(spacing: 8) {
+                testLabMetricBadge(title: "Strokes", value: "\(captureEngine.scratchDetectionCount)", color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green)
+                testLabMetricBadge(title: "Fader events", value: "\(captureEngine.cxlEventCount)", color: captureEngine.cxlEventCount == 0 ? .secondary : .green)
+            }
+
+            if captureEngine.lastRoutineRecordingURL != nil {
+                Text(lastRoutineTakeDisplayName)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Text("Record a take to see the detected label, confidence, stroke count, fader events, and review actions.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var captureSessionListCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Sessions")
+                .font(.headline)
+
+            if let activeSession = routineSessionPresentation.activeSession {
+                routineSessionButton(activeSession)
+            } else {
+                Text("No capture session yet.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if !routineSessionPresentation.recentSessions.isEmpty {
+                ForEach(routineSessionPresentation.recentSessions.prefix(2)) { session in
+                    routineSessionButton(session)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var captureWorkflowSummaryCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Capture Workflow")
+                .font(.headline)
+
+            Text("1. Leave the session blank or name it now.\n2. Choose Auto Detect or the intended scratch.\n3. Choose No Beat, Click, Beat, or Calibration.\n4. Confirm Audio and Camera are ready.\n5. Record, stop, save the take, then review or export.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewHeaderCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Review")
+                .font(.system(size: 28, weight: .semibold))
+
+            Text("Accept or correct detected labels without changing the raw captured media.")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Label(reviewStatusMessage, systemImage: "checkmark.seal.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewSessionListCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Session / Take List")
+                .font(.headline)
+
+            if let activeSession = routineSessionPresentation.activeSession {
+                routineSessionButton(activeSession)
+            } else {
+                Text("No session selected.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            if captureEngine.lastRoutineRecordingURL != nil {
+                Label(lastRoutineTakeDisplayName, systemImage: "film.stack.fill")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Text("Record a take in Capture to populate this list.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewTakeCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Take Review")
+                .font(.headline)
+
+            if hasRecordedTake {
+                HStack(spacing: 8) {
+                    testLabMetricBadge(title: "Detected scratch type", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
+                    testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
+                }
+
+                HStack(spacing: 8) {
+                    testLabMetricBadge(title: "Stroke count", value: "\(captureEngine.scratchDetectionCount)", color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green)
+                    testLabMetricBadge(title: "Fader event count", value: "\(captureEngine.cxlEventCount)", color: captureEngine.cxlEventCount == 0 ? .secondary : .green)
+                }
+
+                if hasReviewNotationPreview {
+                    miniNotationTimeline
+                } else {
+                    Label("Notation preview is only shown when this take has real captured stroke or event data.", systemImage: "waveform.path.ecg")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Picker("Correct Label", selection: $reviewCorrectionSelection) {
+                    ForEach(ReviewCorrection.allCases) { correction in
+                        Text(correction.rawValue).tag(correction)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                HStack(spacing: 10) {
+                    Button("Accept") {
+                        acceptReviewLabel()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Correct Label") {
+                        correctReviewLabel()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Leave Unknown") {
+                        leaveReviewLabelUnknown()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No take ready for review")
+                        .font(.system(size: 16, weight: .semibold))
+
+                    Text("Record a take in Capture to see detected notation, confidence, and label options.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewExportCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Export")
+                .font(.headline)
+
+            Text(sessionExportCoordinator.statusMessage ?? "Export ZIP when review is complete.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Export ZIP") {
+                shareLastRoutineSession()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!hasRecordedTake || sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
+
+            if let lastExport = sessionExportCoordinator.lastResult {
+                Text("\(lastExport.displayName) · \(lastExport.formattedArchiveSize)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewStage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Review Timeline")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white)
+
+            cameraStageCard(
+                title: "Mini Notation Timeline",
+                subtitle: "Detected label, confidence, and correction state stay separate from raw captured files."
+            ) {
+                VStack(spacing: 22) {
+                    miniNotationTimeline
+                        .padding(.horizontal, 32)
+
+                    Text(reviewDecisionSummary)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.white.opacity(0.04))
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(Color.black)
+    }
+
+    private var practiceHeaderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Scratch Rating")
+                    Text("Practice")
                         .font(.system(size: 28, weight: .semibold))
 
                     Text("ScratchLab")
@@ -1290,32 +2282,40 @@ struct MacAnalyzerView: View {
 
                 Spacer(minLength: 12)
 
-                Button("Open Routine Capture") {
-                    workspaceTab = .routineLab
+                    Button("Open Capture") {
+                        workspaceTab = .capture
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             }
 
-            Text("Use one routed input and one camera view here for a quick scratch rating check.")
+            Text("Use Try Demo, Listen, and Replay for the App Review path. No hardware is needed unless you choose Live Input.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                headerStatusPill(
-                    title: "Audio",
-                    value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Choose input" : captureEngine.formattedAudioPercent,
-                    color: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .secondary : captureEngine.audioMeterColor
-                )
+                if liveInputEnabled {
+                    headerStatusPill(
+                        title: "Audio",
+                        value: captureEngine.practiceAudioStatusText,
+                        color: captureEngine.practiceAudioStatusText == captureEngine.formattedAudioPercent ? captureEngine.audioMeterColor : .secondary
+                    )
+                } else {
+                    headerStatusPill(
+                        title: "Demo",
+                        value: demoModeController.isReady ? "Replay ready" : "Try Demo",
+                        color: .green
+                    )
+                }
                 headerStatusPill(
                     title: "Matches",
                     value: "\(captureEngine.scratchDetectionCount)",
                     color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green
                 )
                 headerStatusPill(
-                    title: "Stars",
-                    value: "\(captureEngine.visibleStarCount)/5",
-                    color: captureEngine.visibleStarCount == 0 ? .secondary : .green
+                    title: liveInputEnabled ? "Stars" : "Hardware",
+                    value: liveInputEnabled ? "\(captureEngine.visibleStarCount)/5" : "Optional",
+                    color: liveInputEnabled && captureEngine.visibleStarCount > 0 ? .green : .secondary
                 )
             }
 
@@ -1323,7 +2323,7 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(captureEngine.scratchStatusColor)
 
-            Text("Open Routine Capture when you need the second camera, deck calibration, monitor tools, or a saved take.")
+            Text("Open Capture when you need to record a take.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -1332,7 +2332,7 @@ struct MacAnalyzerView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private var testLabPracticeCard: some View {
+    private var practiceControlCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -2227,7 +3227,14 @@ struct MacAnalyzerView: View {
             return
         }
 
-        captureEngine.recordingSessionConfig = routineSessionSetup.config
+        guard ensureCaptureSessionForRecording() != nil else {
+            captureEngine.reportRoutineRecordingIssue("ScratchLab could not create a capture session.")
+            return
+        }
+
+        let resolvedConfig = resolvedCaptureConfigForRecording()
+        routineSessionSetup.applyPersistedConfig(resolvedConfig)
+        captureEngine.recordingSessionConfig = resolvedConfig
 
         if captureEngine.isRoutineRecording {
             beatEngine.stop()
@@ -2419,7 +3426,7 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private var testLabAudioCard: some View {
+    private var practiceAudioCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Audio Input")
                 .font(.headline)
@@ -2578,30 +3585,35 @@ struct MacAnalyzerView: View {
             ScratchCoachCardContent(
                 instruction: coachInstruction,
                 demoStatusMessage: coachDemoStatusMessage,
-                playbackTimeProvider: { coachDemoPlayer.currentPlaybackTime },
-                isPlayingProvider: { coachDemoPlayer.isActivelyPlayingAudio },
+                playbackTimeProvider: { babyScratchDemo.currentAudioTime },
+                isPlayingProvider: { babyScratchDemo.isPlaying },
+                animationStateProvider: { audioTime, _ in
+                    let pose = BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)
+                    guard !babyScratchDemo.isStopped else { return .babyScratchOpen }
+                    return BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)
+                },
                 theme: coachCardTheme
             ) {
                 HStack(spacing: 10) {
                     coachDemoButton(
                         title: "Listen",
                         systemImage: "play.fill",
-                        enabled: coachDemoPlayer.isAudioAvailable && !coachDemoPlaybackBlocked,
-                        action: coachDemoPlayer.play
+                        enabled: babyScratchDemo.isAudioAvailable && !coachDemoPlaybackBlocked,
+                        action: babyScratchDemo.playBabyScratch
                     )
 
                     coachDemoButton(
                         title: "Pause",
                         systemImage: "pause.fill",
-                        enabled: coachDemoPlayer.isPlaying && !coachDemoPlaybackBlocked,
-                        action: coachDemoPlayer.pause
+                        enabled: babyScratchDemo.isPlaying && !coachDemoPlaybackBlocked,
+                        action: babyScratchDemo.pause
                     )
 
                     coachDemoButton(
                         title: "Replay",
                         systemImage: "gobackward",
-                        enabled: coachDemoPlayer.isAudioAvailable && !coachDemoPlaybackBlocked,
-                        action: coachDemoPlayer.replay
+                        enabled: babyScratchDemo.isAudioAvailable && !coachDemoPlaybackBlocked,
+                        action: babyScratchDemo.replayBabyScratch
                     )
                 }
             }
@@ -2882,7 +3894,7 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private var testLabRatingCard: some View {
+    private var practiceFeedbackCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Ability Rating")
                 .font(.headline)
@@ -2991,7 +4003,7 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: 260)
     }
 
-    private var testLabWorkflowCard: some View {
+    private var practiceWorkflowCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Quick Workflow")
                 .font(.headline)
@@ -3009,7 +4021,7 @@ struct MacAnalyzerView: View {
     private var cxlCaptureCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("CXL Dataset Capture")
+                Text("Advanced Capture Details")
                     .font(.headline)
                 Spacer()
                 Circle()
@@ -3065,22 +4077,22 @@ struct MacAnalyzerView: View {
                     .tint(Color(nsColor: .systemRed))
                     .font(.system(size: 12, weight: .semibold))
 
-                    Button("Export Dataset") {
+                    Button("Export Session") {
                         captureEngine.exportCXLSession()
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color(nsColor: .systemBlue))
                     .font(.system(size: 12, weight: .semibold))
                 } else {
-                    Button("Start CXL Capture") {
-                        captureEngine.startCXLCapture(mode: "scratchRating")
+                    Button("Start Dataset Capture") {
+                        captureEngine.startCXLCapture(mode: "Advanced Capture Details")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color(nsColor: .systemGreen))
                     .font(.system(size: 12, weight: .semibold))
 
                     if captureEngine.cxlEventCount > 0 || captureEngine.cxlSampleCount > 0 {
-                        Button("Export Dataset") {
+                        Button("Export Session") {
                             captureEngine.exportCXLSession()
                         }
                         .buttonStyle(.bordered)
@@ -3093,6 +4105,66 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func captureInputStatusTile(title: String, value: String, systemImage: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(color)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Text(value)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(color)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var miniNotationTimeline: some View {
+        let notation = ScratchNotation.babyScratch
+        let hasTake = captureEngine.lastRoutineRecordingURL != nil
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Mini notation timeline")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            if hasTake {
+                ScratchNotationCanvasView(
+                    notation: notation,
+                    playbackTime: 0,
+                    loopDuration: notation?.timelineDuration ?? 2.1
+                )
+                .frame(height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                Text("Record a routine first to see notation here.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
+                    .padding(10)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+    }
+
+    private func fallbackTakeDisplayName(for date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH-mm"
+        return "CXL Take \(formatter.string(from: date))"
     }
 
     private func testLabMetricBadge(title: String, value: String, color: Color) -> some View {

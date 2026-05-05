@@ -2,6 +2,8 @@ import Foundation
 import Combine
 import OSLog
 import AVFoundation
+import QuartzCore
+import os.signpost
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -9,7 +11,74 @@ import UIKit
 import AppKit
 #endif
 
+enum ScratchLabPerformanceSignpost {
+    private static let log = OSLog(
+        subsystem: "com.machelpnz.scratchlab",
+        category: .pointsOfInterest
+    )
+
+    static func begin(_ name: StaticString) -> OSSignpostID {
+        let signpostID = OSSignpostID(log: log)
+        os_signpost(.begin, log: log, name: name, signpostID: signpostID)
+        return signpostID
+    }
+
+    static func end(_ name: StaticString, _ signpostID: OSSignpostID) {
+        os_signpost(.end, log: log, name: name, signpostID: signpostID)
+    }
+
+    static func withInterval<T>(
+        _ name: StaticString,
+        _ work: () throws -> T
+    ) rethrows -> T {
+        let signpostID = begin(name)
+        defer { end(name, signpostID) }
+        return try work()
+    }
+}
+
+final class ScratchLabRuntimeDiagnostics: ObservableObject {
+    static let shared = ScratchLabRuntimeDiagnostics()
+
+    @Published private(set) var notationLastTickDurationMS: Double = 0
+    @Published private(set) var notationTickRateHz: Double = 0
+    @Published private(set) var coachLastUpdateDurationMS: Double = 0
+
+    private var notationTickWindowStartedAt: CFTimeInterval = 0
+    private var notationTickCount = 0
+
+    private init() {}
+
+    func recordNotationTick(durationSeconds: TimeInterval) {
+        notationLastTickDurationMS = durationSeconds * 1_000
+        let now = CACurrentMediaTime()
+        if notationTickWindowStartedAt == 0 {
+            notationTickWindowStartedAt = now
+            notationTickCount = 0
+        }
+        notationTickCount += 1
+
+        let elapsed = now - notationTickWindowStartedAt
+        guard elapsed >= 1 else { return }
+        notationTickRateHz = Double(notationTickCount) / elapsed
+        notationTickWindowStartedAt = now
+        notationTickCount = 0
+    }
+
+    func recordCoachRigUpdate(durationSeconds: TimeInterval) {
+        coachLastUpdateDurationMS = durationSeconds * 1_000
+    }
+
+    func markNotationIdle() {
+        notationLastTickDurationMS = 0
+        notationTickRateHz = 0
+        notationTickWindowStartedAt = 0
+        notationTickCount = 0
+    }
+}
+
 enum CaptureSessionScratchType: String, CaseIterable, Codable, Sendable {
+    case unknown
     case babyScratch = "baby_scratch"
     case forwardScratch = "forward_scratch"
     case backwardScratch = "backward_scratch"
@@ -38,6 +107,7 @@ enum CaptureSessionScratchType: String, CaseIterable, Codable, Sendable {
 
     var title: String {
         switch self {
+        case .unknown: return "Unknown"
         case .babyScratch: return "Baby Scratch"
         case .forwardScratch: return "Forward Scratch"
         case .backwardScratch: return "Backward Scratch"
@@ -76,7 +146,7 @@ enum CaptureSessionScratchType: String, CaseIterable, Codable, Sendable {
             return [80, 90, 100]
         case .comboL1, .comboL2, .comboL3, .comboL4, .comboL5:
             return [70, 80, 95, 105, 125]
-        case .babyScratch, .forwardScratch, .backwardScratch, .releaseScratch, .chirp, .scribble:
+        case .unknown, .babyScratch, .forwardScratch, .backwardScratch, .releaseScratch, .chirp, .scribble:
             return [70, 90, 110]
         }
     }
@@ -827,18 +897,12 @@ final class SessionSetupViewModel: ObservableObject {
     var validationMessages: [String] {
         var messages: [String] = []
 
-        if performerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            messages.append("Add performer name before starting capture.")
-        }
         if scratchType == nil {
             messages.append("Choose the scratch type before starting capture.")
         }
         if captureMode == .timedClick {
-            guard let bpmValue else {
-                messages.append("Enter BPM before starting capture.")
-                return messages
-            }
-            if !CaptureClickTrackDefaults.supportedBPMRange.contains(bpmValue) {
+            if let bpmValue,
+               !CaptureClickTrackDefaults.supportedBPMRange.contains(bpmValue) {
                 messages.append("Choose a BPM between 60 and 140.")
             }
         }
@@ -865,13 +929,17 @@ final class SessionSetupViewModel: ObservableObject {
     func sessionName(defaultAppName: String) -> String {
         let cleanPerformerName = performerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseName = cleanPerformerName.isEmpty ? defaultAppName : cleanPerformerName
-        if captureMode == .calibrationNoClick, scratchType != nil {
+        let displayScratchType: CaptureSessionScratchType? = {
+            guard let scratchType, scratchType != .unknown else { return nil }
+            return scratchType
+        }()
+        if captureMode == .calibrationNoClick, displayScratchType != nil {
             return "\(baseName) \(scratchTypeName) Calibration"
         }
-        if let bpmValue {
+        if let bpmValue, displayScratchType != nil {
             return "\(baseName) \(scratchTypeName) \(bpmValue) BPM"
         }
-        if scratchType != nil {
+        if displayScratchType != nil {
             return "\(baseName) \(scratchTypeName)"
         }
         return baseName
@@ -1452,6 +1520,8 @@ enum ScratchCoachDemoPlaybackState: String, Equatable, Sendable {
     case paused
 }
 
+typealias DemoPlaybackState = ScratchCoachDemoPlaybackState
+
 protocol ScratchCoachDemoPlayable: AnyObject {
     var isPlaying: Bool { get }
     var currentTime: TimeInterval { get set }
@@ -1565,6 +1635,8 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         guard let player, isAudioAvailable else { return }
         if player.play() {
             playbackState = .playing
+        } else {
+            playbackState = .stopped
         }
     }
 
@@ -1579,6 +1651,8 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         player.currentTime = 0
         if player.play() {
             playbackState = .playing
+        } else {
+            playbackState = .stopped
         }
     }
 
@@ -1778,6 +1852,192 @@ struct ScratchLabBabyScratchStrokeSegment: Equatable, Sendable {
     }
 }
 
+enum ScratchNotationDirection: String, Decodable, Equatable, Sendable {
+    case forward
+    case backward
+}
+
+enum ScratchNotationSpeedClassification: String, Decodable, Equatable, Sendable {
+    case slow
+    case medium
+    case fast
+}
+
+enum ScratchNotationFaderState: String, Decodable, Equatable, Sendable {
+    case open
+    case closed
+}
+
+enum ScratchMovementKind: String, Codable, Equatable, Sendable {
+    case fastPush
+    case normalPush
+    case slowDrag
+    case fastPull
+    case normalPull
+    case slowPullDrag
+    case hold
+    case releaseNormalPlayback
+}
+
+enum ScratchFaderEventKind: String, Codable, Equatable, Sendable {
+    case open
+    case closed
+    case cut
+    case pulse
+    case transformPulse
+    case flareClick
+    case unknown
+}
+
+struct ScratchNotation: Decodable, Equatable, Sendable {
+    struct Stroke: Decodable, Equatable, Sendable {
+        let startTime: TimeInterval
+        let endTime: TimeInterval
+        let direction: ScratchNotationDirection
+        let speedClassification: ScratchNotationSpeedClassification
+        let faderState: ScratchNotationFaderState
+
+        var duration: TimeInterval {
+            max(0, endTime - startTime)
+        }
+
+        var motionDirection: ScratchMotionDirection {
+            direction == .backward ? .backward : .forward
+        }
+
+        var startProgress: Double {
+            direction == .forward ? 0 : 1
+        }
+
+        var endProgress: Double {
+            direction == .forward ? 1 : 0
+        }
+
+        var movementKind: ScratchMovementKind {
+            switch (direction, speedClassification) {
+            case (.forward,  .fast):   return .fastPush
+            case (.forward,  .medium): return .normalPush
+            case (.forward,  .slow):   return .slowDrag
+            case (.backward, .fast):   return .fastPull
+            case (.backward, .medium): return .normalPull
+            case (.backward, .slow):   return .slowPullDrag
+            }
+        }
+    }
+
+    let version: Int
+    let scratchID: String
+    let demoStart: TimeInterval
+    let demoEnd: TimeInterval
+    let phraseStart: TimeInterval?
+    let phraseEnd: TimeInterval?
+    let timingBasis: String
+    let strokes: [Stroke]
+
+    var timelineDuration: TimeInterval {
+        if let phraseEnd {
+            return max(0, phraseEnd)
+        }
+        return max(0, demoEnd - demoStart)
+    }
+
+    var strokeSegments: [ScratchLabBabyScratchStrokeSegment] {
+        strokes.enumerated().map { index, stroke in
+            let nextStartTime = index + 1 < strokes.count
+                ? strokes[index + 1].startTime
+                : timelineDuration
+            return ScratchLabBabyScratchStrokeSegment(
+                startTime: stroke.startTime,
+                endTime: stroke.endTime,
+                direction: stroke.motionDirection,
+                holdAfter: max(0, nextStartTime - stroke.endTime),
+                startProgress: stroke.startProgress,
+                endProgress: stroke.endProgress
+            )
+        }
+    }
+
+    static let babyScratch: ScratchNotation? = loadBabyScratchFromBundle()
+
+    static func loadBabyScratchFromBundle(_ bundle: Bundle = .main) -> ScratchNotation? {
+        guard let url = bundle.url(
+            forResource: "baby_scratch",
+            withExtension: "json",
+            subdirectory: "Notation"
+        ) else {
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(ScratchNotation.self, from: data)
+        } catch {
+            Logger(subsystem: "com.scratchlab.capture", category: "ScratchNotation")
+                .warning("Failed to load Baby Scratch notation JSON: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+}
+
+struct BabyScratchExtractedStrokeResource: Decodable, Equatable, Sendable {
+    struct Stroke: Decodable, Equatable, Sendable {
+        let startTime: TimeInterval
+        let endTime: TimeInterval
+        let direction: String
+        let holdAfter: TimeInterval
+        let startProgress: Double
+        let endProgress: Double
+
+        var motionDirection: ScratchMotionDirection {
+            direction == "backward" ? .backward : .forward
+        }
+
+        var segment: ScratchLabBabyScratchStrokeSegment {
+            ScratchLabBabyScratchStrokeSegment(
+                startTime: startTime,
+                endTime: endTime,
+                direction: motionDirection,
+                holdAfter: holdAfter,
+                startProgress: startProgress,
+                endProgress: endProgress
+            )
+        }
+    }
+
+    let version: Int
+    let scratchID: String
+    let timingSource: String
+    let demoStart: TimeInterval
+    let demoEnd: TimeInterval
+    let phraseStart: TimeInterval?
+    let phraseEnd: TimeInterval?
+    let timelineDuration: TimeInterval
+    let strokes: [Stroke]
+
+    var strokeSegments: [ScratchLabBabyScratchStrokeSegment] {
+        strokes.map(\.segment)
+    }
+
+    static func loadFromBundle(_ bundle: Bundle = .main) -> BabyScratchExtractedStrokeResource? {
+        guard let url = bundle.url(
+            forResource: "baby_scratch_strokes",
+            withExtension: "json",
+            subdirectory: "CoachDemoMotion"
+        ) else {
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(BabyScratchExtractedStrokeResource.self, from: data)
+        } catch {
+            Logger(subsystem: "com.scratchlab.capture", category: "BabyScratchMotion")
+                .warning("Failed to load Baby Scratch extracted motion JSON: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+}
+
 struct BabyScratchReferenceMotionKeyframe: Equatable, Sendable {
     let time: TimeInterval
     let sourceTime: TimeInterval
@@ -1797,6 +2057,12 @@ struct BabyScratchReferenceMotionPose: Equatable, Sendable {
     let direction: ScratchMotionDirection
     let isHold: Bool
     let strokeDuration: TimeInterval?
+}
+
+enum BabyScratchNotationLoopMode: Equatable, Sendable {
+    case fullDemoAudio
+    case notationPhrase
+    case disabled
 }
 
 enum BabyScratchReferenceTimingSource: String, Equatable, Sendable {
@@ -1851,27 +2117,56 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     static let demoStart: TimeInterval = 35.035
     static let demoEnd: TimeInterval = 83.450033
     static let phaseOffset: TimeInterval = 0
-    static let phraseDuration: TimeInterval = 6.08
+    static let demoAudioPhraseCycleCount = 8
+    private static let fallbackPhraseDuration: TimeInterval = 1.0
+    private static let notationResource = ScratchNotation.loadBabyScratchFromBundle()
+    private static let extractedStrokeResource = BabyScratchExtractedStrokeResource.loadFromBundle()
+    static let usesNotationResource = notationResource != nil
+    static let usesExtractedStrokeResource = notationResource == nil && extractedStrokeResource != nil
+    static let phraseStart: TimeInterval =
+        notationResource?.phraseStart
+        ?? extractedStrokeResource?.phraseStart
+        ?? 0
+    static let phraseEnd: TimeInterval = max(
+        phraseStart,
+        notationResource?.phraseEnd
+            ?? extractedStrokeResource?.phraseEnd
+            ?? fallbackPhraseDuration
+    )
+    static let phraseDuration: TimeInterval = phraseEnd
+    static let phraseLoopDuration: TimeInterval = max(0, phraseEnd - phraseStart)
 
     static var sourceDuration: TimeInterval {
         max(0, demoEnd - demoStart)
     }
 
-    static let strokeSegments: [ScratchLabBabyScratchStrokeSegment] = [
-        ScratchLabBabyScratchStrokeSegment(startTime: 0.0400, endTime: 0.2000, direction: .forward, holdAfter: 0.1750, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 0.3750, endTime: 0.4800, direction: .backward, holdAfter: 0.3100, startProgress: 1, endProgress: 0),
-        ScratchLabBabyScratchStrokeSegment(startTime: 0.7900, endTime: 0.8500, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 0.8500, endTime: 0.9050, direction: .backward, holdAfter: 0.0300, startProgress: 1, endProgress: 0),
-        ScratchLabBabyScratchStrokeSegment(startTime: 0.9350, endTime: 0.9850, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 0.9850, endTime: 1.0450, direction: .backward, holdAfter: 0.3000, startProgress: 1, endProgress: 0),
-        ScratchLabBabyScratchStrokeSegment(startTime: 1.3450, endTime: 1.4400, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 1.4400, endTime: 1.5400, direction: .backward, holdAfter: 0.1000, startProgress: 1, endProgress: 0),
-        ScratchLabBabyScratchStrokeSegment(startTime: 1.6400, endTime: 1.7050, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 1.7050, endTime: 1.7700, direction: .backward, holdAfter: 0.1000, startProgress: 1, endProgress: 0),
-        ScratchLabBabyScratchStrokeSegment(startTime: 1.8700, endTime: 1.9900, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 1.9900, endTime: 2.1250, direction: .backward, holdAfter: 0.1300, startProgress: 1, endProgress: 0),
-        ScratchLabBabyScratchStrokeSegment(startTime: 2.2550, endTime: 2.3050, direction: .forward, holdAfter: 0.0000, startProgress: 0, endProgress: 1),
-        ScratchLabBabyScratchStrokeSegment(startTime: 2.3050, endTime: 2.3600, direction: .backward, holdAfter: 0.3000, startProgress: 1, endProgress: 0)
+    static var demoAudioPhraseCycleDuration: TimeInterval {
+        guard demoAudioPhraseCycleCount > 0 else { return sourceDuration }
+        return sourceDuration / Double(demoAudioPhraseCycleCount)
+    }
+
+    static let strokeSegments: [ScratchLabBabyScratchStrokeSegment] =
+        notationResource?.strokeSegments
+        ?? extractedStrokeResource?.strokeSegments
+        ?? fallbackStrokeSegments
+
+    private static let fallbackStrokeSegments: [ScratchLabBabyScratchStrokeSegment] = [
+        ScratchLabBabyScratchStrokeSegment(
+            startTime: 0.04,
+            endTime: 0.22,
+            direction: .forward,
+            holdAfter: 0.12,
+            startProgress: 0,
+            endProgress: 1
+        ),
+        ScratchLabBabyScratchStrokeSegment(
+            startTime: 0.34,
+            endTime: 0.52,
+            direction: .backward,
+            holdAfter: 0.48,
+            startProgress: 1,
+            endProgress: 0
+        )
     ]
 
     static var keyframes: [BabyScratchReferenceMotionKeyframe] {
@@ -1906,21 +2201,20 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
         return frames.sorted { $0.time < $1.time }
     }
 
-    static func pose(at playbackTime: TimeInterval) -> BabyScratchReferenceMotionPose {
-        let phase = normalizedTime(
-            timelineTime(forPlaybackTime: playbackTime) + phaseOffset,
-            duration: phraseDuration
-        )
+    static func pose(
+        at playbackTime: TimeInterval,
+        loopMode: BabyScratchNotationLoopMode = .fullDemoAudio
+    ) -> BabyScratchReferenceMotionPose {
+        let phase = timelineTime(forPlaybackTime: playbackTime, loopMode: loopMode) + phaseOffset
         for segment in strokeSegments {
             if phase >= segment.startTime && phase < segment.endTime {
                 let localProgress = segment.duration > 0
                     ? (phase - segment.startTime) / segment.duration
                     : 1
-                let easedProgress = smoothStep(localProgress)
                 let scratchProgress = interpolate(
                     from: segment.startProgress,
                     to: segment.endProgress,
-                    progress: easedProgress
+                    progress: localProgress
                 )
                 return pose(
                     scratchProgress: scratchProgress,
@@ -1949,11 +2243,25 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     }
 
     static func sourceTime(forPlaybackTime playbackTime: TimeInterval) -> TimeInterval {
-        demoStart + normalizedTime(playbackTime, duration: sourceDuration)
+        demoStart + boundedPlaybackTime(playbackTime)
     }
 
-    static func timelineTime(forPlaybackTime playbackTime: TimeInterval) -> TimeInterval {
-        max(0, sourceTime(forPlaybackTime: playbackTime) - demoStart)
+    static func timelineTime(
+        forPlaybackTime playbackTime: TimeInterval,
+        loopMode: BabyScratchNotationLoopMode = .fullDemoAudio
+    ) -> TimeInterval {
+        let boundedTime = boundedPlaybackTime(playbackTime)
+        switch loopMode {
+        case .fullDemoAudio:
+            return cycleLocalTime(
+                boundedTime,
+                cycleDuration: demoAudioPhraseCycleDuration
+            )
+        case .notationPhrase:
+            return notationPhraseLocalTime(boundedTime)
+        case .disabled:
+            return boundedTime
+        }
     }
 
     static func timelineTime(forSourceTime sourceTime: TimeInterval) -> TimeInterval {
@@ -1976,13 +2284,12 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
         }
 
         let rawProgress = max(0, min(1, activeSegmentTime / activeSegmentDuration))
-        let easedProgress = smoothStep(rawProgress)
         let scratchProgress: Double
         switch direction {
         case .backward:
-            scratchProgress = 1 - easedProgress
+            scratchProgress = 1 - rawProgress
         default:
-            scratchProgress = easedProgress
+            scratchProgress = rawProgress
         }
         return pose(
             scratchProgress: scratchProgress,
@@ -2040,24 +2347,128 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
         interpolate(from: 0, to: recordRotationRangeDegrees, progress: progress)
     }
 
-    private static func normalizedTime(
+    private static func boundedPlaybackTime(_ playbackTime: TimeInterval) -> TimeInterval {
+        min(sourceDuration, max(0, playbackTime))
+    }
+
+    private static func notationPhraseLocalTime(_ playbackTime: TimeInterval) -> TimeInterval {
+        guard phraseLoopDuration > 0,
+              playbackTime >= phraseEnd else {
+            return playbackTime
+        }
+        return phraseStart + positiveRemainder(
+            playbackTime - phraseStart,
+            duration: phraseLoopDuration
+        )
+    }
+
+    private static func cycleLocalTime(
         _ playbackTime: TimeInterval,
+        cycleDuration: TimeInterval
+    ) -> TimeInterval {
+        guard cycleDuration > 0 else { return playbackTime }
+        return positiveRemainder(playbackTime, duration: cycleDuration)
+    }
+
+    private static func positiveRemainder(
+        _ value: TimeInterval,
         duration: TimeInterval
     ) -> TimeInterval {
         guard duration > 0 else { return 0 }
-        let remainder = playbackTime.truncatingRemainder(dividingBy: duration)
-        return remainder >= 0 ? remainder : remainder + duration
-    }
-
-    private static func smoothStep(_ value: Double) -> Double {
-        let progress = max(0, min(1, value))
-        return progress * progress * (3 - (2 * progress))
+        let remainder = value.truncatingRemainder(dividingBy: duration)
+        let positive = remainder >= 0 ? remainder : remainder + duration
+        return duration - positive < 0.000_001 ? 0 : positive
     }
 
     private static func interpolate(from start: Double, to end: Double, progress: Double) -> Double {
         start + ((end - start) * max(0, min(1, progress)))
     }
 }
+
+#if DEBUG
+struct BabyScratchCoachTimingProbe: Equatable, Sendable {
+    let playbackTime: TimeInterval
+    let timelineTime: TimeInterval
+    let strokeIndex: Int?
+    let direction: ScratchMotionDirection
+    let progress: Double
+    let isHold: Bool
+    let timingSource: String
+}
+
+extension BabyScratchReferenceMotionTimeline {
+    static let debugProbePlaybackTimes: [TimeInterval] = [0.03, 0.218, 0.503, 0.523, 2.183, 2.203]
+
+    static func debugTimingProbe(
+        at playbackTime: TimeInterval,
+        loopMode: BabyScratchNotationLoopMode = .fullDemoAudio
+    ) -> BabyScratchCoachTimingProbe {
+        let phase = timelineTime(forPlaybackTime: playbackTime, loopMode: loopMode) + phaseOffset
+        for (index, segment) in strokeSegments.enumerated() {
+            if phase >= segment.startTime && phase < segment.endTime {
+                let localProgress = segment.duration > 0
+                    ? (phase - segment.startTime) / segment.duration
+                    : 1
+                let scratchProgress = interpolate(
+                    from: segment.startProgress,
+                    to: segment.endProgress,
+                    progress: localProgress
+                )
+                return BabyScratchCoachTimingProbe(
+                    playbackTime: playbackTime,
+                    timelineTime: phase,
+                    strokeIndex: index,
+                    direction: segment.direction,
+                    progress: scratchProgress,
+                    isHold: false,
+                    timingSource: debugTimingSource
+                )
+            }
+
+            if phase >= segment.endTime && phase < segment.holdEndTime {
+                return BabyScratchCoachTimingProbe(
+                    playbackTime: playbackTime,
+                    timelineTime: phase,
+                    strokeIndex: index,
+                    direction: .neutral,
+                    progress: segment.endProgress,
+                    isHold: true,
+                    timingSource: debugTimingSource
+                )
+            }
+        }
+
+        return BabyScratchCoachTimingProbe(
+            playbackTime: playbackTime,
+            timelineTime: phase,
+            strokeIndex: nil,
+            direction: .neutral,
+            progress: 0,
+            isHold: true,
+            timingSource: debugTimingSource
+        )
+    }
+
+    static func debugTimingReport(
+        at playbackTime: TimeInterval,
+        loopMode: BabyScratchNotationLoopMode = .fullDemoAudio
+    ) -> String {
+        let probe = debugTimingProbe(at: playbackTime, loopMode: loopMode)
+        let strokeLabel = probe.strokeIndex.map(String.init) ?? "none"
+        return "time=\(probe.playbackTime) timeline=\(probe.timelineTime) stroke=\(strokeLabel) direction=\(probe.direction) progress=\(probe.progress) source=\(probe.timingSource)"
+    }
+
+    private static var debugTimingSource: String {
+        if usesNotationResource {
+            return "Notation/baby_scratch.json"
+        }
+        if usesExtractedStrokeResource {
+            return "CoachDemoMotion/baby_scratch_strokes.json"
+        }
+        return "fallback"
+    }
+}
+#endif
 
 #if DEBUG
 extension BabyScratchReferenceAsset {
@@ -2113,8 +2524,8 @@ extension BabyScratchReferenceAsset {
             )
         ],
         videoUsage: .visualReferenceOnly,
-        motionTimelinePath: nil,
-        embeddedMotionTimelineName: "BabyScratchReferenceMotionTimeline",
+        motionTimelinePath: "Notation/baby_scratch.json",
+        embeddedMotionTimelineName: "BabyScratchReferenceMotionTimelineFallback",
         automaticVideoTrackingEnabled: false
     )
 }
@@ -2175,10 +2586,8 @@ struct ScratchLabBabyScratchDemoMotionPattern: Sendable {
     }
 
     static func timelinePhase(playbackTime: TimeInterval) -> TimeInterval {
-        normalizedTime(
-            BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: playbackTime) + babyScratchDemoPhaseOffset,
-            duration: babyScratchStrokeTimelineDuration
-        )
+        BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: playbackTime)
+            + babyScratchDemoPhaseOffset
     }
 
     static func isHoldWindow(playbackTime: TimeInterval) -> Bool {
@@ -2242,20 +2651,6 @@ struct ScratchLabBabyScratchDemoMotionPattern: Sendable {
             direction: timelineState.direction,
             feedback: feedback
         )
-    }
-
-    private static func normalizedTime(
-        _ playbackTime: TimeInterval,
-        duration: TimeInterval
-    ) -> TimeInterval {
-        guard duration > 0 else { return 0 }
-        let remainder = playbackTime.truncatingRemainder(dividingBy: duration)
-        return remainder >= 0 ? remainder : remainder + duration
-    }
-
-    private static func smoothStep(_ value: Double) -> Double {
-        let progress = max(0, min(1, value))
-        return progress * progress * (3 - (2 * progress))
     }
 
     private static func strokeInputLevel(progress: Double) -> Float {
@@ -2550,9 +2945,14 @@ struct ScratchLabDemoAudioSampleBuffer: Sendable {
         switch normalizedScratchType {
         case "baby":
             let normalizedTime = normalizedPlaybackTime(playbackTime)
+            let motionActivityLevel: Float = ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
+                playbackTime: normalizedTime
+            )
+                ? max(activityState.level, ScratchLabBabyScratchDemoMotionPattern.minimumActiveLevel)
+                : activityState.level
             let activeMotionState = ScratchLabBabyScratchDemoMotionPattern.state(
                 playbackTime: normalizedTime,
-                activityLevel: activityState.level
+                activityLevel: motionActivityLevel
             )
             if activeMotionState.direction != .neutral {
                 let animationState = activeMotionState.animationState
@@ -2829,6 +3229,165 @@ final class ScratchLabDemoModeAnalyzer {
     }
 }
 
+// MARK: - Baby Scratch demo playback coordinator
+
+@MainActor
+final class BabyScratchDemoPlaybackCoordinator: ObservableObject {
+
+    let audioPlayer: ScratchCoachDemoAudioPlayer
+
+    @Published private(set) var playbackState: DemoPlaybackState = .stopped
+    @Published private(set) var isConfiguredForBabyScratch = false
+    @Published private(set) var lastErrorMessage: String?
+
+    init() {
+        self.audioPlayer = ScratchCoachDemoAudioPlayer()
+    }
+
+    init(audioPlayer: ScratchCoachDemoAudioPlayer) {
+        self.audioPlayer = audioPlayer
+    }
+
+    var currentAudioTime: TimeInterval { audioPlayer.currentPlaybackTime }
+    var isAudioAvailable: Bool { audioPlayer.isAudioAvailable }
+    var isPlaying: Bool { playbackState == .playing && audioPlayer.isActivelyPlayingAudio }
+    var isPaused: Bool { playbackState == .paused }
+    var isStopped: Bool { playbackState == .stopped }
+
+    func configureBabyScratchIfNeeded() {
+        guard !isConfiguredForBabyScratch || !audioPlayer.isAudioAvailable else { return }
+
+        audioPlayer.configure(with: Self.babyScratchInstruction())
+        isConfiguredForBabyScratch = audioPlayer.isAudioAvailable
+        lastErrorMessage = isConfiguredForBabyScratch
+            ? nil
+            : "Baby Scratch demo audio is unavailable."
+    }
+
+    func playBabyScratch() {
+        configureBabyScratchIfNeeded()
+        guard audioPlayer.isAudioAvailable else {
+            audioPlayer.stop()
+            playbackState = .stopped
+            lastErrorMessage = "Baby Scratch demo audio is unavailable."
+            return
+        }
+
+        audioPlayer.play()
+        if audioPlayer.playbackState == .playing && audioPlayer.isActivelyPlayingAudio {
+            playbackState = .playing
+            lastErrorMessage = nil
+        } else {
+            lastErrorMessage = "Baby Scratch demo audio could not start."
+            audioPlayer.stop()
+            playbackState = .stopped
+        }
+    }
+
+    func pause() {
+        guard audioPlayer.isAudioAvailable else {
+            playbackState = .stopped
+            return
+        }
+        audioPlayer.pause()
+        playbackState = .paused
+    }
+
+    func stop() {
+        audioPlayer.stop()
+        playbackState = .stopped
+    }
+
+    func replayBabyScratch() {
+        configureBabyScratchIfNeeded()
+        guard audioPlayer.isAudioAvailable else {
+            audioPlayer.stop()
+            playbackState = .stopped
+            lastErrorMessage = "Baby Scratch demo audio is unavailable."
+            return
+        }
+
+        audioPlayer.replay()
+        if audioPlayer.playbackState == .playing && audioPlayer.isActivelyPlayingAudio {
+            playbackState = .playing
+            lastErrorMessage = nil
+        } else {
+            lastErrorMessage = "Baby Scratch demo audio could not start."
+            audioPlayer.stop()
+            playbackState = .stopped
+        }
+    }
+
+    nonisolated static var audioDuration: TimeInterval { BabyScratchReferenceMotionTimeline.sourceDuration }
+    nonisolated static var phraseDuration: TimeInterval { BabyScratchReferenceMotionTimeline.phraseEnd }
+    nonisolated static var phraseCycleDuration: TimeInterval { BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration }
+
+    nonisolated static func notationPhraseTime(for audioTime: TimeInterval) -> TimeInterval {
+        let cycleDur = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+        let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
+        guard cycleDur > 0 else { return min(phraseEnd, max(0, audioTime)) }
+        let cycleIndex = Int(audioTime / cycleDur)
+        let cycleLocalTime = audioTime - Double(cycleIndex) * cycleDur
+        return min(phraseEnd, max(0, cycleLocalTime))
+    }
+
+    nonisolated static func coachPose(for audioTime: TimeInterval) -> BabyScratchReferenceMotionPose {
+        BabyScratchReferenceMotionTimeline.pose(at: audioTime)
+    }
+
+    nonisolated static func coachAnimationState(
+        for audioTime: TimeInterval,
+        isPlaying: Bool
+    ) -> ScratchCoachDemoAnimationState {
+        guard isPlaying else { return .babyScratchOpen }
+        return coachAnimationState(for: coachPose(for: audioTime))
+    }
+
+    nonisolated static func coachAnimationState(
+        for pose: BabyScratchReferenceMotionPose
+    ) -> ScratchCoachDemoAnimationState {
+        ScratchCoachDemoAnimationState(
+            recordPosition: pose.scratchProgress,
+            recordRotationDegrees: pose.recordRotationDegrees,
+            crossfaderPosition: ScratchCoachDemoAnimationState.babyScratchCrossfaderPosition,
+            crossfaderOpenState: true
+        )
+    }
+
+    func coachAnimationState(isPlaying: Bool) -> ScratchCoachDemoAnimationState {
+        Self.coachAnimationState(
+            for: currentAudioTime,
+            isPlaying: isPlaying && self.isPlaying
+        )
+    }
+
+    private static func babyScratchInstruction() -> ScratchCoachInstruction {
+        let bundledInstruction = ScratchCoachInstructionStore.shared.instruction(
+            for: CaptureSessionScratchType.babyScratch.rawValue,
+            scratchDisplayName: CaptureSessionScratchType.babyScratch.title
+        )
+        guard bundledInstruction.hasDemoAudioReference else {
+            return fallbackBabyScratchInstruction
+        }
+        return bundledInstruction
+    }
+
+    private static var fallbackBabyScratchInstruction: ScratchCoachInstruction {
+        ScratchCoachInstruction(
+            scratchType: CaptureSessionScratchType.babyScratch.rawValue,
+            scratchDisplayName: CaptureSessionScratchType.babyScratch.title,
+            instructionSummary: "Baby Scratch demo",
+            coachScript: "Play the bundled Baby Scratch demo audio.",
+            steps: [],
+            commonMistake: "",
+            practiceChallenge: "",
+            difficulty: "beginner",
+            demoAudioFile: ScratchLabDemoSessionBuilder.demoAudioFileName,
+            demoAudioRole: "noBeat"
+        )
+    }
+}
+
 @MainActor
 final class ScratchLabDemoModeController: ObservableObject {
     @Published private(set) var inputLevel: Float = 0
@@ -2943,7 +3502,11 @@ final class ScratchLabDemoModeController: ObservableObject {
 
     private func processNextAnalysisFrame() {
         guard let analyzer else { return }
-        if !demoPlayer.isActivelyPlayingAudio, demoPlayer.playbackState != .paused {
+        guard demoPlayer.playbackState == .playing else {
+            return
+        }
+
+        if !demoPlayer.isActivelyPlayingAudio {
             demoPlayer.replay()
         }
 
@@ -2956,7 +3519,7 @@ final class ScratchLabDemoModeController: ObservableObject {
         if let feedback = frame.feedback {
             motionFeedback = feedback
         }
-        if frame.didLoop {
+        if frame.didLoop, demoPlayer.playbackState == .playing {
             demoPlayer.replay()
         }
     }
@@ -3876,6 +4439,20 @@ enum CaptureCore {
         }
     }
 
+    struct CaptureReviewDecision: Codable, Equatable, Sendable {
+        enum Status: String, Codable, Sendable {
+            case accepted
+            case corrected
+            case unknown
+        }
+
+        let status: Status
+        let label: String
+        let detectedLabel: String?
+        let confidence: Double?
+        let reviewedAt: Date
+    }
+
     struct LocalRecordingSidecar: Codable, Equatable {
         static let currentSchemaVersion = "scratchlab_local_recording_sidecar_v1"
 
@@ -3914,6 +4491,7 @@ enum CaptureCore {
         var watchAcknowledgedAt: Date?
         var linkedMotionCaptureID: UUID?
         var linkedMotionFileName: String?
+        var reviewDecision: CaptureReviewDecision?
         var auditTrail: [CaptureAuditEvent]
 
         init(
@@ -3945,6 +4523,7 @@ enum CaptureCore {
             watchAcknowledgedAt: Date? = nil,
             linkedMotionCaptureID: UUID? = nil,
             linkedMotionFileName: String? = nil,
+            reviewDecision: CaptureReviewDecision? = nil,
             auditTrail: [CaptureAuditEvent] = []
         ) {
             self.schemaVersion = schemaVersion
@@ -3975,6 +4554,7 @@ enum CaptureCore {
             self.watchAcknowledgedAt = watchAcknowledgedAt
             self.linkedMotionCaptureID = linkedMotionCaptureID
             self.linkedMotionFileName = linkedMotionFileName
+            self.reviewDecision = reviewDecision
             self.auditTrail = auditTrail
         }
 
@@ -4093,6 +4673,31 @@ enum CaptureCore {
                 CaptureAuditEvent(
                     category: "watch_linked",
                     detail: "Linked watch capture \(fileName) to \(takeID)."
+                )
+            )
+            return updated
+        }
+
+        func reviewed(
+            status: CaptureReviewDecision.Status,
+            label: String,
+            detectedLabel: String?,
+            confidence: Double?,
+            reviewedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.reviewDecision = CaptureReviewDecision(
+                status: status,
+                label: label,
+                detectedLabel: detectedLabel,
+                confidence: confidence,
+                reviewedAt: reviewedAt
+            )
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: reviewedAt,
+                    category: "label_reviewed",
+                    detail: "Review marked \(takeID) as \(label) with status \(status.rawValue)."
                 )
             )
             return updated

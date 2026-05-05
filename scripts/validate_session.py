@@ -46,6 +46,9 @@ def format_take_label(bpm: int, take_number: int) -> str:
 
 MIN_PRIMARY_MEDIA_DURATION_SECONDS = 0.5
 MAX_PRIMARY_AV_DURATION_DELTA_SECONDS = 0.5
+MAX_VIDEO_PROBE_DURATION_DELTA_SECONDS = 0.25
+MAX_VIDEO_PROBE_FRAME_RATE_DELTA_FPS = 0.001
+OPTIONAL_MANIFEST_FILE_SOURCES = {"notation"}
 
 
 def expected_camera_id(sources: dict[str, dict[str, Any]]) -> str | None:
@@ -54,6 +57,77 @@ def expected_camera_id(sources: dict[str, dict[str, Any]]) -> str | None:
     if has_cam_a:
         return "camA+camB" if has_cam_b else "camA"
     return None
+
+
+def artifact_probe_matches(
+    source: str,
+    recorded_probe: dict[str, Any],
+    expected_probe: dict[str, Any],
+) -> bool:
+    if source == "serato":
+        return recorded_probe == expected_probe
+
+    if source in {"camA", "camB"}:
+        for key in ("kind", "width", "height", "codec"):
+            if recorded_probe.get(key) != expected_probe.get(key):
+                return False
+
+        recorded_duration = recorded_probe.get("duration_seconds")
+        expected_duration = expected_probe.get("duration_seconds")
+        if not isinstance(recorded_duration, (int, float)) or not isinstance(expected_duration, (int, float)):
+            return False
+        if abs(float(recorded_duration) - float(expected_duration)) > MAX_VIDEO_PROBE_DURATION_DELTA_SECONDS:
+            return False
+
+        recorded_frame_rate = recorded_probe.get("frame_rate_fps")
+        expected_frame_rate = expected_probe.get("frame_rate_fps")
+        if recorded_frame_rate is None or expected_frame_rate is None:
+            return recorded_frame_rate == expected_frame_rate
+        if not isinstance(recorded_frame_rate, (int, float)) or not isinstance(expected_frame_rate, (int, float)):
+            return False
+        return abs(float(recorded_frame_rate) - float(expected_frame_rate)) <= MAX_VIDEO_PROBE_FRAME_RATE_DELTA_FPS
+
+    return recorded_probe == expected_probe
+
+
+def payload_contains_absolute_user_path(payload: Any) -> bool:
+    if isinstance(payload, str):
+        return "/Users/" in payload
+    if isinstance(payload, dict):
+        return any(payload_contains_absolute_user_path(value) for value in payload.values())
+    if isinstance(payload, list):
+        return any(payload_contains_absolute_user_path(item) for item in payload)
+    return False
+
+
+def validate_notation_document(
+    notation_payload: Any,
+    *,
+    take_label: str,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    if not isinstance(notation_payload, dict):
+        errors.append(f"{take_label}: notation file must contain a JSON object.")
+        return
+
+    if payload_contains_absolute_user_path(notation_payload):
+        errors.append(f"{take_label}: notation JSON must not contain absolute /Users paths.")
+
+    for field in ("sessionID", "takeID", "scratchType"):
+        value = notation_payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{take_label}: notation JSON is missing {field}.")
+
+    for field in ("recordMovementEvents", "faderEvents", "mixerMidiEvents"):
+        if not isinstance(notation_payload.get(field), list):
+            errors.append(f"{take_label}: notation JSON field {field} must be an array.")
+
+    notation_source = notation_payload.get("notationSource")
+    if not isinstance(notation_source, str) or not notation_source.strip():
+        errors.append(f"{take_label}: notation JSON is missing notationSource.")
+    elif notation_source == "unavailable":
+        warnings.append(f"{take_label}: notationSource is unavailable.")
 
 
 def validate_take_media_sanity(
@@ -189,7 +263,7 @@ def validate_manifest(
         else:
             file_sources = set(files)
             missing_file_sources = sorted(grouped_sources - file_sources)
-            unexpected_file_sources = sorted(file_sources - grouped_sources)
+            unexpected_file_sources = sorted(file_sources - grouped_sources - OPTIONAL_MANIFEST_FILE_SOURCES)
             if missing_file_sources:
                 errors.append(
                     f"{take_label}: manifest files are missing source entries for: {', '.join(missing_file_sources)}."
@@ -213,6 +287,26 @@ def validate_manifest(
                 path = session_dir / str(relative_path)
                 if not path.exists():
                     errors.append(f"{take_label}: manifest file reference is missing: {relative_path}")
+
+            notation_relative_path = files.get("notation")
+            if not isinstance(notation_relative_path, str) or not notation_relative_path:
+                errors.append(f"{take_label}: manifest files are missing source entries for: notation.")
+            else:
+                notation_path = session_dir / notation_relative_path
+                if not notation_path.exists():
+                    errors.append(f"{take_label}: manifest notation reference is missing: {notation_relative_path}")
+                else:
+                    try:
+                        notation_payload = read_json(notation_path)
+                    except Exception as exc:
+                        errors.append(f"{take_label}: could not read notation JSON: {exc}")
+                    else:
+                        validate_notation_document(
+                            notation_payload,
+                            take_label=take_label,
+                            errors=errors,
+                            warnings=warnings,
+                        )
 
         artifacts = take.get("artifacts")
         if not isinstance(artifacts, dict):
@@ -263,7 +357,7 @@ def validate_manifest(
                 errors.append(
                     f"{take_label}: artifact sha256 for {source} does not match the file on disk."
                 )
-            if artifact.get("probe") != expected_artifact["probe"]:
+            if not artifact_probe_matches(source, artifact.get("probe", {}), expected_artifact["probe"]):
                 errors.append(
                     f"{take_label}: artifact probe metadata for {source} does not match the file on disk."
                 )

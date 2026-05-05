@@ -10,7 +10,13 @@ final class NotationVisualizerViewModel: ObservableObject {
     // MARK: Notation data (loaded once)
 
     let notation: ScratchNotation?
-    var loopDuration: TimeInterval { notation?.phraseEnd ?? 2.126 }
+    // Display duration: the notation phrase window (e.g. 2.126s). Audio cycles are longer;
+    // timing within each cycle is mapped via BabyScratchReferenceMotionTimeline.
+    var loopDuration: TimeInterval { BabyScratchReferenceMotionTimeline.phraseEnd }
+
+    // MARK: Shared coordinator — master clock for all timing
+
+    private let demo: BabyScratchDemoPlaybackCoordinator
 
     // MARK: Playback state
 
@@ -47,9 +53,9 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     // MARK: Playback internals
 
-    private var playbackStartWall: CFTimeInterval = 0
-    private var playbackStartLoopTime: TimeInterval = 0
     private var loopIndex = 0
+    // Tracks which audio phrase cycle we are in, so we can detect cycle wrap.
+    private var lastCycleIndex: Int = 0
 
     // Target-stroke firing: tracks which stroke start-times have been fired in the current loop
     private var firedStrokeIndicesThisLoop: Set<Int> = []
@@ -67,7 +73,8 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     // MARK: Init
 
-    init() {
+    init(demo: BabyScratchDemoPlaybackCoordinator) {
+        self.demo = demo
         notation = ScratchNotation.loadBabyScratchFromBundle()
     }
 
@@ -75,12 +82,15 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     func play() {
         guard !isPlaying else { return }
-        playbackStartWall = CACurrentMediaTime() - playbackTime
-        playbackStartLoopTime = playbackTime
-        isPlaying = true
+        demo.playBabyScratch()
+        isPlaying = demo.isPlaying
+        playbackTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
+            for: demo.currentAudioTime
+        )
     }
 
     func pause() {
+        demo.pause()
         isPlaying = false
     }
 
@@ -89,9 +99,11 @@ final class NotationVisualizerViewModel: ObservableObject {
     }
 
     func reset() {
-        pause()
+        demo.stop()
+        isPlaying = false
         playbackTime = 0
         loopIndex = 0
+        lastCycleIndex = 0
         firedStrokeIndicesThisLoop = []
         lastTickLoopTime = 0
         pendingScores = []
@@ -107,13 +119,59 @@ final class NotationVisualizerViewModel: ObservableObject {
     // MARK: Per-frame tick (called by the view's timer)
 
     func tick(captureEngine: MacCaptureEngine) {
-        guard isPlaying else { return }
-        let now = CACurrentMediaTime()
-        let rawElapsed = now - playbackStartWall
-        let newLoopTime = rawElapsed.truncatingRemainder(dividingBy: loopDuration)
+        guard demo.playbackState == .playing else {
+            ScratchLabRuntimeDiagnostics.shared.markNotationIdle()
+            if isPlaying {
+                isPlaying = false
+            }
+            if demo.playbackState == .stopped, playbackTime != 0 {
+                playbackTime = 0
+                lastTickLoopTime = 0
+                lastCycleIndex = 0
+            }
+            return
+        }
 
-        // Detect loop wrap
-        let didWrap = newLoopTime < lastTickLoopTime
+        let tickStartedAt = CACurrentMediaTime()
+        let signpostID = ScratchLabPerformanceSignpost.begin("NotationTick")
+        defer {
+            ScratchLabPerformanceSignpost.end("NotationTick", signpostID)
+            ScratchLabRuntimeDiagnostics.shared.recordNotationTick(
+                durationSeconds: CACurrentMediaTime() - tickStartedAt
+            )
+        }
+
+        // Auto-replay when the bundled demo audio reaches its end.
+        if demo.playbackState == .playing && !demo.isPlaying {
+            demo.replayBabyScratch()
+            lastCycleIndex = 0
+            guard demo.playbackState == .playing else {
+                if isPlaying {
+                    isPlaying = false
+                }
+                return
+            }
+        }
+
+        // Audio player time is the master clock. Map it to notation phrase time.
+        let audioTime = demo.currentAudioTime
+        let cycleDur = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+
+        let currentCycleIndex = cycleDur > 0 ? Int(audioTime / cycleDur) : 0
+        let newLoopTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
+            for: audioTime
+        )
+        if playbackTime != newLoopTime {
+            playbackTime = newLoopTime
+        }
+        if !isPlaying {
+            isPlaying = true
+        }
+
+        let now = CACurrentMediaTime()
+
+        // A "loop" increments when we enter a new audio phrase cycle.
+        let didWrap = currentCycleIndex > lastCycleIndex
         if didWrap {
             loopIndex += 1
             firedStrokeIndicesThisLoop = []
@@ -123,12 +181,12 @@ final class NotationVisualizerViewModel: ObservableObject {
             }
         }
 
-        playbackTime = newLoopTime
         fireTargetStrokes(at: newLoopTime, prev: lastTickLoopTime, wrapped: didWrap, captureEngine: captureEngine, now: now)
         resolvePendingScores(captureEngine: captureEngine, now: now)
         pruneMotionHistory(loopTime: newLoopTime)
         pruneScoreBadges()
 
+        lastCycleIndex = currentCycleIndex
         lastTickLoopTime = newLoopTime
     }
 
@@ -250,23 +308,37 @@ final class NotationVisualizerViewModel: ObservableObject {
 struct NotationVisualizerView: View {
 
     @EnvironmentObject private var captureEngine: MacCaptureEngine
-    @StateObject private var vm = NotationVisualizerViewModel()
+    @ObservedObject private var demo: BabyScratchDemoPlaybackCoordinator
+    @StateObject private var vm: NotationVisualizerViewModel
 
     private let ticker = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
+
+    init(demo: BabyScratchDemoPlaybackCoordinator) {
+        _demo = ObservedObject(wrappedValue: demo)
+        _vm = StateObject(wrappedValue: NotationVisualizerViewModel(demo: demo))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             notationStatusBar
-            NotationTimelineCanvas(vm: vm)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ScratchNotationCanvasView(
+                notation: vm.notation,
+                playbackTime: vm.playbackTime,
+                loopDuration: vm.loopDuration
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             notationMotionLane
             notationTransportBar
         }
         .background(Color(white: 0.10))
+        .onAppear {
+            demo.configureBabyScratchIfNeeded()
+        }
         .onReceive(ticker) { _ in
             vm.tick(captureEngine: captureEngine)
         }
         .onChange(of: captureEngine.handMotionState) { _, newState in
+            guard vm.isPlaying || captureEngine.cxlIsRecording else { return }
             vm.recordObservedMotion(newState, loopTime: vm.playbackTime)
         }
         .onDisappear {
@@ -278,14 +350,28 @@ struct NotationVisualizerView: View {
 
     private var notationStatusBar: some View {
         HStack(spacing: 16) {
-            Text("Baby Scratch")
+            ScratchLabBrandMark(size: 22)
+
+            Text("Notation Lab · Advanced technical view")
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white)
 
             Spacer(minLength: 0)
 
             labelChip(
-                "Loop \(String(format: "%.3f", vm.loopDuration))s",
+                "Phrase \(String(format: "%.3f", vm.loopDuration))s",
+                color: Color(white: 0.45)
+            )
+            labelChip(
+                demo.isAudioAvailable ? "Audio ready" : "Audio missing",
+                color: demo.isAudioAvailable ? Color(red: 0.2, green: 0.85, blue: 0.55) : Color(red: 1.0, green: 0.45, blue: 0.25)
+            )
+            labelChip(
+                "Source: \(ScratchLabDemoSessionBuilder.demoAudioFileName)",
+                color: Color(white: 0.45)
+            )
+            labelChip(
+                "Audio \(String(format: "%.1f", demo.currentAudioTime))s",
                 color: Color(white: 0.45)
             )
             labelChip(

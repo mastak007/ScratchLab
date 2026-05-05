@@ -25,6 +25,7 @@ REQUIRED_DIRECTORIES = (
     "audio",
     "video",
     "watch",
+    "notation",
     "manifests",
 )
 
@@ -361,7 +362,7 @@ def probe_video_metadata(path: Path) -> dict[str, Any]:
 
     frame_rate = parse_probe_ratio(video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate"))
     if frame_rate is not None:
-        metadata["frame_rate_fps"] = frame_rate
+        metadata["frame_rate_fps"] = round(frame_rate, 4)
 
     codec_name = str(video_stream.get("codec_name") or "").strip()
     if codec_name:
@@ -443,6 +444,37 @@ def build_artifact_record(session_dir: Path, path: Path, source: str) -> dict[st
     }
 
 
+def build_notation_filename(take_number: int) -> str:
+    return f"take-{take_number:03d}_detected_notation.json"
+
+
+def build_unavailable_notation_document(
+    *,
+    session_id: str,
+    take_id: str,
+    take_number: int,
+    bpm: int,
+    notes: str,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": "scratchlab_detected_notation_v1",
+        "sessionID": session_id,
+        "takeID": take_id,
+        "takeNumber": take_number,
+        "scratchType": SESSION_NAME,
+        "bpm": bpm,
+        "captureMode": "timed_click",
+        "notationSource": "unavailable",
+        "labelSource": "unknown",
+        "confidence": None,
+        "recordMovementEvents": [],
+        "faderEvents": [],
+        "mixerMidiEvents": [],
+        "beatGrid": None,
+        "notes": notes,
+    }
+
+
 def take_sort_key(record: dict[str, Any]) -> tuple[int, int]:
     return int(record["bpm"]), int(record["take_number"])
 
@@ -473,6 +505,7 @@ def build_take_record(
         source: relative_to_session(session_dir, path)
         for source, path in sorted(files_by_source.items())
     }
+    files["notation"] = f"notation/{build_notation_filename(take_number)}"
     artifacts = {
         source: build_artifact_record(session_dir, path, source)
         for source, path in sorted(files_by_source.items())

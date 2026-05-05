@@ -21,6 +21,8 @@
 		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
 		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
 		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
+		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
+		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
 		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
 		203015F013837B25E7DAB626 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC2FA5C155AEA197428B94F6 /* Foundation.framework */; };
 		210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* MacCameraPreviewView.swift */; };
@@ -250,6 +252,8 @@
 		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
 		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
+		SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabBrandMark.swift; sourceTree = "<group>"; };
+		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
 		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
@@ -504,6 +508,8 @@
 				B2000004 /* HandMotionOverlay.swift */,
 				B2000009 /* DeckGamificationOverlay.swift */,
 				NV00000001NV0001NV000001 /* NotationVisualizerView.swift */,
+				SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */,
+				SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -710,6 +716,8 @@
 				7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */,
 				CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */,
 				NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */,
+				SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */,
+				SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */,
 				SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E5 /* CaptureCore.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,

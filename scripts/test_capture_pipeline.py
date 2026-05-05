@@ -156,6 +156,20 @@ class CapturePipelineFixtureTests(unittest.TestCase):
             sources.append("watch")
         return sources
 
+    def assert_notation_file_valid(self, relative_path: str) -> None:
+        notation_path = self.session_dir / relative_path
+        self.assertTrue(notation_path.exists(), f"Missing notation file {relative_path}")
+        payload = json.loads(notation_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schemaVersion"], "scratchlab_detected_notation_v1")
+        self.assertIsInstance(payload["sessionID"], str)
+        self.assertIsInstance(payload["takeID"], str)
+        self.assertEqual(payload["scratchType"], "baby_scratch")
+        self.assertEqual(payload["notationSource"], "unavailable")
+        self.assertIsInstance(payload["recordMovementEvents"], list)
+        self.assertIsInstance(payload["faderEvents"], list)
+        self.assertIsInstance(payload["mixerMidiEvents"], list)
+        self.assertFalse(payload["recordMovementEvents"], "Unavailable notation must not invent stroke data")
+
     def test_manifest_example_template_matches_current_take_shape(self) -> None:
         template_path = REPO_ROOT / "templates" / "session_manifest_example.json"
         template = json.loads(template_path.read_text(encoding="utf-8"))
@@ -175,8 +189,9 @@ class CapturePipelineFixtureTests(unittest.TestCase):
             self.assertEqual(take["segment_count"], SEGMENT_COUNT)
 
             expected_sources = self.expected_take_sources(take)
-            self.assertEqual(sorted(take["files"]), expected_sources)
+            self.assertEqual(sorted(take["files"]), sorted(expected_sources + ["notation"]))
             self.assertEqual(sorted(take["artifacts"]), expected_sources)
+            self.assertTrue(str(take["files"]["notation"]).startswith("notation/take-"))
 
             for source in expected_sources:
                 self.assertEqual(take["artifacts"][source]["path"], take["files"][source])
@@ -217,9 +232,9 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assertIn('case .iosCompanion:\n                self.config = .guidedCaptureDefaults()', capture_core)
         self.assertIn("case .macRoutine:", capture_core)
         self.assertIn("self.config = .routineCapture(", capture_core)
-        self.assertIn('messages.append("Add performer name before starting capture.")', capture_core)
         self.assertIn('messages.append("Choose the scratch type before starting capture.")', capture_core)
-        self.assertIn('messages.append("Enter BPM before starting capture.")', capture_core)
+        self.assertNotIn('messages.append("Add performer name before starting capture.")', capture_core)
+        self.assertNotIn('messages.append("Enter BPM before starting capture.")', capture_core)
 
     def test_export_paths_use_shared_session_config_resolver_on_ios_and_routine_capture(self) -> None:
         export_coordinator = self.read_repo_text("ScratchLab/Services/SessionExportCoordinator.swift")
@@ -487,9 +502,15 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assertTrue((self.session_dir / "video" / "DJFIXTURE_baby_070_take01_camA.mov").exists())
         self.assertTrue((self.session_dir / "audio" / "DJFIXTURE_baby_090_take01_serato.wav").exists())
         self.assertTrue((self.session_dir / "watch" / "DJFIXTURE_baby_070_take01_watch.csv").exists())
+        self.assertTrue((self.session_dir / "notation" / "take-001_detected_notation.json").exists())
         self.assertTrue((self.session_dir / "70bpm" / "take01.txt").exists())
         self.assertTrue((self.session_dir / "90bpm" / "take01.txt").exists())
         self.assertTrue((self.session_dir / "110bpm" / "take01.txt").exists())
+        self.assertEqual(
+            takes_by_bpm[70]["files"]["notation"],
+            "notation/take-001_detected_notation.json",
+        )
+        self.assert_notation_file_valid("notation/take-001_detected_notation.json")
 
         validate_result = self.run_script("validate_session.py", self.session_dir)
         self.assertIn("Status: PASS", validate_result.stdout)
@@ -497,6 +518,7 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assert_report_contains("- 70 BPM: 1 valid take(s), 1 renamed take(s)")
         self.assert_report_contains("- 90 BPM: 1 valid take(s), 1 renamed take(s)")
         self.assert_report_contains("- 110 BPM: 1 valid take(s), 1 renamed take(s)")
+        self.assert_report_contains("70 BPM take 01: notationSource is unavailable.")
 
     def test_rename_fixture_fails_closed_on_blank_boolean(self) -> None:
         self.create_session()
@@ -601,6 +623,21 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assert_report_contains("Status: FAIL")
         self.assert_report_contains("70 BPM take 01: manifest files are missing source entries for: serato.")
 
+    def test_validate_fixture_fails_when_manifest_notation_file_source_is_missing(self) -> None:
+        self.create_session()
+        self.stage_raw_media()
+        self.install_take_log_fixture("happy_path_take_log.csv")
+        self.run_script("rename_files.py", self.session_dir)
+
+        manifest = self.read_manifest()
+        del manifest["takes"][0]["files"]["notation"]
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir, expect_success=False)
+        self.assertNotEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: FAIL")
+        self.assert_report_contains("70 BPM take 01: manifest files are missing source entries for: notation.")
+
     def test_validate_fixture_fails_when_manifest_file_path_is_stale(self) -> None:
         self.create_session()
         self.stage_raw_media()
@@ -617,6 +654,37 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assert_report_contains(
             "70 BPM take 01: manifest file path for serato is 'audio/DJFIXTURE_baby_070_take99_serato.wav', expected 'audio/DJFIXTURE_baby_070_take01_serato.wav'."
         )
+
+    def test_validate_fixture_accepts_video_probe_container_duration_variance(self) -> None:
+        self.create_session()
+        self.stage_raw_media()
+        self.install_take_log_fixture("happy_path_take_log.csv")
+        self.run_script("rename_files.py", self.session_dir)
+
+        manifest = self.read_manifest()
+        cam_a_probe = manifest["takes"][0]["artifacts"]["camA"]["probe"]
+        cam_a_probe["duration_seconds"] = 1.18
+        cam_a_probe["frame_rate_fps"] = 30.0004
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir)
+        self.assertEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: PASS")
+
+    def test_validate_fixture_fails_when_audio_probe_bit_depth_is_wrong(self) -> None:
+        self.create_session()
+        self.stage_raw_media()
+        self.install_take_log_fixture("happy_path_take_log.csv")
+        self.run_script("rename_files.py", self.session_dir)
+
+        manifest = self.read_manifest()
+        manifest["takes"][0]["artifacts"]["serato"]["probe"]["sample_width_bytes"] = 4
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir, expect_success=False)
+        self.assertNotEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: FAIL")
+        self.assert_report_contains("70 BPM take 01: artifact probe metadata for serato does not match the file on disk.")
 
     def test_validate_fixture_fails_when_primary_audio_is_too_short(self) -> None:
         self.create_session()

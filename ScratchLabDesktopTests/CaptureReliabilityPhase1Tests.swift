@@ -66,6 +66,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         var pauseCallCount = 0
         var stopCallCount = 0
         var prepareCallCount = 0
+        var playReturnValue = true
 
         func prepareToPlay() {
             prepareCallCount += 1
@@ -73,8 +74,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         func play() -> Bool {
             playCallCount += 1
-            isPlaying = true
-            return true
+            isPlaying = playReturnValue
+            return playReturnValue
         }
 
         func pause() {
@@ -95,6 +96,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertNotEqual(first, second)
         XCTAssertFalse(first.isEmpty)
         XCTAssertFalse(second.isEmpty)
+    }
+
+    @MainActor
+    func testMacRoutineSessionSetupAllowsBlankPerformerAndUsesFallbackDisplayName() {
+        let viewModel = SessionSetupViewModel(surface: .macRoutine)
+        viewModel.scratchType = .unknown
+        viewModel.bpmText = ""
+
+        XCTAssertEqual(viewModel.validationMessages, [])
+        XCTAssertEqual(viewModel.sessionName(defaultAppName: "Untitled Session"), "Untitled Session")
     }
 
     func testSameDaySessionsDoNotCoMingleDuringLocalExportPreparation() throws {
@@ -835,6 +846,188 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(mockPlayable.currentTime, 0, accuracy: 0.0001)
     }
 
+    @MainActor
+    func testBabyScratchDemoPlaybackCoordinatorConfiguresBabyScratchAudio() throws {
+        let mockPlayable = MockScratchCoachDemoPlayable()
+        let root = try makeTemporaryDirectory()
+        let resourceURL = root.appendingPathComponent(ScratchLabDemoSessionBuilder.demoAudioFileName)
+        var requestedAudioNames: [String] = []
+        let player = ScratchCoachDemoAudioPlayer(
+            resourceURLProvider: { audioName in
+                requestedAudioNames.append(audioName)
+                return resourceURL
+            },
+            playerFactory: { url in
+                XCTAssertEqual(url, resourceURL)
+                return mockPlayable
+            }
+        )
+        let coordinator = BabyScratchDemoPlaybackCoordinator(audioPlayer: player)
+
+        coordinator.configureBabyScratchIfNeeded()
+
+        XCTAssertEqual(requestedAudioNames, [ScratchLabDemoSessionBuilder.demoAudioFileName])
+        XCTAssertTrue(coordinator.isConfiguredForBabyScratch)
+        XCTAssertTrue(coordinator.isAudioAvailable)
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertNil(coordinator.lastErrorMessage)
+        XCTAssertEqual(mockPlayable.prepareCallCount, 1)
+    }
+
+    @MainActor
+    func testBabyScratchDemoPlaybackCoordinatorDoesNotFakePlaybackWhenAudioIsMissing() {
+        let player = ScratchCoachDemoAudioPlayer(
+            resourceURLProvider: { _ in nil },
+            playerFactory: { _ in
+                XCTFail("Missing Baby Scratch audio should not create a playback instance.")
+                return MockScratchCoachDemoPlayable()
+            }
+        )
+        let coordinator = BabyScratchDemoPlaybackCoordinator(audioPlayer: player)
+
+        coordinator.playBabyScratch()
+
+        XCTAssertFalse(coordinator.isConfiguredForBabyScratch)
+        XCTAssertFalse(coordinator.isAudioAvailable)
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertEqual(player.playbackState, .stopped)
+        XCTAssertEqual(coordinator.lastErrorMessage, "Baby Scratch demo audio is unavailable.")
+    }
+
+    @MainActor
+    func testBabyScratchDemoPlaybackCoordinatorDoesNotFakePlaybackWhenPlayFails() throws {
+        let mockPlayable = MockScratchCoachDemoPlayable()
+        mockPlayable.playReturnValue = false
+        let root = try makeTemporaryDirectory()
+        let resourceURL = root.appendingPathComponent(ScratchLabDemoSessionBuilder.demoAudioFileName)
+        let player = ScratchCoachDemoAudioPlayer(
+            resourceURLProvider: { _ in resourceURL },
+            playerFactory: { _ in mockPlayable }
+        )
+        let coordinator = BabyScratchDemoPlaybackCoordinator(audioPlayer: player)
+
+        coordinator.playBabyScratch()
+
+        XCTAssertTrue(coordinator.isConfiguredForBabyScratch)
+        XCTAssertTrue(coordinator.isAudioAvailable)
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertEqual(player.playbackState, .stopped)
+        XCTAssertEqual(mockPlayable.playCallCount, 1)
+        XCTAssertEqual(coordinator.lastErrorMessage, "Baby Scratch demo audio could not start.")
+    }
+
+    @MainActor
+    func testBabyScratchDemoPlaybackCoordinatorPauseStopAndReplayState() throws {
+        let mockPlayable = MockScratchCoachDemoPlayable()
+        let root = try makeTemporaryDirectory()
+        let resourceURL = root.appendingPathComponent(ScratchLabDemoSessionBuilder.demoAudioFileName)
+        let player = ScratchCoachDemoAudioPlayer(
+            resourceURLProvider: { _ in resourceURL },
+            playerFactory: { _ in mockPlayable }
+        )
+        let coordinator = BabyScratchDemoPlaybackCoordinator(audioPlayer: player)
+
+        coordinator.playBabyScratch()
+        XCTAssertEqual(coordinator.playbackState, .playing)
+        XCTAssertTrue(coordinator.isPlaying)
+
+        mockPlayable.currentTime = 1.25
+        coordinator.pause()
+        XCTAssertEqual(coordinator.playbackState, .paused)
+        XCTAssertTrue(coordinator.isPaused)
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertEqual(mockPlayable.pauseCallCount, 1)
+        XCTAssertEqual(coordinator.currentAudioTime, 1.25, accuracy: 0.0001)
+
+        coordinator.replayBabyScratch()
+        XCTAssertEqual(coordinator.playbackState, .playing)
+        XCTAssertTrue(coordinator.isPlaying)
+        XCTAssertEqual(mockPlayable.currentTime, 0, accuracy: 0.0001)
+
+        coordinator.stop()
+        XCTAssertEqual(coordinator.playbackState, .stopped)
+        XCTAssertTrue(coordinator.isStopped)
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertEqual(mockPlayable.currentTime, 0, accuracy: 0.0001)
+    }
+
+    func testNotationTickNoOpsWhenDemoPlaybackIsPaused() throws {
+        let notationURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: notationURL, encoding: .utf8)
+        let tickSource = try sourceSlice(
+            in: source,
+            from: "func tick(captureEngine: MacCaptureEngine)",
+            through: "private func fireTargetStrokes("
+        )
+
+        XCTAssertTrue(tickSource.contains("guard demo.playbackState == .playing else"))
+        XCTAssertTrue(tickSource.contains("if demo.playbackState == .stopped, playbackTime != 0"))
+        XCTAssertTrue(tickSource.contains("if demo.playbackState == .playing && !demo.isPlaying"))
+        XCTAssertTrue(tickSource.contains("let audioTime = demo.currentAudioTime"))
+        XCTAssertTrue(tickSource.contains("if playbackTime != newLoopTime"))
+        XCTAssertFalse(tickSource.contains("if isPlaying && !demo.isPlaying"))
+
+        let guardRange = try XCTUnwrap(tickSource.range(of: "guard demo.playbackState == .playing else"))
+        let audioTimeRange = try XCTUnwrap(tickSource.range(of: "let audioTime = demo.currentAudioTime"))
+        let playbackSetRange = try XCTUnwrap(tickSource.range(of: "playbackTime = newLoopTime"))
+        XCTAssertLessThan(guardRange.lowerBound, audioTimeRange.lowerBound)
+        XCTAssertLessThan(guardRange.lowerBound, playbackSetRange.lowerBound)
+    }
+
+    func testCoachPauseHoldsPoseFromAudioTimeAndAvoidsPausedTimelineWork() throws {
+        let coachSourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
+        let macSourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let coachSource = try String(contentsOf: coachSourceURL, encoding: .utf8)
+        let macSource = try String(contentsOf: macSourceURL, encoding: .utf8)
+        let rigSource = try sourceSlice(
+            in: coachSource,
+            from: "struct ScratchCoachRigView: View",
+            through: "private var hasCustomAnimationStateProvider"
+        )
+
+        XCTAssertTrue(rigSource.contains("if isPlayingProvider()"))
+        XCTAssertTrue(rigSource.contains("TimelineView(.periodic"))
+        XCTAssertTrue(rigSource.contains("rigContent(\n                    playbackTime: playbackTimeProvider(),\n                    isPlaying: false"))
+        XCTAssertTrue(rigSource.contains("ScratchLabPerformanceSignpost.withInterval(\"CoachRigUpdate\")"))
+        XCTAssertTrue(macSource.contains("guard !babyScratchDemo.isStopped else { return .babyScratchOpen }"))
+        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
+        XCTAssertFalse(macSource.contains("CACurrentMediaTime()"))
+    }
+
+    func testPausePerformanceSignpostsAndDiagnosticsAreWired() throws {
+        let coreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let notationURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let coachURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let audioURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/AudioEngine.swift")
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+
+        let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
+        let notationSource = try String(contentsOf: notationURL, encoding: .utf8)
+        let coachSource = try String(contentsOf: coachURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let exportSource = try String(contentsOf: exportURL, encoding: .utf8)
+        let audioSource = try String(contentsOf: audioURL, encoding: .utf8)
+        let macSource = try String(contentsOf: macURL, encoding: .utf8)
+
+        XCTAssertTrue(coreSource.contains("enum ScratchLabPerformanceSignpost"))
+        XCTAssertTrue(notationSource.contains("ScratchLabPerformanceSignpost.begin(\"NotationTick\")"))
+        XCTAssertTrue(coachSource.contains("ScratchLabPerformanceSignpost.withInterval(\"CoachRigUpdate\")"))
+        XCTAssertTrue(captureSource.contains("ScratchLabPerformanceSignpost.begin(\"CameraFrameProcess\")"))
+        XCTAssertTrue(captureSource.contains("ScratchLabPerformanceSignpost.begin(\"CaptureFrameProcess\")"))
+        XCTAssertTrue(captureSource.contains("ScratchLabPerformanceSignpost.begin(\"AudioAnalyze\")"))
+        XCTAssertTrue(audioSource.contains("ScratchLabPerformanceSignpost.begin(\"AudioAnalyze\")"))
+        XCTAssertTrue(exportSource.contains("ScratchLabPerformanceSignpost.begin(\"ExportZIP\")"))
+        XCTAssertTrue(macSource.contains("private var performanceDiagnosticsCard: some View"))
+        XCTAssertTrue(macSource.contains("Playback state"))
+        XCTAssertTrue(macSource.contains("Camera active"))
+        XCTAssertTrue(macSource.contains("Last notation tick"))
+    }
+
     func testScratchCoachDemoAnimatorResetsWhenPlaybackIsStopped() {
         let animationState = ScratchCoachDemoAnimator.state(
             scratchType: "baby",
@@ -878,8 +1071,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             accuracy: 0.0001
         )
         XCTAssertTrue(forwardState.crossfaderOpenState)
-        XCTAssertGreaterThan(forwardState.recordPosition, 0.85)
-        XCTAssertGreaterThan(forwardState.recordRotationDegrees, 52)
+        XCTAssertEqual(forwardState.recordPosition, 0.7979, accuracy: 0.001)
+        XCTAssertEqual(forwardState.recordRotationDegrees, 47.8723, accuracy: 0.001)
         XCTAssertEqual(forwardHoldState.recordPosition, 1, accuracy: 0.0001)
         XCTAssertEqual(forwardHoldState.recordRotationDegrees, 60, accuracy: 0.0001)
         XCTAssertLessThan(backwardState.recordPosition, forwardHoldState.recordPosition)
@@ -1231,7 +1424,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(result.archiveURL, destinationURL)
         XCTAssertFalse(result.shouldCleanupAfterUse)
         XCTAssertTrue(FileManager.default.fileExists(atPath: destinationURL.path))
-        XCTAssertEqual(coordinator.statusMessage, "Saved ZIP.")
+        XCTAssertEqual(coordinator.statusMessage, "Export saved.")
     }
 
     @MainActor
@@ -1266,7 +1459,35 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(result.archiveURL, destinationURL)
         XCTAssertFalse(result.shouldCleanupAfterUse)
         XCTAssertTrue(fileManager.fileExists(atPath: destinationURL.path))
-        XCTAssertEqual(coordinator.statusMessage, "Saved ZIP.")
+        XCTAssertEqual(coordinator.statusMessage, "Export saved.")
+    }
+
+    @MainActor
+    func testSessionExportCoordinatorSaveArchiveFailureSurfacesRecoverableError() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let destinationURL = root
+            .appendingPathComponent("Missing Parent", isDirectory: true)
+            .appendingPathComponent("SavedSession.zip")
+        let coordinator = SessionExportCoordinator(
+            archiveSaveDestinationProvider: { _ in destinationURL }
+        )
+
+        coordinator.saveArchiveCopy(for: .package(package))
+
+        for _ in 0..<80 {
+            if case .failed(.unableToSaveArchive) = coordinator.state { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        if case .failed(.unableToSaveArchive) = coordinator.state {
+            XCTAssertEqual(
+                coordinator.statusMessage,
+                "Export failed: ScratchLab couldn't save to the selected location. Try Desktop or choose another folder."
+            )
+        } else {
+            XCTFail("Expected save to fail for a missing parent directory")
+        }
     }
 
     func testSessionExportCoordinatorSecurityScopedAccessUsesParentDirectoryForNewSaveDestination() throws {
@@ -1297,6 +1518,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("startAccessingSecurityScopedResource()"))
         XCTAssertTrue(source.contains("securityScopedAccessURL(for: destinationURL"))
+        XCTAssertTrue(source.contains("NSFileCoordinator()"))
+        XCTAssertTrue(source.contains("statusMessage = \"Choose save location\""))
+        XCTAssertTrue(source.contains("case .unableToSaveArchive"))
     }
 
     func testScratchLabDesktopEntitlementsAllowUserSelectedArchiveSave() throws {
@@ -1304,6 +1528,62 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let source = try String(contentsOf: entitlementsURL, encoding: .utf8)
 
         XCTAssertTrue(source.contains("com.apple.security.files.user-selected.read-write"))
+    }
+
+    func testMacCaptureEngineFormattedAudioPercentCoversFiniteValuesAndClamps() {
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.0, hasPublishedAudioLevel: true), "0%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.5, hasPublishedAudioLevel: true), "50%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 1.0, hasPublishedAudioLevel: true), "100%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: -0.4, hasPublishedAudioLevel: true), "0%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 1.6, hasPublishedAudioLevel: true), "100%")
+    }
+
+    func testMacCaptureEngineFormattedAudioPercentReturnsPlaceholderForInvalidOrUnavailableInput() {
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: .nan, hasPublishedAudioLevel: true), "Audio --")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: .infinity, hasPublishedAudioLevel: true), "Audio --")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: nil, hasPublishedAudioLevel: true), "Audio --")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.4, hasPublishedAudioLevel: false), "Audio --")
+    }
+
+    func testMacCaptureEnginePracticeAudioStatusTextUsesSafeUnavailableStates() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.selectedAudioDeviceUniqueID = ""
+
+        XCTAssertEqual(engine.practiceAudioStatusText, "Choose input")
+
+        engine.selectedAudioDeviceUniqueID = "missing-device"
+        XCTAssertEqual(engine.practiceAudioStatusText, "Audio Missing")
+    }
+
+    func testMacCaptureEngineFormattedAudioPercentSourceHasNoFatalDisplayGuards() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let sourceSlice = try sourceSlice(
+            in: source,
+            from: "var formattedAudioPercent: String {",
+            through: "var practiceAudioStatusText: String {"
+        )
+
+        XCTAssertFalse(sourceSlice.contains("assertionFailure"))
+        XCTAssertFalse(sourceSlice.contains("precondition"))
+        XCTAssertFalse(sourceSlice.contains("fatalError"))
+        XCTAssertFalse(sourceSlice.contains("!"))
+        XCTAssertTrue(source.contains("static func formattedAudioPercent("))
+    }
+
+    func testPracticeHeaderUsesSafeAudioStatusText() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let sourceSlice = try sourceSlice(
+            in: source,
+            from: "private var practiceHeaderCard: some View {",
+            through: "private var practiceControlCard: some View {"
+        )
+
+        XCTAssertTrue(sourceSlice.contains("captureEngine.practiceAudioStatusText"))
+        XCTAssertFalse(sourceSlice.contains("captureEngine.formattedAudioPercent,"))
+        XCTAssertFalse(sourceSlice.contains("assertionFailure"))
+        XCTAssertFalse(sourceSlice.contains("fatalError"))
     }
 
     func testMacScratchDetectorTrainingLookupReturnsEmptyWithoutBundledTrainingLibrary() throws {
@@ -1862,11 +2142,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let macAnalyzerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let macAnalyzerSource = try String(contentsOf: macAnalyzerURL, encoding: .utf8)
         let macDemoStart = try XCTUnwrap(macAnalyzerSource.range(of: "private var macDemoModeCard: some View"))
-        let macDemoEnd = try XCTUnwrap(macAnalyzerSource.range(of: "private var analyzerSidebar: some View"))
+        let macDemoEnd = try XCTUnwrap(macAnalyzerSource.range(of: "private var captureSidebar: some View"))
         let macDemoSource = String(macAnalyzerSource[macDemoStart.lowerBound..<macDemoEnd.lowerBound])
         XCTAssertTrue(macDemoSource.contains("Text(\"Try Demo\")"))
         XCTAssertTrue(macDemoSource.contains("Text(\"See scratch feedback instantly\")"))
-        XCTAssertTrue(macDemoSource.contains("No hardware"))
+        XCTAssertTrue(macDemoSource.contains("No hardware needed for demo"))
         XCTAssertTrue(macAnalyzerSource.contains("@StateObject private var demoModeController = ScratchLabDemoModeController()"))
         XCTAssertTrue(macAnalyzerSource.contains("if liveInputEnabled {\n                startMacLiveInput()"))
         XCTAssertTrue(macAnalyzerSource.contains("Button(liveInputEnabled ? \"Live Input Enabled\" : \"Start Live Input\")"))
@@ -2090,6 +2370,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceTime(forPlaybackTime: 0), 35.035, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forSourceTime: 35.035), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0.523), 0.523, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseStart, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 2.126, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 2.096, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 8)
+        XCTAssertEqual(
+            BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration,
+            BabyScratchReferenceMotionTimeline.sourceDuration / 8,
+            accuracy: 0.0001
+        )
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseDuration, resource.timelineDuration, accuracy: 0.0001)
         XCTAssertEqual(timeline[0].startTime, resource.strokes[0].startTime, accuracy: 0.0001)
         XCTAssertEqual(timeline[0].endTime, resource.strokes[0].endTime, accuracy: 0.0001)
@@ -2127,6 +2417,113 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             )
         )
     }
+
+    func testBabyScratchCoachTimingLoadsNotationAtAudioPlaybackTime() throws {
+        let resource = try decodedBabyScratchNotation()
+        let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
+        let firstFastForward = try XCTUnwrap(timeline.dropFirst(2).first)
+
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesNotationResource)
+        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
+        XCTAssertEqual(resource.strokes.count, 14)
+        XCTAssertEqual(timeline.count, 14)
+        XCTAssertEqual(firstFastForward.direction, .forward)
+        XCTAssertEqual(firstFastForward.startTime, 0.523, accuracy: 0.0001)
+        XCTAssertEqual(resource.strokes[2].startTime, 0.523, accuracy: 0.0001)
+
+        let poseAtFirstFastStart = BabyScratchReferenceMotionTimeline.pose(at: 0.523)
+        XCTAssertEqual(poseAtFirstFastStart.direction, .forward)
+        XCTAssertEqual(poseAtFirstFastStart.scratchProgress, 0, accuracy: 0.0001)
+
+        let doubleOffsetPose = BabyScratchReferenceMotionTimeline.pose(
+            at: BabyScratchReferenceMotionTimeline.demoStart + 0.523
+        )
+        XCTAssertEqual(doubleOffsetPose.direction, .neutral)
+        XCTAssertEqual(doubleOffsetPose.scratchProgress, 0, accuracy: 0.0001)
+    }
+
+    func testBabyScratchCoachTimingUsesFullAudioCycleAndPhraseLoopMode() throws {
+        let firstStroke = try XCTUnwrap(BabyScratchReferenceMotionTimeline.strokeSegments.first)
+        let postPhraseSilenceTime: TimeInterval = 2.203
+        let postPhraseSilencePose = BabyScratchReferenceMotionTimeline.pose(at: postPhraseSilenceTime)
+        let secondAudioCycleStart = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+            + BabyScratchReferenceMotionTimeline.phraseStart
+        let secondAudioCyclePose = BabyScratchReferenceMotionTimeline.pose(at: secondAudioCycleStart)
+        let notationPhraseLoopTime = BabyScratchReferenceMotionTimeline.phraseEnd + 0.077
+        let notationPhraseLoopPose = BabyScratchReferenceMotionTimeline.pose(
+            at: notationPhraseLoopTime,
+            loopMode: .notationPhrase
+        )
+        let disabledLoopPose = BabyScratchReferenceMotionTimeline.pose(
+            at: BabyScratchReferenceMotionTimeline.sourceDuration + 0.01,
+            loopMode: .disabled
+        )
+
+        XCTAssertFalse(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: postPhraseSilenceTime))
+        XCTAssertEqual(postPhraseSilencePose.direction, .neutral)
+        XCTAssertEqual(postPhraseSilencePose.scratchProgress, 0, accuracy: 0.0001)
+        XCTAssertEqual(secondAudioCyclePose.direction, firstStroke.direction)
+        XCTAssertEqual(secondAudioCyclePose.scratchProgress, firstStroke.startProgress, accuracy: 0.0001)
+        XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: secondAudioCycleStart))
+        XCTAssertEqual(
+            BabyScratchReferenceMotionTimeline.timelineTime(
+                forPlaybackTime: notationPhraseLoopTime,
+                loopMode: .notationPhrase
+            ),
+            0.107,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(notationPhraseLoopPose.direction, .forward)
+        XCTAssertGreaterThan(notationPhraseLoopPose.scratchProgress, 0.35)
+        XCTAssertLessThan(notationPhraseLoopPose.scratchProgress, 0.45)
+        XCTAssertEqual(disabledLoopPose.direction, .neutral)
+        XCTAssertEqual(disabledLoopPose.scratchProgress, 0, accuracy: 0.0001)
+    }
+
+    #if DEBUG
+    func testBabyScratchCoachTimingDebugProbeReportsStrokeProgress() {
+        let firstScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.03)
+        let firstScratchEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.218)
+        let slowBackwardEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.503)
+        let firstFastStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.523)
+        let postPhraseSilence = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.183)
+        let postPhrasePhraseLoop = BabyScratchReferenceMotionTimeline.debugTimingProbe(
+            at: 2.203,
+            loopMode: .notationPhrase
+        )
+
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.debugProbePlaybackTimes, [0.03, 0.218, 0.503, 0.523, 2.183, 2.203])
+        XCTAssertEqual(firstScratchStart.strokeIndex, 0)
+        XCTAssertEqual(firstScratchStart.direction, .forward)
+        XCTAssertFalse(firstScratchStart.isHold)
+        XCTAssertEqual(firstScratchStart.progress, 0, accuracy: 0.0001)
+        XCTAssertEqual(firstScratchEnd.strokeIndex, 0)
+        XCTAssertEqual(firstScratchEnd.direction, .neutral)
+        XCTAssertTrue(firstScratchEnd.isHold)
+        XCTAssertEqual(firstScratchEnd.progress, 1, accuracy: 0.0001)
+        XCTAssertEqual(slowBackwardEnd.strokeIndex, 1)
+        XCTAssertEqual(slowBackwardEnd.direction, .neutral)
+        XCTAssertTrue(slowBackwardEnd.isHold)
+        XCTAssertEqual(slowBackwardEnd.progress, 0, accuracy: 0.0001)
+        XCTAssertEqual(slowBackwardEnd.timingSource, "Notation/baby_scratch.json")
+
+        XCTAssertEqual(firstFastStart.strokeIndex, 2)
+        XCTAssertEqual(firstFastStart.direction, .forward)
+        XCTAssertFalse(firstFastStart.isHold)
+        XCTAssertEqual(firstFastStart.timelineTime, 0.523, accuracy: 0.0001)
+        XCTAssertEqual(firstFastStart.progress, 0, accuracy: 0.0001)
+
+        XCTAssertNil(postPhraseSilence.strokeIndex)
+        XCTAssertEqual(postPhraseSilence.direction, .neutral)
+        XCTAssertTrue(postPhraseSilence.isHold)
+        XCTAssertEqual(postPhrasePhraseLoop.strokeIndex, 0)
+        XCTAssertEqual(postPhrasePhraseLoop.direction, .forward)
+        XCTAssertFalse(postPhrasePhraseLoop.isHold)
+        XCTAssertEqual(postPhrasePhraseLoop.timelineTime, 0.107, accuracy: 0.001)
+        XCTAssertEqual(postPhrasePhraseLoop.progress, 0.4096, accuracy: 0.001)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.debugTimingReport(at: 0.523).contains("stroke=2"))
+    }
+    #endif
 
     func testBabyScratchReferenceMotionTimelineDoesNotSkipAlternatingStrokes() throws {
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
@@ -2171,6 +2568,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(coreSource.contains("1.5750"))
         XCTAssertFalse(coreSource.contains("2.3600"))
         XCTAssertFalse(coreSource.contains("fast chiga"))
+        XCTAssertFalse(coreSource.contains("smoothStep"))
 
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.handStartViewerHour, 3, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.handEndViewerHour, 5, accuracy: 0.0001)
@@ -2478,6 +2876,44 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         XCTAssertEqual(firstState, secondState)
+    }
+
+    func testLowerCoachRigUsesNotationTimeWithoutDemoStartDoubleOffset() throws {
+        let audioURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
+        let sampleBuffer = try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+        let firstFastMidpoint: TimeInterval = 0.590
+        let secondAudioCycleFirstStroke = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+            + BabyScratchReferenceMotionTimeline.phraseStart
+        let activeState = sampleBuffer.coachRigAnimationState(
+            scratchType: "baby",
+            playbackTime: firstFastMidpoint,
+            isPlaying: true
+        )
+        let secondCycleState = sampleBuffer.coachRigAnimationState(
+            scratchType: "baby",
+            playbackTime: secondAudioCycleFirstStroke + 0.05,
+            isPlaying: true
+        )
+
+        XCTAssertGreaterThan(activeState.recordPosition, 0.2)
+        XCTAssertGreaterThan(secondCycleState.recordPosition, 0.1)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0.523), 0.523, accuracy: 0.0001)
+        XCTAssertEqual(
+            BabyScratchReferenceMotionTimeline.timelineTime(
+                forSourceTime: BabyScratchReferenceMotionTimeline.demoStart + 0.523
+            ),
+            0.523,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceTime(forPlaybackTime: 0), 35.035, accuracy: 0.0001)
+        XCTAssertEqual(
+            BabyScratchReferenceMotionTimeline.sourceTime(
+                forPlaybackTime: BabyScratchReferenceMotionTimeline.sourceDuration + 1
+            ),
+            BabyScratchReferenceMotionTimeline.demoEnd,
+            accuracy: 0.0001
+        )
     }
 
     func testBundledDemoAudioDrivesNeutralAndMovingCoachFrames() throws {
@@ -2881,11 +3317,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("coachDemoPlayer.configure(with: coachInstruction)"))
-        XCTAssertTrue(source.contains("coachDemoPlayer.stop()"))
+        XCTAssertTrue(source.contains("babyScratchDemo.configureBabyScratchIfNeeded()"))
+        XCTAssertTrue(source.contains("babyScratchDemo.stop()"))
         XCTAssertTrue(source.contains("\"Demo audio unavailable for this scratch.\""))
         XCTAssertTrue(source.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(source.contains("coachDemoPlayer.currentPlaybackTime"))
+        XCTAssertTrue(source.contains("babyScratchDemo.currentAudioTime"))
+        XCTAssertTrue(source.contains("animationStateProvider:"))
+        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
         XCTAssertTrue(source.contains(".onChange(of: coachDemoPlaybackBlocked)"))
         XCTAssertTrue(source.contains("practiceBeatStore.isPlaying || captureEngine.isRoutineRecording"))
         XCTAssertFalse(source.contains("isolatedScratch"))
@@ -2898,6 +3336,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("struct ScratchCoachRigView: View"))
         XCTAssertTrue(source.contains("struct ScratchCoachCardContent<Controls: View>: View"))
         XCTAssertTrue(source.contains("ScratchCoachDemoAnimator.state("))
+        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
+        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
         XCTAssertTrue(source.contains("demoMotionSampleBuffer?.coachRigAnimationState("))
         XCTAssertTrue(source.contains(".task(id: demoMotionProfileTaskID)"))
         XCTAssertTrue(source.contains("@State private var showsDetails = false"))
@@ -2920,16 +3360,22 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(sharedSource.components(separatedBy: "struct ScratchCoachRigView: View").count - 1, 1)
         XCTAssertTrue(sharedSource.contains("private func resolvedAnimationState("))
         XCTAssertTrue(sharedSource.contains("ScratchCoachDemoAudioPlayer.bundledDemoAudioURL(named: audioFileName, in: .main)"))
+        XCTAssertTrue(sharedSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
+        XCTAssertTrue(sharedSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
         XCTAssertTrue(sharedSource.contains("private static let babyScratchCrossfaderPosition"))
         XCTAssertTrue(sharedSource.contains("private static let babyScratchLeftHandPose"))
         XCTAssertTrue(sharedSource.contains("private static let recordHandBasePose"))
         XCTAssertTrue(sharedSource.contains("private static let recordStickerBasePose"))
         XCTAssertTrue(sharedSource.contains("ScratchCoachRigGeometry.recordHandUnitPoint(progress: 0)"))
         XCTAssertTrue(sharedSource.contains("ScratchCoachRigGeometry.recordStickerUnitPoint(progress: 0)"))
+        XCTAssertFalse(sharedSource.contains(".animation("))
+        XCTAssertFalse(sharedSource.contains("withAnimation("))
         XCTAssertTrue(practiceSource.contains("ScratchCoachCardContent("))
         XCTAssertTrue(practiceSource.contains("playbackTimeProvider: { demoPlayer.currentPlaybackTime }"))
         XCTAssertTrue(macSource.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(macSource.contains("playbackTimeProvider: { coachDemoPlayer.currentPlaybackTime }"))
+        XCTAssertTrue(macSource.contains("playbackTimeProvider: { babyScratchDemo.currentAudioTime }"))
+        XCTAssertTrue(macSource.contains("animationStateProvider:"))
+        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
         XCTAssertTrue(mainMenuSource.contains("ScratchCoachCardContent("))
         XCTAssertTrue(mainMenuSource.contains("animationStateProvider:"))
         XCTAssertFalse(practiceSource.contains("struct ScratchCoachRigView"))
@@ -3094,7 +3540,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(rigSource.contains("randomElement"))
         XCTAssertFalse(rigSource.contains("UUID("))
         XCTAssertFalse(rigSource.contains("cursorTime +="))
-        XCTAssertTrue(rigSource.contains("let playbackTime = isPlaying ? playbackTimeProvider() : 0"))
+        XCTAssertFalse(rigSource.contains("let playbackTime = isPlaying ? playbackTimeProvider() : 0"))
+        XCTAssertTrue(rigSource.contains("playbackTime: playbackTimeProvider()"))
         XCTAssertTrue(rigSource.contains("demoMotionSampleBuffer?.coachRigAnimationState("))
     }
 
@@ -3677,6 +4124,46 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(decoded.sessionConfig?.handedness, .right)
     }
 
+    func testReviewDecisionPersistsWithoutChangingRawTakeIdentity() throws {
+        let now = Date(timeIntervalSince1970: 1_778_000_000)
+        let files = CaptureCore.LocalRecordingFiles(
+            baseName: "routine-session_take001_routine",
+            mediaURL: URL(fileURLWithPath: "/tmp/routine-session_take001_routine.mov"),
+            sidecarURL: URL(fileURLWithPath: "/tmp/routine-session_take001_routine.json")
+        )
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "routine-session",
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: "routine-session", takeNumber: 1),
+            files: files,
+            recordingRole: "routine_capture",
+            platform: "macOS",
+            appSurface: "mac_desktop",
+            sourceDeviceName: "ScratchLab Mac",
+            startedAt: now
+        )
+        let reviewed = sidecar.reviewed(
+            status: .corrected,
+            label: "chirp",
+            detectedLabel: "Baby Scratch",
+            confidence: 42,
+            reviewedAt: now.addingTimeInterval(5)
+        )
+
+        let decoded = try JSONDecoder.captureCoreDecoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: try reviewed.encodedData()
+        )
+
+        XCTAssertEqual(decoded.mediaFileName, sidecar.mediaFileName)
+        XCTAssertEqual(decoded.sidecarFileName, sidecar.sidecarFileName)
+        XCTAssertEqual(decoded.takeID, sidecar.takeID)
+        XCTAssertEqual(decoded.reviewDecision?.status, .corrected)
+        XCTAssertEqual(decoded.reviewDecision?.label, "chirp")
+        XCTAssertEqual(decoded.reviewDecision?.detectedLabel, "Baby Scratch")
+        XCTAssertEqual(decoded.reviewDecision?.confidence, 42)
+        XCTAssertEqual(decoded.auditTrail.last?.category, "label_reviewed")
+    }
+
     func testCanonicalExportManifestParity() throws {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root)
@@ -3767,15 +4254,29 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(manifest?["spec_version"] as? String, "capture_spec_v1")
         XCTAssertEqual(manifest?["scratch_type"] as? String, "baby")
         XCTAssertEqual((manifest?["allowed_bpms"] as? [Int]) ?? [], [70, 90, 110])
+        XCTAssertEqual(manifest?["session_root"] as? String, "session_2024_03_10_dj_alpha_baby_scratch_70_90_110_bpm")
+        XCTAssertFalse(String(data: manifestData, encoding: .utf8)?.contains("/Users/") ?? true)
 
         let takes = try XCTUnwrap(manifest?["takes"] as? [[String: Any]])
         XCTAssertEqual(takes.count, 3)
         XCTAssertEqual((takes.first?["files"] as? [String: String])?["camA"], "video/DJALPHA_baby_070_take01_camA.mov")
         XCTAssertEqual((takes.first?["files"] as? [String: String])?["serato"], "audio/DJALPHA_baby_070_take01_serato.wav")
+        XCTAssertEqual((takes.first?["files"] as? [String: String])?["notation"], "notation/take-001_detected_notation.json")
 
         let takeLog = preview.takeLogCSV
         XCTAssertTrue(takeLog.contains("bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes"))
         XCTAssertTrue(takeLog.contains("\"70\",\"1\",\"\",\"\",\"\",\"\",\"true\",\"true\",\"take 1 note\""))
+        XCTAssertEqual(
+            takeLog.split(whereSeparator: \.isNewline).count - 1,
+            takes.count,
+            "take_log row count must agree with manifest take count"
+        )
+
+        let metadataDocument = try builder.metadataDocument(for: validatedPackage)
+        XCTAssertEqual(metadataDocument.takes.first?.notationFile, "notation/take-001_detected_notation.json")
+        XCTAssertEqual(metadataDocument.takes.first?.notationSource, "unavailable")
+        XCTAssertEqual(metadataDocument.takes.first?.labelSource, "unknown")
+        XCTAssertNil(metadataDocument.takes.first?.confidence)
     }
 
     func testRoutineCaptureExportAcceptsRecordedBPMSubset() throws {
@@ -3880,10 +4381,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertEqual(manifest["scratch_type"] as? String, "stab")
         XCTAssertEqual((manifest["allowed_bpms"] as? [Int]) ?? [], [90])
+        XCTAssertEqual(manifest["session_root"] as? String, "session_2024_03_10_dj_alpha_stab_90_bpm")
         XCTAssertEqual((manifest["takes"] as? [[String: Any]])?.count, 1)
         XCTAssertEqual((manifest["takes"] as? [[String: Any]])?.first?["scratch_type"] as? String, "stab")
         XCTAssertEqual((manifest["takes"] as? [[String: Any]])?.first?["files"] as? [String: String], [
             "camA": "video/DJALPHA_stab_090_take01_camA.mov",
+            "notation": "notation/take-001_detected_notation.json",
             "serato": "audio/DJALPHA_stab_090_take01_serato.wav"
         ])
     }
@@ -4346,6 +4849,286 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(macSource.contains("ForEach(ExportMixMode.allCases)"))
     }
 
+    func testMacDesktopMainLayoutExposesSimpleCaptureModes() throws {
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("case practice"))
+        XCTAssertTrue(source.contains("case capture"))
+        XCTAssertTrue(source.contains("case review"))
+        XCTAssertTrue(source.contains("case advanced"))
+        XCTAssertTrue(source.contains("case .practice: return \"Practice\""))
+        XCTAssertTrue(source.contains("case .capture: return \"Capture\""))
+        XCTAssertTrue(source.contains("case .review: return \"Review\""))
+        XCTAssertTrue(source.contains("case .advanced: return \"Advanced\""))
+        XCTAssertTrue(source.contains("advancedWorkspace"))
+        XCTAssertTrue(source.contains("static func resolved(from storedValue: String)"))
+    }
+
+    func testMacCaptureScreenContainsSimpleDatasetWorkflowLabels() throws {
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+
+        for label in [
+            "Capture Session",
+            "Auto Detect",
+            "Baby Scratch",
+            "Chirp",
+            "Transform",
+            "Flare",
+            "Unknown",
+            "No Beat",
+            "Click",
+            "Beat",
+            "Calibration",
+            "Audio Ready",
+            "Camera Ready",
+            "Mixer MIDI",
+            "Mixer Optional",
+            "Mixer Not Connected",
+            "Watch Ready",
+            "Start Capture",
+            "\"Stop\" : \"Record\"",
+            "Save Take",
+            "Retake",
+            "Export Session",
+            "Untitled Session",
+            "Unknown Performer"
+        ] {
+            XCTAssertTrue(source.contains(label), "Missing Capture label \(label)")
+        }
+
+        let primarySource = try sourceSlice(
+            in: source,
+            from: "private var practiceSidebar",
+            through: "private var reviewSidebar"
+        )
+        for forbidden in ["debug", "test only", "dev only", "internal only", "fake", "dummy", "CXL Dataset", "QBERT", "DVD", "rip"] {
+            XCTAssertFalse(
+                primarySource.localizedCaseInsensitiveContains(forbidden),
+                "Primary Practice/Capture source exposes \(forbidden)"
+            )
+        }
+    }
+
+    func testMacReviewScreenContainsCorrectionAndExportLabels() throws {
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+
+        for label in [
+            "Detected scratch type",
+            "Confidence",
+            "Stroke count",
+            "Fader event count",
+            "Mini notation timeline",
+            "No take ready for review",
+            "Record a take in Capture to see detected notation, confidence, and label options.",
+            "Accept",
+            "Correct Label",
+            "Leave Unknown",
+            "Export ZIP",
+            "baby_scratch",
+            "manual_label"
+        ] {
+            XCTAssertTrue(source.contains(label), "Missing Review label \(label)")
+        }
+
+        XCTAssertTrue(source.contains("reviewDecisionByTakeID[reviewTakeID]"))
+        XCTAssertTrue(source.contains("persistReviewDecision"))
+        XCTAssertTrue(source.contains("sidecar.reviewed"))
+        XCTAssertTrue(source.contains("without changing the raw captured media"))
+        XCTAssertTrue(source.contains("if hasRecordedTake {"))
+        XCTAssertTrue(source.contains("if hasReviewNotationPreview {"))
+    }
+
+    func testMacAdvancedScreenContainsTechnicalToolsOutsidePrimaryNavigation() throws {
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+
+        let advancedSource = try sourceSlice(
+            in: source,
+            from: "private var advancedToolsCard",
+            through: "private var routineSessionCard"
+        )
+
+        for label in [
+            "Notation Lab",
+            "Input diagnostics",
+            "MIDI device mapping",
+            "Deck/mixer calibration",
+            "Export manifest info",
+            "App Review demo tools",
+            "Test Lab",
+            "Raw JSON/sidecar inspection",
+            "Watch motion diagnostics",
+            "Timing checks",
+            "Advanced Capture Details"
+        ] {
+            XCTAssertTrue(advancedSource.contains(label), "Missing Advanced label \(label)")
+        }
+
+        let tabSource = try sourceSlice(
+            in: source,
+            from: "TabView(selection: workspaceTabBinding)",
+            through: ".background(Color(nsColor: .windowBackgroundColor))"
+        )
+        XCTAssertFalse(tabSource.contains("Notation Lab"))
+        XCTAssertFalse(tabSource.contains("Test Lab"))
+        XCTAssertFalse(tabSource.contains("Advanced Capture Details"))
+    }
+
+    @MainActor
+    func testRawJSONInspectorOpenWithoutSelectionShowsEmptyState() {
+        let viewModel = RawJSONInspectorViewModel(previewByteLimit: 256, previewLineLimit: 12)
+
+        viewModel.openForCurrentSelection(nil)
+
+        XCTAssertEqual(viewModel.state, .empty)
+        XCTAssertEqual(viewModel.previewText, "")
+        XCTAssertNil(viewModel.selectedFileName)
+    }
+
+    @MainActor
+    func testRawJSONInspectorMissingFileReturnsFailedState() async throws {
+        let viewModel = RawJSONInspectorViewModel(previewByteLimit: 256, previewLineLimit: 12)
+        let missingURL = try makeTemporaryDirectory().appendingPathComponent("missing-sidecar.json")
+
+        viewModel.openForCurrentSelection(missingURL)
+        try await waitForRawJSONInspector(viewModel)
+
+        guard case .failed(let message) = viewModel.state else {
+            return XCTFail("Expected missing file to fail")
+        }
+        XCTAssertTrue(message.contains("could not find"))
+        XCTAssertEqual(viewModel.selectedFileName, "missing-sidecar.json")
+    }
+
+    @MainActor
+    func testRawJSONInspectorLargeJSONReturnsTruncatedPreview() async throws {
+        let root = try makeTemporaryDirectory()
+        let jsonURL = root.appendingPathComponent("large-sidecar.json")
+        let payload = "{\n" + (0..<600).map { #"  "line\#($0)": "value\#($0)""# }.joined(separator: ",\n") + "\n}"
+        try payload.write(to: jsonURL, atomically: true, encoding: .utf8)
+
+        let viewModel = RawJSONInspectorViewModel(previewByteLimit: 256, previewLineLimit: 20)
+        viewModel.openForCurrentSelection(jsonURL)
+        try await waitForRawJSONInspector(viewModel)
+
+        XCTAssertEqual(viewModel.state, .loaded)
+        XCTAssertTrue(viewModel.previewText.contains("Preview truncated for performance."))
+        XCTAssertEqual(viewModel.selectedFileName, "large-sidecar.json")
+        XCTAssertNotNil(viewModel.fileSizeDescription)
+    }
+
+    @MainActor
+    func testRawJSONInspectorInvalidJSONReturnsPreviewAndError() async throws {
+        let root = try makeTemporaryDirectory()
+        let jsonURL = root.appendingPathComponent("invalid-sidecar.json")
+        try """
+        {
+          "sessionID": "broken",
+          "takes":
+        }
+        """.write(to: jsonURL, atomically: true, encoding: .utf8)
+
+        let viewModel = RawJSONInspectorViewModel(previewByteLimit: 512, previewLineLimit: 20)
+        viewModel.openForCurrentSelection(jsonURL)
+        try await waitForRawJSONInspector(viewModel)
+
+        guard case .failed(let message) = viewModel.state else {
+            return XCTFail("Expected invalid JSON to fail validation")
+        }
+        XCTAssertTrue(message.contains("JSON validation failed"))
+        XCTAssertTrue(viewModel.previewText.contains("\"sessionID\": \"broken\""))
+        XCTAssertEqual(viewModel.errorMessage, message)
+    }
+
+    func testRawJSONInspectorSourceAvoidsBodyIOAndRecursiveScan() throws {
+        let serviceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/StagingInspector.swift")
+        let viewURL = projectRootURL().appendingPathComponent("ScratchLab/Views/StagingInspectorView.swift")
+        let serviceSource = try String(contentsOf: serviceURL, encoding: .utf8)
+        let viewSource = try String(contentsOf: viewURL, encoding: .utf8)
+
+        let inspectorServiceSource = try sourceSlice(
+            in: serviceSource,
+            from: "enum InspectorState: Equatable, Sendable {",
+            through: "struct StagingInspectorContext: Identifiable {"
+        )
+        let rawInspectorViewSource = try sourceSlice(
+            in: viewSource,
+            from: "struct RawJSONInspectorView: View {",
+            through: "struct StagingInspectorView: View {"
+        )
+
+        XCTAssertTrue(inspectorServiceSource.contains("Task.detached"))
+        XCTAssertTrue(inspectorServiceSource.contains("Preview truncated for performance."))
+        XCTAssertTrue(inspectorServiceSource.contains("FileHandle(forReadingFrom: url)"))
+        XCTAssertFalse(inspectorServiceSource.contains("contentsOfDirectory"))
+        XCTAssertFalse(inspectorServiceSource.contains("enumerator("))
+        XCTAssertFalse(rawInspectorViewSource.contains("Data(contentsOf:"))
+        XCTAssertFalse(rawInspectorViewSource.contains("String(contentsOf:"))
+        XCTAssertFalse(rawInspectorViewSource.contains("JSONDecoder().decode"))
+    }
+
+    func testRawJSONInspectorButtonUsesDedicatedInspectorInsteadOfStagingScan() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let buttonSource = try sourceSlice(
+            in: source,
+            from: "Button(\"Raw JSON/sidecar inspection\") {",
+            through: ".controlSize(.small)"
+        )
+
+        XCTAssertTrue(buttonSource.contains("rawJSONInspector.openForCurrentSelection(selectedRawJSONURL)"))
+        XCTAssertTrue(buttonSource.contains("isShowingRawJSONInspector = true"))
+        XCTAssertFalse(buttonSource.contains("isShowingStagingInspector = true"))
+        XCTAssertFalse(buttonSource.contains("shareLastRoutineSession()"))
+    }
+
+    func testMacCaptureSourceAutoCreatesSessionAndAppliesFallbackCaptureNames() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("guard ensureCaptureSessionForRecording() != nil else"))
+        XCTAssertTrue(source.contains("config.performerName = \"Unknown Performer\""))
+        XCTAssertTrue(source.contains("config.bpm = CaptureClickTrackDefaults.defaultTimedBPM"))
+        XCTAssertTrue(source.contains("sessionName(defaultAppName: \"Untitled Session\")"))
+        XCTAssertTrue(source.contains("CXL Take"))
+    }
+
+    func testMacCaptureSourceUsesTruthfulMixerStatus() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private var selectedAudioLooksMixerHardware: Bool"))
+        XCTAssertTrue(source.contains("return \"Mixer Ready\""))
+        XCTAssertTrue(source.contains("return selectedAudioDevice == nil ? \"Mixer Not Connected\" : \"Mixer Optional\""))
+        XCTAssertTrue(source.contains("selectedAudioLooksMixerHardware ? .green : .secondary"))
+    }
+
+    func testPracticeSourceKeepsDemoPathAppReviewSafe() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertTrue(source.contains("Use Try Demo, Listen, and Replay for the App Review path."))
+        XCTAssertTrue(source.contains("No hardware needed for demo"))
+        XCTAssertFalse(source.contains("dataset details"))
+    }
+
+    func testAdvancedDiagnosticsExplainCameraAndTickActivity() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let notationURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let coreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let macSource = try String(contentsOf: macURL, encoding: .utf8)
+        let notationSource = try String(contentsOf: notationURL, encoding: .utf8)
+        let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
+
+        XCTAssertTrue(macSource.contains("true (Live Input)"))
+        XCTAssertTrue(macSource.contains("live preview"))
+        XCTAssertTrue(notationSource.contains("Notation Lab · Advanced technical view"))
+        XCTAssertTrue(coreSource.contains("func markNotationIdle()"))
+        XCTAssertTrue(notationSource.contains("ScratchLabRuntimeDiagnostics.shared.markNotationIdle()"))
+    }
+
     func testSessionExportCoordinatorUsesAsyncAVAssetTrackLoading() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
@@ -4789,6 +5572,182 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertEqual((manifest["allowed_bpms"] as? [Int]) ?? [], [90])
         XCTAssertTrue(preview.takeLogCSV.contains("\"90\",\"1\",\"\",\"\",\"\",\"\",\"false\",\"false\",\"\""))
+    }
+
+    // MARK: - Baby Scratch sync tests (notation coach + audio master clock)
+
+    func testNotationVisualizerViewModelDrivesTimingFromAudioPlayer() throws {
+        let notationViewURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: notationViewURL, encoding: .utf8)
+
+        // Shared coordinator must be the master clock source — no separate player owned by the VM.
+        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator"))
+        XCTAssertTrue(source.contains("demo.currentAudioTime"))
+        XCTAssertTrue(source.contains("BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration"))
+        XCTAssertTrue(source.contains("BabyScratchReferenceMotionTimeline.phraseEnd"))
+        // Separate owned player must be gone.
+        XCTAssertFalse(source.contains("let audioPlayer = ScratchCoachDemoAudioPlayer()"))
+        // Old wall-clock approach must be gone.
+        XCTAssertFalse(source.contains("playbackStartWall"))
+        XCTAssertFalse(source.contains("rawElapsed.truncatingRemainder"))
+    }
+
+    func testBabyScratchDemoAudioDurationExceedsSingleNotationPhrase() throws {
+        let audioURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL.path))
+        let audioFile = try AVAudioFile(forReading: audioURL)
+        let audioDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+
+        let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
+        let cycleDuration = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+
+        // Audio must be substantially longer than a single notation phrase.
+        XCTAssertGreaterThan(audioDuration, phraseEnd * 2)
+        // Each audio cycle must be longer than the notation phrase (silence gap must exist).
+        XCTAssertGreaterThan(cycleDuration, phraseEnd)
+        // Audio must contain at least 4 complete phrase cycles.
+        XCTAssertGreaterThanOrEqual(Int(audioDuration / cycleDuration), 4)
+    }
+
+    func testBabyScratchPhraseTimeHoldsAtPhraseEndDuringSilence() {
+        let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
+        let cycleDuration = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+        // A time midway through the silence gap within the first cycle.
+        let silenceTime = phraseEnd + (cycleDuration - phraseEnd) / 2
+        let silencePose = BabyScratchReferenceMotionTimeline.pose(at: silenceTime)
+        // A time at the very start of the second cycle.
+        let secondCycleStart = cycleDuration + BabyScratchReferenceMotionTimeline.phraseStart
+        let secondCycleStartPose = BabyScratchReferenceMotionTimeline.pose(at: secondCycleStart)
+        let firstStroke = BabyScratchReferenceMotionTimeline.strokeSegments.first
+
+        // During silence the coach must hold neutral, not continue scratching.
+        XCTAssertFalse(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: silenceTime))
+        XCTAssertEqual(silencePose.direction, .neutral)
+        XCTAssertEqual(silencePose.isHold, true)
+        // On the next cycle the first stroke should restart correctly.
+        XCTAssertEqual(secondCycleStartPose.direction, firstStroke?.direction)
+    }
+
+    func testBabyScratchNotationStrokesAlternateForwardBackInsidePhrase() throws {
+        let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
+        XCTAssertGreaterThanOrEqual(timeline.count, 2)
+        for index in 0..<timeline.count {
+            let expected: ScratchMotionDirection = index.isMultiple(of: 2) ? .forward : .backward
+            XCTAssertEqual(timeline[index].direction, expected, "Stroke \(index) direction mismatch")
+        }
+        // All strokes must end at or before phraseEnd.
+        let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
+        XCTAssertTrue(timeline.allSatisfy { $0.endTime <= phraseEnd + 0.001 })
+    }
+
+    func testBabyScratchNotationCoachAndCoachRigSampleSameTimeline() throws {
+        let notationViewURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let macViewURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let coreURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let notationSource = try String(contentsOf: notationViewURL, encoding: .utf8)
+        let macSource = try String(contentsOf: macViewURL, encoding: .utf8)
+        let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
+
+        // Notation coach references BabyScratchReferenceMotionTimeline (for cycle duration + phraseEnd).
+        XCTAssertTrue(notationSource.contains("BabyScratchReferenceMotionTimeline"))
+        // Notation coach uses the shared coordinator — not a separately owned audio player.
+        XCTAssertTrue(notationSource.contains("BabyScratchDemoPlaybackCoordinator"))
+        XCTAssertTrue(notationSource.contains("demo.currentAudioTime"))
+        // The shared timeline definition and coach rig pose path live in CaptureCore.swift.
+        XCTAssertTrue(coreSource.contains("struct BabyScratchReferenceMotionTimeline"))
+        XCTAssertTrue(coreSource.contains("let timelineState = BabyScratchReferenceMotionTimeline.pose("))
+        // The coordinator is also defined in CaptureCore.swift.
+        XCTAssertTrue(coreSource.contains("final class BabyScratchDemoPlaybackCoordinator"))
+        // The macOS Baby Scratch coach bypasses buffered audio analysis and samples the direct audio-time pose.
+        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
+        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
+        XCTAssertFalse(notationSource.contains("playbackStartWall"))
+    }
+
+    func testBabyScratchDemoPlaybackCoordinatorNotationPhraseTimeMapsCorrectly() {
+        let phraseEnd = BabyScratchDemoPlaybackCoordinator.phraseDuration
+        let cycleDur = BabyScratchDemoPlaybackCoordinator.phraseCycleDuration
+
+        // At audioTime 0, phrase time is 0.
+        XCTAssertEqual(BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: 0), 0, accuracy: 0.001)
+
+        // Mid-phrase time maps 1:1.
+        let midPhrase = phraseEnd / 2
+        XCTAssertEqual(BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: midPhrase), midPhrase, accuracy: 0.001)
+
+        // During the silence gap, phrase time clamps to phraseEnd.
+        let silenceTime = phraseEnd + (cycleDur - phraseEnd) / 2
+        XCTAssertEqual(BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: silenceTime), phraseEnd, accuracy: 0.001)
+
+        // At the start of the second cycle, phrase time resets near 0.
+        let secondCycleStart = cycleDur + 0.001
+        XCTAssertLessThan(BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: secondCycleStart), phraseEnd)
+        XCTAssertGreaterThanOrEqual(BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: secondCycleStart), 0)
+    }
+
+    func testBabyScratchDemoPlaybackCoordinatorCoachPoseFollowsNotation() {
+        let phraseEnd = BabyScratchDemoPlaybackCoordinator.phraseDuration
+        let cycleDur = BabyScratchDemoPlaybackCoordinator.phraseCycleDuration
+
+        // During an active stroke window, the pose is not neutral/hold.
+        let firstStroke = BabyScratchReferenceMotionTimeline.strokeSegments.first
+        if let stroke = firstStroke {
+            let startStroke = stroke.startTime + 0.001
+            let midStroke = stroke.startTime + stroke.duration / 2
+            let startPose = BabyScratchDemoPlaybackCoordinator.coachPose(for: startStroke)
+            let activePose = BabyScratchDemoPlaybackCoordinator.coachPose(for: midStroke)
+            XCTAssertFalse(activePose.isHold, "Pose during active stroke should not be hold")
+            XCTAssertNotEqual(activePose.direction, .neutral)
+            XCTAssertNotEqual(startPose.scratchProgress, activePose.scratchProgress)
+        }
+
+        // During silence, the coach holds neutral.
+        let silenceTime = phraseEnd + (cycleDur - phraseEnd) / 2
+        let silencePose = BabyScratchDemoPlaybackCoordinator.coachPose(for: silenceTime)
+        let laterSilencePose = BabyScratchDemoPlaybackCoordinator.coachPose(for: silenceTime + 0.25)
+        XCTAssertEqual(silencePose.direction, .neutral)
+        XCTAssertEqual(silencePose.isHold, true)
+        XCTAssertEqual(laterSilencePose.direction, .neutral)
+        XCTAssertEqual(laterSilencePose.scratchProgress, silencePose.scratchProgress, accuracy: 0.0001)
+    }
+
+    func testBabyScratchDemoPlaybackCoordinatorSharesPlayerBetweenViewsAtSourceLevel() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let notationURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let coreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let macSource = try String(contentsOf: macURL, encoding: .utf8)
+        let notationSource = try String(contentsOf: notationURL, encoding: .utf8)
+        let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
+
+        // Coordinator is defined in CaptureCore.swift.
+        XCTAssertTrue(coreSource.contains("final class BabyScratchDemoPlaybackCoordinator"))
+        XCTAssertTrue(coreSource.contains("let audioPlayer: ScratchCoachDemoAudioPlayer"))
+
+        // MacAnalyzerView owns the single coordinator instance and passes it to NotationVisualizerView.
+        XCTAssertTrue(macSource.contains("@StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()"))
+        XCTAssertTrue(macSource.contains("NotationVisualizerView(demo: babyScratchDemo)"))
+
+        // NotationVisualizerView accepts the coordinator — no separate owned player.
+        XCTAssertTrue(notationSource.contains("init(demo: BabyScratchDemoPlaybackCoordinator)"))
+        XCTAssertFalse(notationSource.contains("ScratchCoachDemoAudioPlayer()"))
+    }
+
+    func testMacCoachButtonsUseCoordinatorPlaybackAPI() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let macSource = try String(contentsOf: macURL, encoding: .utf8)
+
+        XCTAssertTrue(macSource.contains("action: babyScratchDemo.playBabyScratch"))
+        XCTAssertTrue(macSource.contains("action: babyScratchDemo.pause"))
+        XCTAssertTrue(macSource.contains("action: babyScratchDemo.replayBabyScratch"))
+        XCTAssertTrue(macSource.contains("isPlayingProvider: { babyScratchDemo.isPlaying }"))
+        XCTAssertFalse(macSource.contains("action: babyScratchDemo.audioPlayer.play"))
+        XCTAssertFalse(macSource.contains("action: babyScratchDemo.audioPlayer.replay"))
+        XCTAssertFalse(macSource.contains("babyScratchDemo.audioPlayer.configure(with: coachInstruction)"))
     }
 }
 
@@ -5981,6 +6940,15 @@ private extension CaptureReliabilityPhase1CoreTests {
             .deletingLastPathComponent()
     }
 
+    func sourceSlice(in source: String, from startToken: String, through endToken: String) throws -> String {
+        let start = try XCTUnwrap(source.range(of: startToken), "Missing start token \(startToken)")
+        let end = try XCTUnwrap(
+            source[start.lowerBound...].range(of: endToken),
+            "Missing end token \(endToken)"
+        )
+        return String(source[start.lowerBound..<end.upperBound])
+    }
+
     func makeCanonicalPackage(rootURL: URL) throws -> SessionExportPackage {
         try makeCanonicalPackage(rootURL: rootURL, scratchType: .babyScratch)
     }
@@ -6458,6 +7426,22 @@ private extension CaptureReliabilityPhase1CoreTests {
         return defaults
     }
 
+    @MainActor
+    func waitForRawJSONInspector(
+        _ viewModel: RawJSONInspectorViewModel,
+        iterations: Int = 80
+    ) async throws {
+        for _ in 0..<iterations {
+            switch viewModel.state {
+            case .loading, .idle:
+                try await Task.sleep(nanoseconds: 25_000_000)
+            case .empty, .loaded, .failed:
+                return
+            }
+        }
+        XCTFail("Timed out waiting for Raw JSON inspector state to settle")
+    }
+
 }
 
 private struct StagingOperationsHarness {
@@ -6481,6 +7465,282 @@ private struct StagingOperationsHarness {
             runAction: runAction,
             validationReportProvider: validationReportProvider
         )
+    }
+}
+
+// MARK: - New notation model, export sandbox, and UI tests
+
+final class ScratchLabNotationAndExportTests: XCTestCase {
+
+    // MARK: - ScratchMovementKind
+
+    func testScratchMovementKindCodable() throws {
+        let allCases: [ScratchMovementKind] = [
+            .fastPush, .normalPush, .slowDrag,
+            .fastPull, .normalPull, .slowPullDrag,
+            .hold, .releaseNormalPlayback
+        ]
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        for kind in allCases {
+            let data = try encoder.encode(kind)
+            let decoded = try decoder.decode(ScratchMovementKind.self, from: data)
+            XCTAssertEqual(decoded, kind, "Round-trip failed for \(kind)")
+        }
+    }
+
+    func testReleaseNormalPlaybackDistinctFromNormalPush() {
+        XCTAssertNotEqual(ScratchMovementKind.releaseNormalPlayback, .normalPush)
+        XCTAssertNotEqual(ScratchMovementKind.releaseNormalPlayback.rawValue, ScratchMovementKind.normalPush.rawValue)
+    }
+
+    func testHoldDistinctFromReleaseNormalPlayback() {
+        XCTAssertNotEqual(ScratchMovementKind.hold, .releaseNormalPlayback)
+        XCTAssertNotEqual(ScratchMovementKind.hold.rawValue, ScratchMovementKind.releaseNormalPlayback.rawValue)
+    }
+
+    func testScratchMovementKindDerivedFromStroke() throws {
+        // Encode a minimal ScratchNotation with known direction + speed and verify movementKind
+        let json = """
+        {"version":1,"scratchID":"test","demoStart":0,"demoEnd":2,"timingBasis":"phrase",
+         "strokes":[
+           {"startTime":0.0,"endTime":0.25,"direction":"forward","speedClassification":"fast","faderState":"open"},
+           {"startTime":0.3,"endTime":0.55,"direction":"forward","speedClassification":"medium","faderState":"open"},
+           {"startTime":0.6,"endTime":0.85,"direction":"forward","speedClassification":"slow","faderState":"open"},
+           {"startTime":0.9,"endTime":1.15,"direction":"backward","speedClassification":"fast","faderState":"closed"},
+           {"startTime":1.2,"endTime":1.45,"direction":"backward","speedClassification":"medium","faderState":"closed"},
+           {"startTime":1.5,"endTime":1.75,"direction":"backward","speedClassification":"slow","faderState":"closed"}
+         ]}
+        """
+        let notation = try JSONDecoder().decode(ScratchNotation.self, from: Data(json.utf8))
+        let kinds = notation.strokes.map(\.movementKind)
+        XCTAssertEqual(kinds[0], .fastPush)
+        XCTAssertEqual(kinds[1], .normalPush)
+        XCTAssertEqual(kinds[2], .slowDrag)
+        XCTAssertEqual(kinds[3], .fastPull)
+        XCTAssertEqual(kinds[4], .normalPull)
+        XCTAssertEqual(kinds[5], .slowPullDrag)
+    }
+
+    // MARK: - ScratchFaderEventKind
+
+    func testScratchFaderEventKindCodable() throws {
+        let allCases: [ScratchFaderEventKind] = [
+            .open, .closed, .cut, .pulse, .transformPulse, .flareClick, .unknown
+        ]
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        for kind in allCases {
+            let data = try encoder.encode(kind)
+            let decoded = try decoder.decode(ScratchFaderEventKind.self, from: data)
+            XCTAssertEqual(decoded, kind, "Round-trip failed for \(kind)")
+        }
+    }
+
+    // MARK: - Export sandbox
+
+    func testExportBuildsInTempFirst() throws {
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertTrue(
+            source.contains("temporaryDirectory"),
+            "Export should build the ZIP in a temp location before moving to user destination"
+        )
+    }
+
+    func testExportSaveUsesNSSavePanel() throws {
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertTrue(source.contains("NSSavePanel"), "macOS export must use NSSavePanel for user-selected destination")
+    }
+
+    func testFailedSaveSurfacesError() throws {
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertTrue(
+            source.contains("unableToSaveArchive"),
+            "A failed save must surface SessionExportError.unableToSaveArchive"
+        )
+        XCTAssertTrue(
+            source.contains("ScratchLab couldn't save to the selected location"),
+            "Error message must tell user to try another location"
+        )
+    }
+
+    func testExportEntitlementIncludesUserSelectedReadWrite() throws {
+        let entURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/ScratchLabDesktop.entitlements")
+        let source = try String(contentsOf: entURL, encoding: .utf8)
+        XCTAssertTrue(
+            source.contains("com.apple.security.files.user-selected.read-write"),
+            "Entitlements must include user-selected.read-write for save panel destinations"
+        )
+    }
+
+    func testSecurityScopedAccessURLDoesNotStandardize() throws {
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: exportURL, encoding: .utf8)
+        // The fix removes standardizedFileURL from securityScopedAccessURL to preserve cloud paths
+        let funcRange = try XCTUnwrap(source.range(of: "func securityScopedAccessURL"))
+        let closingRange = try XCTUnwrap(source[funcRange.lowerBound...].range(of: "}\n"))
+        let funcBody = String(source[funcRange.lowerBound..<closingRange.upperBound])
+        XCTAssertFalse(
+            funcBody.contains("standardizedFileURL"),
+            "securityScopedAccessURL must not standardize the URL — iCloud/Drive paths lose their scope token"
+        )
+    }
+
+    func testExportCopyFallbackPresent() throws {
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: exportURL, encoding: .utf8)
+        XCTAssertTrue(
+            source.contains("Fallback: try a direct copy without file coordination"),
+            "Export must include a direct-copy fallback for cloud filesystems that fail NSFileCoordinator"
+        )
+    }
+
+    // MARK: - Primary nav
+
+    func testPrimaryNavWorkspaceTabValues() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macURL, encoding: .utf8)
+        for id in ["practice", "capture", "review", "advanced"] {
+            XCTAssertTrue(source.contains("case \(id)"), "Primary nav must include \(id)")
+        }
+    }
+
+    func testNoTTMOrSXRATCHInPrimaryNavLabels() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macURL, encoding: .utf8)
+        XCTAssertFalse(source.contains("\"TTM\""), "Primary nav must not expose TTM branding")
+        XCTAssertFalse(source.contains("\"SXRATCH\""), "Primary nav must not expose SXRATCH branding")
+
+        let formulaURL = projectRootURL().appendingPathComponent("ScratchLab/Views/FormulaPlaygroundView.swift")
+        let formulaSource = try String(contentsOf: formulaURL, encoding: .utf8)
+        XCTAssertFalse(formulaSource.contains("\"TTM GRAPH\""), "TTM GRAPH label must be replaced")
+        XCTAssertFalse(formulaSource.contains("TTM-style aliases"), "TTM-style alias label must be replaced")
+    }
+
+    // MARK: - Notation canvas
+
+    func testScratchNotationCanvasViewEmptyModel() {
+        // Verify the view accepts nil notation without crashing
+        let view = ScratchNotationCanvasView(notation: nil, playbackTime: 0, loopDuration: 2.0)
+        XCTAssertNotNil(view) // if init doesn't crash, we're good
+    }
+
+    func testScratchNotationCanvasViewBabyScratchModel() throws {
+        let canvasURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/ScratchNotationCanvasView.swift")
+        let source = try String(contentsOf: canvasURL, encoding: .utf8)
+        XCTAssertTrue(source.contains("ScratchNotation"), "Canvas must accept ScratchNotation model")
+        XCTAssertTrue(source.contains("movementKind"), "Canvas must use movementKind for slope differentiation")
+        XCTAssertTrue(source.contains("releaseNormalPlayback"), "Canvas must handle releaseNormalPlayback distinctly")
+        XCTAssertTrue(source.contains("faderState"), "Canvas must render the fader lane")
+        XCTAssertFalse(
+            source.contains("loadBabyScratchFromBundle") || source.contains("Data(contentsOf"),
+            "Canvas body must not perform file reads"
+        )
+    }
+
+    func testScratchNotationCanvasViewNoFileReadsInBody() throws {
+        let canvasURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/ScratchNotationCanvasView.swift")
+        let source = try String(contentsOf: canvasURL, encoding: .utf8)
+        XCTAssertFalse(source.contains("Data(contentsOf"), "No synchronous file reads in canvas")
+        XCTAssertFalse(source.contains("JSONDecoder().decode"), "No JSON decoding in canvas")
+        XCTAssertFalse(source.contains("contentsOfDirectory"), "No directory enumeration in canvas")
+    }
+
+    func testBrandMarkExistsAndHasNoExternalAssets() throws {
+        let brandURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/ScratchLabBrandMark.swift")
+        let source = try String(contentsOf: brandURL, encoding: .utf8)
+        XCTAssertTrue(source.contains("struct ScratchLabBrandMark"), "Brand mark view must exist")
+        XCTAssertFalse(source.contains("Image(\""), "Brand mark must not reference external image assets")
+        XCTAssertFalse(source.contains("TTM"), "Brand mark must not copy TTM branding")
+        XCTAssertFalse(source.contains("SXRATCH"), "Brand mark must not copy SXRATCH branding")
+    }
+
+    // MARK: - Dataset probe regression tests
+
+    func testProbeVideoUsesNaturalSizeNotTransformedSize() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // Dimensions must come from naturalSize directly; applying preferredTransform
+        // rotates portrait iPhone video to display orientation, which disagrees with
+        // the codec dimensions that ffprobe reports. Both sides must use codec dimensions.
+        XCTAssertFalse(
+            source.contains("naturalSize.applying(preferredTransform)"),
+            "probeVideo must not apply preferredTransform — use naturalSize directly to match ffprobe codec dimensions"
+        )
+    }
+
+    func testProbeAudioUsesFileFormatForBitDepth() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // processingFormat converts to float32 (4 bytes) regardless of on-disk bit depth;
+        // fileFormat reflects actual stored depth (e.g. 2 bytes for 16-bit WAV).
+        XCTAssertTrue(
+            source.contains("audioFile.fileFormat.streamDescription.pointee.mBitsPerChannel"),
+            "probeAudio must use fileFormat (not processingFormat) to get on-disk bit depth"
+        )
+        XCTAssertFalse(
+            source.contains("format.streamDescription.pointee.mBitsPerChannel"),
+            "probeAudio must not derive sample_width_bytes from processingFormat"
+        )
+    }
+
+    func testProbeVideoFrameRateRoundedToFourDecimalPlaces() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // Python validator rounds to 4dp via round(fps, 4). Swift must use the same
+        // precision to avoid 1-ULP mismatches from Float32→Double conversion of nominalFrameRate.
+        XCTAssertTrue(
+            source.contains("Double(frameRateValue) * 10_000") || source.contains("Double(frameRateValue) * 10000"),
+            "probeVideo must round frame_rate_fps to 4 decimal places (multiply by 10_000)"
+        )
+        XCTAssertFalse(
+            source.contains("Double(frameRateValue) * 1_000_000") || source.contains("Double(frameRateValue) * 1000000"),
+            "probeVideo must not use 6-decimal rounding for frame_rate_fps — causes Python validator mismatch"
+        )
+    }
+
+    func testCanonicalManifestContainsCaptureSpecV1Fields() throws {
+        // The spec_version literal lives in CaptureCanonicalRules; the coordinator uses that constant.
+        let rulesURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureReliability.swift")
+        let rulesSource = try String(contentsOf: rulesURL, encoding: .utf8)
+        XCTAssertTrue(rulesSource.contains("\"capture_spec_v1\""), "CaptureCanonicalRules must define spec_version = capture_spec_v1")
+
+        let coordURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: coordURL, encoding: .utf8)
+        // Coordinator must emit all keys required by validate_session.py.
+        XCTAssertTrue(source.contains("CaptureCanonicalRules.specVersion"), "coordinator must stamp spec_version from CaptureCanonicalRules")
+        XCTAssertTrue(source.contains("case scratchType = \"scratch_type\""), "manifest must include scratch_type key")
+        XCTAssertTrue(source.contains("case segmentCount = \"segment_count\""), "manifest must include segment_count key")
+        XCTAssertTrue(source.contains("case djToken = \"dj_token\""), "manifest must include dj_token key")
+        XCTAssertTrue(source.contains("case allowedBPMs = \"allowed_bpms\""), "manifest must include allowed_bpms key")
+        XCTAssertTrue(source.contains("let takes: [CanonicalTakeManifestRecord]"), "manifest must include takes array")
+    }
+
+    func testCanonicalManifestStorageTypesAreStringsNotURLs() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // CanonicalSessionManifest and CanonicalTakeManifestRecord must store paths as String,
+        // not URL, so the encoded JSON contains portable relative paths.
+        let manifestStructPattern = #"struct CanonicalSessionManifest: Codable \{[^}]+\}"#
+        if let range = source.range(of: manifestStructPattern, options: .regularExpression) {
+            let structBody = String(source[range])
+            XCTAssertFalse(structBody.contains(": URL"), "CanonicalSessionManifest must not store URL properties")
+            XCTAssertFalse(structBody.contains(": [URL]"), "CanonicalSessionManifest must not store URL array properties")
+        }
+        // The files dict in take manifest must be [String: String] (relative paths), not [String: URL].
+        XCTAssertTrue(
+            source.contains("let files: [String: String]"),
+            "CanonicalTakeManifestRecord.files must be [String: String] (relative paths)"
+        )
+    }
+
+    private func projectRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 }
 

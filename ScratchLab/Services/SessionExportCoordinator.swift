@@ -254,6 +254,10 @@ struct SessionExportTakeCaptureMetadata: Codable, Equatable, Sendable {
     let clickAccentPattern: String
     let clickVersion: String
     let timingPrintedToRecording: String
+    let notationFile: String?
+    let notationSource: String
+    let labelSource: String
+    let confidence: Double?
 }
 
 struct SessionExportMetadataDocument: Codable, Equatable, Sendable {
@@ -284,6 +288,10 @@ struct SessionExportArtifactMetadata: Codable, Equatable, Sendable {
     let scratchFile: String?
     let timingFile: String?
     let rawTakeFile: String?
+    let notationFile: String?
+    let notationSource: String
+    let labelSource: String
+    let confidence: Double?
 }
 
 struct SessionExportArtifactMetadataDocument: Codable, Equatable, Sendable {
@@ -293,6 +301,100 @@ struct SessionExportArtifactMetadataDocument: Codable, Equatable, Sendable {
     let captureQuality: String
     let timingPrintedToRecording: String
     let takes: [SessionExportArtifactMetadata]
+}
+
+enum SessionExportNotationSource: String, Codable, Equatable, Sendable {
+    case detected
+    case template
+    case unavailable
+}
+
+enum SessionExportLabelSource: String, Codable, Equatable, Sendable {
+    case detected
+    case manual
+    case corrected
+    case unknown
+}
+
+struct SessionExportRecordMovementEvent: Codable, Equatable, Sendable {
+    let direction: String?
+    let startTime: Double?
+    let endTime: Double?
+    let confidence: Double?
+    let source: String?
+}
+
+struct SessionExportFaderEvent: Codable, Equatable, Sendable {
+    let time: Double?
+    let state: String?
+    let confidence: Double?
+}
+
+struct SessionExportMixerMidiEvent: Codable, Equatable, Sendable {
+    let time: Double?
+    let status: Int?
+    let data1: Int?
+    let data2: Int?
+    let channel: Int?
+}
+
+struct SessionExportNotationBeatGrid: Codable, Equatable, Sendable {
+    let bpm: Int
+    let beatsPerBar: Int
+    let countInBeats: Int
+}
+
+struct SessionExportNotationDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_detected_notation_v1"
+
+    let schemaVersion: String
+    let sessionID: String
+    let takeID: String
+    let takeNumber: Int
+    let scratchType: String
+    let bpm: Int?
+    let captureMode: String
+    let notationSource: SessionExportNotationSource
+    let labelSource: SessionExportLabelSource
+    let confidence: Double?
+    let recordMovementEvents: [SessionExportRecordMovementEvent]
+    let faderEvents: [SessionExportFaderEvent]
+    let mixerMidiEvents: [SessionExportMixerMidiEvent]
+    let beatGrid: SessionExportNotationBeatGrid?
+    let notes: String
+
+    init(
+        sessionID: String,
+        takeID: String,
+        takeNumber: Int,
+        scratchType: String,
+        bpm: Int?,
+        captureMode: String,
+        notationSource: SessionExportNotationSource,
+        labelSource: SessionExportLabelSource,
+        confidence: Double?,
+        recordMovementEvents: [SessionExportRecordMovementEvent],
+        faderEvents: [SessionExportFaderEvent],
+        mixerMidiEvents: [SessionExportMixerMidiEvent],
+        beatGrid: SessionExportNotationBeatGrid?,
+        notes: String
+    ) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.sessionID = sessionID
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.scratchType = scratchType
+        self.bpm = bpm
+        self.captureMode = captureMode
+        self.notationSource = notationSource
+        self.labelSource = labelSource
+        self.confidence = confidence
+        self.recordMovementEvents = recordMovementEvents
+        self.faderEvents = faderEvents
+        self.mixerMidiEvents = mixerMidiEvents
+        self.beatGrid = beatGrid
+        self.notes = notes
+    }
 }
 
 struct SessionExportPackage: Sendable {
@@ -338,6 +440,7 @@ enum SessionExportError: Error, Equatable, Sendable {
     case invalidSessionMetadata
     case unableToPrepareExport
     case unableToCreateArchive
+    case unableToSaveArchive
     case unableToPresentShareOptions
 
     var userMessage: String {
@@ -352,6 +455,8 @@ enum SessionExportError: Error, Equatable, Sendable {
             return "Unable to prepare export."
         case .unableToCreateArchive:
             return "Unable to create ZIP archive."
+        case .unableToSaveArchive:
+            return "ScratchLab couldn't save to the selected location. Try Desktop or choose another folder."
         case .unableToPresentShareOptions:
             return "Unable to present sharing options."
         }
@@ -684,6 +789,7 @@ final class SessionExportCoordinator: ObservableObject {
                     try SessionArchiveBuilder().createArchive(from: package, options: options)
                 }.value
 
+                statusMessage = "Choose save location"
                 guard let destinationURL = archiveSaveDestinationProvider(result.displayName) else {
                     try? FileManager.default.removeItem(at: result.archiveURL)
                     state = lastResult.map(SessionExportState.cancelled) ?? .idle
@@ -711,12 +817,12 @@ final class SessionExportCoordinator: ObservableObject {
                     ? "This session may be too large for email. AirDrop or cloud upload is recommended."
                     : nil
                 state = .shareCompleted(savedResult)
-                statusMessage = "Saved ZIP."
+                statusMessage = "Export saved."
             } catch let exportError as SessionExportError {
                 handleFailure(exportError)
             } catch {
                 print("Session export save failed: \(error)")
-                handleFailure(.unableToCreateArchive)
+                handleFailure(.unableToSaveArchive)
             }
         }
     }
@@ -781,7 +887,12 @@ final class SessionExportCoordinator: ObservableObject {
         } else {
             state = .failed(error)
         }
-        statusMessage = validationReport?.summaryText ?? error.userMessage
+        switch error {
+        case .unableToSaveArchive:
+            statusMessage = "Export failed: \(error.userMessage)"
+        default:
+            statusMessage = validationReport?.summaryText ?? error.userMessage
+        }
     }
 
     private func recordValidationBlockIfNeeded(for source: SessionExportSource, report: SessionValidationReport) {
@@ -841,14 +952,19 @@ final class SessionExportCoordinator: ObservableObject {
         for destinationURL: URL,
         fileManager: FileManager = .default
     ) -> URL {
-        let standardizedDestinationURL = destinationURL.standardizedFileURL
-        if fileManager.fileExists(atPath: standardizedDestinationURL.path) {
-            return standardizedDestinationURL
+        // Avoid URL normalization here — iCloud Drive and network volume paths
+        // can lose their sandbox security scope when resolved to a canonical form.
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            return destinationURL
         }
-        return standardizedDestinationURL.deletingLastPathComponent()
+        return destinationURL.deletingLastPathComponent()
     }
 
     nonisolated private static func copyArchive(_ sourceURL: URL, to destinationURL: URL) throws -> URL {
+        final class CoordinatedCopyState {
+            var error: Error?
+        }
+
         let fileManager = FileManager.default
         do {
             if urlsMatchSameFileLocation(sourceURL, destinationURL) {
@@ -861,13 +977,35 @@ final class SessionExportCoordinator: ObservableObject {
                     securityScopedURL.stopAccessingSecurityScopedResource()
                 }
             }
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try fileManager.removeItem(at: destinationURL)
+            var coordinationError: NSError?
+            let coordinatedCopyState = CoordinatedCopyState()
+            let coordinator = NSFileCoordinator()
+            coordinator.coordinate(writingItemAt: destinationURL, options: [], error: &coordinationError) { coordinatedURL in
+                do {
+                    if fileManager.fileExists(atPath: coordinatedURL.path) {
+                        try fileManager.removeItem(at: coordinatedURL)
+                    }
+                    try fileManager.copyItem(at: sourceURL, to: coordinatedURL)
+                } catch {
+                    coordinatedCopyState.error = error
+                }
             }
-            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            if coordinationError != nil || coordinatedCopyState.error != nil {
+                // Fallback: try a direct copy without file coordination.
+                // Some cloud filesystems (Google Drive, certain iCloud configurations)
+                // fail NSFileCoordinator but succeed with a plain copyItem.
+                do {
+                    if fileManager.fileExists(atPath: destinationURL.path) {
+                        try fileManager.removeItem(at: destinationURL)
+                    }
+                    try fileManager.copyItem(at: sourceURL, to: destinationURL)
+                } catch {
+                    throw SessionExportError.unableToSaveArchive
+                }
+            }
             return destinationURL
         } catch {
-            throw SessionExportError.unableToCreateArchive
+            throw (error as? SessionExportError) ?? .unableToSaveArchive
         }
     }
 
@@ -996,6 +1134,8 @@ struct SessionArchiveBuilder: Sendable {
         let videoFileName: String
         let audioFileName: String
         let watchFileName: String?
+        let notationFileName: String
+        let notationDocument: SessionExportNotationDocument
         let verbalSlateUsed: Bool
         let syncClapUsed: Bool
         let notes: String
@@ -1006,6 +1146,12 @@ struct SessionArchiveBuilder: Sendable {
         let takeLogRows: [CanonicalTakeLogRow]
         let takes: [CanonicalTakeContext]
         let sessionRootName: String
+    }
+
+    private struct ResolvedNotationExport {
+        let fileName: String
+        let relativePath: String
+        let document: SessionExportNotationDocument
     }
 
     func preparePackage(from source: SessionExportSource) throws -> SessionExportPackage {
@@ -1105,10 +1251,15 @@ struct SessionArchiveBuilder: Sendable {
         let archiveDirectory = try archiveDirectory ?? shareArchiveDirectoryURL(fileManager: fileManager)
         try validateArchiveDirectoryWritable(archiveDirectory, fileManager: fileManager)
 
-        let folderName = archiveFolderName(for: package.metadata)
+        let canonicalContext = try canonicalContext(for: package)
+        let folderName = canonicalContext.sessionRootName
         let stagingRoot = archiveDirectory.appendingPathComponent("staging-\(UUID().uuidString)", isDirectory: true)
         let stagedSessionURL = stagingRoot.appendingPathComponent(folderName, isDirectory: true)
-        let archiveURL = archiveURL(for: package.metadata, in: archiveDirectory)
+        let archiveURL = archiveDirectory
+            .appendingPathComponent(folderName)
+            .appendingPathExtension("zip")
+        let signpostID = ScratchLabPerformanceSignpost.begin("ExportZIP")
+        defer { ScratchLabPerformanceSignpost.end("ExportZIP", signpostID) }
 
         do {
             if fileManager.fileExists(atPath: archiveURL.path) {
@@ -1165,6 +1316,12 @@ struct SessionArchiveBuilder: Sendable {
         let hydratedPackage = hydratePackageForExport(package)
         let artifactMetadata = try hydratedPackage.takes.map { take -> SessionExportArtifactMetadata in
             let captureMetadata = try resolvedTakeCaptureMetadata(for: take, packageMetadata: hydratedPackage.metadata)
+            let sidecar = try decodeSidecar(at: take.sidecarURL)
+            let notationExport = try resolvedNotationExport(
+                for: take,
+                sidecar: sidecar,
+                packageMetadata: hydratedPackage.metadata
+            )
             let timingPrintedState = TimingPrintedToRecordingState(
                 rawValue: captureMetadata.timingPrintedToRecording
             ) ?? .unknown
@@ -1199,7 +1356,11 @@ struct SessionArchiveBuilder: Sendable {
                 engineVersion: captureMetadata.engineVersion,
                 scratchFile: mixPaths.scratchFile,
                 timingFile: mixPaths.timingFile,
-                rawTakeFile: mixPaths.rawTakeFile
+                rawTakeFile: mixPaths.rawTakeFile,
+                notationFile: notationExport.relativePath,
+                notationSource: notationExport.document.notationSource.rawValue,
+                labelSource: notationExport.document.labelSource.rawValue,
+                confidence: notationExport.document.confidence
             )
         }
 
@@ -1412,11 +1573,16 @@ struct SessionArchiveBuilder: Sendable {
             let audioURL = stagedSessionURL
                 .appendingPathComponent("audio", isDirectory: true)
                 .appendingPathComponent(takeContext.audioFileName)
+            let notationURL = stagedSessionURL
+                .appendingPathComponent("notation", isDirectory: true)
+                .appendingPathComponent(takeContext.notationFileName)
             try fileManager.copyItem(at: takeContext.take.mediaURL, to: videoURL)
             guard let audioArtifactURL = takeContext.take.audioArtifactURL else {
                 throw SessionExportError.missingRequiredFiles
             }
             try fileManager.copyItem(at: audioArtifactURL, to: audioURL)
+            let notationData = try Self.jsonEncoder.encode(takeContext.notationDocument)
+            try notationData.write(to: notationURL, options: .atomic)
 
             if let watchFileName = takeContext.watchFileName,
                let watchCaptureSession = takeContext.take.watchCaptureSession {
@@ -1563,6 +1729,11 @@ struct SessionArchiveBuilder: Sendable {
             sidecar: sidecar,
             packageMetadata: packageMetadata
         )
+        let notationExport = try resolvedNotationExport(
+            for: take,
+            sidecar: sidecar,
+            packageMetadata: packageMetadata
+        )
 
         return SessionExportTakeCaptureMetadata(
             takeID: take.takeID,
@@ -1582,7 +1753,74 @@ struct SessionArchiveBuilder: Sendable {
             recordingStartHostTime: captureValues.recordingStartHostTime,
             clickAccentPattern: captureValues.clickAccentPattern,
             clickVersion: captureValues.clickVersion,
-            timingPrintedToRecording: captureValues.timingPrintedToRecording
+            timingPrintedToRecording: captureValues.timingPrintedToRecording,
+            notationFile: notationExport.relativePath,
+            notationSource: notationExport.document.notationSource.rawValue,
+            labelSource: notationExport.document.labelSource.rawValue,
+            confidence: notationExport.document.confidence
+        )
+    }
+
+    private func notationFileName(for takeNumber: Int) -> String {
+        "take-\(String(format: "%03d", takeNumber))_detected_notation.json"
+    }
+
+    private func resolvedNotationExport(
+        for take: SessionExportTake,
+        sidecar: CaptureCore.LocalRecordingSidecar,
+        packageMetadata: SessionExportMetadata
+    ) throws -> ResolvedNotationExport {
+        let captureValues = resolvedTakeCaptureValues(
+            for: take,
+            sidecar: sidecar,
+            packageMetadata: packageMetadata
+        )
+        let fileName = notationFileName(for: take.takeNumber)
+        let relativePath = "notation/\(fileName)"
+        let scratchType = {
+            let normalizedID = packageMetadata.scratchTypeID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !normalizedID.isEmpty {
+                return normalizedID
+            }
+            let normalizedName = packageMetadata.scratchTypeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !normalizedName.isEmpty {
+                return normalizedName
+            }
+            return "unknown"
+        }()
+        let reviewDecision = sidecar.reviewDecision
+        let labelSource: SessionExportLabelSource
+        switch reviewDecision?.status {
+        case .accepted:
+            labelSource = reviewDecision?.detectedLabel == nil ? .manual : .detected
+        case .corrected:
+            labelSource = .corrected
+        case .unknown:
+            labelSource = .unknown
+        case nil:
+            labelSource = .unknown
+        }
+
+        let notationDocument = SessionExportNotationDocument(
+            sessionID: sidecar.sessionID,
+            takeID: sidecar.takeID,
+            takeNumber: take.takeNumber,
+            scratchType: scratchType,
+            bpm: captureValues.bpm,
+            captureMode: captureValues.captureMode,
+            notationSource: .unavailable,
+            labelSource: labelSource,
+            confidence: reviewDecision?.confidence,
+            recordMovementEvents: [],
+            faderEvents: [],
+            mixerMidiEvents: [],
+            beatGrid: nil,
+            notes: take.note ?? ""
+        )
+        return ResolvedNotationExport(
+            fileName: fileName,
+            relativePath: relativePath,
+            document: notationDocument
         )
     }
 
@@ -2049,7 +2287,19 @@ struct SessionArchiveBuilder: Sendable {
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.dateFormat = "yyyy_MM_dd"
         let dateString = formatter.string(from: metadata.createdAt)
-        let sanitizedSessionName = sanitizedFileName(metadata.sessionName)
+        let sanitizedSessionName = sanitizedArchiveLabel(for: metadata, allowedBPMs: nil)
+        return "session_\(dateString)_\(sanitizedSessionName)"
+    }
+
+    private func archiveFolderName(
+        for metadata: SessionExportMetadata,
+        allowedBPMs: [Int]
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy_MM_dd"
+        let dateString = formatter.string(from: metadata.createdAt)
+        let sanitizedSessionName = sanitizedArchiveLabel(for: metadata, allowedBPMs: allowedBPMs)
         return "session_\(dateString)_\(sanitizedSessionName)"
     }
 
@@ -2332,6 +2582,11 @@ struct SessionArchiveBuilder: Sendable {
                     fileExtension: "csv"
                 )
             }
+            let notationExport = try resolvedNotationExport(
+                for: take,
+                sidecar: sidecar,
+                packageMetadata: package.metadata
+            )
 
             decodedSidecars.append(sidecar)
             bpmCoverage.insert(canonicalBPM)
@@ -2343,6 +2598,8 @@ struct SessionArchiveBuilder: Sendable {
                     videoFileName: videoFileName,
                     audioFileName: audioFileName,
                     watchFileName: watchFileName,
+                    notationFileName: notationExport.fileName,
+                    notationDocument: notationExport.document,
                     verbalSlateUsed: verbalSlateUsed,
                     syncClapUsed: syncClapUsed,
                     notes: take.note ?? ""
@@ -2361,7 +2618,10 @@ struct SessionArchiveBuilder: Sendable {
             throw SessionExportError.invalidSessionMetadata
         }
 
-        let sessionRootName = archiveFolderName(for: package.metadata)
+        let sessionRootName = archiveFolderName(
+            for: package.metadata,
+            allowedBPMs: manifestAllowedBPMs
+        )
         let manifestTakes = try takeContexts.map { context in
             let files = try canonicalFilesMap(for: context, sessionRootURL: URL(fileURLWithPath: "/tmp/\(sessionRootName)"))
             let artifacts = try canonicalArtifactsMap(for: context, sessionRootURL: URL(fileURLWithPath: "/tmp/\(sessionRootName)"))
@@ -2451,6 +2711,7 @@ struct SessionArchiveBuilder: Sendable {
             "audio",
             "video",
             "watch",
+            "notation",
             "manifests"
         ] + bpmDirectories
 
@@ -2465,7 +2726,8 @@ struct SessionArchiveBuilder: Sendable {
     private func canonicalFilesMap(for context: CanonicalTakeContext, sessionRootURL: URL) throws -> [String: String] {
         var files: [String: String] = [
             "camA": "video/\(context.videoFileName)",
-            "serato": "audio/\(context.audioFileName)"
+            "serato": "audio/\(context.audioFileName)",
+            "notation": "notation/\(context.notationFileName)"
         ]
         if let watchFileName = context.watchFileName {
             files["watch"] = "watch/\(watchFileName)"
@@ -2562,10 +2824,8 @@ struct SessionArchiveBuilder: Sendable {
                 throw SessionExportError.invalidSessionMetadata
             }
             let naturalSize = try await track.load(.naturalSize)
-            let preferredTransform = try await track.load(.preferredTransform)
-            let transformedSize = naturalSize.applying(preferredTransform)
-            let width = Int(abs(transformedSize.width.rounded()))
-            let height = Int(abs(transformedSize.height.rounded()))
+            let width = Int(naturalSize.width.rounded())
+            let height = Int(naturalSize.height.rounded())
             let duration = round(durationTime.seconds * 1_000_000) / 1_000_000
             guard duration > 0, width > 0, height > 0 else {
                 throw SessionExportError.invalidSessionMetadata
@@ -2573,7 +2833,7 @@ struct SessionArchiveBuilder: Sendable {
 
             let frameRateValue = try await track.load(.nominalFrameRate)
             let frameRate = frameRateValue > 0
-                ? round(Double(frameRateValue) * 1_000_000) / 1_000_000
+                ? round(Double(frameRateValue) * 10_000) / 10_000
                 : nil
 
             let descriptions = try await track.load(.formatDescriptions)
@@ -2635,7 +2895,7 @@ struct SessionArchiveBuilder: Sendable {
         let sampleRate = Int(format.sampleRate.rounded())
         let channelCount = Int(format.channelCount)
         let frameCount = Int(audioFile.length)
-        let sampleWidthBytes = max(1, Int(format.streamDescription.pointee.mBitsPerChannel) / 8)
+        let sampleWidthBytes = max(1, Int(audioFile.fileFormat.streamDescription.pointee.mBitsPerChannel) / 8)
         let duration = sampleRate > 0 ? round((Double(frameCount) / Double(sampleRate)) * 1_000_000) / 1_000_000 : 0
         guard sampleRate > 0, channelCount > 0, frameCount >= 0 else {
             throw SessionExportError.invalidSessionMetadata
@@ -2726,6 +2986,29 @@ struct SessionArchiveBuilder: Sendable {
             .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
             .lowercased()
         return collapsed.isEmpty ? "scratchlab_session" : collapsed
+    }
+
+    private func sanitizedArchiveLabel(
+        for metadata: SessionExportMetadata,
+        allowedBPMs: [Int]?
+    ) -> String {
+        guard let allowedBPMs, !allowedBPMs.isEmpty else {
+            return sanitizedFileName(metadata.sessionName)
+        }
+
+        let bpmLabel = allowedBPMs.sorted().map(String.init).joined(separator: "_") + "_bpm"
+        let performerLabel = {
+            let trimmed = metadata.performerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? "Unknown Performer" : trimmed
+        }()
+        let scratchLabel = {
+            let trimmedName = metadata.scratchTypeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedName.isEmpty { return trimmedName }
+            let trimmedID = metadata.scratchTypeID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmedID.isEmpty ? "Scratch" : trimmedID
+        }()
+
+        return sanitizedFileName("\(performerLabel)_\(scratchLabel)_\(bpmLabel)")
     }
 
     private func csvField(_ value: String) -> String {
