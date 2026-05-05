@@ -11,8 +11,10 @@ from capture_pipeline_common import (
     DESTINATION_FOLDERS,
     REQUIRED_DIRECTORIES,
     SOURCE_COLUMNS,
+    build_notation_filename,
     build_standard_filename,
     build_take_record,
+    build_unavailable_notation_document,
     default_manifest,
     normalize_extension,
     parse_bool,
@@ -250,6 +252,21 @@ def main() -> int:
         except ValueError as exc:
             errors.append(f"{label}: {exc}")
             continue
+
+        notation_path = session_dir / "notation" / build_notation_filename(take_number)
+        notation_document = build_unavailable_notation_document(
+            session_id=f"{dj_token.lower()}_{date_string}",
+            take_id=f"take-{take_number:03d}",
+            take_number=take_number,
+            bpm=bpm,
+            notes=row["notes"],
+        )
+        try:
+            write_json(notation_path, notation_document)
+        except OSError as exc:
+            errors.append(f"{label}: could not write notation file {notation_path}: {exc}")
+            continue
+        copied_targets.append(notation_path)
 
         take_records.append(take_record)
 

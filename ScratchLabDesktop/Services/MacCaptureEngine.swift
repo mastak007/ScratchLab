@@ -127,8 +127,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             switch self {
             case .searching: return "Show your hand"
             case .steady: return "Hand steady"
-            case .movingLeft: return "Moving left"
-            case .movingRight: return "Moving right"
+            case .movingLeft: return "Back stroke"
+            case .movingRight: return "Forward stroke"
             }
         }
 
@@ -136,8 +136,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             switch self {
             case .searching: return "No confident hand pose yet."
             case .steady: return "Camera sees your hand and is waiting for movement."
-            case .movingLeft: return "Detected leftward hand motion."
-            case .movingRight: return "Detected rightward hand motion."
+            case .movingLeft: return "Detected the reverse-back stroke."
+            case .movingRight: return "Detected the forward stroke."
             }
         }
 
@@ -177,6 +177,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
     @Published var audioLevel: Float = 0
+    @Published private(set) var hasPublishedAudioLevel = false
     @Published var handDetected = false
     @Published var handPosition: CGPoint?
     @Published var handMotionState: HandMotionState = .searching
@@ -190,7 +191,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             UserDefaults.standard.set(calibrationLocked, forKey: ScratchLabDesktopDefaultsKey.calibrationLocked)
             guard oldValue != calibrationLocked else { return }
             videoQueue.async {
-                self.rigLayoutDetector.prioritizeNextDetection()
+                if self.calibrationLocked {
+                    self.rigLayoutDetector.prioritizeNextDetection()
+                } else {
+                    self.clearFixedRigLayout(prioritizeDetection: true)
+                    self.resetPublishedVideoState()
+                }
             }
         }
     }
@@ -249,24 +255,58 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var statusMessage = "Requesting camera and microphone access"
     @Published private(set) var directCaptureStatus = "Open Serato DJ Pro to prepare Direct Capture."
     @Published private(set) var directCaptureDeviceUID: String?
+    @Published private(set) var isCameraActive = false
     @Published private(set) var isRoutineRecording = false
     @Published private(set) var routineRecordingStatus = "Pick camera and audio to record a routine."
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
+
+    // CXL notation capture
+    let cxlRecorder = CXLNotationCaptureRecorder()
+    @Published private(set) var cxlIsRecording = false
+    @Published private(set) var cxlSessionId = ""
+    @Published private(set) var cxlEventCount = 0
+    @Published private(set) var cxlSampleCount = 0
+    @Published private(set) var cxlLastExportPath: String?
+    @Published private(set) var cxlLastExportError: String?
 
     let captureSession = AVCaptureSession()
     let calibrationOffsetRange: ClosedRange<Double> = -0.28...0.28
     let calibrationScaleRange: ClosedRange<Double> = 0.65...1.85
     let mixerWidthRange: ClosedRange<Double> = 0.10...0.30
 
+    static let unavailableAudioPercent = "Audio --"
+
     var formattedAudioPercent: String {
-        "\(Int(audioLevel * 100))%"
+        Self.formattedAudioPercent(for: audioLevel, hasPublishedAudioLevel: hasPublishedAudioLevel)
+    }
+
+    var practiceAudioStatusText: String {
+        guard !selectedAudioDeviceUniqueID.isEmpty else { return "Choose input" }
+        guard availableAudioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceUniqueID }) else {
+            return "Audio Missing"
+        }
+        return formattedAudioPercent
     }
 
     var audioMeterColor: Color {
+        guard hasPublishedAudioLevel, audioLevel.isFinite else { return Color(hex: "9E9E9E") }
         if audioLevel >= 0.65 { return Color(hex: "4CAF50") }
         if audioLevel >= 0.3 { return Color(hex: "FFC107") }
         return Color(hex: "FF7043")
+    }
+
+    static func formattedAudioPercent(
+        for audioLevel: Float?,
+        hasPublishedAudioLevel: Bool,
+        unavailablePlaceholder: String = unavailableAudioPercent
+    ) -> String {
+        guard hasPublishedAudioLevel, let audioLevel, audioLevel.isFinite else {
+            return unavailablePlaceholder
+        }
+
+        let clampedLevel = min(max(audioLevel, 0), 1)
+        return "\(Int((clampedLevel * 100).rounded()))%"
     }
 
     var statusIcon: String {
@@ -335,9 +375,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case .steady:
             return "Ready for the next baby"
         case .movingLeft:
-            return "Left sweep locked"
+            return "Back stroke"
         case .movingRight:
-            return "Right sweep locked"
+            return "Forward stroke"
         }
     }
 
@@ -348,9 +388,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case .steady:
             return "Start a smooth sweep"
         case .movingLeft:
-            return "Next move: reverse right"
+            return "Back — now reverse forward"
         case .movingRight:
-            return "Next move: reverse left"
+            return "Forward — now reverse back"
         }
     }
 
@@ -359,12 +399,53 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case .searching:
             return "Keep the scratching hand visible above one deck so ScratchLab can read the baby-scratch direction."
         case .steady:
-            return "Hand tracking is live. Make one clean sweep, then reverse back the other way for the baby scratch."
+            return "Hand tracking is live. Make one clean forward sweep, then reverse back for the baby scratch."
         case .movingLeft:
-            return "The hand is traveling left right now. Reverse back to the right on the next stroke to keep the baby scratch even."
+            return "Back stroke detected (\(coachConfidenceSourcePhrase)). Reverse forward on the next stroke to complete the baby scratch."
         case .movingRight:
-            return "The hand is traveling right right now. Reverse back to the left on the next stroke to keep the baby scratch even."
+            return "Forward stroke detected (\(coachConfidenceSourcePhrase)). Reverse back on the next stroke to complete the baby scratch."
         }
+    }
+
+    /// Confidence percentage from the direction tracker (0-100).
+    var coachConfidencePercent: Int {
+        let baseConfidence = Int((handDirectionTracker.confidence * 100).rounded())
+        guard hasActiveCoachMotion,
+              let audioConfidence = recentAudioScratchConfidence else {
+            return baseConfidence
+        }
+
+        let conservativeAudioBoost = min(10, Int((audioConfidence * 0.10).rounded()))
+        return min(100, baseConfidence + conservativeAudioBoost)
+    }
+
+    /// Human-readable signal source for the current coach state.
+    /// "Fused" = camera motion and recent audio onset both active.
+    /// Audio alone does not drive direction — it only confirms activity.
+    var coachSignalSource: String {
+        let recentAudio = recentAudioScratchConfidence != nil
+        if hasActiveCoachMotion && recentAudio { return "Fused" }
+        if recentAudio { return "Audio" }
+        if handDetected { return "Camera" }
+        return "Searching"
+    }
+
+    private var hasActiveCoachMotion: Bool {
+        handMotionState == .movingLeft || handMotionState == .movingRight
+    }
+
+    private var recentAudioScratchConfidence: Double? {
+        guard let lastScratchDetection,
+              Date().timeIntervalSince(lastScratchDetection.detectedAt) <= 1.5 else {
+            return nil
+        }
+        return lastScratchDetection.confidence
+    }
+
+    private var coachConfidenceSourcePhrase: String {
+        let source = coachSignalSource.lowercased()
+        guard coachConfidencePercent > 0 else { return source }
+        return "\(coachConfidencePercent)% confidence, \(source)"
     }
 
     var visibleStarCount: Int {
@@ -508,6 +589,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let handPoseRequest = VNDetectHumanHandPoseRequest()
     private let scratchDetector = MacScratchDetector()
     private let rigLayoutDetector = DJRigLayoutDetector()
+    private let handDirectionTracker = HandDirectionTracker()
 
     private let videoOutput = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -520,14 +602,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private var isRunning = false
     private let activeHandPoseInterval: CFTimeInterval = 0.12
-    private let lockedHandPoseInterval: CFTimeInterval = 0.20
     private var lastVisionFrameTime: CFTimeInterval = 0
     private var lastPerformerMonitorFrameTime: CFTimeInterval = 0
     private let audioLevelPublishInterval: CFTimeInterval = 0.05
     private var lastPublishedAudioLevelTime: CFTimeInterval = 0
-    private var lastHandSample: (point: CGPoint, time: CFTimeInterval)?
     private var smoothedHandPoint: CGPoint?
     private var missedHandTrackingFrames = 0
+
+    #if DEBUG
+    private var debugFramesReceived = 0
+    private var debugFramesAnalyzed = 0
+    private var debugHandObservationsFound = 0
+    private var debugDirectionChanges = 0
+    private var debugMissedFrameCount = 0
+    private var debugLastROI: CGRect = .zero
+    #endif
     private var lastStarAwardAt: Date?
     private var lastPublishedRigLayout: DJRigLayout?
     private var lastPublishedUsesManualRigGuide = false
@@ -598,14 +687,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        isCameraActive = true
+        hasPublishedAudioLevel = false
         refreshDevices()
         requestPermissionsAndConfigure()
     }
 
     func stop() {
         isRunning = false
+        isCameraActive = false
         scratchDetector.reset()
         rigLayoutDetector.reset()
+        handDirectionTracker.reset()
         setPerformerMonitorStreamingEnabled(false)
         lastScratchDetection = nil
         scratchDetectionCount = 0
@@ -617,6 +710,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         missedHandTrackingFrames = 0
         performerMonitorFrame = nil
         lastStarAwardAt = nil
+        audioLevel = 0
+        hasPublishedAudioLevel = false
         videoQueue.async {
             self.clearFixedRigLayout()
             self.resetPublishedVideoState()
@@ -655,11 +750,104 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         Task { @MainActor in
             self.audioLevel = 0
+            self.hasPublishedAudioLevel = false
             self.lastScratchDetection = nil
             self.scratchDetectionCount = 0
             self.highlightedZoneRole = .leftDeck
             self.sessionStars = 0
             self.lastStarAwardAt = nil
+        }
+    }
+
+    // MARK: - CXL notation capture
+
+    func startCXLCapture(
+        scratchType: String = "baby_scratch",
+        mode: String = "scratchRating",
+        bpm: Int? = nil,
+        loopDuration: Double? = nil
+    ) {
+        let roi = fixedRigLayout.map { layout -> CXLNotationCaptureSession.CXLRect? in
+            let box = layout.unionBox
+            return CXLNotationCaptureSession.CXLRect(
+                x: box.origin.x,
+                y: box.origin.y,
+                width: box.width,
+                height: box.height
+            )
+        } ?? nil
+
+        cxlRecorder.startSession(
+            scratchType: scratchType,
+            mode: mode,
+            bpm: bpm,
+            loopDuration: loopDuration,
+            cameraMode: selectedVideoSourceDescription,
+            calibrationLocked: calibrationLocked,
+            deckROI: roi,
+            appBuildVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        )
+        publishCXLState()
+    }
+
+    func stopCXLCapture() {
+        cxlRecorder.stopSession()
+        publishCXLState()
+    }
+
+    func exportCXLSession() {
+        Task.detached(priority: .background) { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try self.cxlRecorder.exportSession()
+                await MainActor.run {
+                    self.cxlLastExportPath = result.directoryURL.path
+                    self.cxlLastExportError = nil
+                    self.publishCXLState()
+                }
+            } catch {
+                await MainActor.run {
+                    self.cxlLastExportError = error.localizedDescription
+                    self.publishCXLState()
+                }
+            }
+        }
+    }
+
+    /// Record a target stroke from the notation playback engine.
+    /// Direction must come from the notation timeline — not from live hand detection.
+    @discardableResult
+    func recordCXLTargetStroke(direction: CXLDirection, strokeDuration: Double? = nil) -> Int {
+        let idx = cxlRecorder.recordTargetStroke(direction: direction, strokeDuration: strokeDuration)
+        publishCXLState()
+        return idx
+    }
+
+    private func publishCXLState() {
+        Task { @MainActor in
+            self.cxlIsRecording = self.cxlRecorder.isRecording
+            self.cxlSessionId = self.cxlRecorder.sessionId
+            self.cxlEventCount = self.cxlRecorder.eventCount
+            self.cxlSampleCount = self.cxlRecorder.sampleCount
+            self.cxlLastExportPath = self.cxlRecorder.lastExportPath
+        }
+    }
+
+    private func cxlDirectionFrom(_ state: HandMotionState) -> CXLDirection {
+        switch state {
+        case .movingRight: return .forward
+        case .movingLeft:  return .back
+        case .steady:      return .idle
+        case .searching:   return .searching
+        }
+    }
+
+    private func cxlSignalSource() -> CXLSignalSource {
+        switch coachSignalSource {
+        case "Fused":     return .fused
+        case "Audio":     return .audio
+        case "Camera":    return .camera
+        default:          return .searching
         }
     }
 
@@ -672,6 +860,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 Task { @MainActor in
                     if !videoGranted || !audioGranted {
                         self.statusMessage = "Grant camera and microphone access in System Settings"
+                        self.isCameraActive = false
                     } else {
                         self.statusMessage = "Configuring capture session"
                     }
@@ -1149,6 +1338,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if !captureSession.isRunning {
             captureSession.startRunning()
         }
+        Task { @MainActor in
+            self.isCameraActive = self.captureSession.isRunning
+        }
     }
 
     private func captureSessionHasInput(matching uniqueID: String, mediaType: AVMediaType) -> Bool {
@@ -1359,8 +1551,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func processVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        let signpostID = ScratchLabPerformanceSignpost.begin("CameraFrameProcess")
+        defer { ScratchLabPerformanceSignpost.end("CameraFrameProcess", signpostID) }
+
         let now = CACurrentMediaTime()
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        #if DEBUG
+        debugFramesReceived += 1
+        #endif
 
         let detectedLayout = fixedRigLayout == nil
             ? rigLayoutDetector.detectLayout(in: pixelBuffer, useLockedCadence: calibrationLocked)
@@ -1375,48 +1574,66 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             publishPerformerMonitorFrame(from: pixelBuffer, layout: layout, at: now)
         }
 
-        let handPoseInterval = resolvedHandPoseInterval(for: layout)
-        guard now - lastVisionFrameTime >= handPoseInterval else { return }
+        // Hand pose always runs at the active rate; the rig detector manages its own cadence.
+        guard now - lastVisionFrameTime >= activeHandPoseInterval else { return }
         lastVisionFrameTime = now
 
+        #if DEBUG
+        debugFramesAnalyzed += 1
         let trackingRegion = resolvedHandTrackingRegion(for: layout)
+        debugLastROI = trackingRegion
+        #else
+        let trackingRegion = resolvedHandTrackingRegion(for: layout)
+        #endif
+
         handPoseRequest.regionOfInterest = trackingRegion
         let requestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
 
         do {
             try requestHandler.perform([handPoseRequest])
             guard let observation = handPoseRequest.results?.first,
-                  let trackedPoint = trackedHandPoint(from: observation, layout: layout, trackingRegion: trackingRegion) else {
+                  let rawTrackedPoint = trackedHandPoint(from: observation, layout: layout, trackingRegion: trackingRegion) else {
                 handleHandTrackingMiss()
                 return
             }
 
+            #if DEBUG
+            debugHandObservationsFound += 1
+            let prevState = lastPublishedHandMotionState
+            #endif
+
             missedHandTrackingFrames = 0
-            let currentPoint = smoothedTrackingPoint(from: trackedPoint)
-            let movementState: HandMotionState
-            if let lastHandSample {
-                let deltaX = currentPoint.x - lastHandSample.point.x
-                let deltaTime = max(now - lastHandSample.time, 0.001)
-                let velocity = deltaX / deltaTime
 
-                if velocity > 0.10 && deltaX > 0.008 {
-                    movementState = .movingRight
-                } else if velocity < -0.10 && deltaX < -0.008 {
-                    movementState = .movingLeft
-                } else {
-                    movementState = .steady
-                }
-            } else {
-                movementState = .steady
-            }
+            // Feed the raw point into the tracker (unsmoothed = accurate velocity).
+            let direction = handDirectionTracker.recordObservation(rawPoint: rawTrackedPoint, at: now)
+            let movementState = handMotionState(from: direction)
 
-            lastHandSample = (currentPoint, now)
+            #if DEBUG
+            if movementState != prevState { debugDirectionChanges += 1 }
+            #endif
+
+            // Use the smoothed point only for display position.
+            let currentPoint = smoothedTrackingPoint(from: rawTrackedPoint)
             publishHandTrackingIfNeeded(detected: true, position: currentPoint, state: movementState)
         } catch {
             Task { @MainActor in
-                print("Hand tracking error: \(error.localizedDescription)")
                 self.statusMessage = "Hand tracking paused. Adjust framing and try again."
             }
+        }
+    }
+
+    private func handMotionState(from direction: HandDirectionTracker.Direction) -> HandMotionState {
+        // Vision uses un-mirrored pixel-buffer coordinates on macOS (AVCaptureVideoDataOutput
+        // does not mirror; only the preview layer mirrors for front-facing cameras).
+        // Convention: x increases rightward in the frame. For a front-facing camera looking at
+        // the DJ, frame-right = DJ's physical left. A right-hand forward scratch stroke moves
+        // the hand to the DJ's left → frame-right → x increases → .movingForward.
+        // Desk View (top-down) maps differently; that limitation is documented in HandDirectionTracker.
+        switch direction {
+        case .movingForward:  return .movingRight
+        case .movingBackward: return .movingLeft
+        case .idle:           return .steady
+        case .searching:      return .searching
         }
     }
 
@@ -1471,9 +1688,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func processAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        let signpostID = ScratchLabPerformanceSignpost.begin("AudioAnalyze")
+        defer { ScratchLabPerformanceSignpost.end("AudioAnalyze", signpostID) }
+
         guard let audioPacket = Self.audioPacket(from: sampleBuffer) else { return }
 
-        let level = Self.level(from: audioPacket.samples)
+        let measuredLevel = Self.level(from: audioPacket.samples)
+        let hasFiniteMeasuredLevel = measuredLevel.isFinite
+        let sanitizedLevel = hasFiniteMeasuredLevel ? min(max(measuredLevel, 0), 1) : 0
         let detection = scratchDetector.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
         let now = CACurrentMediaTime()
         let shouldPublishAudioLevel = now - lastPublishedAudioLevelTime >= audioLevelPublishInterval
@@ -1485,12 +1707,26 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         Task { @MainActor in
             if shouldPublishAudioLevel {
-                self.audioLevel = (self.audioLevel * 0.55) + (level * 0.45)
+                let currentLevel = self.audioLevel.isFinite ? self.audioLevel : 0
+                if hasFiniteMeasuredLevel {
+                    self.audioLevel = min(max((currentLevel * 0.55) + (sanitizedLevel * 0.45), 0), 1)
+                    self.hasPublishedAudioLevel = true
+                } else if !self.hasPublishedAudioLevel {
+                    self.audioLevel = 0
+                }
             }
             if let detection {
                 self.lastScratchDetection = detection
                 self.scratchDetectionCount += 1
                 self.rewardScratchIfNeeded(detection)
+                if self.cxlRecorder.isRecording {
+                    self.cxlRecorder.recordAudioScratch(
+                        confidence: detection.confidence / 100.0,
+                        rms: nil,
+                        onset: true
+                    )
+                    self.publishCXLState()
+                }
             }
         }
     }
@@ -1511,6 +1747,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func resolveFixedRigLayout(from detectedLayout: DJRigLayout?) -> DJRigLayout? {
+        // Invariant: once fixedRigLayout is set it is frozen until the user explicitly resets
+        // (resetCalibration, camera source change, manualRigGuideEnabled toggle, or stop).
+        // The rig detector is skipped entirely when fixedRigLayout != nil (see processVideoSampleBuffer),
+        // so live detection can never silently shift the hand ROI after the first lock.
         if let fixedRigLayout {
             return fixedRigLayout
         }
@@ -1637,14 +1877,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return region
     }
 
-    private func resolvedHandPoseInterval(for layout: DJRigLayout?) -> CFTimeInterval {
-        guard calibrationLocked,
-              layout != nil else {
-            return activeHandPoseInterval
-        }
-        return lockedHandPoseInterval
-    }
-
     private func smoothedTrackingPoint(from point: CGPoint) -> CGPoint {
         guard let smoothedHandPoint else {
             self.smoothedHandPoint = point
@@ -1662,15 +1894,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private func handleHandTrackingMiss() {
         missedHandTrackingFrames += 1
-        guard missedHandTrackingFrames >= 4 else { return }
 
-        smoothedHandPoint = nil
-        lastHandSample = nil
-        publishHandTrackingIfNeeded(detected: false, position: nil, state: .searching)
+        #if DEBUG
+        debugMissedFrameCount += 1
+        #endif
+
+        let direction = handDirectionTracker.recordMiss()
+
+        if direction == .searching {
+            // Extended miss — clear all hand state.
+            smoothedHandPoint = nil
+            publishHandTrackingIfNeeded(detected: false, position: nil, state: .searching)
+        } else {
+            // Brief miss — hold the last position and direction so the coach doesn't flicker.
+            let movementState = handMotionState(from: direction)
+            publishHandTrackingIfNeeded(
+                detected: smoothedHandPoint != nil,
+                position: smoothedHandPoint,
+                state: movementState
+            )
+        }
     }
 
     private var shouldPublishPerformerMonitorFrame: Bool {
         performerMonitorDemandQueue.sync { performerMonitorStreamingEnabled }
+    }
+
+    private var shouldProcessCaptureSamples: Bool {
+        isRunning || isRoutineRecording || cxlRecorder.isRecording || shouldPublishPerformerMonitorFrame
     }
 
     private func publishRigLayoutIfNeeded(_ layout: DJRigLayout?, usesManualRigGuide: Bool) {
@@ -1688,24 +1939,68 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func publishHandTrackingIfNeeded(detected: Bool, position: CGPoint?, state: HandMotionState) {
+        let stateChanged = lastPublishedHandMotionState != state
         guard lastPublishedHandDetected != detected
             || lastPublishedHandPosition != position
-            || lastPublishedHandMotionState != state else {
+            || stateChanged else {
             return
         }
 
+        let prevState = lastPublishedHandMotionState
         lastPublishedHandDetected = detected
         lastPublishedHandPosition = position
         lastPublishedHandMotionState = state
+
+        // Capture tracker values before crossing thread boundary.
+        let motionConfidence = Double(handDirectionTracker.confidence)
+        let cxlDir = cxlDirectionFrom(state)
+        let cxlSrc = cxlSignalSource()
+        let cxlPrevDir = cxlDirectionFrom(prevState)
 
         Task { @MainActor in
             self.handDetected = detected
             self.handPosition = position
             self.handMotionState = state
+
+            // CXL: record motion stroke on active-direction transitions.
+            if self.cxlRecorder.isRecording && stateChanged {
+                let wasActive = prevState == .movingLeft || prevState == .movingRight
+                let nowActive = state == .movingLeft || state == .movingRight
+                _ = cxlPrevDir  // suppress unused warning
+                if nowActive || (wasActive && !nowActive) {
+                    self.cxlRecorder.recordMotionStroke(
+                        detectedDirection: cxlDir,
+                        confidence: motionConfidence,
+                        signalSource: cxlSrc,
+                        handX: position.map { Double($0.x) },
+                        handY: position.map { Double($0.y) }
+                    )
+                    self.publishCXLState()
+                }
+            }
+
+            // CXL: periodic sample (throttled inside recordSample).
+            if self.cxlRecorder.isRecording {
+                self.cxlRecorder.recordSample(
+                    targetDirection: nil,
+                    detectedDirection: cxlDir,
+                    handX: position.map { Double($0.x) },
+                    handY: position.map { Double($0.y) },
+                    motionConfidence: motionConfidence,
+                    audioConfidence: self.recentAudioScratchConfidence,
+                    signalSource: cxlSrc,
+                    timingErrorMs: nil,
+                    calibrationLocked: self.calibrationLocked
+                )
+                self.publishCXLState()
+            }
         }
     }
 
     private func resetPublishedVideoState() {
+        handDirectionTracker.reset()
+        smoothedHandPoint = nil
+        missedHandTrackingFrames = 0
         lastPublishedRigLayout = nil
         lastPublishedUsesManualRigGuide = false
         lastPublishedHandDetected = false
@@ -1970,10 +2265,39 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         vDSP_rmsqv(samples, 1, &rms, vDSP_Length(samples.count))
         return min(max(rms * 10, 0), 1)
     }
+
+    #if DEBUG
+    /// Snapshot of detection counters for in-session debugging.
+    struct DebugStats {
+        let framesReceived: Int
+        let framesAnalyzed: Int
+        let handObservationsFound: Int
+        let directionChanges: Int
+        let missedFrames: Int
+        let currentROI: CGRect
+        let audioScratchCount: Int
+    }
+
+    func captureDebugStats() -> DebugStats {
+        DebugStats(
+            framesReceived: debugFramesReceived,
+            framesAnalyzed: debugFramesAnalyzed,
+            handObservationsFound: debugHandObservationsFound,
+            directionChanges: debugDirectionChanges,
+            missedFrames: debugMissedFrameCount,
+            currentROI: debugLastROI,
+            audioScratchCount: scratchDetectionCount
+        )
+    }
+    #endif
 }
 
 extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard shouldProcessCaptureSamples else { return }
+        let signpostID = ScratchLabPerformanceSignpost.begin("CaptureFrameProcess")
+        defer { ScratchLabPerformanceSignpost.end("CaptureFrameProcess", signpostID) }
+
         if output is AVCaptureVideoDataOutput {
             processVideoSampleBuffer(sampleBuffer)
         } else {

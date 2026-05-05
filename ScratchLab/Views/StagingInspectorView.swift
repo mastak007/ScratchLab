@@ -1,5 +1,110 @@
 import SwiftUI
 
+struct RawJSONInspectorView: View {
+    @ObservedObject var viewModel: RawJSONInspectorViewModel
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Raw JSON / Sidecar")
+                            .font(.title2.weight(.bold))
+                        Text("Advanced technical view")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Close") {
+                        viewModel.close()
+                        dismiss()
+                    }
+                }
+
+                statusContent
+
+                if let fileName = viewModel.selectedFileName, !fileName.isEmpty {
+                    HStack(spacing: 8) {
+                        Text(fileName)
+                            .font(.system(.subheadline, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+
+                        if let fileSizeDescription = viewModel.fileSizeDescription {
+                            Text(fileSizeDescription)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if !viewModel.previewText.isEmpty {
+                    ScrollView {
+                        Text(viewModel.previewText)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(12)
+                    }
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+            .padding(20)
+            .frame(minWidth: 720, minHeight: 520, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
+        switch viewModel.state {
+        case .idle:
+            Text("Choose a take to inspect.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        case .empty:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("No JSON or sidecar selected")
+                    .font(.headline)
+                Text("Record or select a take, then open inspection.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        case .loading:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Loading preview...")
+                    .font(.subheadline.weight(.semibold))
+            }
+        case .loaded:
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+            } else {
+                Text("Preview ready")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(message)
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                if !viewModel.previewText.isEmpty {
+                    Text("Showing the bounded raw preview below.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
 struct StagingInspectorView: View {
     let contexts: [StagingInspectorContext]
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 struct ScratchCoachCardTheme {
     let accentColor: Color
@@ -192,67 +193,93 @@ struct ScratchCoachRigView: View {
     private static let crossfaderYRatio: CGFloat = 0.80
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            let isPlaying = isPlayingProvider()
-            let playbackTime = isPlaying ? playbackTimeProvider() : 0
-            let animationState = resolvedAnimationState(
-                playbackTime: playbackTime,
-                isPlaying: isPlaying
-            )
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Coach Rig")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.primaryTextColor)
-
-                    Spacer()
-
-                    Text(isPlaying ? "LIVE" : "READY")
-                        .font(.system(size: 10, weight: .black))
-                        .foregroundStyle(isPlaying ? theme.primaryTextColor : theme.secondaryTextColor)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(
-                            isPlaying
-                                ? theme.accentColor.opacity(0.82)
-                                : theme.detailFill,
-                            in: Capsule()
-                        )
-                }
-
-                GeometryReader { geometry in
-                    rigScene(
-                        in: geometry.size,
-                        animationState: animationState,
-                        isPlaying: isPlaying
+        Group {
+            if isPlayingProvider() {
+                TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+                    rigContent(
+                        playbackTime: playbackTimeProvider(),
+                        isPlaying: isPlayingProvider()
                     )
                 }
-                .frame(height: sceneHeight)
-
-                HStack(spacing: 8) {
-                    Label("Record hand", systemImage: "record.circle")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(theme.secondaryTextColor)
-
-                    Spacer(minLength: 0)
-
-                    Label(faderStateLabel(for: animationState), systemImage: animationState.crossfaderOpenState ? "slider.horizontal.3" : "pause.rectangle")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(theme.secondaryTextColor)
-                }
-
-                Text(faderCueText)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(theme.secondaryTextColor)
+            } else {
+                rigContent(
+                    playbackTime: playbackTimeProvider(),
+                    isPlaying: false
+                )
             }
-            .padding(12)
-            .background(theme.controllerFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .accessibilityIdentifier("scratchlab-coach-rig")
         }
         .task(id: demoMotionProfileTaskID) {
             await loadDemoMotionProfileIfNeeded()
         }
+    }
+
+    private func rigContent(
+        playbackTime: TimeInterval,
+        isPlaying: Bool
+    ) -> some View {
+        let updateStartedAt = CACurrentMediaTime()
+        let animationState = ScratchLabPerformanceSignpost.withInterval("CoachRigUpdate") {
+            resolvedAnimationState(
+                playbackTime: playbackTime,
+                isPlaying: isPlaying
+            )
+        }
+        let updateDuration = CACurrentMediaTime() - updateStartedAt
+        DispatchQueue.main.async {
+            ScratchLabRuntimeDiagnostics.shared.recordCoachRigUpdate(
+                durationSeconds: updateDuration
+            )
+        }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Coach Rig")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.primaryTextColor)
+
+                Spacer()
+
+                Text(isPlaying ? "LIVE" : "READY")
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(isPlaying ? theme.primaryTextColor : theme.secondaryTextColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        isPlaying
+                            ? theme.accentColor.opacity(0.82)
+                            : theme.detailFill,
+                        in: Capsule()
+                    )
+            }
+
+            GeometryReader { geometry in
+                rigScene(
+                    in: geometry.size,
+                    animationState: animationState,
+                    isPlaying: isPlaying
+                )
+            }
+            .frame(height: sceneHeight)
+
+            HStack(spacing: 8) {
+                Label("Record hand", systemImage: "record.circle")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(theme.secondaryTextColor)
+
+                Spacer(minLength: 0)
+
+                Label(faderStateLabel(for: animationState), systemImage: animationState.crossfaderOpenState ? "slider.horizontal.3" : "pause.rectangle")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(theme.secondaryTextColor)
+            }
+
+            Text(faderCueText)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.secondaryTextColor)
+        }
+        .padding(12)
+        .background(theme.controllerFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityIdentifier("scratchlab-coach-rig")
     }
 
     private var hasCustomAnimationStateProvider: Bool {
@@ -263,7 +290,7 @@ struct ScratchCoachRigView: View {
     }
 
     private var demoMotionProfileTaskID: String {
-        guard !hasCustomAnimationStateProvider else { return "" }
+        guard !hasCustomAnimationStateProvider, !isBabyScratch else { return "" }
         return Self.normalizedDemoAudioFileName(instruction.demoAudioFile) ?? ""
     }
 
@@ -277,6 +304,11 @@ struct ScratchCoachRigView: View {
 
         guard isPlaying else {
             return isBabyScratch ? .babyScratchOpen : .neutral
+        }
+
+        if isBabyScratch {
+            let pose = BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)
+            return BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)
         }
 
         if Self.normalizedDemoAudioFileName(instruction.demoAudioFile) != nil {
@@ -297,6 +329,7 @@ struct ScratchCoachRigView: View {
     @MainActor
     private func loadDemoMotionProfileIfNeeded() async {
         guard !hasCustomAnimationStateProvider,
+              !isBabyScratch,
               let audioFileName = Self.normalizedDemoAudioFileName(instruction.demoAudioFile) else {
             loadedDemoMotionAudioFile = nil
             demoMotionSampleBuffer = nil

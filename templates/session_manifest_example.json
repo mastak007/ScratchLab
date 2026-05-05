@@ -30,6 +30,7 @@
       "notes": "clean take",
       "files": {
         "camA": "video/DJPRIMECUTS_baby_070_take01_camA.mov",
+        "notation": "notation/take-001_detected_notation.json",
         "serato": "audio/DJPRIMECUTS_baby_070_take01_serato.wav"
       },
       "artifacts": {
@@ -77,6 +78,7 @@
       "files": {
         "camA": "video/DJPRIMECUTS_baby_090_take01_camA.mov",
         "camB": "video/DJPRIMECUTS_baby_090_take01_camB.mov",
+        "notation": "notation/take-001_detected_notation.json",
         "serato": "audio/DJPRIMECUTS_baby_090_take01_serato.wav",
         "watch": "watch/DJPRIMECUTS_baby_090_take01_watch.csv"
       },
@@ -148,6 +150,7 @@
       "notes": "",
       "files": {
         "camA": "video/DJPRIMECUTS_baby_110_take01_camA.mov",
+        "notation": "notation/take-001_detected_notation.json",
         "serato": "audio/DJPRIMECUTS_baby_110_take01_serato.wav"
       },
       "artifacts": {

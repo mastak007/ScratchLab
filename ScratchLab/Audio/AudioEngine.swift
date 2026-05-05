@@ -425,6 +425,9 @@ class AudioEngine: ObservableObject {
     
     private func analyzeBuffer(_ buffer: [Float], sampleRate: Double) {
         guard isAnalyzing else { return }
+
+        let signpostID = ScratchLabPerformanceSignpost.begin("AudioAnalyze")
+        defer { ScratchLabPerformanceSignpost.end("AudioAnalyze", signpostID) }
         
         // Perform FFT
         let frequencies = performFFT(buffer)

@@ -1,6 +1,179 @@
 import Foundation
 import SwiftUI
 
+enum InspectorState: Equatable, Sendable {
+    case idle
+    case empty
+    case loading
+    case loaded
+    case failed(String)
+}
+
+@MainActor
+final class RawJSONInspectorViewModel: ObservableObject {
+    @Published var state: InspectorState = .idle
+    @Published var selectedFileName: String?
+    @Published var previewText: String = ""
+    @Published var fileSizeDescription: String?
+    @Published var errorMessage: String?
+
+    private let previewByteLimit: Int
+    private let previewLineLimit: Int
+    private var loadTask: Task<Void, Never>?
+
+    init(previewByteLimit: Int = 100 * 1024, previewLineLimit: Int = 2_000) {
+        self.previewByteLimit = previewByteLimit
+        self.previewLineLimit = previewLineLimit
+    }
+
+    func openForCurrentSelection(_ url: URL?) {
+        loadTask?.cancel()
+        selectedFileName = url?.lastPathComponent
+        previewText = ""
+        fileSizeDescription = nil
+        errorMessage = nil
+
+        guard let url else {
+            state = .empty
+            return
+        }
+
+        loadPreview(url: url)
+    }
+
+    func loadPreview(url: URL) {
+        loadTask?.cancel()
+        selectedFileName = url.lastPathComponent
+        previewText = ""
+        fileSizeDescription = nil
+        errorMessage = nil
+        state = .loading
+
+        loadTask = Task { [previewByteLimit, previewLineLimit] in
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try RawJSONPreviewLoader.loadPreview(
+                        from: url,
+                        previewByteLimit: previewByteLimit,
+                        previewLineLimit: previewLineLimit
+                    )
+                }.value
+
+                guard !Task.isCancelled else { return }
+                previewText = result.previewText
+                fileSizeDescription = result.fileSizeDescription
+                errorMessage = result.errorMessage
+                state = result.state
+            } catch {
+                guard !Task.isCancelled else { return }
+                let message = (error as? LocalizedError)?.errorDescription
+                    ?? "ScratchLab could not open \(url.lastPathComponent)."
+                selectedFileName = url.lastPathComponent
+                previewText = ""
+                fileSizeDescription = nil
+                errorMessage = message
+                state = .failed(message)
+            }
+        }
+    }
+
+    func close() {
+        loadTask?.cancel()
+        loadTask = nil
+        selectedFileName = nil
+        previewText = ""
+        fileSizeDescription = nil
+        errorMessage = nil
+        state = .idle
+    }
+}
+
+private enum RawJSONPreviewLoader {
+    fileprivate struct PreviewResult: Sendable {
+        let state: InspectorState
+        let previewText: String
+        let fileSizeDescription: String?
+        let errorMessage: String?
+    }
+
+    fileprivate static func loadPreview(
+        from url: URL,
+        previewByteLimit: Int,
+        previewLineLimit: Int,
+        fileManager: FileManager = .default
+    ) throws -> PreviewResult {
+        guard fileManager.fileExists(atPath: url.path) else {
+            let message = "ScratchLab could not find \(url.lastPathComponent)."
+            return PreviewResult(
+                state: .failed(message),
+                previewText: "",
+                fileSizeDescription: nil,
+                errorMessage: message
+            )
+        }
+
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        let fileSize = values.fileSize ?? 0
+        let fileSizeDescription = ByteCountFormatter.string(
+            fromByteCount: Int64(fileSize),
+            countStyle: .file
+        )
+
+        let handle = try FileHandle(forReadingFrom: url)
+        defer {
+            try? handle.close()
+        }
+
+        let previewData = try handle.read(upToCount: previewByteLimit + 1) ?? Data()
+        let wasByteTruncated = previewData.count > previewByteLimit || fileSize > previewByteLimit
+        let boundedData = wasByteTruncated ? previewData.prefix(previewByteLimit) : previewData[...]
+        let rawPreview = String(decoding: boundedData, as: UTF8.self)
+        let lineLimitedPreview = truncatedLinePreview(rawPreview, lineLimit: previewLineLimit)
+
+        var previewText = lineLimitedPreview.text
+        var errorMessage: String?
+        let wasTruncated = wasByteTruncated || lineLimitedPreview.wasTruncated
+
+        if !wasByteTruncated {
+            do {
+                _ = try JSONSerialization.jsonObject(with: Data(boundedData), options: [])
+            } catch {
+                errorMessage = "JSON validation failed: \(error.localizedDescription)"
+            }
+        }
+
+        if wasTruncated {
+            previewText += (previewText.isEmpty ? "" : "\n\n") + "Preview truncated for performance."
+        }
+
+        if let errorMessage {
+            return PreviewResult(
+                state: .failed(errorMessage),
+                previewText: previewText,
+                fileSizeDescription: fileSizeDescription,
+                errorMessage: errorMessage
+            )
+        }
+
+        return PreviewResult(
+            state: .loaded,
+            previewText: previewText,
+            fileSizeDescription: fileSizeDescription,
+            errorMessage: nil
+        )
+    }
+
+    private static func truncatedLinePreview(_ text: String, lineLimit: Int) -> (text: String, wasTruncated: Bool) {
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        guard lines.count > lineLimit else {
+            return (text, false)
+        }
+
+        let limitedLines = lines.prefix(lineLimit).map(String.init)
+        return (limitedLines.joined(separator: "\n"), true)
+    }
+}
+
 struct StagingInspectorContext: Identifiable {
     let storageKind: StagedCaptureStorageKind
     let title: String

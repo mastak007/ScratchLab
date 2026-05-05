@@ -134,7 +134,7 @@ struct FormulaPlaygroundView: View {
                     .foregroundColor(Color(hex: "7DD3FC"))
             }
 
-            Text("TTM-style aliases for the scratches already built into ScratchLab.")
+            Text("Scratch technique aliases built into ScratchLab.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.62))
 
@@ -187,7 +187,7 @@ struct FormulaPlaygroundView: View {
 
     private func resultCard(timeline: ScratchRenderTimeline) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("TTM GRAPH")
+            Text("SCRATCH GRAPH")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.white.opacity(0.75))
 
