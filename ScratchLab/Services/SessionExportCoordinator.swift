@@ -463,6 +463,118 @@ enum SessionExportError: Error, Equatable, Sendable {
     }
 }
 
+enum TakeArtifactReadiness: Equatable, Sendable {
+    case recording
+    case finalizing
+    case ready
+    case missingAudio
+    case missingVideo
+    case failed(String)
+
+    var badgeTitle: String {
+        switch self {
+        case .recording:
+            return "Recording"
+        case .finalizing:
+            return "Finalizing"
+        case .ready:
+            return "Ready"
+        case .missingAudio:
+            return "Missing Audio"
+        case .missingVideo:
+            return "Missing Video"
+        case .failed:
+            return "Failed"
+        }
+    }
+}
+
+struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
+    let takeID: String
+    let takeNumber: Int
+    let bpm: Int?
+    let audioSourceURL: URL?
+    let videoSourceURL: URL?
+    let audioExists: Bool
+    let videoExists: Bool
+    let audioBytes: Int64
+    let videoBytes: Int64
+    let finalizedAt: Date?
+    let readiness: TakeArtifactReadiness
+
+    var id: String { takeID }
+}
+
+enum ArtifactPreflight {
+    struct Configuration: Equatable, Sendable {
+        let timeout: TimeInterval
+        let pollInterval: TimeInterval
+        let stabilityInterval: TimeInterval
+
+        static let exportDefault = Configuration(
+            timeout: 4.0,
+            pollInterval: 0.2,
+            stabilityInterval: 0.35
+        )
+    }
+
+    struct FileCheckResult: Equatable, Sendable {
+        let url: URL
+        let exists: Bool
+        let bytes: Int64
+        let isStable: Bool
+    }
+
+    static func checkFileReady(
+        url: URL,
+        fileManager: FileManager = .default,
+        configuration: Configuration = .exportDefault
+    ) -> FileCheckResult {
+        let deadline = Date().addingTimeInterval(configuration.timeout)
+        var lastObservedSize: Int64 = 0
+        var lastObservedExists = false
+
+        while Date() <= deadline {
+            let current = fileState(at: url, fileManager: fileManager)
+            lastObservedExists = current.exists
+            lastObservedSize = current.bytes
+
+            if current.exists, current.bytes > 0 {
+                Thread.sleep(forTimeInterval: configuration.stabilityInterval)
+                let stabilized = fileState(at: url, fileManager: fileManager)
+                if stabilized.exists, stabilized.bytes == current.bytes, stabilized.bytes > 0 {
+                    return FileCheckResult(
+                        url: url,
+                        exists: true,
+                        bytes: stabilized.bytes,
+                        isStable: true
+                    )
+                }
+                lastObservedExists = stabilized.exists
+                lastObservedSize = stabilized.bytes
+            }
+
+            Thread.sleep(forTimeInterval: configuration.pollInterval)
+        }
+
+        return FileCheckResult(
+            url: url,
+            exists: lastObservedExists,
+            bytes: lastObservedSize,
+            isStable: false
+        )
+    }
+
+    private static func fileState(at url: URL, fileManager: FileManager) -> (exists: Bool, bytes: Int64) {
+        guard fileManager.fileExists(atPath: url.path),
+              let attributes = try? fileManager.attributesOfItem(atPath: url.path) else {
+            return (false, 0)
+        }
+        let bytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        return (true, bytes)
+    }
+}
+
 struct SessionCanonicalMetadataSignature: Equatable {
     let sessionID: String
     let performerName: String?
@@ -1460,17 +1572,21 @@ struct SessionArchiveBuilder: Sendable {
                     return nil
                 }
 
-                let mediaURL = sessionDirectory.appendingPathComponent(sidecar.mediaFileName)
-                guard fileManager.fileExists(atPath: mediaURL.path) else { return nil }
+                let snapshot = localRecordingArtifactStatus(
+                    for: sidecar,
+                    sessionDirectory: sessionDirectory,
+                    fileManager: fileManager,
+                    preflightConfiguration: .exportDefault
+                )
+                guard snapshot.readiness == .ready,
+                      let mediaURL = snapshot.videoSourceURL,
+                      let audioArtifactURL = snapshot.audioSourceURL else {
+                    return nil
+                }
 
                 let duration = max(
                     0,
                     (sidecar.endedAt ?? sidecar.startedAt).timeIntervalSince(sidecar.startedAt)
-                )
-                let audioArtifactURL = try? self.derivedAudioArtifactURL(
-                    for: mediaURL,
-                    in: sessionDirectory,
-                    fileManager: fileManager
                 )
                 let linkedWatchCapture = self.resolveLinkedWatchCapture(for: sidecar)
 
@@ -1486,7 +1602,7 @@ struct SessionArchiveBuilder: Sendable {
                     duration: duration,
                     quality: nil,
                     comboTagged: false,
-                    audioPresent: audioArtifactURL != nil,
+                    audioPresent: true,
                     motionPresent: linkedWatchCapture != nil,
                     syncStatus: sidecar.watchSyncState.rawValue,
                     recordingStatus: sidecar.recordingStatus,
@@ -2061,10 +2177,40 @@ struct SessionArchiveBuilder: Sendable {
         }
     }
 
+    func localRecordingArtifactStatuses(
+        lastRecordingURL: URL,
+        fileManager: FileManager = .default,
+        preflightConfiguration: ArtifactPreflight.Configuration = .exportDefault
+    ) -> [TakeArtifactStatusSnapshot] {
+        let sessionDirectory = lastRecordingURL.deletingLastPathComponent()
+        let seedSidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
+        guard fileManager.fileExists(atPath: seedSidecarURL.path),
+              let seedSidecar = try? decodeSidecar(at: seedSidecarURL) else {
+            return []
+        }
+
+        let sidecarURLs = (try? matchingCompatibleLocalRecordingSidecarURLs(
+            in: sessionDirectory,
+            seedSidecar: seedSidecar,
+            fileManager: fileManager
+        )) ?? []
+
+        return sidecarURLs.compactMap { sidecarURL in
+            guard let sidecar = try? decodeSidecar(at: sidecarURL) else { return nil }
+            return localRecordingArtifactStatus(
+                for: sidecar,
+                sessionDirectory: sessionDirectory,
+                fileManager: fileManager,
+                preflightConfiguration: preflightConfiguration
+            )
+        }
+    }
+
     private func localRecordingBlockingIssues(
         in sessionDirectory: URL,
         seedSidecar: CaptureCore.LocalRecordingSidecar,
-        fileManager: FileManager
+        fileManager: FileManager,
+        preflightConfiguration: ArtifactPreflight.Configuration = .exportDefault
     ) -> [String] {
         let sidecarURLs = (try? matchingCompatibleLocalRecordingSidecarURLs(
             in: sessionDirectory,
@@ -2076,15 +2222,189 @@ struct SessionArchiveBuilder: Sendable {
             guard let sidecar = try? decodeSidecar(at: sidecarURL) else {
                 return "ScratchLab could not read \(sidecarURL.lastPathComponent)."
             }
-            let mediaURL = sessionDirectory.appendingPathComponent(sidecar.mediaFileName)
-            if !fileManager.fileExists(atPath: mediaURL.path) {
-                return "Take \(sidecar.takeID) is missing \(sidecar.mediaFileName)."
+            let snapshot = localRecordingArtifactStatus(
+                for: sidecar,
+                sessionDirectory: sessionDirectory,
+                fileManager: fileManager,
+                preflightConfiguration: preflightConfiguration
+            )
+            return issueMessage(for: snapshot)
+        }
+    }
+
+    private func localRecordingArtifactStatus(
+        for sidecar: CaptureCore.LocalRecordingSidecar,
+        sessionDirectory: URL,
+        fileManager: FileManager,
+        preflightConfiguration: ArtifactPreflight.Configuration
+    ) -> TakeArtifactStatusSnapshot {
+        let mediaURL = sessionDirectory.appendingPathComponent(sidecar.mediaFileName)
+        let audioURL = sessionDirectory
+            .appendingPathComponent(mediaURL.deletingPathExtension().lastPathComponent)
+            .appendingPathExtension("wav")
+        let bpm = SessionExportMetadataResolver.validatedSessionConfig(from: sidecar)?.bpm
+
+        if sidecar.recordingStatus == "recording" {
+            return TakeArtifactStatusSnapshot(
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                bpm: bpm,
+                audioSourceURL: audioURL,
+                videoSourceURL: mediaURL,
+                audioExists: fileManager.fileExists(atPath: audioURL.path),
+                videoExists: fileManager.fileExists(atPath: mediaURL.path),
+                audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
+                videoBytes: (try? fileSize(for: mediaURL, fileManager: fileManager)) ?? 0,
+                finalizedAt: sidecar.endedAt,
+                readiness: .recording
+            )
+        }
+
+        if sidecar.recordingStatus != "completed" {
+            return TakeArtifactStatusSnapshot(
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                bpm: bpm,
+                audioSourceURL: audioURL,
+                videoSourceURL: mediaURL,
+                audioExists: fileManager.fileExists(atPath: audioURL.path),
+                videoExists: fileManager.fileExists(atPath: mediaURL.path),
+                audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
+                videoBytes: (try? fileSize(for: mediaURL, fileManager: fileManager)) ?? 0,
+                finalizedAt: sidecar.endedAt,
+                readiness: .failed(sidecar.errorDescription ?? "Capture did not complete.")
+            )
+        }
+
+        let videoCheck = ArtifactPreflight.checkFileReady(
+            url: mediaURL,
+            fileManager: fileManager,
+            configuration: preflightConfiguration
+        )
+        guard videoCheck.exists else {
+            return TakeArtifactStatusSnapshot(
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                bpm: bpm,
+                audioSourceURL: audioURL,
+                videoSourceURL: mediaURL,
+                audioExists: fileManager.fileExists(atPath: audioURL.path),
+                videoExists: false,
+                audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
+                videoBytes: 0,
+                finalizedAt: sidecar.endedAt,
+                readiness: .missingVideo
+            )
+        }
+        guard videoCheck.isStable else {
+            return TakeArtifactStatusSnapshot(
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                bpm: bpm,
+                audioSourceURL: audioURL,
+                videoSourceURL: mediaURL,
+                audioExists: fileManager.fileExists(atPath: audioURL.path),
+                videoExists: true,
+                audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
+                videoBytes: videoCheck.bytes,
+                finalizedAt: sidecar.endedAt,
+                readiness: .finalizing
+            )
+        }
+
+        if !fileManager.fileExists(atPath: audioURL.path) {
+            do {
+                _ = try derivedAudioArtifactURL(
+                    for: mediaURL,
+                    in: sessionDirectory,
+                    fileManager: fileManager
+                )
+            } catch {
+                return TakeArtifactStatusSnapshot(
+                    takeID: sidecar.takeID,
+                    takeNumber: sidecar.appLocalTakeNumber,
+                    bpm: bpm,
+                    audioSourceURL: audioURL,
+                    videoSourceURL: mediaURL,
+                    audioExists: false,
+                    videoExists: true,
+                    audioBytes: 0,
+                    videoBytes: videoCheck.bytes,
+                    finalizedAt: sidecar.endedAt,
+                    readiness: .missingAudio
+                )
             }
-            guard sidecar.recordingStatus == "completed" else {
-                return "Take \(sidecar.takeID) is still marked \(sidecar.recordingStatus) and must be reviewed before export."
-            }
+        }
+
+        let audioCheck = ArtifactPreflight.checkFileReady(
+            url: audioURL,
+            fileManager: fileManager,
+            configuration: preflightConfiguration
+        )
+        if !audioCheck.exists || audioCheck.bytes <= 0 {
+            return TakeArtifactStatusSnapshot(
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                bpm: bpm,
+                audioSourceURL: audioURL,
+                videoSourceURL: mediaURL,
+                audioExists: audioCheck.exists,
+                videoExists: true,
+                audioBytes: audioCheck.bytes,
+                videoBytes: videoCheck.bytes,
+                finalizedAt: sidecar.endedAt,
+                readiness: .missingAudio
+            )
+        }
+        guard audioCheck.isStable else {
+            return TakeArtifactStatusSnapshot(
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                bpm: bpm,
+                audioSourceURL: audioURL,
+                videoSourceURL: mediaURL,
+                audioExists: true,
+                videoExists: true,
+                audioBytes: audioCheck.bytes,
+                videoBytes: videoCheck.bytes,
+                finalizedAt: sidecar.endedAt,
+                readiness: .finalizing
+            )
+        }
+
+        return TakeArtifactStatusSnapshot(
+            takeID: sidecar.takeID,
+            takeNumber: sidecar.appLocalTakeNumber,
+            bpm: bpm,
+            audioSourceURL: audioURL,
+            videoSourceURL: mediaURL,
+            audioExists: true,
+            videoExists: true,
+            audioBytes: audioCheck.bytes,
+            videoBytes: videoCheck.bytes,
+            finalizedAt: sidecar.endedAt,
+            readiness: .ready
+        )
+    }
+
+    private func issueMessage(for snapshot: TakeArtifactStatusSnapshot) -> String? {
+        let takeLabel = formattedTakeLabel(snapshot.takeNumber)
+        switch snapshot.readiness {
+        case .recording, .finalizing:
+            return "\(takeLabel) audio is still finalizing. Try again in a moment."
+        case .missingAudio:
+            return "\(takeLabel) audio is missing. Retake it before export."
+        case .missingVideo:
+            return "\(takeLabel) video is missing. Retake it before export."
+        case .failed(let message):
+            return "\(takeLabel) failed: \(message)"
+        case .ready:
             return nil
         }
+    }
+
+    private func formattedTakeLabel(_ takeNumber: Int) -> String {
+        "Take \(String(format: "%03d", takeNumber))"
     }
 
     private func matchingCompatibleLocalRecordingSidecarURLs(
@@ -2147,21 +2467,32 @@ struct SessionArchiveBuilder: Sendable {
         }
 
         for take in package.takes {
-            if !FileManager.default.fileExists(atPath: take.mediaURL.path) {
-                issues.append("Take \(take.takeID) is missing \(take.mediaURL.lastPathComponent).")
+            let takeLabel = formattedTakeLabel(take.takeNumber)
+            let videoCheck = ArtifactPreflight.checkFileReady(url: take.mediaURL)
+            if !videoCheck.exists || videoCheck.bytes <= 0 {
+                issues.append("\(takeLabel) video is missing. Retake it before export.")
+            } else if !videoCheck.isStable {
+                issues.append("\(takeLabel) video is still finalizing. Try again in a moment.")
             }
             if !FileManager.default.fileExists(atPath: take.sidecarURL.path) {
                 issues.append("Take \(take.takeID) is missing \(take.sidecarURL.lastPathComponent).")
             }
             if let audioArtifactURL = take.audioArtifactURL {
-                if !FileManager.default.fileExists(atPath: audioArtifactURL.path) {
-                    issues.append("Take \(take.takeID) is missing \(audioArtifactURL.lastPathComponent).")
+                let audioCheck = ArtifactPreflight.checkFileReady(url: audioArtifactURL)
+                if !audioCheck.exists || audioCheck.bytes <= 0 {
+                    issues.append("\(takeLabel) audio is missing. Retake it before export.")
+                } else if !audioCheck.isStable {
+                    issues.append("\(takeLabel) audio is still finalizing. Try again in a moment.")
                 }
             } else {
-                issues.append("Take \(take.takeID) is missing its audio artifact.")
+                issues.append("\(takeLabel) audio is missing. Retake it before export.")
             }
             if take.recordingStatus != "completed" {
-                issues.append("Take \(take.takeID) is marked \(take.recordingStatus) and is not exportable.")
+                if take.recordingStatus == "recording" {
+                    issues.append("\(takeLabel) audio is still finalizing. Try again in a moment.")
+                } else {
+                    issues.append("\(takeLabel) failed and is not exportable.")
+                }
             }
             if let motionPresent = take.motionPresent, motionPresent,
                let watchCaptureSession = take.watchCaptureSession {

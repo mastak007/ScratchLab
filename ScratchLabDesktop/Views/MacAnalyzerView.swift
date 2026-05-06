@@ -1127,6 +1127,31 @@ struct MacAnalyzerView: View {
         return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
     }
 
+    private var currentRoutineArtifactStatus: TakeArtifactStatusSnapshot? {
+        captureEngine.routineTakeArtifactStatuses.last
+    }
+
+    private var reviewArtifactStatusSummary: String {
+        guard let status = currentRoutineArtifactStatus else {
+            return "No take ready for review"
+        }
+        let takeLabel = "Take \(String(format: "%03d", status.takeNumber))"
+        switch status.readiness {
+        case .ready:
+            return "\(takeLabel) is ready for review and export."
+        case .recording:
+            return "\(takeLabel) is still recording."
+        case .finalizing:
+            return "\(takeLabel) is finalizing audio/video."
+        case .missingAudio:
+            return "\(takeLabel) audio is missing. Retake it before export."
+        case .missingVideo:
+            return "\(takeLabel) video is missing. Retake it before export."
+        case .failed(let message):
+            return "\(takeLabel) failed: \(message)"
+        }
+    }
+
     private var captureTargetBinding: Binding<CaptureTarget> {
         Binding(
             get: { CaptureTarget.target(for: routineSessionSetup.scratchType) },
@@ -1368,7 +1393,20 @@ struct MacAnalyzerView: View {
 
     private func markLastTakeSaved() {
         guard hasRecordedTake else { return }
-        captureEngine.reportRoutineRecordingIssue("Take saved. Open Review to accept, correct, or leave the label unknown.")
+        switch currentRoutineArtifactStatus?.readiness {
+        case .ready:
+            captureEngine.reportRoutineRecordingIssue("Take saved. Open Review to accept, correct, or leave the label unknown.")
+        case .finalizing, .recording:
+            captureEngine.reportRoutineRecordingIssue("Take saved. Audio/video are still finalizing before export.")
+        case .missingAudio:
+            captureEngine.reportRoutineRecordingIssue("The latest take is missing audio. Retake it before export.")
+        case .missingVideo:
+            captureEngine.reportRoutineRecordingIssue("The latest take is missing video. Retake it before export.")
+        case .failed(let message):
+            captureEngine.reportRoutineRecordingIssue("The latest take failed: \(message)")
+        case .none:
+            captureEngine.reportRoutineRecordingIssue("Take saved. ScratchLab is verifying the capture before export.")
+        }
     }
 
     private func prepareRetake() {
@@ -1769,6 +1807,25 @@ struct MacAnalyzerView: View {
         }
     }
 
+    private func artifactStatusBadge(_ status: TakeArtifactStatusSnapshot) -> some View {
+        let color: Color
+        switch status.readiness {
+        case .ready:
+            color = .green
+        case .recording, .finalizing:
+            color = .orange
+        case .missingAudio, .missingVideo, .failed:
+            color = .red
+        }
+
+        return Text(status.readiness.badgeTitle)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.12), in: Capsule())
+    }
+
     private var routineSessionCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -2128,7 +2185,25 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if captureEngine.lastRoutineRecordingURL != nil {
+            if !captureEngine.routineTakeArtifactStatuses.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(captureEngine.routineTakeArtifactStatuses) { status in
+                        HStack(spacing: 10) {
+                            Text("Take \(String(format: "%03d", status.takeNumber))")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+
+                            if let bpm = status.bpm {
+                                Text("\(bpm) BPM")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 8)
+                            artifactStatusBadge(status)
+                        }
+                    }
+                }
+            } else if captureEngine.lastRoutineRecordingURL != nil {
                 Label(lastRoutineTakeDisplayName, systemImage: "film.stack.fill")
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -2151,6 +2226,16 @@ struct MacAnalyzerView: View {
                 .font(.headline)
 
             if hasRecordedTake {
+                if let currentRoutineArtifactStatus {
+                    HStack(spacing: 8) {
+                        artifactStatusBadge(currentRoutineArtifactStatus)
+                        Text(reviewArtifactStatusSummary)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 HStack(spacing: 8) {
                     testLabMetricBadge(title: "Detected scratch type", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
                     testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
@@ -2192,6 +2277,13 @@ struct MacAnalyzerView: View {
                         leaveReviewLabelUnknown()
                     }
                     .buttonStyle(.bordered)
+
+                    if currentRoutineArtifactStatus?.readiness != .ready {
+                        Button("Retake Take") {
+                            prepareRetake()
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
@@ -2220,11 +2312,19 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Button("Export ZIP") {
-                shareLastRoutineSession()
+            HStack(spacing: 10) {
+                Button("Export ZIP") {
+                    shareLastRoutineSession()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!hasRecordedTake || sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
+
+                Button("Retake Take") {
+                    prepareRetake()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(!hasRecordedTake || sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
 
             if let lastExport = sessionExportCoordinator.lastResult {
                 Text("\(lastExport.displayName) · \(lastExport.formattedArchiveSize)")

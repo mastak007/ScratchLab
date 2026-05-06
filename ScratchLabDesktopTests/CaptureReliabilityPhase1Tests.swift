@@ -1393,7 +1393,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         coordinator.prepareShare(for: .package(package))
 
-        for _ in 0..<80 {
+        for _ in 0..<240 {
             if coordinator.lastResult != nil { break }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
@@ -1415,7 +1415,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         coordinator.saveArchiveCopy(for: .package(package))
 
-        for _ in 0..<80 {
+        for _ in 0..<240 {
             if coordinator.lastResult?.archiveURL == destinationURL { break }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
@@ -1450,7 +1450,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         coordinator.saveArchiveCopy(for: .package(package))
 
-        for _ in 0..<80 {
+        for _ in 0..<240 {
             if coordinator.lastResult?.archiveURL == destinationURL { break }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
@@ -1475,7 +1475,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         coordinator.saveArchiveCopy(for: .package(package))
 
-        for _ in 0..<80 {
+        for _ in 0..<240 {
             if case .failed(.unableToSaveArchive) = coordinator.state { break }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
@@ -6078,7 +6078,9 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
         XCTAssertNotNil(report)
         XCTAssertEqual(report?.suggestedError, .invalidSessionMetadata)
-        XCTAssertTrue(report?.issues.contains(where: { $0.contains("take-002") && $0.localizedCaseInsensitiveContains("interrupted") }) == true)
+        XCTAssertTrue(report?.issues.contains(where: {
+            $0.contains("Take 002") && $0.localizedCaseInsensitiveContains("failed")
+        }) == true)
     }
 
     @MainActor
@@ -6660,7 +6662,9 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         }
 
         let report = try XCTUnwrap(coordinator.validationReport)
-        XCTAssertTrue(report.issues.contains(where: { $0.localizedCaseInsensitiveContains("audio artifact") }))
+        XCTAssertTrue(report.issues.contains(where: {
+            $0.contains("Take 001") && $0.localizedCaseInsensitiveContains("audio")
+        }))
         let journalEntries = try CaptureJournalStore.loadEntries(
             storageKind: .companion,
             sessionID: sessionID,
@@ -6931,9 +6935,182 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
             samples: samples
         )
     }
+
+    func testArtifactPreflightMarksStableFileReady() throws {
+        let root = try self.makeTemporaryDirectory()
+        let url = root.appendingPathComponent("stable.wav")
+        try self.writePlaceholderFile(at: url, contents: Data("ready".utf8))
+
+        let result = ArtifactPreflight.checkFileReady(
+            url: url,
+            configuration: .init(timeout: 0.2, pollInterval: 0.02, stabilityInterval: 0.05)
+        )
+
+        XCTAssertTrue(result.exists)
+        XCTAssertTrue(result.isStable)
+        XCTAssertGreaterThan(result.bytes, 0)
+    }
+
+    func testArtifactPreflightKeepsChangingFileFinalizing() throws {
+        let root = try self.makeTemporaryDirectory()
+        let url = root.appendingPathComponent("changing.wav")
+        try self.writePlaceholderFile(at: url, contents: Data("a".utf8))
+
+        let writer = DispatchQueue(label: "artifact-preflight-writer")
+        writer.asyncAfter(deadline: .now() + 0.03) {
+            try? Data("ab".utf8).write(to: url, options: .atomic)
+        }
+        writer.asyncAfter(deadline: .now() + 0.11) {
+            try? Data("abc".utf8).write(to: url, options: .atomic)
+        }
+
+        let result = ArtifactPreflight.checkFileReady(
+            url: url,
+            configuration: .init(timeout: 0.12, pollInterval: 0.02, stabilityInterval: 0.05)
+        )
+
+        XCTAssertTrue(result.exists)
+        XCTAssertFalse(result.isStable)
+        XCTAssertGreaterThan(result.bytes, 0)
+    }
+
+    func testLocalRecordingArtifactStatusMarksMissingAudioNotReady() throws {
+        let root = try self.makeTemporaryDirectory()
+        let videoURL = try self.makeLocalRecordingTake(
+            in: root,
+            sessionID: "missing-audio-status",
+            takeNumber: 1,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_500)
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+
+        let statuses = SessionArchiveBuilder().localRecordingArtifactStatuses(
+            lastRecordingURL: videoURL,
+            preflightConfiguration: .init(timeout: 0.15, pollInterval: 0.02, stabilityInterval: 0.04)
+        )
+
+        XCTAssertEqual(statuses.count, 1)
+        XCTAssertEqual(statuses.first?.readiness, .missingAudio)
+    }
+
+    func testLocalRecordingArtifactStatusMarksZeroByteAudioNotReady() throws {
+        let root = try self.makeTemporaryDirectory()
+        let videoURL = try self.makeLocalRecordingTake(
+            in: root,
+            sessionID: "zero-byte-audio-status",
+            takeNumber: 1,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_510),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try Data().write(to: audioURL, options: .atomic)
+
+        let statuses = SessionArchiveBuilder().localRecordingArtifactStatuses(
+            lastRecordingURL: videoURL,
+            preflightConfiguration: .init(timeout: 0.15, pollInterval: 0.02, stabilityInterval: 0.04)
+        )
+
+        XCTAssertEqual(statuses.count, 1)
+        XCTAssertEqual(statuses.first?.readiness, .missingAudio)
+    }
+
+    func testLocalRecordingArtifactStatusWaitsForFinalizingAudioThenBecomesReady() throws {
+        let root = try self.makeTemporaryDirectory()
+        let videoURL = try self.makeLocalRecordingTake(
+            in: root,
+            sessionID: "finalizing-audio-ready",
+            takeNumber: 1,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_520)
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try Data().write(to: audioURL, options: .atomic)
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            try? Data("audio-ready".utf8).write(to: audioURL, options: .atomic)
+        }
+
+        let statuses = SessionArchiveBuilder().localRecordingArtifactStatuses(
+            lastRecordingURL: videoURL,
+            preflightConfiguration: .init(timeout: 0.5, pollInterval: 0.02, stabilityInterval: 0.05)
+        )
+
+        XCTAssertEqual(statuses.count, 1)
+        XCTAssertEqual(statuses.first?.readiness, .ready)
+    }
+
+    func testLocalRecordingValidationNamesExactTakeWhenAudioMissing() throws {
+        let root = try self.makeTemporaryDirectory()
+        let videoURL = try self.makeLocalRecordingTake(
+            in: root,
+            sessionID: "validation-missing-audio",
+            takeNumber: 3,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_530)
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+
+        let report = SessionArchiveBuilder().validationReport(
+            for: .localRecordingSession(
+                lastRecordingURL: videoURL,
+                sessionName: "Broken Export",
+                config: nil
+            )
+        )
+
+        XCTAssertEqual(report?.issues.first, "Take 003 audio is missing. Retake it before export.")
+    }
+
+    func testPreparePackageDoesNotProceedWhenAudioIsMissing() throws {
+        let root = try self.makeTemporaryDirectory()
+        let videoURL = try self.makeLocalRecordingTake(
+            in: root,
+            sessionID: "prepare-package-missing-audio",
+            takeNumber: 3,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_540)
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+
+        XCTAssertThrowsError(
+            try SessionArchiveBuilder().preparePackage(
+                from: .localRecordingSession(
+                    lastRecordingURL: videoURL,
+                    sessionName: "Broken Export",
+                    config: nil
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SessionExportError, .invalidSessionMetadata)
+        }
+    }
+
+    func testRepeatedLocalRecordingValidationIsDeterministicForMissingAudio() throws {
+        let root = try self.makeTemporaryDirectory()
+        let videoURL = try self.makeLocalRecordingTake(
+            in: root,
+            sessionID: "repeat-validation-missing-audio",
+            takeNumber: 2,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_550)
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "Repeat Validation",
+            config: nil
+        )
+
+        let first = builder.validationReport(for: source)
+        let second = builder.validationReport(for: source)
+
+        XCTAssertEqual(first?.issues, second?.issues)
+    }
 }
 
-private extension CaptureReliabilityPhase1CoreTests {
+extension CaptureReliabilityPhase1CoreTests {
     func projectRootURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -7442,6 +7619,106 @@ private extension CaptureReliabilityPhase1CoreTests {
         XCTFail("Timed out waiting for Raw JSON inspector state to settle")
     }
 
+}
+
+extension CaptureRecoveryPhase2CoreTests {
+    func writePlaceholderFile(at url: URL, contents: Data) throws {
+        try contents.write(to: url, options: .atomic)
+    }
+
+    func writeFinalizedSidecar(
+        to sidecarURL: URL,
+        sessionID: String,
+        takeIdentity: TakeIdentity,
+        mediaURL: URL,
+        performerName: String,
+        bpm: Int?,
+        createdAt: Date,
+        scratchType: CaptureSessionScratchType? = .babyScratch,
+        captureMode: CaptureSessionCaptureMode = .timedClick,
+        beatEngineMode: BeatEngineMode = .clickTrack,
+        timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
+        captureTiming: CaptureTimingMetadata? = nil
+    ) throws {
+        var config = CaptureSessionConfig(
+            performerName: performerName,
+            bpm: bpm,
+            scratchType: scratchType,
+            drillMode: .fullCapture,
+            captureMode: captureMode,
+            beatEngineMode: beatEngineMode,
+            timingPrintedToRecording: timingPrintedToRecording,
+            takeDurationSeconds: 1,
+            takeCount: 3,
+            handedness: .right,
+            notes: "session note",
+            sessionID: sessionID,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        config.applyCapturedTakeMetrics(takeCount: 3, totalDurationSeconds: 3, updatedAt: createdAt)
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: config,
+            takeIdentity: takeIdentity,
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: mediaURL.deletingPathExtension().lastPathComponent,
+                mediaURL: mediaURL,
+                sidecarURL: sidecarURL
+            ),
+            recordingRole: "guided_capture",
+            platform: "macOS",
+            appSurface: "mac_desktop",
+            sourceDeviceName: "ScratchLab Mac",
+            captureTiming: captureTiming,
+            startedAt: createdAt
+        ).finalized(
+            endedAt: createdAt.addingTimeInterval(1),
+            mediaFileName: mediaURL.lastPathComponent,
+            captureErrorDescription: nil
+        )
+        try sidecar.encodedData().write(to: sidecarURL, options: .atomic)
+    }
+
+    func makeLocalRecordingTake(
+        in root: URL,
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int? = 95,
+        createdAt: Date,
+        scratchType: CaptureSessionScratchType? = .babyScratch,
+        captureMode: CaptureSessionCaptureMode = .timedClick,
+        beatEngineMode: BeatEngineMode = .clickTrack,
+        timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
+        captureTiming: CaptureTimingMetadata? = nil,
+        useRealMedia: Bool = false
+    ) throws -> URL {
+        let baseName = CaptureCore.LocalRecordingNaming.baseName(
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            roleLabel: "guided"
+        )
+        let videoURL = root.appendingPathComponent(baseName).appendingPathExtension("mov")
+        let audioURL = root.appendingPathComponent(baseName).appendingPathExtension("wav")
+        let sidecarURL = root.appendingPathComponent(baseName).appendingPathExtension("json")
+        try writePlaceholderFile(at: videoURL, contents: Data("mov-\(takeNumber)".utf8))
+        try writePlaceholderFile(at: audioURL, contents: Data("wav-\(takeNumber)".utf8))
+        try writeFinalizedSidecar(
+            to: sidecarURL,
+            sessionID: sessionID,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: sessionID, takeNumber: takeNumber),
+            mediaURL: videoURL,
+            performerName: "DJ Alpha",
+            bpm: bpm,
+            createdAt: createdAt,
+            scratchType: scratchType,
+            captureMode: captureMode,
+            beatEngineMode: beatEngineMode,
+            timingPrintedToRecording: timingPrintedToRecording,
+            captureTiming: captureTiming
+        )
+        return videoURL
+    }
 }
 
 private struct StagingOperationsHarness {

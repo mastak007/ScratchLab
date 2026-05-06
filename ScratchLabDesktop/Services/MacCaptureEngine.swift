@@ -260,6 +260,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var routineRecordingStatus = "Pick camera and audio to record a routine."
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
+    @Published private(set) var routineTakeArtifactStatuses: [TakeArtifactStatusSnapshot] = []
 
     // CXL notation capture
     let cxlRecorder = CXLNotationCaptureRecorder()
@@ -459,6 +460,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func rescanRoutineCaptures() {
         recoverInterruptedRoutineCaptures()
         restoreLatestCompletedRoutineCapture()
+        refreshRoutineArtifactStatuses()
     }
 
     var selectedVideoDevice: AVCaptureDevice? {
@@ -633,6 +635,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineRecordingSidecarURL: URL?
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
+    private var routineArtifactRefreshTask: Task<Void, Never>?
     private var fixedRigLayout: DJRigLayout?
     private var fixedRigLayoutUsesManualGuide = false
     private let autoRefreshDevicesOnInit: Bool
@@ -1012,6 +1015,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             Task { @MainActor in
                 self.routineRecordingStatus = "Finishing routine recording"
+                if let sidecar = self.activeRoutineRecordingSidecar {
+                    self.upsertRoutineTakeArtifactStatus(
+                        self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing)
+                    )
+                }
             }
             self.movieOutput.stopRecording()
         }
@@ -1414,7 +1422,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return directory
     }
 
-    private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) -> (statusMessage: String, sessionID: String?) {
+    private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) -> (statusMessage: String, sessionID: String?, sidecar: CaptureCore.LocalRecordingSidecar?) {
         defer {
             activeRoutineRecordingSidecar = nil
             activeRoutineRecordingSidecarURL = nil
@@ -1425,9 +1433,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let captureErrorDescription = error?.localizedDescription
         guard var sidecar = activeRoutineRecordingSidecar else {
             if captureErrorDescription != nil {
-                return ("Recording ended before it could be saved.", nil)
+                return ("Recording ended before it could be saved.", nil, nil)
             }
-            return ("Saved \(outputFileURL.lastPathComponent).", nil)
+            return ("Finalizing \(outputFileURL.lastPathComponent)...", nil, nil)
         }
 
         sidecar = sidecar.finalized(
@@ -1448,14 +1456,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 sidecar: sidecar
             )
             if captureErrorDescription != nil {
-                return ("Recording ended before it could be saved completely.", nil)
+                return ("Recording ended before it could be saved completely.", nil, sidecar)
             }
-            return ("Saved \(outputFileURL.lastPathComponent).", sidecar.sessionID)
+            return ("Finalizing \(outputFileURL.lastPathComponent)...", sidecar.sessionID, sidecar)
         } catch {
             if captureErrorDescription != nil {
-                return ("Recording ended before it could be saved completely.", nil)
+                return ("Recording ended before it could be saved completely.", nil, sidecar)
             }
-            return ("Saved \(outputFileURL.lastPathComponent), but session details could not be updated.", nil)
+            return ("Finalizing \(outputFileURL.lastPathComponent)...", nil, sidecar)
         }
     }
 
@@ -1503,6 +1511,101 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         } catch {
             routineRecordingStatus = "Routine capture recovery needs attention."
         }
+    }
+
+    private func refreshRoutineArtifactStatuses() {
+        routineArtifactRefreshTask?.cancel()
+        guard let directory = routineRecordingsFolderURL,
+              let lastRoutineRecordingURL else {
+            routineTakeArtifactStatuses = []
+            return
+        }
+
+        let lastURL = lastRoutineRecordingURL
+        routineArtifactRefreshTask = Task { [weak self] in
+            let statuses = await Task.detached(priority: .userInitiated) {
+                SessionArchiveBuilder().localRecordingArtifactStatuses(
+                    lastRecordingURL: lastURL
+                )
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.routineRecordingsFolderURL == directory else { return }
+                self.routineTakeArtifactStatuses = statuses
+                if let latest = statuses.last {
+                    self.applyRoutineArtifactStatusToMessage(latest)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func applyRoutineArtifactStatusToMessage(_ status: TakeArtifactStatusSnapshot) {
+        let takeLabel = "Take \(String(format: "%03d", status.takeNumber))"
+        switch status.readiness {
+        case .recording:
+            routineRecordingStatus = "Recording \(takeLabel.lowercased())"
+        case .finalizing:
+            routineRecordingStatus = "\(takeLabel) is finalizing..."
+        case .ready:
+            if let videoSourceURL = status.videoSourceURL {
+                routineRecordingStatus = "Ready to export \(videoSourceURL.lastPathComponent)."
+            } else {
+                routineRecordingStatus = "\(takeLabel) is ready to export."
+            }
+        case .missingAudio:
+            routineRecordingStatus = "\(takeLabel) audio is missing or still finalizing."
+        case .missingVideo:
+            routineRecordingStatus = "\(takeLabel) video is missing or still finalizing."
+        case .failed(let message):
+            routineRecordingStatus = "\(takeLabel) failed: \(message)"
+        }
+    }
+
+    @MainActor
+    private func upsertRoutineTakeArtifactStatus(_ status: TakeArtifactStatusSnapshot) {
+        var statuses = routineTakeArtifactStatuses.filter { $0.takeID != status.takeID }
+        statuses.append(status)
+        routineTakeArtifactStatuses = statuses.sorted { lhs, rhs in
+            if lhs.takeNumber == rhs.takeNumber {
+                return lhs.takeID < rhs.takeID
+            }
+            return lhs.takeNumber < rhs.takeNumber
+        }
+        applyRoutineArtifactStatusToMessage(status)
+    }
+
+    private func provisionalRoutineTakeArtifactStatus(
+        for sidecar: CaptureCore.LocalRecordingSidecar,
+        readiness: TakeArtifactReadiness
+    ) -> TakeArtifactStatusSnapshot {
+        let baseDirectory = activeRoutineRecordingSidecarURL?.deletingLastPathComponent()
+            ?? routineRecordingsFolderURL
+            ?? FileManager.default.temporaryDirectory
+        let mediaURL = baseDirectory.appendingPathComponent(sidecar.mediaFileName)
+        let audioURL = baseDirectory
+            .appendingPathComponent(mediaURL.deletingPathExtension().lastPathComponent)
+            .appendingPathExtension("wav")
+        let videoExists = FileManager.default.fileExists(atPath: mediaURL.path)
+        let audioExists = FileManager.default.fileExists(atPath: audioURL.path)
+        return TakeArtifactStatusSnapshot(
+            takeID: sidecar.takeID,
+            takeNumber: sidecar.appLocalTakeNumber,
+            bpm: sidecar.sessionConfig?.bpm,
+            audioSourceURL: audioURL,
+            videoSourceURL: mediaURL,
+            audioExists: audioExists,
+            videoExists: videoExists,
+            audioBytes: fileSizeOrZero(at: audioURL),
+            videoBytes: fileSizeOrZero(at: mediaURL),
+            finalizedAt: sidecar.endedAt,
+            readiness: readiness
+        )
+    }
+
+    private func fileSizeOrZero(at url: URL) -> Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     static func latestCompletedRoutineCapture(
@@ -2321,10 +2424,16 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
 
             if error == nil {
                 self.lastRoutineRecordingURL = outputFileURL
+                if let sidecar = completion.sidecar {
+                    self.upsertRoutineTakeArtifactStatus(
+                        self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing)
+                    )
+                }
             }
 
             self.lastRoutineRecordingSessionID = completion.sessionID
             self.routineRecordingStatus = completion.statusMessage
+            self.refreshRoutineArtifactStatuses()
         }
     }
 }
