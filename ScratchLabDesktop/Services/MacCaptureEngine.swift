@@ -301,13 +301,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
 
-        func snapshot(
-            detectedLabel: String?,
-            labelSource: String,
-            labelConfidence: Double?,
-            capturedAt: Date = Date(),
+        func movementEvents(
             now: CFTimeInterval = CACurrentMediaTime()
-        ) -> CaptureCore.DetectedNotationSnapshot {
+        ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             if let activeMovement {
                 finishActiveMovement(
                     activeMovement,
@@ -317,22 +313,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 )
             }
             activeMovement = nil
-
-            let notationConfidence = events.isEmpty
-                ? nil
-                : events.map(\.confidence).reduce(0, +) / Double(events.count)
-
-            return CaptureCore.DetectedNotationSnapshot(
-                notationSource: events.isEmpty ? "unavailable" : "detected",
-                notationConfidence: notationConfidence,
-                detectedLabel: detectedLabel,
-                labelSource: labelSource,
-                labelConfidence: labelConfidence,
-                recordMovementEvents: events,
-                faderEvents: [],
-                mixerMidiEvents: [],
-                capturedAt: capturedAt
-            )
+            return events
         }
 
         private func finishActiveMovement(
@@ -407,6 +388,175 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             if duration >= 0.32 || speed <= 1.5 {
                 return isBackward ? .slowPullDrag : .slowDrag
+            }
+            return isBackward ? .normalPull : .normalPush
+        }
+    }
+
+    private struct RoutineNotationFusionEngine {
+        func snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot,
+            motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+            detectedLabel: String?,
+            labelSource: String,
+            labelConfidence: Double?,
+            capturedAt: Date = Date()
+        ) -> CaptureCore.DetectedNotationSnapshot {
+            let fusedMovementEvents = fuseMovementEvents(
+                audioEvents: audioSnapshot.audioEvents,
+                motionEvents: motionEvents
+            )
+            let audioEvents = audioSnapshot.audioEvents.map {
+                CaptureCore.DetectedNotationAudioEvent(
+                    startTime: $0.startTime,
+                    endTime: $0.endTime,
+                    duration: $0.duration,
+                    peakLevel: Double($0.peakLevel),
+                    rmsLevel: Double($0.rmsLevel),
+                    confidence: $0.confidence,
+                    eventKind: $0.eventKind.rawValue,
+                    source: $0.source
+                )
+            }
+            let notationSource: String
+            if !fusedMovementEvents.isEmpty {
+                notationSource = "detected"
+            } else if !audioEvents.isEmpty {
+                notationSource = "partial"
+            } else {
+                notationSource = "unavailable"
+            }
+
+            let notationConfidence: Double?
+            if !fusedMovementEvents.isEmpty {
+                notationConfidence = fusedMovementEvents.map(\.confidence).reduce(0, +) / Double(fusedMovementEvents.count)
+            } else if !audioEvents.isEmpty {
+                notationConfidence = audioEvents.map(\.confidence).reduce(0, +) / Double(audioEvents.count)
+            } else {
+                notationConfidence = nil
+            }
+
+            var detectionSources: [String] = []
+            if !audioEvents.isEmpty {
+                detectionSources.append("audio")
+            }
+            if !motionEvents.isEmpty {
+                detectionSources.append("video")
+            }
+
+            return CaptureCore.DetectedNotationSnapshot(
+                notationSource: notationSource,
+                notationConfidence: notationConfidence,
+                detectedLabel: detectedLabel,
+                labelSource: labelSource,
+                labelConfidence: labelConfidence,
+                detectionSources: detectionSources,
+                recordMovementEvents: fusedMovementEvents,
+                audioEvents: audioEvents,
+                faderEvents: [],
+                mixerMidiEvents: [],
+                capturedAt: capturedAt
+            )
+        }
+
+        private func fuseMovementEvents(
+            audioEvents: [ScratchAudioNotationEventCandidate],
+            motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+        ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+            var fused: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+            var usedMotionIndexes = Set<Int>()
+            let burstAudioEvents = audioEvents.filter { event in
+                event.eventKind == .scratchBurst || event.eventKind == .possibleDrag
+            }
+
+            for audioEvent in burstAudioEvents {
+                if let match = bestMotionMatch(for: audioEvent, motionEvents: motionEvents, usedMotionIndexes: usedMotionIndexes) {
+                    usedMotionIndexes.insert(match.index)
+                    let motionEvent = match.event
+                    let duration = max(0.001, audioEvent.endTime - audioEvent.startTime)
+                    let distance = abs(motionEvent.endPosition - motionEvent.startPosition)
+                    let fusedSpeed = distance / duration
+                    let fusedConfidence = min(1, max(0, (motionEvent.confidence + audioEvent.confidence) / 2))
+                    let movementKind = movementKindForFusedEvent(
+                        direction: motionEvent.direction,
+                        audioEventKind: audioEvent.eventKind,
+                        duration: duration,
+                        speed: fusedSpeed
+                    )
+                    fused.append(
+                        CaptureCore.DetectedNotationRecordMovementEvent(
+                            startTime: audioEvent.startTime,
+                            endTime: audioEvent.endTime,
+                            startPosition: motionEvent.startPosition,
+                            endPosition: motionEvent.endPosition,
+                            direction: motionEvent.direction,
+                            movementKind: movementKind,
+                            speed: fusedSpeed,
+                            confidence: fusedConfidence,
+                            source: "fused"
+                        )
+                    )
+                }
+            }
+
+            for (index, motionEvent) in motionEvents.enumerated() where !usedMotionIndexes.contains(index) {
+                fused.append(
+                    CaptureCore.DetectedNotationRecordMovementEvent(
+                        startTime: motionEvent.startTime,
+                        endTime: motionEvent.endTime,
+                        startPosition: motionEvent.startPosition,
+                        endPosition: motionEvent.endPosition,
+                        direction: motionEvent.direction,
+                        movementKind: motionEvent.movementKind,
+                        speed: motionEvent.speed,
+                        confidence: min(1, max(0, motionEvent.confidence * 0.65)),
+                        source: "video"
+                    )
+                )
+            }
+
+            return fused.sorted { lhs, rhs in
+                if lhs.startTime == rhs.startTime {
+                    return lhs.endTime < rhs.endTime
+                }
+                return lhs.startTime < rhs.startTime
+            }
+        }
+
+        private func bestMotionMatch(
+            for audioEvent: ScratchAudioNotationEventCandidate,
+            motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+            usedMotionIndexes: Set<Int>
+        ) -> (index: Int, event: CaptureCore.DetectedNotationRecordMovementEvent)? {
+            let audioMidpoint = (audioEvent.startTime + audioEvent.endTime) / 2
+            return motionEvents.enumerated()
+                .filter { !usedMotionIndexes.contains($0.offset) }
+                .compactMap { index, event -> (Int, CaptureCore.DetectedNotationRecordMovementEvent, Double)? in
+                    let overlapStart = max(audioEvent.startTime, event.startTime)
+                    let overlapEnd = min(audioEvent.endTime, event.endTime)
+                    let overlap = max(0, overlapEnd - overlapStart)
+                    let eventMidpoint = (event.startTime + event.endTime) / 2
+                    let midpointDistance = abs(audioMidpoint - eventMidpoint)
+                    guard overlap > 0 || midpointDistance <= 0.18 else { return nil }
+                    let score = overlap - midpointDistance
+                    return (index, event, score)
+                }
+                .max { $0.2 < $1.2 }
+                .map { ($0.0, $0.1) }
+        }
+
+        private func movementKindForFusedEvent(
+            direction: String,
+            audioEventKind: ScratchAudioNotationEventKind,
+            duration: TimeInterval,
+            speed: Double
+        ) -> ScratchMovementKind {
+            let isBackward = direction == "backward"
+            if audioEventKind == .possibleDrag || duration >= 0.32 || speed <= 1.5 {
+                return isBackward ? .slowPullDrag : .slowDrag
+            }
+            if duration <= 0.11 || speed >= 5.5 {
+                return isBackward ? .fastPull : .fastPush
             }
             return isBackward ? .normalPull : .normalPush
         }
@@ -1017,6 +1167,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRoutineRecordingSidecarURL: URL?
     private var activeRoutineAudioCaptureWriter: RoutineAudioCaptureWriter?
+    private var activeRoutineAudioNotationDetector: ScratchAudioNotationDetector?
     private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
@@ -1114,6 +1265,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.movieOutput.stopRecording()
             }
             self.activeRoutineDetectedNotationBuilder = nil
+            self.activeRoutineAudioNotationDetector = nil
             self.audioQueue.async {
                 self.activeRoutineAudioCaptureWriter = nil
                 self.publishRoutineAudioCaptureDiagnostics(nil)
@@ -1383,6 +1535,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.activeRoutineRecordingSidecar = preparedRecording.sidecar
                 self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
                 self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder()
+                self.activeRoutineAudioNotationDetector = ScratchAudioNotationDetector()
                 self.audioQueue.sync {
                     self.activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter(destinationURL: preparedRecording.audioURL)
                     self.publishRoutineAudioCaptureDiagnostics(self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot())
@@ -1834,6 +1987,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             activeRoutineRecordingSidecar = nil
             activeRoutineRecordingSidecarURL = nil
             activeRoutineDetectedNotationBuilder = nil
+            activeRoutineAudioNotationDetector = nil
             pendingRoutineTakeIdentity = nil
             pendingWatchReply = nil
         }
@@ -1847,7 +2001,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         let labelSource = lastScratchDetection == nil ? "unknown" : "detected"
-        let notationSnapshot = activeRoutineDetectedNotationBuilder?.snapshot(
+        let audioSnapshot = activeRoutineAudioNotationDetector?.snapshot() ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
+        let motionEvents = activeRoutineDetectedNotationBuilder?.movementEvents() ?? []
+        let notationSnapshot = RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: motionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
             labelConfidence: lastScratchDetection?.confidence
@@ -2225,6 +2383,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let hasFiniteMeasuredLevel = measuredLevel.isFinite
         let sanitizedLevel = hasFiniteMeasuredLevel ? min(max(measuredLevel, 0), 1) : 0
         let detection = scratchDetector.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
+        if isRoutineRecording || movieOutput.isRecording {
+            activeRoutineAudioNotationDetector?.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
+        }
         let now = CACurrentMediaTime()
         let shouldPublishAudioLevel = now - lastPublishedAudioLevelTime >= audioLevelPublishInterval
         if shouldPublishAudioLevel {

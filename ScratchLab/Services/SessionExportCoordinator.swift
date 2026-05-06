@@ -313,6 +313,7 @@ struct SessionExportArtifactMetadataDocument: Codable, Equatable, Sendable {
 
 enum SessionExportNotationSource: String, Codable, Equatable, Sendable {
     case detected
+    case partial
     case template
     case unavailable
 }
@@ -333,6 +334,17 @@ struct SessionExportRecordMovementEvent: Codable, Equatable, Sendable {
     let movementKind: String?
     let speed: Double?
     let confidence: Double?
+    let source: String?
+}
+
+struct SessionExportAudioEvent: Codable, Equatable, Sendable {
+    let startTime: Double?
+    let endTime: Double?
+    let duration: Double?
+    let peakLevel: Double?
+    let rmsLevel: Double?
+    let confidence: Double?
+    let eventKind: String?
     let source: String?
 }
 
@@ -367,10 +379,12 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
     let bpm: Int?
     let captureMode: String
     let notationSource: SessionExportNotationSource
+    let detectionSources: [String]
     let labelSource: SessionExportLabelSource
     let labelConfidence: Double?
     let notationConfidence: Double?
     let recordMovementEvents: [SessionExportRecordMovementEvent]
+    let audioEvents: [SessionExportAudioEvent]
     let faderEvents: [SessionExportFaderEvent]
     let mixerMidiEvents: [SessionExportMixerMidiEvent]
     let beatGrid: SessionExportNotationBeatGrid?
@@ -384,10 +398,12 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
         bpm: Int?,
         captureMode: String,
         notationSource: SessionExportNotationSource,
+        detectionSources: [String],
         labelSource: SessionExportLabelSource,
         labelConfidence: Double?,
         notationConfidence: Double?,
         recordMovementEvents: [SessionExportRecordMovementEvent],
+        audioEvents: [SessionExportAudioEvent],
         faderEvents: [SessionExportFaderEvent],
         mixerMidiEvents: [SessionExportMixerMidiEvent],
         beatGrid: SessionExportNotationBeatGrid?,
@@ -401,10 +417,12 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
         self.bpm = bpm
         self.captureMode = captureMode
         self.notationSource = notationSource
+        self.detectionSources = detectionSources
         self.labelSource = labelSource
         self.labelConfidence = labelConfidence
         self.notationConfidence = notationConfidence
         self.recordMovementEvents = recordMovementEvents
+        self.audioEvents = audioEvents
         self.faderEvents = faderEvents
         self.mixerMidiEvents = mixerMidiEvents
         self.beatGrid = beatGrid
@@ -2020,7 +2038,25 @@ struct SessionArchiveBuilder: Sendable {
                 source: $0.source
             )
         }
-        let notationSource: SessionExportNotationSource = detectedMovementEvents.isEmpty ? .unavailable : .detected
+        let detectedAudioEvents = (detectedNotation?.audioEvents ?? []).map {
+            SessionExportAudioEvent(
+                startTime: $0.startTime,
+                endTime: $0.endTime,
+                duration: $0.duration,
+                peakLevel: $0.peakLevel,
+                rmsLevel: $0.rmsLevel,
+                confidence: $0.confidence,
+                eventKind: $0.eventKind,
+                source: $0.source
+            )
+        }
+        let notationSource: SessionExportNotationSource = if !detectedMovementEvents.isEmpty {
+            .detected
+        } else if !detectedAudioEvents.isEmpty {
+            .partial
+        } else {
+            .unavailable
+        }
         let beatGrid = captureValues.bpm.map {
             SessionExportNotationBeatGrid(
                 bpm: $0,
@@ -2029,11 +2065,17 @@ struct SessionArchiveBuilder: Sendable {
             )
         }
         let labelConfidence = reviewDecision?.confidence ?? detectedNotation?.labelConfidence
-        let notes = detectedMovementEvents.isEmpty
+        let notes = notationSource == .unavailable
             ? "No notation events detected"
-            : (take.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? take.note!
-                : "")
+            : (notationSource == .partial
+                ? "Detected audio notation without confirmed movement direction"
+                : (take.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? take.note!
+                    : ""))
+        let detectionSources = detectedNotation?.detectionSources ?? []
+        let notationConfidence = notationSource == .unavailable
+            ? nil
+            : detectedNotation?.notationConfidence
 
         let notationDocument = SessionExportNotationDocument(
             sessionID: sidecar.sessionID,
@@ -2043,10 +2085,12 @@ struct SessionArchiveBuilder: Sendable {
             bpm: captureValues.bpm,
             captureMode: captureValues.captureMode,
             notationSource: notationSource,
+            detectionSources: detectionSources,
             labelSource: labelSource,
             labelConfidence: labelConfidence,
-            notationConfidence: notationSource == .detected ? detectedNotation?.notationConfidence : nil,
+            notationConfidence: notationConfidence,
             recordMovementEvents: detectedMovementEvents,
+            audioEvents: detectedAudioEvents,
             faderEvents: [],
             mixerMidiEvents: [],
             beatGrid: beatGrid,

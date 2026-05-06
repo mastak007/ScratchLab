@@ -4524,19 +4524,40 @@ enum CaptureCore {
         let source: String
     }
 
+    struct DetectedNotationAudioEvent: Codable, Equatable, Sendable {
+        let startTime: Double
+        let endTime: Double
+        let duration: Double
+        let peakLevel: Double
+        let rmsLevel: Double
+        let confidence: Double
+        let eventKind: String
+        let source: String
+    }
+
     struct DetectedNotationSnapshot: Codable, Equatable, Sendable {
         let notationSource: String
         let notationConfidence: Double?
         let detectedLabel: String?
         let labelSource: String
         let labelConfidence: Double?
+        let detectionSources: [String]
         let recordMovementEvents: [DetectedNotationRecordMovementEvent]
+        let audioEvents: [DetectedNotationAudioEvent]
         let faderEvents: [String]
         let mixerMidiEvents: [String]
         let capturedAt: Date
 
         var hasDetectedEvents: Bool {
+            !recordMovementEvents.isEmpty || !audioEvents.isEmpty
+        }
+
+        var hasDetectedMovementEvents: Bool {
             !recordMovementEvents.isEmpty
+        }
+
+        var hasAudioEvents: Bool {
+            !audioEvents.isEmpty
         }
     }
 
@@ -4804,7 +4825,7 @@ enum CaptureCore {
                     timestamp: recordedAt,
                     category: "notation_snapshot",
                     detail: detectedNotation?.hasDetectedEvents == true
-                        ? "Captured detected notation snapshot with \(detectedNotation?.recordMovementEvents.count ?? 0) movement events."
+                        ? "Captured detected notation snapshot with \(detectedNotation?.recordMovementEvents.count ?? 0) movement events and \(detectedNotation?.audioEvents.count ?? 0) audio events."
                         : "No detected notation events were available at save time."
                 )
             )

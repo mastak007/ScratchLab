@@ -960,6 +960,10 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false
     }
 
+    private var hasPartialReviewNotation: Bool {
+        currentRoutineNotationSnapshot?.audioEvents.isEmpty == false && !hasReviewNotationPreview
+    }
+
     private var lastRoutineTakeDisplayName: String {
         guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
             return fallbackTakeDisplayName()
@@ -1130,6 +1134,9 @@ struct MacAnalyzerView: View {
         if let decision = reviewDecisionByTakeID[reviewTakeID] {
             return "Review label: \(decision.rawValue)"
         }
+        if hasPartialReviewNotation {
+            return "Notation detected from audio · Direction pending video/motion confirmation"
+        }
         return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
     }
 
@@ -1157,6 +1164,10 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.recordMovementEvents.count ?? 0
     }
 
+    private var reviewAudioEventCount: Int {
+        currentRoutineNotationSnapshot?.audioEvents.count ?? 0
+    }
+
     private var reviewFaderEventCount: Int {
         currentRoutineNotationSnapshot?.faderEvents.count ?? 0
     }
@@ -1180,6 +1191,13 @@ struct MacAnalyzerView: View {
         case .failed(let message):
             return "\(takeLabel) failed: \(message)"
         }
+    }
+
+    private var reviewNotationAvailabilityMessage: String {
+        if hasPartialReviewNotation {
+            return "Notation detected from audio. Direction pending video/motion confirmation."
+        }
+        return "Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved."
     }
 
     private var captureTargetBinding: Binding<CaptureTarget> {

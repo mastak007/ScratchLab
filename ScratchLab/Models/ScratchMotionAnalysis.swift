@@ -38,6 +38,241 @@ struct ScratchMotionFeedback: Equatable {
     }
 }
 
+enum ScratchAudioNotationEventKind: String, Codable, Equatable, Sendable {
+    case scratchBurst
+    case silenceGap
+    case possibleCut
+    case possibleDrag
+    case unknown
+}
+
+struct ScratchAudioNotationEventCandidate: Codable, Equatable, Sendable {
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    let duration: TimeInterval
+    let peakLevel: Float
+    let rmsLevel: Float
+    let confidence: Double
+    let eventKind: ScratchAudioNotationEventKind
+    let source: String
+}
+
+struct ScratchAudioNotationSnapshot: Equatable, Sendable {
+    let audioEvents: [ScratchAudioNotationEventCandidate]
+    let confidence: Double?
+
+    var hasDetectedEvents: Bool {
+        !audioEvents.isEmpty
+    }
+}
+
+final class ScratchAudioNotationDetector {
+    private struct ActiveBurst {
+        let startTime: TimeInterval
+        let startedFromPeak: Float
+        var peakLevel: Float
+        var rmsTotal: Float
+        var frameCount: Int
+    }
+
+    private let frameSize = 256
+    private let activeRMSFloor: Float = 0.010
+    private let activePeakFloor: Float = 0.032
+    private let releaseRMSFloor: Float = 0.006
+    private let minimumBurstDuration: TimeInterval = 0.045
+    private let minimumGapDuration: TimeInterval = 0.05
+    private let quietFramesToCloseBurst = 4
+    private let shortCutGapDuration: TimeInterval = 0.09
+    private let strongBurstPeakLevel: Float = 0.18
+    private let dragDurationThreshold: TimeInterval = 0.30
+
+    private var elapsedTime: TimeInterval = 0
+    private var activeBurst: ActiveBurst?
+    private var quietFramesDuringBurst = 0
+    private var quietGapStartTime: TimeInterval?
+    private var mostRecentBurstPeakLevel: Float?
+    private var audioEvents: [ScratchAudioNotationEventCandidate] = []
+
+    func reset() {
+        elapsedTime = 0
+        activeBurst = nil
+        quietFramesDuringBurst = 0
+        quietGapStartTime = nil
+        mostRecentBurstPeakLevel = nil
+        audioEvents.removeAll()
+    }
+
+    func process(samples: [Float], sampleRate: Double) {
+        guard !samples.isEmpty, sampleRate > 0 else { return }
+
+        var sampleIndex = 0
+        while sampleIndex < samples.count {
+            let frameEndIndex = min(sampleIndex + frameSize, samples.count)
+            let frame = samples[sampleIndex..<frameEndIndex]
+            let frameDuration = Double(frame.count) / sampleRate
+            processFrame(
+                rms: averageAbsoluteAmplitude(of: frame),
+                peak: peakAmplitude(of: frame),
+                frameDuration: frameDuration
+            )
+            sampleIndex = frameEndIndex
+        }
+    }
+
+    func snapshot() -> ScratchAudioNotationSnapshot {
+        finalizeActiveBurst(at: elapsedTime)
+        finalizeTrailingGap(at: elapsedTime)
+        let confidence = audioEvents.isEmpty
+            ? nil
+            : audioEvents.map(\.confidence).reduce(0, +) / Double(audioEvents.count)
+        return ScratchAudioNotationSnapshot(audioEvents: audioEvents, confidence: confidence)
+    }
+
+    private func processFrame(rms: Float, peak: Float, frameDuration: TimeInterval) {
+        let frameStartTime = elapsedTime
+        elapsedTime += frameDuration
+        let frameEndTime = elapsedTime
+        let isActive = rms >= activeRMSFloor || peak >= activePeakFloor
+        let isReleased = rms <= releaseRMSFloor && peak <= activePeakFloor * 0.6
+
+        if var activeBurst {
+            activeBurst.peakLevel = max(activeBurst.peakLevel, peak)
+            activeBurst.rmsTotal += rms
+            activeBurst.frameCount += 1
+            self.activeBurst = activeBurst
+
+            if isReleased {
+                quietFramesDuringBurst += 1
+                if quietFramesDuringBurst >= quietFramesToCloseBurst {
+                    let endTime = max(activeBurst.startTime, frameEndTime - (frameDuration * Double(quietFramesToCloseBurst - 1)))
+                    finalizeActiveBurst(at: endTime)
+                    quietGapStartTime = endTime
+                }
+            } else {
+                quietFramesDuringBurst = 0
+            }
+            return
+        }
+
+        if isActive {
+            finalizePendingGapIfNeeded(at: frameStartTime, nextBurstPeak: peak)
+            activeBurst = ActiveBurst(
+                startTime: frameStartTime,
+                startedFromPeak: peak,
+                peakLevel: peak,
+                rmsTotal: rms,
+                frameCount: 1
+            )
+            quietFramesDuringBurst = 0
+            return
+        }
+
+        if quietGapStartTime == nil {
+            quietGapStartTime = frameStartTime
+        }
+    }
+
+    private func finalizeActiveBurst(at endTime: TimeInterval) {
+        guard let activeBurst else { return }
+        self.activeBurst = nil
+        quietFramesDuringBurst = 0
+
+        let duration = max(0, endTime - activeBurst.startTime)
+        guard duration >= minimumBurstDuration else { return }
+
+        let rmsLevel = activeBurst.frameCount > 0
+            ? activeBurst.rmsTotal / Float(activeBurst.frameCount)
+            : 0
+        let eventKind: ScratchAudioNotationEventKind = duration >= dragDurationThreshold ? .possibleDrag : .scratchBurst
+        let confidence = normalizedConfidence(peakLevel: activeBurst.peakLevel, rmsLevel: rmsLevel)
+        audioEvents.append(
+            ScratchAudioNotationEventCandidate(
+                startTime: activeBurst.startTime,
+                endTime: endTime,
+                duration: duration,
+                peakLevel: activeBurst.peakLevel,
+                rmsLevel: rmsLevel,
+                confidence: confidence,
+                eventKind: eventKind,
+                source: "audio"
+            )
+        )
+        mostRecentBurstPeakLevel = activeBurst.peakLevel
+    }
+
+    private func finalizePendingGapIfNeeded(at nextBurstStartTime: TimeInterval, nextBurstPeak: Float) {
+        guard let quietGapStartTime else { return }
+        self.quietGapStartTime = nil
+
+        let duration = max(0, nextBurstStartTime - quietGapStartTime)
+        guard duration >= minimumGapDuration else { return }
+
+        let previousPeak = mostRecentBurstPeakLevel ?? 0
+        let strongBursts = previousPeak >= strongBurstPeakLevel && nextBurstPeak >= strongBurstPeakLevel
+        let eventKind: ScratchAudioNotationEventKind = strongBursts && duration <= shortCutGapDuration
+            ? .possibleCut
+            : .silenceGap
+        let confidence = strongBursts && duration <= shortCutGapDuration ? 0.74 : 0.56
+        audioEvents.append(
+            ScratchAudioNotationEventCandidate(
+                startTime: quietGapStartTime,
+                endTime: nextBurstStartTime,
+                duration: duration,
+                peakLevel: 0,
+                rmsLevel: 0,
+                confidence: confidence,
+                eventKind: eventKind,
+                source: "audio"
+            )
+        )
+    }
+
+    private func finalizeTrailingGap(at endTime: TimeInterval) {
+        guard let quietGapStartTime else { return }
+        self.quietGapStartTime = nil
+        let duration = max(0, endTime - quietGapStartTime)
+        guard duration >= minimumGapDuration else { return }
+        audioEvents.append(
+            ScratchAudioNotationEventCandidate(
+                startTime: quietGapStartTime,
+                endTime: endTime,
+                duration: duration,
+                peakLevel: 0,
+                rmsLevel: 0,
+                confidence: 0.45,
+                eventKind: .silenceGap,
+                source: "audio"
+            )
+        )
+    }
+
+    private func normalizedConfidence(peakLevel: Float, rmsLevel: Float) -> Double {
+        let peakScore = min(max((peakLevel - activePeakFloor) / 0.45, 0), 1)
+        let rmsScore = min(max((rmsLevel - activeRMSFloor) / 0.20, 0), 1)
+        return Double((peakScore * 0.6) + (rmsScore * 0.4))
+    }
+
+    private func averageAbsoluteAmplitude(of frame: ArraySlice<Float>) -> Float {
+        guard !frame.isEmpty else { return 0 }
+
+        var total: Float = 0
+        for sample in frame {
+            total += abs(sample)
+        }
+        return total / Float(frame.count)
+    }
+
+    private func peakAmplitude(of frame: ArraySlice<Float>) -> Float {
+        guard !frame.isEmpty else { return 0 }
+
+        var peak: Float = 0
+        for sample in frame {
+            peak = max(peak, abs(sample))
+        }
+        return peak
+    }
+}
+
 final class ScratchMotionAnalyzer {
     private struct StrokeSegment: Equatable {
         let direction: ScratchMotionDirection
