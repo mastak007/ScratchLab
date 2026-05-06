@@ -930,11 +930,44 @@ struct MacAnalyzerView: View {
     }
 
     private var mixerStatusDetail: String {
-        selectedMixerMIDIDeviceName ?? "No MIDI mixer detected"
+        guard let name = selectedMixerMIDIDeviceName else { return "No MIDI mixer detected" }
+        if let mapping = captureEngine.crossfaderCCMapping {
+            return "\(name) · Xfader: \(mapping.displayName)"
+        }
+        return name
     }
 
     private var selectedMixerMIDIDeviceName: String? {
         captureEngine.availableMIDISourceNames.first
+    }
+
+    @ViewBuilder
+    private var midiLearnRow: some View {
+        HStack(spacing: 8) {
+            switch captureEngine.midiLearnState {
+            case .idle:
+                Button("Learn Crossfader") { captureEngine.startMIDILearn() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            case .listening:
+                Text("Move crossfader…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Button("Cancel") { captureEngine.cancelMIDILearn() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            case .learned(let mapping):
+                Text("Xfader: \(mapping.displayName)")
+                    .font(.system(size: 12, weight: .medium))
+                Button("Learn Crossfader") { captureEngine.startMIDILearn() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                Button("Clear") { captureEngine.clearCrossfaderMapping() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            Spacer()
+        }
     }
 
     private var watchStatusValue: String {
@@ -2186,6 +2219,10 @@ struct MacAnalyzerView: View {
                     systemImage: "applewatch",
                     color: relayedWatchCaptureStore.importedSessions.isEmpty ? .secondary : .green
                 )
+            }
+
+            if selectedMixerMIDIDeviceName != nil {
+                midiLearnRow
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

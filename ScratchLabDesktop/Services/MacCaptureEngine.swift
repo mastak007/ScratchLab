@@ -25,6 +25,7 @@ private enum ScratchLabDesktopDefaultsKey {
     static let rigHeightScale = "scratchlab.mac.rigHeightScale"
     static let mixerWidthRatio = "scratchlab.mac.mixerWidthRatio"
     static let zoneAdjustmentsData = "scratchlab.mac.zoneAdjustmentsData"
+    static let crossfaderMIDIMapping = "scratchlab.mac.crossfaderMIDIMapping"
 }
 
 final class MacCaptureEngine: NSObject, ObservableObject {
@@ -46,6 +47,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     struct AudioSelectionDecision: Equatable {
         let device: AudioInputDeviceChoice?
         let priority: AudioSelectionPriority
+    }
+
+    struct CrossfaderCCMapping: Codable, Equatable {
+        let channel: Int
+        let controller: Int
+
+        var displayName: String { "CC\(controller) Ch\(channel + 1)" }
+    }
+
+    enum MIDILearnState: Equatable {
+        case idle
+        case listening
+        case learned(CrossfaderCCMapping)
     }
 
     private enum DirectCaptureRoute {
@@ -827,6 +841,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var availableAudioDevices: [AVCaptureDevice] = []
     @Published var availableVideoDevices: [AVCaptureDevice] = []
     @Published private(set) var availableMIDISourceNames: [String] = []
+    @Published private(set) var midiLearnState: MIDILearnState = .idle
+    @Published private(set) var crossfaderCCMapping: CrossfaderCCMapping? = nil
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -1385,6 +1401,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineAudioCaptureWriter: RoutineAudioCaptureWriter?
     private var activeRoutineAudioNotationDetector: ScratchAudioNotationDetector?
     private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
+    private var midiClient: MIDIClientRef = 0
+    private var midiInputPort: MIDIPortRef = 0
+    private var capturedMidiCCEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    private let midiCaptureLock = NSLock()
+    private var midiRecordingStartTime: CFTimeInterval = 0
+    private var midiConnectedSourceName: String = ""
+    private var isMIDILearning: Bool = false
+    private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
     private var routineArtifactRefreshTask: Task<Void, Never>?
@@ -1441,6 +1465,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             object: nil
         )
 
+        if let data = UserDefaults.standard.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
+           let mapping = try? JSONDecoder().decode(CrossfaderCCMapping.self, from: data) {
+            crossfaderCCMapping = mapping
+            midiLearnState = .learned(mapping)
+            persistedCrossfaderMapping = mapping
+        }
+
+        setupMIDIClient()
+
         if autoRefreshDevicesOnInit {
             refreshDevices()
         }
@@ -1450,6 +1483,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         audioSignalDecayTimer?.cancel()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         destroySeratoDirectCapture()
+        if midiInputPort != 0 { MIDIPortDispose(midiInputPort) }
+        if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
 
     func start() {
@@ -1783,8 +1818,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     self.lastRoutineDetectedNotation = nil
                     self.routineRecordingStatus = "Starting routine recording"
                 }
+                self.openMIDIInputForRecording()
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
+                self.closeMIDIInput()
                 let message = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
                 Task { @MainActor in
@@ -2385,13 +2422,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let labelSource = lastScratchDetection == nil ? "unknown" : "detected"
         let audioSnapshot = activeRoutineAudioNotationDetector?.snapshot() ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
         let motionEvents = activeRoutineDetectedNotationBuilder?.movementEvents() ?? []
+        let capturedMidi = drainCapturedMidiCCEvents()
+        closeMIDIInput()
         let notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: motionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
             labelConfidence: lastScratchDetection?.confidence
-        )
+        ).withMixerMidiEvents(capturedMidi)
 
         sidecar = sidecar.finalized(
             mediaFileName: outputFileURL.lastPathComponent,
@@ -3405,6 +3444,169 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
         audioSignalDecayTimer = timer
         timer.resume()
+    }
+
+    func startMIDILearn() {
+        midiCaptureLock.lock()
+        isMIDILearning = true
+        midiCaptureLock.unlock()
+        Task { @MainActor in
+            midiLearnState = .listening
+        }
+    }
+
+    func cancelMIDILearn() {
+        midiCaptureLock.lock()
+        isMIDILearning = false
+        midiCaptureLock.unlock()
+        Task { @MainActor in
+            midiLearnState = crossfaderCCMapping.map { .learned($0) } ?? .idle
+        }
+    }
+
+    func clearCrossfaderMapping() {
+        midiCaptureLock.lock()
+        persistedCrossfaderMapping = nil
+        isMIDILearning = false
+        midiCaptureLock.unlock()
+        UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        Task { @MainActor in
+            crossfaderCCMapping = nil
+            midiLearnState = .idle
+        }
+    }
+
+    private func applyLearnedCrossfaderMapping(_ mapping: CrossfaderCCMapping) {
+        midiCaptureLock.lock()
+        persistedCrossfaderMapping = mapping
+        isMIDILearning = false
+        midiCaptureLock.unlock()
+        if let data = try? JSONEncoder().encode(mapping) {
+            UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        }
+        Task { @MainActor in
+            crossfaderCCMapping = mapping
+            midiLearnState = .learned(mapping)
+        }
+    }
+
+    private func setupMIDIClient() {
+        guard midiClient == 0 else { return }
+        MIDIClientCreate("ScratchLab.MIDICapture" as CFString, nil, nil, &midiClient)
+        guard midiClient != 0 else { return }
+        MIDIInputPortCreateWithBlock(midiClient, "ScratchLab.MIDIIn" as CFString, &midiInputPort) { [weak self] packetList, _ in
+            self?.receiveMIDIPacketList(packetList)
+        }
+    }
+
+    private func openMIDIInputForRecording() {
+        midiCaptureLock.lock()
+        capturedMidiCCEvents = []
+        midiRecordingStartTime = CACurrentMediaTime()
+        midiConnectedSourceName = ""
+        midiCaptureLock.unlock()
+
+        guard midiInputPort != 0 else { return }
+        let sourceCount = MIDIGetNumberOfSources()
+        for index in 0..<sourceCount {
+            let endpoint = MIDIGetSource(index)
+            guard endpoint != 0 else { continue }
+            var unmanagedName: Unmanaged<CFString>?
+            let status = MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &unmanagedName)
+            let name = (status == noErr ? unmanagedName?.takeRetainedValue() as String? : nil)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !name.isEmpty else { continue }
+            midiCaptureLock.lock()
+            midiConnectedSourceName = name
+            midiCaptureLock.unlock()
+            MIDIPortConnectSource(midiInputPort, endpoint, nil)
+            break
+        }
+    }
+
+    private func closeMIDIInput() {
+        guard midiInputPort != 0 else { return }
+        let sourceCount = MIDIGetNumberOfSources()
+        for index in 0..<sourceCount {
+            let endpoint = MIDIGetSource(index)
+            guard endpoint != 0 else { continue }
+            MIDIPortDisconnectSource(midiInputPort, endpoint)
+        }
+    }
+
+    private func drainCapturedMidiCCEvents() -> [CaptureCore.RawMixerMIDIEvent] {
+        midiCaptureLock.lock()
+        defer {
+            capturedMidiCCEvents = []
+            midiRecordingStartTime = 0
+            midiCaptureLock.unlock()
+        }
+        return capturedMidiCCEvents
+    }
+
+    private func receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
+        let now = CACurrentMediaTime()
+        midiCaptureLock.lock()
+        let startTime = midiRecordingStartTime
+        let deviceName = midiConnectedSourceName
+        midiCaptureLock.unlock()
+        guard startTime > 0 else { return }
+
+        var packetPtr = withUnsafePointer(to: packetListPtr.pointee.packet) {
+            UnsafeMutablePointer(mutating: $0)
+        }
+        for _ in 0..<Int(packetListPtr.pointee.numPackets) {
+            let length = Int(packetPtr.pointee.length)
+            if length >= 3 {
+                withUnsafeBytes(of: packetPtr.pointee.data) { rawBytes in
+                    var i = 0
+                    while i + 2 < length {
+                        let statusByte = rawBytes[i]
+                        if statusByte & 0xF0 == 0xB0 {
+                            let channel = Int(statusByte & 0x0F)
+                            let controller = Int(rawBytes[i + 1])
+                            let value = Int(rawBytes[i + 2])
+
+                            midiCaptureLock.lock()
+                            let learning = isMIDILearning
+                            var currentMapping = persistedCrossfaderMapping
+                            midiCaptureLock.unlock()
+
+                            if learning {
+                                let newMapping = CrossfaderCCMapping(channel: channel, controller: controller)
+                                currentMapping = newMapping
+                                applyLearnedCrossfaderMapping(newMapping)
+                            }
+
+                            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
+                            let event = CaptureCore.RawMixerMIDIEvent(
+                                timestamp: now,
+                                takeRelativeTime: max(0, now - startTime),
+                                deviceName: deviceName,
+                                channel: channel,
+                                controller: controller,
+                                value: value,
+                                normalizedValue: Double(value) / 127.0,
+                                mappedControl: mappedControl
+                            )
+                            midiCaptureLock.lock()
+                            capturedMidiCCEvents.append(event)
+                            midiCaptureLock.unlock()
+                            i += 3
+                        } else if statusByte >= 0x80 {
+                            switch statusByte & 0xF0 {
+                            case 0x80, 0x90, 0xA0, 0xE0: i += 3
+                            case 0xC0, 0xD0: i += 2
+                            default: i += 1
+                            }
+                        } else {
+                            i += 1
+                        }
+                    }
+                }
+            }
+            packetPtr = MIDIPacketNext(packetPtr)
+        }
     }
 
     private func discoverMIDISourceNames() -> [String] {

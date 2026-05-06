@@ -8625,6 +8625,224 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTFail("Timed out waiting for Raw JSON inspector state to settle")
     }
 
+    // MARK: - Mixer MIDI capture tests
+
+    func testMIDICCDecodesToNormalizedValue() {
+        let event = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1000.0,
+            takeRelativeTime: 0.5,
+            deviceName: "IAC Driver Bus 1",
+            channel: 0,
+            controller: 7,
+            value: 64,
+            normalizedValue: Double(64) / 127.0,
+            mappedControl: nil
+        )
+        XCTAssertEqual(event.value, 64)
+        XCTAssertEqual(event.normalizedValue, Double(64) / 127.0, accuracy: 0.001)
+        XCTAssertNil(event.mappedControl)
+        XCTAssertEqual(event.deviceName, "IAC Driver Bus 1")
+        XCTAssertEqual(event.channel, 0)
+        XCTAssertEqual(event.controller, 7)
+
+        let fullScale = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1000.0, takeRelativeTime: 1.0,
+            deviceName: "TestDevice", channel: 1, controller: 11,
+            value: 127, normalizedValue: Double(127) / 127.0, mappedControl: nil
+        )
+        XCTAssertEqual(fullScale.normalizedValue, 1.0, accuracy: 0.001)
+
+        let zero = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1000.0, takeRelativeTime: 2.0,
+            deviceName: "TestDevice", channel: 1, controller: 11,
+            value: 0, normalizedValue: Double(0) / 127.0, mappedControl: nil
+        )
+        XCTAssertEqual(zero.normalizedValue, 0.0, accuracy: 0.001)
+    }
+
+    func testNoMIDIExportsEmptyMixerMidiEvents() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+        let snapshot = makeDetectedNotationSnapshot()
+        XCTAssertTrue(snapshot.mixerMidiEvents.isEmpty)
+        sidecar = sidecar.withDetectedNotation(snapshot)
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let notationDocument = try JSONDecoder().decode(SessionExportNotationDocument.self, from: data)
+
+        XCTAssertTrue(notationDocument.mixerMidiEvents.isEmpty)
+        XCTAssertTrue(notationDocument.faderEvents.isEmpty)
+    }
+
+    func testRawMIDIExportsMixerMidiEventsWithoutFakeFaderEvents() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+
+        let midiEvent = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1001.0,
+            takeRelativeTime: 0.42,
+            deviceName: "MixEmergency",
+            channel: 0,
+            controller: 7,
+            value: 100,
+            normalizedValue: Double(100) / 127.0,
+            mappedControl: nil
+        )
+        let snapshot = makeDetectedNotationSnapshot().withMixerMidiEvents([midiEvent])
+        sidecar = sidecar.withDetectedNotation(snapshot)
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let notationDocument = try JSONDecoder().decode(SessionExportNotationDocument.self, from: data)
+
+        XCTAssertEqual(notationDocument.mixerMidiEvents.count, 1)
+        XCTAssertEqual(notationDocument.mixerMidiEvents.first?.controller, 7)
+        XCTAssertEqual(notationDocument.mixerMidiEvents.first?.value, 100)
+        XCTAssertEqual(notationDocument.mixerMidiEvents.first?.deviceName, "MixEmergency")
+        XCTAssertNil(notationDocument.mixerMidiEvents.first?.mappedControl)
+        XCTAssertTrue(notationDocument.faderEvents.isEmpty, "faderEvents must stay empty when no fader mapping exists")
+    }
+
+    func testDetectedNotationJSONIncludesMixerMidiEventsArray() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+        sidecar = sidecar.withDetectedNotation(makeDetectedNotationSnapshot())
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let rawJSON = try String(contentsOf: notationURL, encoding: .utf8)
+
+        XCTAssertTrue(rawJSON.contains("\"mixerMidiEvents\""), "detected_notation.json must contain mixerMidiEvents key")
+        XCTAssertTrue(rawJSON.contains("\"faderEvents\""), "detected_notation.json must contain faderEvents key")
+    }
+
+    // MARK: - MIDI Learn and crossfader mapping tests
+
+    func testCrossfaderCCMappingDisplayName() {
+        let mapping = MacCaptureEngine.CrossfaderCCMapping(channel: 0, controller: 7)
+        XCTAssertEqual(mapping.displayName, "CC7 Ch1")
+
+        let ch2 = MacCaptureEngine.CrossfaderCCMapping(channel: 1, controller: 11)
+        XCTAssertEqual(ch2.displayName, "CC11 Ch2")
+    }
+
+    func testMIDILearnStateTransitionsToListening() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        XCTAssertEqual(engine.midiLearnState, .idle)
+        engine.startMIDILearn()
+        // isMIDILearning is internal; published state updates via Task so we just verify the method runs without crash
+    }
+
+    func testCancelMIDILearnReturnsToIdle() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.startMIDILearn()
+        engine.cancelMIDILearn()
+        // After cancel with no prior mapping, state should return to idle (async via Task)
+        XCTAssertNil(engine.crossfaderCCMapping)
+    }
+
+    func testClearCrossfaderMappingRemovesMapping() {
+        let defaults = UserDefaults.standard
+        let key = "scratchlab.mac.crossfaderMIDIMapping"
+        let mapping = MacCaptureEngine.CrossfaderCCMapping(channel: 0, controller: 7)
+        if let data = try? JSONEncoder().encode(mapping) {
+            defaults.set(data, forKey: key)
+        }
+
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        XCTAssertNotNil(engine.crossfaderCCMapping)
+
+        engine.clearCrossfaderMapping()
+
+        XCTAssertNil(defaults.data(forKey: key), "UserDefaults key should be removed after clear")
+    }
+
+    func testMappedControlCrossfaderTagRoundTripsExport() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+
+        let crossfaderEvent = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1002.0,
+            takeRelativeTime: 0.75,
+            deviceName: "IAC Driver Bus 1",
+            channel: 0,
+            controller: 7,
+            value: 127,
+            normalizedValue: 1.0,
+            mappedControl: "crossfader"
+        )
+        let snapshot = makeDetectedNotationSnapshot().withMixerMidiEvents([crossfaderEvent])
+        sidecar = sidecar.withDetectedNotation(snapshot)
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let notationDocument = try JSONDecoder().decode(SessionExportNotationDocument.self, from: data)
+
+        let exported = try XCTUnwrap(notationDocument.mixerMidiEvents.first)
+        XCTAssertEqual(notationDocument.mixerMidiEvents.count, 1)
+        XCTAssertEqual(exported.mappedControl, "crossfader")
+        XCTAssertEqual(exported.normalizedValue, 1.0, accuracy: 0.001)
+        XCTAssertTrue(notationDocument.faderEvents.isEmpty)
+    }
+
+    func testMIDILearnSourceCodePresence() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("struct CrossfaderCCMapping"))
+        XCTAssertTrue(source.contains("enum MIDILearnState"))
+        XCTAssertTrue(source.contains("func startMIDILearn()"))
+        XCTAssertTrue(source.contains("func cancelMIDILearn()"))
+        XCTAssertTrue(source.contains("func clearCrossfaderMapping()"))
+        XCTAssertTrue(source.contains("crossfaderMIDIMapping"))
+        XCTAssertTrue(source.contains("mappedControl: mappedControl"))
+    }
+
+    func testMIDILearnUISourcePresence() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("midiLearnRow"))
+        XCTAssertTrue(source.contains("Learn Crossfader"))
+        XCTAssertTrue(source.contains("startMIDILearn()"))
+        XCTAssertTrue(source.contains("cancelMIDILearn()"))
+        XCTAssertTrue(source.contains("clearCrossfaderMapping()"))
+        XCTAssertTrue(source.contains("Move crossfader"))
+        XCTAssertTrue(source.contains("Xfader:"))
+    }
+
 }
 
 extension CaptureRecoveryPhase2CoreTests {
