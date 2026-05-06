@@ -285,6 +285,12 @@ struct SessionExportArtifactMetadata: Codable, Equatable, Sendable {
     let recordingStartHostTime: UInt64?
     let clickVersion: String
     let engineVersion: String
+    let scratchOnlyFile: String?
+    let beatOnlyFile: String?
+    let scratchWithBeatFile: String?
+    let scratchOnlyAvailability: String
+    let beatOnlyAvailability: String
+    let scratchWithBeatAvailability: String
     let scratchFile: String?
     let timingFile: String?
     let rawTakeFile: String?
@@ -1188,6 +1194,7 @@ struct SessionArchiveBuilder: Sendable {
         let verbalSlateUsed: Bool
         let syncClapUsed: Bool
         let notes: String
+        let stemAvailability: [String: String]
         let files: [String: String]
         let artifacts: [String: CanonicalArtifactRecord]
 
@@ -1204,6 +1211,7 @@ struct SessionArchiveBuilder: Sendable {
             case verbalSlateUsed = "verbal_slate_used"
             case syncClapUsed = "sync_clap_used"
             case notes
+            case stemAvailability = "stem_availability"
             case files
             case artifacts
         }
@@ -1244,10 +1252,15 @@ struct SessionArchiveBuilder: Sendable {
         let sidecar: CaptureCore.LocalRecordingSidecar
         let canonicalBPM: Int
         let videoFileName: String
-        let audioFileName: String
+        let primaryAudioFileName: String
+        let scratchOnlyRelativePath: String
+        let beatOnlyFileName: String?
+        let scratchWithBeatFileName: String?
+        let stemAvailability: [String: String]
         let watchFileName: String?
         let notationFileName: String
         let notationDocument: SessionExportNotationDocument
+        let captureMetadata: SessionExportTakeCaptureMetadata
         let verbalSlateUsed: Bool
         let syncClapUsed: Bool
         let notes: String
@@ -1264,6 +1277,15 @@ struct SessionArchiveBuilder: Sendable {
         let fileName: String
         let relativePath: String
         let document: SessionExportNotationDocument
+    }
+
+    private struct ResolvedAudioStemExport {
+        let scratchOnlyRelativePath: String
+        let beatOnlyRelativePath: String?
+        let scratchWithBeatRelativePath: String?
+        let scratchOnlyAvailability: String
+        let beatOnlyAvailability: String
+        let scratchWithBeatAvailability: String
     }
 
     func preparePackage(from source: SessionExportSource) throws -> SessionExportPackage {
@@ -1434,6 +1456,22 @@ struct SessionArchiveBuilder: Sendable {
                 sidecar: sidecar,
                 packageMetadata: hydratedPackage.metadata
             )
+            let djToken = try canonicalPerformerToken(from: hydratedPackage.metadata)
+            let scratchTypeToken = try canonicalScratchTypeToken(from: hydratedPackage.metadata)
+            let canonicalBPM = captureMetadata.bpm ?? take.bpm
+            let canReadAudioStem = take.audioArtifactURL.flatMap { try? AVAudioFile(forReading: $0) } != nil
+            let canRenderBeatStem = (captureMetadata.captureMode == CaptureSessionCaptureMode.timedClick.rawValue
+                || captureMetadata.clickEnabled
+                || captureMetadata.beatEnabled)
+                && canReadAudioStem
+            let audioStemExport = resolvedAudioStemExport(
+                djToken: djToken,
+                scratchTypeToken: scratchTypeToken,
+                canonicalBPM: canonicalBPM,
+                takeNumber: take.takeNumber,
+                audioExtension: "wav",
+                shouldRenderBeatStem: canRenderBeatStem
+            )
             let timingPrintedState = TimingPrintedToRecordingState(
                 rawValue: captureMetadata.timingPrintedToRecording
             ) ?? .unknown
@@ -1466,6 +1504,12 @@ struct SessionArchiveBuilder: Sendable {
                 recordingStartHostTime: captureMetadata.recordingStartHostTime,
                 clickVersion: captureMetadata.clickVersion,
                 engineVersion: captureMetadata.engineVersion,
+                scratchOnlyFile: audioStemExport.scratchOnlyRelativePath,
+                beatOnlyFile: audioStemExport.beatOnlyRelativePath,
+                scratchWithBeatFile: audioStemExport.scratchWithBeatRelativePath,
+                scratchOnlyAvailability: audioStemExport.scratchOnlyAvailability,
+                beatOnlyAvailability: audioStemExport.beatOnlyAvailability,
+                scratchWithBeatAvailability: audioStemExport.scratchWithBeatAvailability,
                 scratchFile: mixPaths.scratchFile,
                 timingFile: mixPaths.timingFile,
                 rawTakeFile: mixPaths.rawTakeFile,
@@ -1687,8 +1731,7 @@ struct SessionArchiveBuilder: Sendable {
                 .appendingPathComponent("video", isDirectory: true)
                 .appendingPathComponent(takeContext.videoFileName)
             let audioURL = stagedSessionURL
-                .appendingPathComponent("audio", isDirectory: true)
-                .appendingPathComponent(takeContext.audioFileName)
+                .appendingPathComponent(takeContext.scratchOnlyRelativePath)
             let notationURL = stagedSessionURL
                 .appendingPathComponent("notation", isDirectory: true)
                 .appendingPathComponent(takeContext.notationFileName)
@@ -1696,7 +1739,35 @@ struct SessionArchiveBuilder: Sendable {
             guard let audioArtifactURL = takeContext.take.audioArtifactURL else {
                 throw SessionExportError.missingRequiredFiles
             }
+            try fileManager.createDirectory(
+                at: audioURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
             try fileManager.copyItem(at: audioArtifactURL, to: audioURL)
+            if takeContext.stemAvailability["beat_only"] == "available"
+                || takeContext.stemAvailability["scratch_with_beat"] == "available" {
+                let beatBuffer = try renderedBeatStemBuffer(
+                    for: takeContext.take,
+                    captureMetadata: takeContext.captureMetadata,
+                    scratchAudioURL: audioArtifactURL
+                )
+                if let beatOnlyFileName = takeContext.beatOnlyFileName {
+                    let beatOnlyURL = stagedSessionURL
+                        .appendingPathComponent("audio", isDirectory: true)
+                        .appendingPathComponent(beatOnlyFileName)
+                    try writeAudioBuffer(beatBuffer, to: beatOnlyURL)
+                }
+                if let scratchWithBeatFileName = takeContext.scratchWithBeatFileName {
+                    let scratchWithBeatURL = stagedSessionURL
+                        .appendingPathComponent("audio", isDirectory: true)
+                        .appendingPathComponent(scratchWithBeatFileName)
+                    let mixedBuffer = try mixedScratchWithTimingBuffer(
+                        scratchURL: audioArtifactURL,
+                        timingBuffer: beatBuffer
+                    )
+                    try writeAudioBuffer(mixedBuffer, to: scratchWithBeatURL)
+                }
+            }
             let notationData = try Self.jsonEncoder.encode(takeContext.notationDocument)
             try notationData.write(to: notationURL, options: .atomic)
 
@@ -1937,6 +2008,119 @@ struct SessionArchiveBuilder: Sendable {
             fileName: fileName,
             relativePath: relativePath,
             document: notationDocument
+        )
+    }
+
+    private func resolvedAudioStemExport(
+        djToken: String,
+        scratchTypeToken: String,
+        canonicalBPM: Int,
+        takeNumber: Int,
+        audioExtension: String,
+        shouldRenderBeatStem: Bool
+    ) -> ResolvedAudioStemExport {
+        let primaryAudioFileName = CaptureCanonicalFormatting.standardFileName(
+            djToken: djToken,
+            scratchTypeToken: scratchTypeToken,
+            bpm: canonicalBPM,
+            takeNumber: takeNumber,
+            source: "serato",
+            fileExtension: audioExtension
+        )
+        let beatOnlyRelativePath: String?
+        let scratchWithBeatRelativePath: String?
+        if shouldRenderBeatStem {
+            let beatOnlyFileName = CaptureCanonicalFormatting.standardFileName(
+                djToken: djToken,
+                scratchTypeToken: scratchTypeToken,
+                bpm: canonicalBPM,
+                takeNumber: takeNumber,
+                source: "beat_only",
+                fileExtension: audioExtension
+            )
+            let scratchWithBeatFileName = CaptureCanonicalFormatting.standardFileName(
+                djToken: djToken,
+                scratchTypeToken: scratchTypeToken,
+                bpm: canonicalBPM,
+                takeNumber: takeNumber,
+                source: "scratch_with_beat",
+                fileExtension: audioExtension
+            )
+            beatOnlyRelativePath = "audio/\(beatOnlyFileName)"
+            scratchWithBeatRelativePath = "audio/\(scratchWithBeatFileName)"
+        } else {
+            beatOnlyRelativePath = nil
+            scratchWithBeatRelativePath = nil
+        }
+
+        return ResolvedAudioStemExport(
+            scratchOnlyRelativePath: "audio/\(primaryAudioFileName)",
+            beatOnlyRelativePath: beatOnlyRelativePath,
+            scratchWithBeatRelativePath: scratchWithBeatRelativePath,
+            scratchOnlyAvailability: "available",
+            beatOnlyAvailability: shouldRenderBeatStem ? "available" : "unavailable",
+            scratchWithBeatAvailability: shouldRenderBeatStem ? "available" : "unavailable"
+        )
+    }
+
+    private func canonicalPerformerToken(from metadata: SessionExportMetadata) throws -> String {
+        guard let performerName = metadata.performerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !performerName.isEmpty,
+              let djToken = CaptureCanonicalFormatting.sanitizeDJToken(performerName) else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        return djToken
+    }
+
+    private func canonicalScratchTypeToken(from metadata: SessionExportMetadata) throws -> String {
+        guard let token = CaptureCanonicalFormatting.exportScratchTypeToken(
+            scratchTypeID: metadata.scratchTypeID,
+            scratchTypeName: metadata.scratchTypeName,
+            workflow: metadata.workflow
+        ) else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        return token
+    }
+
+    private func renderedBeatStemBuffer(
+        for take: SessionExportTake,
+        captureMetadata: SessionExportTakeCaptureMetadata,
+        scratchAudioURL: URL
+    ) throws -> AVAudioPCMBuffer {
+        let scratchAudioFile = try AVAudioFile(forReading: scratchAudioURL)
+        let scratchFormat = scratchAudioFile.processingFormat
+        return try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: BeatEngineMode(rawValue: captureMetadata.beatEngineMode) ?? .silent,
+            bpm: captureMetadata.bpm ?? CaptureClickTrackDefaults.defaultTimedBPM,
+            durationSeconds: max(0, take.duration),
+            countInBeats: captureMetadata.countInBeats,
+            beatsPerBar: captureMetadata.beatsPerBar,
+            clickStartHostTime: captureMetadata.clickStartHostTime,
+            recordingStartHostTime: captureMetadata.recordingStartHostTime,
+            sampleRate: scratchFormat.sampleRate,
+            channelCount: scratchFormat.channelCount
+        )
+    }
+
+    private func generatedAudioArtifactRecord(
+        source: String,
+        buffer: AVAudioPCMBuffer,
+        stagedURL: URL,
+        fileManager: FileManager
+    ) throws -> CanonicalArtifactRecord {
+        let temporaryDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("ScratchLabStemArtifacts", isDirectory: true)
+        try fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let temporaryURL = temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? fileManager.removeItem(at: temporaryURL) }
+        try writeAudioBuffer(buffer, to: temporaryURL)
+        return try artifactRecord(
+            source: source,
+            fileURL: temporaryURL,
+            stagedURL: stagedURL
         )
     }
 
@@ -2772,6 +2956,18 @@ struct SessionArchiveBuilder: Sendable {
         let bytesPerChannelFrame = max(1, bytesPerFrame / Int(format.channelCount))
         let expectedByteCount = Int(frameCount) * bytesPerChannelFrame
 
+        if sourceBuffers.count == 1,
+           Int(format.channelCount) > 1,
+           let interleavedSource = sourceBuffers.first?.mData?.assumingMemoryBound(to: Int16.self) {
+            let interleavedFrameWidth = Int(format.channelCount)
+            for frameIndex in 0..<Int(frameCount) {
+                for channelIndex in 0..<Int(format.channelCount) {
+                    channelData[channelIndex][frameIndex] = interleavedSource[(frameIndex * interleavedFrameWidth) + channelIndex]
+                }
+            }
+            return buffer
+        }
+
         for (channelIndex, sourceBuffer) in sourceBuffers.enumerated() {
             guard channelIndex < Int(format.channelCount),
                   let sourceData = sourceBuffer.mData else {
@@ -2849,6 +3045,7 @@ struct SessionArchiveBuilder: Sendable {
                 sidecar: sidecar,
                 packageMetadata: package.metadata
             )
+            let canReadAudioStem = (try? AVAudioFile(forReading: audioArtifactURL)) != nil
             guard let canonicalBPM = captureValues.canonicalBPM,
                   CaptureClickTrackDefaults.supportedBPMRange.contains(canonicalBPM) else {
                 throw SessionExportError.invalidSessionMetadata
@@ -2895,13 +3092,16 @@ struct SessionArchiveBuilder: Sendable {
                 source: "camA",
                 fileExtension: videoExtension
             )
-            let audioFileName = CaptureCanonicalFormatting.standardFileName(
+            let audioStemExport = resolvedAudioStemExport(
                 djToken: djToken,
                 scratchTypeToken: resolvedScratchTypeToken,
-                bpm: canonicalBPM,
+                canonicalBPM: canonicalBPM,
                 takeNumber: take.takeNumber,
-                source: "serato",
-                fileExtension: audioExtension
+                audioExtension: audioExtension,
+                shouldRenderBeatStem: (captureValues.captureMode == CaptureSessionCaptureMode.timedClick.rawValue
+                    || captureValues.clickEnabled
+                    || captureValues.beatEnabled)
+                    && canReadAudioStem
             )
             let watchFileName = take.watchCaptureSession.map {
                 _ in CaptureCanonicalFormatting.standardFileName(
@@ -2918,6 +3118,10 @@ struct SessionArchiveBuilder: Sendable {
                 sidecar: sidecar,
                 packageMetadata: package.metadata
             )
+            let captureMetadata = try resolvedTakeCaptureMetadata(
+                for: take,
+                packageMetadata: package.metadata
+            )
 
             decodedSidecars.append(sidecar)
             bpmCoverage.insert(canonicalBPM)
@@ -2927,10 +3131,19 @@ struct SessionArchiveBuilder: Sendable {
                     sidecar: sidecar,
                     canonicalBPM: canonicalBPM,
                     videoFileName: videoFileName,
-                    audioFileName: audioFileName,
+                    primaryAudioFileName: URL(fileURLWithPath: audioStemExport.scratchOnlyRelativePath).lastPathComponent,
+                    scratchOnlyRelativePath: audioStemExport.scratchOnlyRelativePath,
+                    beatOnlyFileName: audioStemExport.beatOnlyRelativePath.map { URL(fileURLWithPath: $0).lastPathComponent },
+                    scratchWithBeatFileName: audioStemExport.scratchWithBeatRelativePath.map { URL(fileURLWithPath: $0).lastPathComponent },
+                    stemAvailability: [
+                        "scratch_only": audioStemExport.scratchOnlyAvailability,
+                        "beat_only": audioStemExport.beatOnlyAvailability,
+                        "scratch_with_beat": audioStemExport.scratchWithBeatAvailability
+                    ],
                     watchFileName: watchFileName,
                     notationFileName: notationExport.fileName,
                     notationDocument: notationExport.document,
+                    captureMetadata: captureMetadata,
                     verbalSlateUsed: verbalSlateUsed,
                     syncClapUsed: syncClapUsed,
                     notes: take.note ?? ""
@@ -2969,6 +3182,7 @@ struct SessionArchiveBuilder: Sendable {
                 verbalSlateUsed: context.verbalSlateUsed,
                 syncClapUsed: context.syncClapUsed,
                 notes: context.notes,
+                stemAvailability: context.stemAvailability,
                 files: files,
                 artifacts: artifacts
             )
@@ -3057,9 +3271,16 @@ struct SessionArchiveBuilder: Sendable {
     private func canonicalFilesMap(for context: CanonicalTakeContext, sessionRootURL: URL) throws -> [String: String] {
         var files: [String: String] = [
             "camA": "video/\(context.videoFileName)",
-            "serato": "audio/\(context.audioFileName)",
+            "serato": context.scratchOnlyRelativePath,
+            "scratch_only": context.scratchOnlyRelativePath,
             "notation": "notation/\(context.notationFileName)"
         ]
+        if let beatOnlyFileName = context.beatOnlyFileName {
+            files["beat_only"] = "audio/\(beatOnlyFileName)"
+        }
+        if let scratchWithBeatFileName = context.scratchWithBeatFileName {
+            files["scratch_with_beat"] = "audio/\(scratchWithBeatFileName)"
+        }
         if let watchFileName = context.watchFileName {
             files["watch"] = "watch/\(watchFileName)"
         }
@@ -3079,12 +3300,40 @@ struct SessionArchiveBuilder: Sendable {
         guard let audioArtifactURL = context.take.audioArtifactURL else {
             throw SessionExportError.missingRequiredFiles
         }
-        let audioTargetURL = sessionRootURL.appendingPathComponent("audio/\(context.audioFileName)")
-        artifacts["serato"] = try artifactRecord(
-            source: "serato",
+        let audioTargetURL = sessionRootURL.appendingPathComponent(context.scratchOnlyRelativePath)
+        let scratchArtifact = try artifactRecord(
+            source: "scratch_only",
             fileURL: audioArtifactURL,
             stagedURL: audioTargetURL
         )
+        artifacts["serato"] = scratchArtifact
+        artifacts["scratch_only"] = scratchArtifact
+
+        if let beatOnlyFileName = context.beatOnlyFileName {
+            let beatBuffer = try renderedBeatStemBuffer(
+                for: context.take,
+                captureMetadata: context.captureMetadata,
+                scratchAudioURL: audioArtifactURL
+            )
+            artifacts["beat_only"] = try generatedAudioArtifactRecord(
+                source: "beat_only",
+                buffer: beatBuffer,
+                stagedURL: sessionRootURL.appendingPathComponent("audio/\(beatOnlyFileName)"),
+                fileManager: FileManager.default
+            )
+            if let scratchWithBeatFileName = context.scratchWithBeatFileName {
+                let mixedBuffer = try mixedScratchWithTimingBuffer(
+                    scratchURL: audioArtifactURL,
+                    timingBuffer: beatBuffer
+                )
+                artifacts["scratch_with_beat"] = try generatedAudioArtifactRecord(
+                    source: "scratch_with_beat",
+                    buffer: mixedBuffer,
+                    stagedURL: sessionRootURL.appendingPathComponent("audio/\(scratchWithBeatFileName)"),
+                    fileManager: FileManager.default
+                )
+            }
+        }
 
         if let watchCaptureSession = context.take.watchCaptureSession,
            let watchFileName = context.watchFileName {
@@ -3129,13 +3378,20 @@ struct SessionArchiveBuilder: Sendable {
         generatedData: Data?
     ) throws -> [String: SessionExportProbeValue] {
         if let artifactProbeOverride {
-            return try artifactProbeOverride(source, fileURL, generatedData)
+            let overrideSource: String
+            switch source {
+            case "scratch_only", "beat_only", "scratch_with_beat", "raw_original":
+                overrideSource = "serato"
+            default:
+                overrideSource = source
+            }
+            return try artifactProbeOverride(overrideSource, fileURL, generatedData)
         }
         switch source {
         case "camA":
             guard let fileURL else { throw SessionExportError.missingRequiredFiles }
             return try probeVideo(url: fileURL)
-        case "serato":
+        case "serato", "scratch_only", "beat_only", "scratch_with_beat", "raw_original":
             guard let fileURL else { throw SessionExportError.missingRequiredFiles }
             return try probeAudio(url: fileURL)
         case "watch":

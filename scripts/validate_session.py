@@ -48,7 +48,8 @@ MIN_PRIMARY_MEDIA_DURATION_SECONDS = 0.5
 MAX_PRIMARY_AV_DURATION_DELTA_SECONDS = 0.5
 MAX_VIDEO_PROBE_DURATION_DELTA_SECONDS = 0.25
 MAX_VIDEO_PROBE_FRAME_RATE_DELTA_FPS = 0.001
-OPTIONAL_MANIFEST_FILE_SOURCES = {"notation"}
+OPTIONAL_MANIFEST_FILE_SOURCES = {"notation", "scratch_only", "raw_original"}
+OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original"}
 
 
 def expected_camera_id(sources: dict[str, dict[str, Any]]) -> str | None:
@@ -64,7 +65,7 @@ def artifact_probe_matches(
     recorded_probe: dict[str, Any],
     expected_probe: dict[str, Any],
 ) -> bool:
-    if source == "serato":
+    if source in {"serato", "scratch_only", "beat_only", "scratch_with_beat", "raw_original"}:
         return recorded_probe == expected_probe
 
     if source in {"camA", "camB"}:
@@ -279,6 +280,8 @@ def validate_manifest(
                     continue
 
                 expected_relative_path = str(grouped.get(source, {}).get("relative_path") or "")
+                if source == "scratch_only" and not expected_relative_path:
+                    expected_relative_path = str(grouped.get("serato", {}).get("relative_path") or "")
                 if expected_relative_path and relative_path != expected_relative_path:
                     errors.append(
                         f"{take_label}: manifest file path for {source} is {relative_path!r}, expected {expected_relative_path!r}."
@@ -315,7 +318,7 @@ def validate_manifest(
 
         artifact_sources = set(artifacts)
         missing_artifact_sources = sorted(grouped_sources - artifact_sources)
-        unexpected_artifact_sources = sorted(artifact_sources - grouped_sources)
+        unexpected_artifact_sources = sorted(artifact_sources - grouped_sources - OPTIONAL_MANIFEST_ARTIFACT_SOURCES)
         if missing_artifact_sources:
             errors.append(
                 f"{take_label}: manifest artifacts are missing source entries for: {', '.join(missing_artifact_sources)}."
@@ -341,7 +344,11 @@ def validate_manifest(
                 continue
 
             try:
-                expected_artifact = build_artifact_record(session_dir, artifact_path, source)
+                expected_artifact = build_artifact_record(
+                    session_dir,
+                    artifact_path,
+                    "serato" if source == "scratch_only" else source,
+                )
             except Exception as exc:
                 errors.append(f"{take_label}: could not probe artifact metadata for {source}: {exc}")
                 continue

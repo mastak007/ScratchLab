@@ -6,6 +6,7 @@ import AppKit
 import CoreAudio
 import CoreMedia
 import AudioToolbox
+import CoreMIDI
 import Accelerate
 import CoreImage
 import ImageIO
@@ -83,8 +84,169 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private struct PreparedRoutineRecording {
         let mediaURL: URL
+        let audioURL: URL
         let sidecarURL: URL
         let sidecar: CaptureCore.LocalRecordingSidecar
+    }
+
+    private struct RoutineAudioCaptureDiagnosticsSnapshot {
+        let buffersReceived: Int
+        let buffersAppended: Int
+        let buffersSkipped: Int
+        let lastErrorMessage: String?
+    }
+
+    private enum RoutineAudioCaptureWriterError: LocalizedError {
+        case unsupportedSourceFormat
+        case unableToReadSampleBuffer
+        case unableToCreateDestination
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedSourceFormat:
+                return "ScratchLab could not prepare the raw audio stem."
+            case .unableToReadSampleBuffer:
+                return "ScratchLab could not read an incoming audio buffer."
+            case .unableToCreateDestination:
+                return "ScratchLab could not create the raw audio stem file."
+            }
+        }
+    }
+
+    private final class RoutineAudioCaptureWriter {
+        private let destinationURL: URL
+        private var destinationFile: AVAudioFile?
+
+        private(set) var buffersReceived = 0
+        private(set) var buffersAppended = 0
+        private(set) var buffersSkipped = 0
+        private(set) var lastErrorMessage: String?
+
+        init(destinationURL: URL) {
+            self.destinationURL = destinationURL
+        }
+
+        func append(_ sampleBuffer: CMSampleBuffer) {
+            buffersReceived += 1
+
+            do {
+                let pcmBuffer = try Self.pcmBuffer(from: sampleBuffer)
+                try ensureDestinationFile(for: pcmBuffer.format)
+                guard let destinationFile else {
+                    throw RoutineAudioCaptureWriterError.unableToCreateDestination
+                }
+                try destinationFile.write(from: pcmBuffer)
+                buffersAppended += 1
+            } catch {
+                buffersSkipped += 1
+                lastErrorMessage = error.localizedDescription
+            }
+        }
+
+        func diagnosticsSnapshot() -> RoutineAudioCaptureDiagnosticsSnapshot {
+            RoutineAudioCaptureDiagnosticsSnapshot(
+                buffersReceived: buffersReceived,
+                buffersAppended: buffersAppended,
+                buffersSkipped: buffersSkipped,
+                lastErrorMessage: lastErrorMessage
+            )
+        }
+
+        private func ensureDestinationFile(for format: AVAudioFormat) throws {
+            if destinationFile != nil { return }
+
+            try? FileManager.default.removeItem(at: destinationURL)
+            destinationFile = try AVAudioFile(
+                forWriting: destinationURL,
+                settings: format.settings,
+                commonFormat: format.commonFormat,
+                interleaved: format.isInterleaved
+            )
+        }
+
+        private static func pcmBuffer(from sampleBuffer: CMSampleBuffer) throws -> AVAudioPCMBuffer {
+            guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+                  let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+                throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
+            }
+
+            let asbd = asbdPointer.pointee
+            let channelCount = max(1, Int(asbd.mChannelsPerFrame))
+            let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+            let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+            let commonFormat: AVAudioCommonFormat
+            switch (isFloat, Int(asbd.mBitsPerChannel)) {
+            case (true, 32):
+                commonFormat = .pcmFormatFloat32
+            case (false, 16):
+                commonFormat = .pcmFormatInt16
+            case (false, 32):
+                commonFormat = .pcmFormatInt32
+            default:
+                throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
+            }
+
+            guard let format = AVAudioFormat(
+                commonFormat: commonFormat,
+                sampleRate: asbd.mSampleRate,
+                channels: AVAudioChannelCount(channelCount),
+                interleaved: !isNonInterleaved
+            ) else {
+                throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
+            }
+
+            let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+            guard frameCount > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
+            }
+            buffer.frameLength = frameCount
+
+            let sourceBufferCount = isNonInterleaved ? channelCount : 1
+            let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+                + max(0, sourceBufferCount - 1) * MemoryLayout<AudioBuffer>.size
+            let rawPointer = UnsafeMutableRawPointer.allocate(
+                byteCount: audioBufferListSize,
+                alignment: MemoryLayout<AudioBufferList>.alignment
+            )
+            defer { rawPointer.deallocate() }
+            let audioBufferListPointer = rawPointer.bindMemory(to: AudioBufferList.self, capacity: 1)
+
+            var retainedBlockBuffer: CMBlockBuffer?
+            let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+                sampleBuffer,
+                bufferListSizeNeededOut: nil,
+                bufferListOut: audioBufferListPointer,
+                bufferListSize: audioBufferListSize,
+                blockBufferAllocator: nil,
+                blockBufferMemoryAllocator: nil,
+                flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
+                blockBufferOut: &retainedBlockBuffer
+            )
+            guard status == noErr else {
+                throw RoutineAudioCaptureWriterError.unableToReadSampleBuffer
+            }
+
+            let sourceBuffers = UnsafeMutableAudioBufferListPointer(audioBufferListPointer)
+            let destinationBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+            guard sourceBuffers.count == destinationBuffers.count else {
+                throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
+            }
+
+            for index in 0..<sourceBuffers.count {
+                guard let sourceData = sourceBuffers[index].mData,
+                      let destinationData = destinationBuffers[index].mData else {
+                    throw RoutineAudioCaptureWriterError.unableToReadSampleBuffer
+                }
+                memcpy(
+                    destinationData,
+                    sourceData,
+                    min(Int(destinationBuffers[index].mDataByteSize), Int(sourceBuffers[index].mDataByteSize))
+                )
+            }
+
+            return buffer
+        }
     }
 
     struct CompletedRoutineCaptureSnapshot: Equatable {
@@ -161,10 +323,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     @Published var availableAudioDevices: [AVCaptureDevice] = []
     @Published var availableVideoDevices: [AVCaptureDevice] = []
+    @Published private(set) var availableMIDISourceNames: [String] = []
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
             syncDirectCaptureStatus(using: availableAudioDevices)
+            resetAudioSignalLevel()
             guard oldValue != selectedAudioDeviceUniqueID, isRunning else { return }
             reconfigureSession()
         }
@@ -172,6 +336,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var selectedVideoDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedVideoDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedVideoDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedVideoDeviceUniqueID)
+            resetAudioSignalLevel()
             guard oldValue != selectedVideoDeviceUniqueID, isRunning else { return }
             reconfigureSession()
         }
@@ -261,6 +426,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
     @Published private(set) var routineTakeArtifactStatuses: [TakeArtifactStatusSnapshot] = []
+    @Published private(set) var routineAudioBuffersReceived = 0
+    @Published private(set) var routineAudioBuffersAppended = 0
+    @Published private(set) var routineAudioBuffersSkipped = 0
+    @Published private(set) var lastRoutineAudioWriterError: String?
 
     // CXL notation capture
     let cxlRecorder = CXLNotationCaptureRecorder()
@@ -276,24 +445,74 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     let calibrationScaleRange: ClosedRange<Double> = 0.65...1.85
     let mixerWidthRange: ClosedRange<Double> = 0.10...0.30
 
-    static let unavailableAudioPercent = "Audio --"
+    static let unavailableAudioPercent = "0%"
+
+    var selectedAudioDeviceName: String {
+        let selectedName = availableAudioDevices
+            .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })?
+            .localizedName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let selectedName, !selectedName.isEmpty {
+            return selectedName
+        }
+        return "Default audio input"
+    }
+
+    var selectedVideoDeviceName: String {
+        let selectedName = availableVideoDevices
+            .first(where: { $0.uniqueID == selectedVideoDeviceUniqueID })?
+            .localizedName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let selectedName, !selectedName.isEmpty {
+            return selectedName
+        }
+        return "Default camera"
+    }
+
+    var isSelectedAudioInputAvailable: Bool {
+        availableAudioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceUniqueID })
+    }
+
+    var currentAudioSignalLevel: Float {
+        guard isSelectedAudioInputAvailable,
+              hasPublishedAudioLevel,
+              audioLevel.isFinite else { return 0 }
+        return min(max(audioLevel, 0), 1)
+    }
+
+    var formattedAudioSignalPercent: String {
+        Self.formattedAudioPercent(for: currentAudioSignalLevel, hasPublishedAudioLevel: true)
+    }
+
+    var audioReadinessText: String {
+        guard !selectedAudioDeviceUniqueID.isEmpty else { return "Choose input" }
+        guard isSelectedAudioInputAvailable else { return "Audio Missing" }
+        return "Audio Ready"
+    }
+
+    var audioSignalStatusText: String {
+        guard isSelectedAudioInputAvailable else { return "No input" }
+        guard currentAudioSignalLevel > 0.001 else { return "No signal" }
+        return "Signal \(formattedAudioSignalPercent)"
+    }
 
     var formattedAudioPercent: String {
-        Self.formattedAudioPercent(for: audioLevel, hasPublishedAudioLevel: hasPublishedAudioLevel)
+        formattedAudioSignalPercent
     }
 
     var practiceAudioStatusText: String {
-        guard !selectedAudioDeviceUniqueID.isEmpty else { return "Choose input" }
-        guard availableAudioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceUniqueID }) else {
-            return "Audio Missing"
-        }
-        return formattedAudioPercent
+        audioReadinessText
+    }
+
+    var practiceAudioStatusColor: Color {
+        audioReadinessText == "Audio Ready" ? Color(hex: "4CAF50") : .secondary
     }
 
     var audioMeterColor: Color {
-        guard hasPublishedAudioLevel, audioLevel.isFinite else { return Color(hex: "9E9E9E") }
-        if audioLevel >= 0.65 { return Color(hex: "4CAF50") }
-        if audioLevel >= 0.3 { return Color(hex: "FFC107") }
+        let level = currentAudioSignalLevel
+        guard level > 0.001 else { return Color(hex: "9E9E9E") }
+        if level >= 0.65 { return Color(hex: "4CAF50") }
+        if level >= 0.3 { return Color(hex: "FFC107") }
         return Color(hex: "FF7043")
     }
 
@@ -324,19 +543,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     var scratchStatusTitle: String {
         guard let lastScratchDetection else {
-            return audioLevel > 0.03 ? "Processing" : "Ready"
+            return currentAudioSignalLevel > 0.03 ? "Processing" : "Ready"
         }
 
         if Date().timeIntervalSince(lastScratchDetection.detectedAt) <= 1.5 {
             return "Baby Scratch Detected"
         }
 
-        return audioLevel > 0.03 ? "Processing" : "Ready"
+        return currentAudioSignalLevel > 0.03 ? "Processing" : "Ready"
     }
 
     var scratchStatusDetail: String {
         guard let lastScratchDetection else {
-            if audioLevel > 0.03 {
+            if currentAudioSignalLevel > 0.03 {
                 return "Signal is live. Play a clean forward-and-back baby scratch and the analyzer will lock it."
             }
             return "Pick a routed DJ source like BlackHole, Loopback, or your interface and start playback."
@@ -349,14 +568,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let lastScratchDetection, Date().timeIntervalSince(lastScratchDetection.detectedAt) <= 1.5 {
             return "waveform.badge.checkmark"
         }
-        return audioLevel > 0.03 ? "waveform" : "waveform.slash"
+        return currentAudioSignalLevel > 0.03 ? "waveform" : "waveform.slash"
     }
 
     var scratchStatusColor: Color {
         if let lastScratchDetection, Date().timeIntervalSince(lastScratchDetection.detectedAt) <= 1.5 {
             return Color(hex: "4CAF50")
         }
-        return audioLevel > 0.03 ? Color(hex: "00BCD4") : Color(hex: "9E9E9E")
+        return currentAudioSignalLevel > 0.03 ? Color(hex: "00BCD4") : Color(hex: "9E9E9E")
     }
 
     var canUseDirectSeratoCapture: Bool {
@@ -633,12 +852,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     var recordingSessionConfig: CaptureSessionConfig?
     private var activeRoutineRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRoutineRecordingSidecarURL: URL?
+    private var activeRoutineAudioCaptureWriter: RoutineAudioCaptureWriter?
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
     private var routineArtifactRefreshTask: Task<Void, Never>?
     private var fixedRigLayout: DJRigLayout?
     private var fixedRigLayoutUsesManualGuide = false
     private let autoRefreshDevicesOnInit: Bool
+    private let audioSignalStaleInterval: CFTimeInterval = 0.8
+    private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
+    private var lastReceivedAudioSampleTime: CFTimeInterval = 0
+    private var audioSignalDecayTimer: DispatchSourceTimer?
     private static let routineSidecarDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -663,6 +887,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
         audioOutput.setSampleBufferDelegate(self, queue: audioQueue)
         movieOutput.movieFragmentInterval = .invalid
+        startAudioSignalDecayTimer()
         rescanRoutineCaptures()
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
@@ -683,6 +908,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     deinit {
+        audioSignalDecayTimer?.cancel()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         destroySeratoDirectCapture()
     }
@@ -691,7 +917,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         isCameraActive = true
-        hasPublishedAudioLevel = false
+        resetAudioSignalLevel()
         refreshDevices()
         requestPermissionsAndConfigure()
     }
@@ -713,18 +939,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         missedHandTrackingFrames = 0
         performerMonitorFrame = nil
         lastStarAwardAt = nil
-        audioLevel = 0
-        hasPublishedAudioLevel = false
+        resetAudioSignalLevel()
         videoQueue.async {
             self.clearFixedRigLayout()
             self.resetPublishedVideoState()
         }
-        audioQueue.async {
-            self.lastPublishedAudioLevelTime = 0
-        }
         sessionQueue.async {
             if self.movieOutput.isRecording {
                 self.movieOutput.stopRecording()
+            }
+            self.audioQueue.async {
+                self.activeRoutineAudioCaptureWriter = nil
+                self.publishRoutineAudioCaptureDiagnostics(nil)
             }
             if self.captureSession.isRunning {
                 self.captureSession.stopRunning()
@@ -752,8 +978,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         Task { @MainActor in
-            self.audioLevel = 0
-            self.hasPublishedAudioLevel = false
+            self.resetAudioSignalLevel()
             self.lastScratchDetection = nil
             self.scratchDetectionCount = 0
             self.highlightedZoneRole = .leftDeck
@@ -990,6 +1215,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 try self.writeRoutineRecordingSidecar(preparedRecording.sidecar, to: preparedRecording.sidecarURL)
                 self.activeRoutineRecordingSidecar = preparedRecording.sidecar
                 self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
+                self.audioQueue.sync {
+                    self.activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter(destinationURL: preparedRecording.audioURL)
+                    self.publishRoutineAudioCaptureDiagnostics(self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot())
+                }
                 Task { @MainActor in
                     self.routineRecordingStatus = "Starting routine recording"
                 }
@@ -1046,6 +1275,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         availableAudioDevices = audioDevices
         availableVideoDevices = videoDevices
+        availableMIDISourceNames = discoverMIDISourceNames()
 
         if !audioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceUniqueID }) {
             selectedAudioDeviceUniqueID = audioDevices.first?.uniqueID ?? ""
@@ -1384,6 +1614,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             takeNumber: takeIdentity.takeNumber,
             roleLabel: "routine"
         )
+        let audioURL = directory
+            .appendingPathComponent(files.baseName)
+            .appendingPathExtension("wav")
 
         let videoDeviceName = videoDevices.first(where: { $0.uniqueID == selectedVideoID })?.localizedName ?? "Unknown video input"
         let audioDeviceName = audioDevices.first(where: { $0.uniqueID == selectedAudioID })?.localizedName ?? "Unknown audio input"
@@ -1407,7 +1640,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         pendingRoutineTakeIdentity = nil
         pendingWatchReply = nil
 
-        return PreparedRoutineRecording(mediaURL: files.mediaURL, sidecarURL: files.sidecarURL, sidecar: syncedSidecar)
+        return PreparedRoutineRecording(
+            mediaURL: files.mediaURL,
+            audioURL: audioURL,
+            sidecarURL: files.sidecarURL,
+            sidecar: syncedSidecar
+        )
     }
 
     private func recordingsDirectoryURL() throws -> URL {
@@ -1810,13 +2048,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         Task { @MainActor in
             if shouldPublishAudioLevel {
-                let currentLevel = self.audioLevel.isFinite ? self.audioLevel : 0
-                if hasFiniteMeasuredLevel {
-                    self.audioLevel = min(max((currentLevel * 0.55) + (sanitizedLevel * 0.45), 0), 1)
-                    self.hasPublishedAudioLevel = true
-                } else if !self.hasPublishedAudioLevel {
-                    self.audioLevel = 0
-                }
+                self.publishAudioSignalLevel(
+                    hasFiniteMeasuredLevel ? sanitizedLevel : nil,
+                    receivedAt: now
+                )
             }
             if let detection {
                 self.lastScratchDetection = detection
@@ -2369,6 +2604,92 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return min(max(rms * 10, 0), 1)
     }
 
+    @MainActor
+    func publishAudioSignalLevel(_ measuredLevel: Float?, receivedAt: CFTimeInterval = CACurrentMediaTime()) {
+        lastReceivedAudioSampleTime = receivedAt
+        lastPublishedAudioLevelTime = receivedAt
+
+        guard let measuredLevel, measuredLevel.isFinite else {
+            if !hasPublishedAudioLevel {
+                audioLevel = 0
+            }
+            return
+        }
+
+        let sanitizedLevel = min(max(measuredLevel, 0), 1)
+        let currentLevel = audioLevel.isFinite ? audioLevel : 0
+        audioLevel = min(max((currentLevel * 0.55) + (sanitizedLevel * 0.45), 0), 1)
+        hasPublishedAudioLevel = true
+    }
+
+    func refreshAudioSignalForCurrentTime(now: CFTimeInterval = CACurrentMediaTime()) {
+        guard hasPublishedAudioLevel else { return }
+        guard lastReceivedAudioSampleTime > 0,
+              now - lastReceivedAudioSampleTime >= audioSignalStaleInterval else { return }
+        resetAudioSignalLevel()
+    }
+
+    func resetAudioSignalLevel() {
+        audioLevel = 0
+        hasPublishedAudioLevel = false
+        lastReceivedAudioSampleTime = 0
+        lastPublishedAudioLevelTime = 0
+    }
+
+    private func appendRoutineAudioSampleBufferIfNeeded(_ sampleBuffer: CMSampleBuffer) {
+        guard isRoutineRecording || movieOutput.isRecording,
+              let writer = activeRoutineAudioCaptureWriter else { return }
+        writer.append(sampleBuffer)
+        publishRoutineAudioCaptureDiagnostics(writer.diagnosticsSnapshot())
+    }
+
+    private func publishRoutineAudioCaptureDiagnostics(_ snapshot: RoutineAudioCaptureDiagnosticsSnapshot?) {
+        Task { @MainActor in
+            self.routineAudioBuffersReceived = snapshot?.buffersReceived ?? 0
+            self.routineAudioBuffersAppended = snapshot?.buffersAppended ?? 0
+            self.routineAudioBuffersSkipped = snapshot?.buffersSkipped ?? 0
+            self.lastRoutineAudioWriterError = snapshot?.lastErrorMessage
+        }
+    }
+
+    private func startAudioSignalDecayTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
+        timer.schedule(
+            deadline: .now() + audioSignalDecayPollInterval,
+            repeating: audioSignalDecayPollInterval
+        )
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                self.refreshAudioSignalForCurrentTime()
+            }
+        }
+        audioSignalDecayTimer = timer
+        timer.resume()
+    }
+
+    private func discoverMIDISourceNames() -> [String] {
+        var names: [String] = []
+        let sourceCount = MIDIGetNumberOfSources()
+        guard sourceCount > 0 else { return names }
+
+        for index in 0..<sourceCount {
+            let endpoint = MIDIGetSource(index)
+            guard endpoint != 0 else { continue }
+
+            var unmanagedName: Unmanaged<CFString>?
+            let propertyStatus = MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &unmanagedName)
+            let trimmedName = (propertyStatus == noErr ? unmanagedName?.takeRetainedValue() as String? : nil)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let trimmedName, !trimmedName.isEmpty {
+                names.append(trimmedName)
+            }
+        }
+
+        return Array(Set(names)).sorted()
+    }
+
     #if DEBUG
     /// Snapshot of detection counters for in-session debugging.
     struct DebugStats {
@@ -2397,6 +2718,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
 extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        if output is AVCaptureAudioDataOutput {
+            appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)
+        }
         guard shouldProcessCaptureSamples else { return }
         let signpostID = ScratchLabPerformanceSignpost.begin("CaptureFrameProcess")
         defer { ScratchLabPerformanceSignpost.end("CaptureFrameProcess", signpostID) }
@@ -2418,6 +2742,11 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     }
 
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        audioQueue.sync {
+            let snapshot = self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot()
+            self.activeRoutineAudioCaptureWriter = nil
+            self.publishRoutineAudioCaptureDiagnostics(snapshot)
+        }
         let completion = finalizeRoutineRecording(outputFileURL: outputFileURL, error: error)
         Task { @MainActor in
             self.isRoutineRecording = false

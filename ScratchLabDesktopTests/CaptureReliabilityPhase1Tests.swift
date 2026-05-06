@@ -1530,7 +1530,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("com.apple.security.files.user-selected.read-write"))
     }
 
-    func testMacCaptureEngineFormattedAudioPercentCoversFiniteValuesAndClamps() {
+    func testMacCaptureEngineFormattedAudioSignalPercentCoversFiniteValuesAndClamps() {
         XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.0, hasPublishedAudioLevel: true), "0%")
         XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.5, hasPublishedAudioLevel: true), "50%")
         XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 1.0, hasPublishedAudioLevel: true), "100%")
@@ -1538,11 +1538,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 1.6, hasPublishedAudioLevel: true), "100%")
     }
 
-    func testMacCaptureEngineFormattedAudioPercentReturnsPlaceholderForInvalidOrUnavailableInput() {
-        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: .nan, hasPublishedAudioLevel: true), "Audio --")
-        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: .infinity, hasPublishedAudioLevel: true), "Audio --")
-        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: nil, hasPublishedAudioLevel: true), "Audio --")
-        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.4, hasPublishedAudioLevel: false), "Audio --")
+    func testMacCaptureEngineFormattedAudioSignalPercentReturnsSafeZeroForInvalidOrUnavailableInput() {
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: .nan, hasPublishedAudioLevel: true), "0%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: .infinity, hasPublishedAudioLevel: true), "0%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: nil, hasPublishedAudioLevel: true), "0%")
+        XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.4, hasPublishedAudioLevel: false), "0%")
     }
 
     func testMacCaptureEnginePracticeAudioStatusTextUsesSafeUnavailableStates() {
@@ -1555,13 +1555,70 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(engine.practiceAudioStatusText, "Audio Missing")
     }
 
+    @MainActor
+    func testMacCaptureEngineAudioSignalStatusSeparatesReadinessFromSignal() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.availableAudioDevices = []
+        engine.selectedAudioDeviceUniqueID = ""
+
+        XCTAssertEqual(engine.audioReadinessText, "Choose input")
+        XCTAssertEqual(engine.audioSignalStatusText, "No input")
+
+        let device = AVCaptureDevice.default(for: .audio)
+        if let device {
+            engine.availableAudioDevices = [device]
+            engine.selectedAudioDeviceUniqueID = device.uniqueID
+            XCTAssertEqual(engine.audioReadinessText, "Audio Ready")
+            XCTAssertEqual(engine.audioSignalStatusText, "No signal")
+        }
+    }
+
+    @MainActor
+    func testMacCaptureEngineStaleSignalResetsToZero() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let device = AVCaptureDevice.default(for: .audio)
+        if let device {
+            engine.availableAudioDevices = [device]
+            engine.selectedAudioDeviceUniqueID = device.uniqueID
+        }
+
+        engine.publishAudioSignalLevel(1.0, receivedAt: 10)
+        XCTAssertGreaterThan(engine.currentAudioSignalLevel, 0)
+
+        engine.refreshAudioSignalForCurrentTime(now: 11)
+        XCTAssertEqual(engine.currentAudioSignalLevel, 0)
+        XCTAssertEqual(engine.formattedAudioSignalPercent, "0%")
+        XCTAssertEqual(engine.audioSignalStatusText, device == nil ? "No input" : "No signal")
+    }
+
+    @MainActor
+    func testMacCaptureEngineStopResetsSignalLevel() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let device = AVCaptureDevice.default(for: .audio)
+        if let device {
+            engine.availableAudioDevices = [device]
+            engine.selectedAudioDeviceUniqueID = device.uniqueID
+        }
+        engine.publishAudioSignalLevel(0.8, receivedAt: 1)
+        if device == nil {
+            XCTAssertEqual(engine.currentAudioSignalLevel, 0)
+        } else {
+            XCTAssertGreaterThan(engine.currentAudioSignalLevel, 0)
+        }
+
+        engine.stop()
+
+        XCTAssertEqual(engine.currentAudioSignalLevel, 0)
+        XCTAssertEqual(engine.formattedAudioSignalPercent, "0%")
+    }
+
     func testMacCaptureEngineFormattedAudioPercentSourceHasNoFatalDisplayGuards() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         let sourceSlice = try sourceSlice(
             in: source,
-            from: "var formattedAudioPercent: String {",
-            through: "var practiceAudioStatusText: String {"
+            from: "var formattedAudioSignalPercent: String {",
+            through: "var audioReadinessText: String {"
         )
 
         XCTAssertFalse(sourceSlice.contains("assertionFailure"))
@@ -4259,9 +4316,17 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         let takes = try XCTUnwrap(manifest?["takes"] as? [[String: Any]])
         XCTAssertEqual(takes.count, 3)
-        XCTAssertEqual((takes.first?["files"] as? [String: String])?["camA"], "video/DJALPHA_baby_070_take01_camA.mov")
-        XCTAssertEqual((takes.first?["files"] as? [String: String])?["serato"], "audio/DJALPHA_baby_070_take01_serato.wav")
-        XCTAssertEqual((takes.first?["files"] as? [String: String])?["notation"], "notation/take-001_detected_notation.json")
+        let firstFiles = try XCTUnwrap(takes.first?["files"] as? [String: String])
+        XCTAssertEqual(firstFiles["camA"], "video/DJALPHA_baby_070_take01_camA.mov")
+        XCTAssertEqual(firstFiles["serato"], "audio/DJALPHA_baby_070_take01_serato.wav")
+        XCTAssertEqual(firstFiles["scratch_only"], "audio/DJALPHA_baby_070_take01_serato.wav")
+        XCTAssertNil(firstFiles["beat_only"])
+        XCTAssertNil(firstFiles["scratch_with_beat"])
+        XCTAssertEqual(firstFiles["notation"], "notation/take-001_detected_notation.json")
+        let firstStemAvailability = try XCTUnwrap(takes.first?["stem_availability"] as? [String: String])
+        XCTAssertEqual(firstStemAvailability["scratch_only"], "available")
+        XCTAssertEqual(firstStemAvailability["beat_only"], "unavailable")
+        XCTAssertEqual(firstStemAvailability["scratch_with_beat"], "unavailable")
 
         let takeLog = preview.takeLogCSV
         XCTAssertTrue(takeLog.contains("bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes"))
@@ -4384,11 +4449,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(manifest["session_root"] as? String, "session_2024_03_10_dj_alpha_stab_90_bpm")
         XCTAssertEqual((manifest["takes"] as? [[String: Any]])?.count, 1)
         XCTAssertEqual((manifest["takes"] as? [[String: Any]])?.first?["scratch_type"] as? String, "stab")
-        XCTAssertEqual((manifest["takes"] as? [[String: Any]])?.first?["files"] as? [String: String], [
-            "camA": "video/DJALPHA_stab_090_take01_camA.mov",
-            "notation": "notation/take-001_detected_notation.json",
-            "serato": "audio/DJALPHA_stab_090_take01_serato.wav"
-        ])
+        let firstTake = try XCTUnwrap((manifest["takes"] as? [[String: Any]])?.first)
+        let files = try XCTUnwrap(firstTake["files"] as? [String: String])
+        XCTAssertEqual(files["camA"], "video/DJALPHA_stab_090_take01_camA.mov")
+        XCTAssertEqual(files["notation"], "notation/take-001_detected_notation.json")
+        XCTAssertEqual(files["serato"], "audio/DJALPHA_stab_090_take01_serato.wav")
+        XCTAssertEqual(files["scratch_only"], "audio/DJALPHA_stab_090_take01_serato.wav")
+        XCTAssertNil(files["beat_only"])
+        XCTAssertNil(files["scratch_with_beat"])
     }
 
     func testRoutineExportValidationAcceptsSelectedNonBabyScratchType() throws {
@@ -4868,6 +4936,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testMacCaptureScreenContainsSimpleDatasetWorkflowLabels() throws {
         let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+        let engineSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let engineSource = try String(contentsOf: engineSourceURL, encoding: .utf8)
 
         for label in [
             "Capture Session",
@@ -4881,12 +4951,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Click",
             "Beat",
             "Calibration",
-            "Audio Ready",
             "Camera Ready",
             "Mixer MIDI",
             "Mixer Optional",
-            "Mixer Not Connected",
-            "Watch Ready",
+            "Watch Optional",
             "Start Capture",
             "\"Stop\" : \"Record\"",
             "Save Take",
@@ -4896,6 +4964,19 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Unknown Performer"
         ] {
             XCTAssertTrue(source.contains(label), "Missing Capture label \(label)")
+        }
+
+        for engineLabel in [
+            "Audio Ready",
+            "Default audio input",
+            "Default camera",
+            "No MIDI mixer detected",
+            "No signal"
+        ] {
+            XCTAssertTrue(
+                source.contains(engineLabel) || engineSource.contains(engineLabel),
+                "Missing Capture label \(engineLabel)"
+            )
         }
 
         let primarySource = try sourceSlice(
@@ -5100,10 +5181,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("private var selectedAudioLooksMixerHardware: Bool"))
+        XCTAssertTrue(source.contains("private var selectedMixerMIDIDeviceName: String?"))
         XCTAssertTrue(source.contains("return \"Mixer Ready\""))
-        XCTAssertTrue(source.contains("return selectedAudioDevice == nil ? \"Mixer Not Connected\" : \"Mixer Optional\""))
-        XCTAssertTrue(source.contains("selectedAudioLooksMixerHardware ? .green : .secondary"))
+        XCTAssertTrue(source.contains("return \"Mixer Optional\""))
+        XCTAssertTrue(source.contains("selectedMixerMIDIDeviceName != nil ? .green : .secondary"))
+        XCTAssertTrue(source.contains("No MIDI mixer detected"))
+    }
+
+    func testMacCaptureSourceShowsSelectedAudioAndCameraDeviceNames() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("captureEngine.selectedAudioDeviceName"))
+        XCTAssertTrue(source.contains("captureEngine.selectedVideoDeviceName"))
+        XCTAssertTrue(source.contains("captureEngine.audioSignalStatusText"))
     }
 
     func testPracticeSourceKeepsDemoPathAppReviewSafe() throws {
@@ -8012,6 +8103,28 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
             source.contains("let files: [String: String]"),
             "CanonicalTakeManifestRecord.files must be [String: String] (relative paths)"
         )
+    }
+
+    func testRoutineCaptureSourceWritesDedicatedRawAudioStemDuringRecording() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private final class RoutineAudioCaptureWriter"))
+        XCTAssertTrue(source.contains("appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)"))
+        XCTAssertTrue(source.contains("activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter"))
+        XCTAssertTrue(source.contains("let audioURL = directory"))
+    }
+
+    func testCanonicalExportAddsScratchAndBeatStemKeys() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("\"scratch_only\":"))
+        XCTAssertTrue(source.contains("\"beat_only\":"))
+        XCTAssertTrue(source.contains("\"scratch_with_beat\":"))
+        XCTAssertTrue(source.contains("case stemAvailability = \"stem_availability\""))
+        XCTAssertTrue(source.contains("artifacts[\"scratch_only\"] = scratchArtifact"))
+        XCTAssertTrue(source.contains("artifacts[\"serato\"] = scratchArtifact"))
     }
 
     private func projectRootURL() -> URL {

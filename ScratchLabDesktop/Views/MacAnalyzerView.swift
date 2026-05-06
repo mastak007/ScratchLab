@@ -857,9 +857,7 @@ struct MacAnalyzerView: View {
     }
 
     private var selectedCameraName: String {
-        captureEngine.availableVideoDevices
-            .first(where: { $0.uniqueID == captureEngine.selectedVideoDeviceUniqueID })?
-            .localizedName ?? "No camera selected"
+        captureEngine.selectedVideoDeviceName
     }
 
     private var demoModeFeedbackTitle: String {
@@ -890,7 +888,7 @@ struct MacAnalyzerView: View {
     }
 
     private var selectedAudioDeviceName: String {
-        selectedAudioDevice?.localizedName ?? "No audio input selected"
+        captureEngine.selectedAudioDeviceName
     }
 
     private var selectedAudioLooksMic: Bool {
@@ -902,26 +900,31 @@ struct MacAnalyzerView: View {
             || lowercasedName.contains("internal")
     }
 
-    private var selectedAudioLooksMixerHardware: Bool {
-        guard let selectedAudioDevice else { return false }
-        let lowercasedName = selectedAudioDevice.localizedName.lowercased()
-        return AudioRoutingOption.interfaceLoopback.matches(deviceName: selectedAudioDevice.localizedName)
-            || lowercasedName.contains("midi")
-            || lowercasedName.contains("djm")
-            || lowercasedName.contains("pioneer")
-            || lowercasedName.contains("rane")
-            || lowercasedName.contains("denon")
-    }
-
     private var mixerStatusValue: String {
-        if selectedAudioLooksMixerHardware {
+        if selectedMixerMIDIDeviceName != nil {
             return "Mixer Ready"
         }
-        return selectedAudioDevice == nil ? "Mixer Not Connected" : "Mixer Optional"
+        return "Mixer Optional"
     }
 
     private var mixerStatusColor: Color {
-        selectedAudioLooksMixerHardware ? .green : .secondary
+        selectedMixerMIDIDeviceName != nil ? .green : .secondary
+    }
+
+    private var mixerStatusDetail: String {
+        selectedMixerMIDIDeviceName ?? "No MIDI mixer detected"
+    }
+
+    private var selectedMixerMIDIDeviceName: String? {
+        captureEngine.availableMIDISourceNames.first
+    }
+
+    private var watchStatusValue: String {
+        relayedWatchCaptureStore.importedSessions.isEmpty ? "Watch Optional" : "Watch Connected"
+    }
+
+    private var watchStatusDetail: String {
+        relayedWatchCaptureStore.importedSessions.isEmpty ? "Not connected" : "Motion data available"
     }
 
     private var diagnosticsCameraValue: String {
@@ -1783,6 +1786,17 @@ struct MacAnalyzerView: View {
                 diagnosticRow(title: "Coach playing", value: babyScratchDemo.isPlaying ? "true" : "false")
                 diagnosticRow(title: "Recording", value: (captureEngine.isRoutineRecording || captureEngine.cxlIsRecording) ? "true" : "false")
                 diagnosticRow(title: "Camera active", value: diagnosticsCameraValue)
+                diagnosticRow(
+                    title: "Raw audio buffers",
+                    value: "\(captureEngine.routineAudioBuffersAppended)/\(captureEngine.routineAudioBuffersReceived) appended"
+                )
+                diagnosticRow(title: "Audio buffers skipped", value: "\(captureEngine.routineAudioBuffersSkipped)")
+                diagnosticRow(title: "Audio device", value: captureEngine.selectedAudioDeviceName)
+                diagnosticRow(title: "Signal", value: captureEngine.audioSignalStatusText)
+                if let lastRoutineAudioWriterError = captureEngine.lastRoutineAudioWriterError,
+                   !lastRoutineAudioWriterError.isEmpty {
+                    diagnosticRow(title: "Last audio writer error", value: lastRoutineAudioWriterError)
+                }
                 diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", runtimeDiagnostics.notationLastTickDurationMS))
                 diagnosticRow(title: "Approx tick rate", value: diagnosticsTickRateValue)
                 diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", runtimeDiagnostics.coachLastUpdateDurationMS))
@@ -2052,25 +2066,29 @@ struct MacAnalyzerView: View {
             LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
                 captureInputStatusTile(
                     title: "Audio",
-                    value: selectedAudioDevice == nil ? "Missing" : "Audio Ready",
+                    value: captureEngine.audioReadinessText,
+                    detail: "\(captureEngine.selectedAudioDeviceName) — \(captureEngine.audioSignalStatusText)",
                     systemImage: selectedAudioDevice == nil ? "waveform.slash" : "waveform",
                     color: selectedAudioDevice == nil ? .secondary : .green
                 )
                 captureInputStatusTile(
                     title: "Camera",
                     value: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "Missing" : "Camera Ready",
+                    detail: captureEngine.selectedVideoDeviceName,
                     systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "video.slash.fill" : "video.fill",
                     color: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .secondary : .green
                 )
                 captureInputStatusTile(
                     title: "Mixer MIDI",
                     value: mixerStatusValue,
+                    detail: mixerStatusDetail,
                     systemImage: "slider.horizontal.3",
                     color: mixerStatusColor
                 )
                 captureInputStatusTile(
                     title: "Watch",
-                    value: relayedWatchCaptureStore.importedSessions.isEmpty ? "Optional" : "Watch Ready",
+                    value: watchStatusValue,
+                    detail: watchStatusDetail,
                     systemImage: "applewatch",
                     color: relayedWatchCaptureStore.importedSessions.isEmpty ? .secondary : .green
                 )
@@ -2398,7 +2416,7 @@ struct MacAnalyzerView: View {
                     headerStatusPill(
                         title: "Audio",
                         value: captureEngine.practiceAudioStatusText,
-                        color: captureEngine.practiceAudioStatusText == captureEngine.formattedAudioPercent ? captureEngine.audioMeterColor : .secondary
+                        color: captureEngine.practiceAudioStatusColor
                     )
                 } else {
                     headerStatusPill(
@@ -3430,13 +3448,17 @@ struct MacAnalyzerView: View {
                     Text("Signal")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                    Text(captureEngine.formattedAudioPercent)
+                    Text(captureEngine.formattedAudioSignalPercent)
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
 
-                ProgressView(value: Double(captureEngine.audioLevel))
+                ProgressView(value: Double(captureEngine.currentAudioSignalLevel))
                     .tint(captureEngine.audioMeterColor)
+
+                Text("\(captureEngine.audioReadinessText) — \(captureEngine.audioSignalStatusText)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
 
                 Text("ScratchLab works best when your deck audio is routed here.")
                     .font(.system(size: 12, weight: .medium))
@@ -3550,13 +3572,17 @@ struct MacAnalyzerView: View {
 
                     Spacer()
 
-                    Text(captureEngine.formattedAudioPercent)
+                    Text(captureEngine.formattedAudioSignalPercent)
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
 
-                ProgressView(value: Double(captureEngine.audioLevel))
+                ProgressView(value: Double(captureEngine.currentAudioSignalLevel))
                     .tint(captureEngine.audioMeterColor)
+
+                Text("\(captureEngine.audioReadinessText) — \(captureEngine.audioSignalStatusText)")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
 
                 Text(selectedAudioLooksMic
                      ? "\"\(selectedAudioDeviceName)\" is still a mic path. For a cleaner rating run, switch to the routed DJ audio feed."
@@ -4207,7 +4233,7 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func captureInputStatusTile(title: String, value: String, systemImage: String, color: Color) -> some View {
+    private func captureInputStatusTile(title: String, value: String, detail: String? = nil, systemImage: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .bold))
@@ -4222,6 +4248,13 @@ struct MacAnalyzerView: View {
                 Text(value)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(color)
+
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 0)

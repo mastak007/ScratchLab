@@ -40,6 +40,10 @@ DESTINATION_FOLDERS = {
     "camA": "video",
     "camB": "video",
     "serato": "audio",
+    "scratch_only": "audio",
+    "beat_only": "audio",
+    "scratch_with_beat": "audio",
+    "raw_original": "audio",
     "watch": "watch",
 }
 
@@ -47,6 +51,10 @@ ALLOWED_EXTENSIONS = {
     "camA": {"mov"},
     "camB": {"mov"},
     "serato": {"wav"},
+    "scratch_only": {"wav"},
+    "beat_only": {"wav"},
+    "scratch_with_beat": {"wav"},
+    "raw_original": {"wav"},
     "watch": {"csv"},
 }
 
@@ -92,7 +100,7 @@ VALIDATION_REPORT_FILENAME = "validation_report.txt"
 
 FILENAME_PATTERN = re.compile(
     r"^(?P<dj>[A-Z0-9]+)_baby_(?P<bpm>070|090|110)_take(?P<take>\d{2})_"
-    r"(?P<source>camA|camB|serato|watch)\.(?P<ext>mov|wav|csv)$"
+    r"(?P<source>camA|camB|serato|scratch_only|beat_only|scratch_with_beat|raw_original|watch)\.(?P<ext>mov|wav|csv)$"
 )
 
 
@@ -428,7 +436,7 @@ def probe_csv_metadata(path: Path) -> dict[str, Any]:
 def probe_media_metadata(source: str, path: Path) -> dict[str, Any]:
     if source in {"camA", "camB"}:
         return probe_video_metadata(path)
-    if source == "serato":
+    if source in {"serato", "scratch_only", "beat_only", "scratch_with_beat", "raw_original"}:
         return probe_audio_metadata(path)
     if source == "watch":
         return probe_csv_metadata(path)
@@ -587,6 +595,8 @@ def scan_renamed_media(session_dir: Path) -> tuple[list[dict[str, Any]], list[st
                     f"Wrong folder for {path.name}: expected {expected_folder}/, found {folder_name}/"
                 )
 
+            canonical_source = "serato" if source == "scratch_only" else source
+
             records.append(
                 {
                     "path": path,
@@ -594,7 +604,8 @@ def scan_renamed_media(session_dir: Path) -> tuple[list[dict[str, Any]], list[st
                     "dj_token": match.group("dj"),
                     "bpm": int(match.group("bpm")),
                     "take_number": int(match.group("take")),
-                    "source": source,
+                    "source": canonical_source,
+                    "source_token": source,
                     "extension": match.group("ext"),
                 }
             )
