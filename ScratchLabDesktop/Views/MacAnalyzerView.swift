@@ -2306,13 +2306,14 @@ struct MacAnalyzerView: View {
 
                 HStack(spacing: 8) {
                     testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
+                    testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
                     testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
                 }
 
                 if hasReviewNotationPreview {
                     miniNotationTimeline
                 } else {
-                    Label("Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved.", systemImage: "waveform.path.ecg")
+                    Label(reviewNotationAvailabilityMessage, systemImage: hasPartialReviewNotation ? "waveform.path.badge.plus" : "waveform.path.ecg")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -4327,7 +4328,9 @@ struct MacAnalyzerView: View {
                 .frame(height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else if hasTake {
-                Text("Notation unavailable for this take.")
+                Text(hasPartialReviewNotation
+                     ? "Notation detected from audio. Direction pending video/motion confirmation."
+                     : "Notation unavailable for this take.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)

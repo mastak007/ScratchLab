@@ -4253,7 +4253,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         XCTAssertEqual(decoded.detectedNotation?.notationSource, "detected")
+        XCTAssertEqual(decoded.detectedNotation?.detectionSources, ["audio", "video"])
         XCTAssertEqual(decoded.detectedNotation?.recordMovementEvents.count, 2)
+        XCTAssertEqual(decoded.detectedNotation?.audioEvents.count, 2)
         XCTAssertEqual(decoded.detectedNotation?.recordMovementEvents.first?.direction, "forward")
         XCTAssertEqual(decoded.auditTrail.last?.category, "notation_snapshot")
     }
@@ -4277,10 +4279,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let notationDocument = try decoder.decode(SessionExportNotationDocument.self, from: data)
 
         XCTAssertEqual(notationDocument.notationSource, .detected)
+        XCTAssertEqual(notationDocument.detectionSources, ["audio", "video"])
         XCTAssertEqual(notationDocument.labelSource, .detected)
         XCTAssertEqual(notationDocument.labelConfidence, 57)
         XCTAssertEqual(try XCTUnwrap(notationDocument.notationConfidence), 0.79, accuracy: 0.001)
         XCTAssertEqual(notationDocument.recordMovementEvents.count, 2)
+        XCTAssertEqual(notationDocument.audioEvents.count, 2)
         XCTAssertEqual(notationDocument.recordMovementEvents.first?.direction, "forward")
         XCTAssertEqual(notationDocument.recordMovementEvents.first?.movementKind, "normalPush")
     }
@@ -4299,8 +4303,34 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertEqual(notationDocument.notationSource, .unavailable)
         XCTAssertTrue(notationDocument.recordMovementEvents.isEmpty)
+        XCTAssertTrue(notationDocument.audioEvents.isEmpty)
         XCTAssertNil(notationDocument.notationConfidence)
         XCTAssertEqual(notationDocument.notes, "No notation events detected")
+    }
+
+    func testExportedPartialNotationUsesAudioEventsWithoutMovement() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+        sidecar = sidecar.withDetectedNotation(makeAudioOnlyDetectedNotationSnapshot())
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let notationDocument = try JSONDecoder().decode(SessionExportNotationDocument.self, from: data)
+
+        XCTAssertEqual(notationDocument.notationSource, .partial)
+        XCTAssertEqual(notationDocument.detectionSources, ["audio"])
+        XCTAssertTrue(notationDocument.recordMovementEvents.isEmpty)
+        XCTAssertEqual(notationDocument.audioEvents.count, 2)
+        XCTAssertEqual(try XCTUnwrap(notationDocument.notationConfidence), 0.63, accuracy: 0.001)
+        XCTAssertEqual(notationDocument.notes, "Detected audio notation without confirmed movement direction")
     }
 
     func testCanonicalExportManifestParity() throws {
@@ -5085,9 +5115,36 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let source = try String(contentsOf: macSourceURL, encoding: .utf8)
 
         XCTAssertTrue(source.contains("currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false"))
+        XCTAssertTrue(source.contains("hasPartialReviewNotation"))
+        XCTAssertTrue(source.contains("Notation detected from audio. Direction pending video/motion confirmation."))
         XCTAssertTrue(source.contains("ScratchNotation.detectedPreview("))
         XCTAssertTrue(source.contains("Notation unavailable for this take."))
         XCTAssertFalse(source.contains("hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)"))
+    }
+
+    func testAudioNotationDetectorDetectsScratchBurstsAndSilenceGap() {
+        let detector = ScratchAudioNotationDetector()
+        let sampleRate = 44_100.0
+        let burst = repeatingWave(amplitude: 0.34, frequency: 180, sampleRate: sampleRate, duration: 0.12)
+        let silence = [Float](repeating: 0, count: Int(sampleRate * 0.08))
+        let pull = repeatingWave(amplitude: 0.26, frequency: 140, sampleRate: sampleRate, duration: 0.16)
+
+        detector.process(samples: burst + silence + pull, sampleRate: sampleRate)
+        let snapshot = detector.snapshot()
+
+        XCTAssertTrue(snapshot.audioEvents.contains(where: { $0.eventKind == .scratchBurst }))
+        XCTAssertTrue(snapshot.audioEvents.contains(where: { $0.eventKind == .silenceGap || $0.eventKind == .possibleCut }))
+        XCTAssertNotNil(snapshot.confidence)
+    }
+
+    func testAudioNotationDetectorLeavesDirectionUnspecified() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Models/ScratchMotionAnalysis.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("movingRight -> forward"))
+        XCTAssertFalse(source.contains("movingLeft -> backward"))
+        XCTAssertTrue(source.contains("struct ScratchAudioNotationEventCandidate"))
+        XCTAssertTrue(source.contains("let eventKind: ScratchAudioNotationEventKind"))
     }
 
     func testMacReviewScreenContainsCorrectionAndExportLabels() throws {
@@ -7718,6 +7775,7 @@ extension CaptureReliabilityPhase1CoreTests {
             detectedLabel: "Baby Scratch",
             labelSource: "detected",
             labelConfidence: 57,
+            detectionSources: ["audio", "video"],
             recordMovementEvents: [
                 CaptureCore.DetectedNotationRecordMovementEvent(
                     startTime: 0.10,
@@ -7742,10 +7800,82 @@ extension CaptureReliabilityPhase1CoreTests {
                     source: "detected"
                 )
             ],
+            audioEvents: [
+                CaptureCore.DetectedNotationAudioEvent(
+                    startTime: 0.10,
+                    endTime: 0.28,
+                    duration: 0.18,
+                    peakLevel: 0.42,
+                    rmsLevel: 0.18,
+                    confidence: 0.71,
+                    eventKind: "scratchBurst",
+                    source: "audio"
+                ),
+                CaptureCore.DetectedNotationAudioEvent(
+                    startTime: 0.34,
+                    endTime: 0.56,
+                    duration: 0.22,
+                    peakLevel: 0.37,
+                    rmsLevel: 0.15,
+                    confidence: 0.67,
+                    eventKind: "possibleDrag",
+                    source: "audio"
+                )
+            ],
             faderEvents: [],
             mixerMidiEvents: [],
             capturedAt: Date(timeIntervalSince1970: 1_715_000_000)
         )
+    }
+
+    func makeAudioOnlyDetectedNotationSnapshot() -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "partial",
+            notationConfidence: 0.63,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 57,
+            detectionSources: ["audio"],
+            recordMovementEvents: [],
+            audioEvents: [
+                CaptureCore.DetectedNotationAudioEvent(
+                    startTime: 0.12,
+                    endTime: 0.24,
+                    duration: 0.12,
+                    peakLevel: 0.31,
+                    rmsLevel: 0.12,
+                    confidence: 0.64,
+                    eventKind: "scratchBurst",
+                    source: "audio"
+                ),
+                CaptureCore.DetectedNotationAudioEvent(
+                    startTime: 0.29,
+                    endTime: 0.37,
+                    duration: 0.08,
+                    peakLevel: 0,
+                    rmsLevel: 0,
+                    confidence: 0.62,
+                    eventKind: "possibleCut",
+                    source: "audio"
+                )
+            ],
+            faderEvents: [],
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 1_715_000_010)
+        )
+    }
+
+    func repeatingWave(
+        amplitude: Float,
+        frequency: Double,
+        sampleRate: Double,
+        duration: Double
+    ) -> [Float] {
+        let sampleCount = Int(sampleRate * duration)
+        return (0..<sampleCount).map { index in
+            let phase = (Double(index) / sampleRate) * frequency * 2 * Double.pi
+            return amplitude * Float(sin(phase))
+        }
     }
 
     func makeCanonicalValidationBuilder() -> SessionArchiveBuilder {
