@@ -5659,7 +5659,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Audio Ready",
             "Default audio input",
             "Default camera",
-            "No MIDI mixer detected",
+            "Not Connected",
             "No signal"
         ] {
             XCTAssertTrue(
@@ -5908,10 +5908,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         XCTAssertTrue(source.contains("private var selectedMixerMIDIDeviceName: String?"))
-        XCTAssertTrue(source.contains("return \"Mixer Ready\""))
+        XCTAssertTrue(source.contains("return captureEngine.midiListeningState"))
         XCTAssertTrue(source.contains("return \"Mixer Optional\""))
         XCTAssertTrue(source.contains("selectedMixerMIDIDeviceName != nil ? .green : .secondary"))
-        XCTAssertTrue(source.contains("No MIDI mixer detected"))
+        XCTAssertTrue(source.contains("Not Connected"))
+        XCTAssertTrue(source.contains("MIDI Source"))
+        XCTAssertTrue(source.contains("MIDI Monitor"))
     }
 
     func testMacCaptureSourceShowsSelectedAudioAndCameraDeviceNames() throws {
@@ -8837,15 +8839,83 @@ extension CaptureReliabilityPhase1CoreTests {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         XCTAssertEqual(engine.midiLearnState, .idle)
         engine.startMIDILearn()
-        // isMIDILearning is internal; published state updates via Task so we just verify the method runs without crash
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(engine.midiLearnState, .listening)
+        XCTAssertEqual(engine.midiLearnFeedback, "Listening...")
     }
 
     func testCancelMIDILearnReturnsToIdle() {
+        UserDefaults.standard.removeObject(forKey: "scratchlab.mac.crossfaderMIDIMapping")
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.startMIDILearn()
         engine.cancelMIDILearn()
-        // After cancel with no prior mapping, state should return to idle (async via Task)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(engine.midiLearnState, .idle)
         XCTAssertNil(engine.crossfaderCCMapping)
+    }
+
+    func testMIDISourceSelectionPrefersIACWhenCurrentSelectionMissing() {
+        let sources = [
+            MacCaptureEngine.MIDIInputSourceChoice(id: "midi_2", name: "Hardware Mixer"),
+            MacCaptureEngine.MIDIInputSourceChoice(id: "midi_1", name: "IAC Driver Bus 1")
+        ]
+
+        let resolved = MacCaptureEngine.resolveMIDISourceSelectionID(
+            currentSelectionID: "missing",
+            availableSources: sources
+        )
+
+        XCTAssertEqual(resolved, "midi_1")
+    }
+
+    func testSelectedMIDISourceIsPersisted() {
+        let defaults = UserDefaults.standard
+        let key = "scratchlab.mac.selectedMIDIInputSourceID"
+        defaults.removeObject(forKey: key)
+
+        let firstEngine = MacCaptureEngine(autoRefreshDevices: false)
+        firstEngine.selectedMIDIInputSourceID = "midi_1"
+
+        let secondEngine = MacCaptureEngine(autoRefreshDevices: false)
+        XCTAssertEqual(secondEngine.selectedMIDIInputSourceID, "midi_1")
+
+        defaults.removeObject(forKey: key)
+    }
+
+    func testReceivingMIDICCUpdatesLastMIDIEventSummary() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "IAC Driver Bus 1",
+            channel: 0,
+            controller: 7,
+            value: 96
+        )
+
+        XCTAssertEqual(engine.midiEventsReceivedCount, 1)
+        XCTAssertEqual(engine.lastMIDICCMessage, "CC7 Ch1 Value96")
+        XCTAssertEqual(engine.lastMIDIEventSummary, "Received CC7 Ch1 Value96")
+        XCTAssertEqual(engine.midiListeningState, "Listening")
+    }
+
+    func testMIDILearnUpdatesFromListeningToLearnedStateWhenCCArrives() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.startMIDILearn()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "IAC Driver Bus 1",
+            channel: 1,
+            controller: 11,
+            value: 64,
+            mappedControl: "crossfader"
+        )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(engine.crossfaderCCMapping, MacCaptureEngine.CrossfaderCCMapping(channel: 1, controller: 11))
+        XCTAssertEqual(engine.midiLearnState, .learned(MacCaptureEngine.CrossfaderCCMapping(channel: 1, controller: 11)))
+        XCTAssertEqual(engine.midiLearnFeedback, "Learned Xfader: CC11 Ch2")
+        XCTAssertEqual(engine.lastMIDIEventSummary, "Received CC11 Ch2 Value64")
     }
 
     func testClearCrossfaderMappingRemovesMapping() {
@@ -8936,25 +9006,38 @@ extension CaptureReliabilityPhase1CoreTests {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         XCTAssertTrue(source.contains("struct CrossfaderCCMapping"))
+        XCTAssertTrue(source.contains("struct MIDIInputSourceChoice"))
         XCTAssertTrue(source.contains("enum MIDILearnState"))
         XCTAssertTrue(source.contains("func startMIDILearn()"))
         XCTAssertTrue(source.contains("func cancelMIDILearn()"))
         XCTAssertTrue(source.contains("func clearCrossfaderMapping()"))
+        XCTAssertTrue(source.contains("selectedMIDIInputSourceID"))
+        XCTAssertTrue(source.contains("midiEventsReceivedCount"))
+        XCTAssertTrue(source.contains("lastMIDIEventSummary"))
+        XCTAssertTrue(source.contains("refreshMIDISources()"))
         XCTAssertTrue(source.contains("crossfaderMIDIMapping"))
         XCTAssertTrue(source.contains("mappedControl: mappedControl"))
     }
 
     func testMIDILearnUISourcePresence() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let projectRoot = projectRootURL()
+        let viewSourceURL = projectRoot.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let engineSourceURL = projectRoot.appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let viewSource = try String(contentsOf: viewSourceURL, encoding: .utf8)
+        let engineSource = try String(contentsOf: engineSourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("midiLearnRow"))
-        XCTAssertTrue(source.contains("Learn Crossfader"))
-        XCTAssertTrue(source.contains("startMIDILearn()"))
-        XCTAssertTrue(source.contains("cancelMIDILearn()"))
-        XCTAssertTrue(source.contains("clearCrossfaderMapping()"))
-        XCTAssertTrue(source.contains("Move crossfader"))
-        XCTAssertTrue(source.contains("Xfader:"))
+        XCTAssertTrue(viewSource.contains("midiLearnRow"))
+        XCTAssertTrue(viewSource.contains("midiSourcePickerRow"))
+        XCTAssertTrue(viewSource.contains("midiMonitorCard"))
+        XCTAssertTrue(viewSource.contains("Learn Crossfader"))
+        XCTAssertTrue(viewSource.contains("startMIDILearn()"))
+        XCTAssertTrue(viewSource.contains("cancelMIDILearn()"))
+        XCTAssertTrue(viewSource.contains("clearCrossfaderMapping()"))
+        XCTAssertTrue(viewSource.contains("Listening..."))
+        XCTAssertTrue(viewSource.contains("captureEngine.midiLearnFeedback"))
+        XCTAssertTrue(viewSource.contains("Last MIDI message"))
+        XCTAssertTrue(viewSource.contains("Events received"))
+        XCTAssertTrue(engineSource.contains("No MIDI received. Check IAC Driver / MixEmergency MIDI Out."))
     }
 
 }

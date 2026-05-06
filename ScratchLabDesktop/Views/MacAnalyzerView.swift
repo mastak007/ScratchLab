@@ -698,6 +698,7 @@ struct MacAnalyzerView: View {
                     if selectedRoutineSession != nil {
                         routineRecordingCard
                     }
+                    midiMonitorCard
                     Group {
                         seratoScreenCard
                         stageModeCard
@@ -920,7 +921,7 @@ struct MacAnalyzerView: View {
 
     private var mixerStatusValue: String {
         if selectedMixerMIDIDeviceName != nil {
-            return "Mixer Ready"
+            return captureEngine.midiListeningState
         }
         return "Mixer Optional"
     }
@@ -930,43 +931,84 @@ struct MacAnalyzerView: View {
     }
 
     private var mixerStatusDetail: String {
-        guard let name = selectedMixerMIDIDeviceName else { return "No MIDI mixer detected" }
-        if let mapping = captureEngine.crossfaderCCMapping {
-            return "\(name) · Xfader: \(mapping.displayName)"
-        }
-        return name
+        guard let name = selectedMixerMIDIDeviceName else { return "Not Connected" }
+        return "\(name) · \(captureEngine.lastMIDICCMessage)"
     }
 
     private var selectedMixerMIDIDeviceName: String? {
-        captureEngine.availableMIDISourceNames.first
+        captureEngine.availableMIDISources.isEmpty ? nil : captureEngine.selectedMIDIInputSourceName
+    }
+
+    private var midiSourceSelectionBinding: Binding<String> {
+        Binding(
+            get: { captureEngine.selectedMIDIInputSourceID },
+            set: { captureEngine.selectedMIDIInputSourceID = $0 }
+        )
+    }
+
+    private var midiSourcePickerRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("MIDI Source")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Picker("MIDI Source", selection: midiSourceSelectionBinding) {
+                if captureEngine.availableMIDISources.isEmpty {
+                    Text("Not Connected").tag("")
+                } else {
+                    ForEach(captureEngine.availableMIDISources) { source in
+                        Text(source.name).tag(source.id)
+                    }
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .disabled(captureEngine.availableMIDISources.isEmpty)
+        }
+    }
+
+    private var midiLearnStatusText: String {
+        switch captureEngine.midiLearnState {
+        case .idle:
+            return captureEngine.midiCrossfaderMappingStatus
+        case .listening:
+            return captureEngine.midiLearnFeedback.isEmpty ? "Listening..." : captureEngine.midiLearnFeedback
+        case .learned(let mapping):
+            if captureEngine.lastMIDICCMessage == "CC -- Ch -- Value --" {
+                return "Learned Xfader: \(mapping.displayName)"
+            }
+            return "Learned Xfader: \(mapping.displayName) · Received \(captureEngine.lastMIDICCMessage)"
+        }
     }
 
     @ViewBuilder
     private var midiLearnRow: some View {
-        HStack(spacing: 8) {
-            switch captureEngine.midiLearnState {
-            case .idle:
-                Button("Learn Crossfader") { captureEngine.startMIDILearn() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            case .listening:
-                Text("Move crossfader…")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Button("Cancel") { captureEngine.cancelMIDILearn() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            case .learned(let mapping):
-                Text("Xfader: \(mapping.displayName)")
-                    .font(.system(size: 12, weight: .medium))
-                Button("Learn Crossfader") { captureEngine.startMIDILearn() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                Button("Clear") { captureEngine.clearCrossfaderMapping() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(midiLearnStatusText)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                switch captureEngine.midiLearnState {
+                case .idle:
+                    Button("Learn Crossfader") { captureEngine.startMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                case .listening:
+                    Button("Cancel") { captureEngine.cancelMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                case .learned:
+                    Button("Learn Crossfader") { captureEngine.startMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Button("Clear") { captureEngine.clearCrossfaderMapping() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                Spacer()
             }
-            Spacer()
         }
     }
 
@@ -2225,9 +2267,49 @@ struct MacAnalyzerView: View {
                 )
             }
 
-            if selectedMixerMIDIDeviceName != nil {
-                midiLearnRow
+            midiSourcePickerRow
+            midiLearnRow
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var midiMonitorCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("MIDI Monitor")
+                    .font(.headline)
+                Spacer()
+                Button("Refresh MIDI") {
+                    captureEngine.refreshMIDISources()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
+
+            midiSourcePickerRow
+
+            HStack(spacing: 8) {
+                testLabMetricBadge(title: "State", value: captureEngine.midiListeningState, color: captureEngine.availableMIDISources.isEmpty ? .secondary : .green)
+                testLabMetricBadge(title: "Events received", value: "\(captureEngine.midiEventsReceivedCount)", color: captureEngine.midiEventsReceivedCount == 0 ? .secondary : .green)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Last MIDI message")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(captureEngine.lastMIDIEventSummary)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                Text(captureEngine.lastMIDICCMessage)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(captureEngine.midiCrossfaderMappingStatus)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            midiLearnRow
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)

@@ -26,6 +26,7 @@ private enum ScratchLabDesktopDefaultsKey {
     static let mixerWidthRatio = "scratchlab.mac.mixerWidthRatio"
     static let zoneAdjustmentsData = "scratchlab.mac.zoneAdjustmentsData"
     static let crossfaderMIDIMapping = "scratchlab.mac.crossfaderMIDIMapping"
+    static let selectedMIDIInputSourceID = "scratchlab.mac.selectedMIDIInputSourceID"
 }
 
 final class MacCaptureEngine: NSObject, ObservableObject {
@@ -54,6 +55,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let controller: Int
 
         var displayName: String { "CC\(controller) Ch\(channel + 1)" }
+    }
+
+    struct MIDIInputSourceChoice: Identifiable, Equatable, Hashable {
+        let id: String
+        let name: String
     }
 
     enum MIDILearnState: Equatable {
@@ -840,9 +846,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     @Published var availableAudioDevices: [AVCaptureDevice] = []
     @Published var availableVideoDevices: [AVCaptureDevice] = []
+    @Published private(set) var availableMIDISources: [MIDIInputSourceChoice] = []
     @Published private(set) var availableMIDISourceNames: [String] = []
     @Published private(set) var midiLearnState: MIDILearnState = .idle
     @Published private(set) var crossfaderCCMapping: CrossfaderCCMapping? = nil
+    @Published var selectedMIDIInputSourceID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID) ?? "" {
+        didSet {
+            if selectedMIDIInputSourceID.isEmpty {
+                UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
+            } else {
+                UserDefaults.standard.set(selectedMIDIInputSourceID, forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
+            }
+            guard oldValue != selectedMIDIInputSourceID else { return }
+            resetMIDIMonitoringState()
+            reconnectSelectedMIDIInput()
+        }
+    }
+    @Published private(set) var midiListeningState: String = "Not Connected"
+    @Published private(set) var midiEventsReceivedCount: Int = 0
+    @Published private(set) var lastMIDIEventSummary: String = "No MIDI received yet"
+    @Published private(set) var lastMIDICCMessage: String = "CC -- Ch -- Value --"
+    @Published private(set) var midiLearnFeedback: String = ""
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -1403,11 +1427,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
     private var midiClient: MIDIClientRef = 0
     private var midiInputPort: MIDIPortRef = 0
+    private var midiSourceEndpoints: [MIDIInputSourceChoice: MIDIEndpointRef] = [:]
     private var capturedMidiCCEvents: [CaptureCore.RawMixerMIDIEvent] = []
     private let midiCaptureLock = NSLock()
     private var midiRecordingStartTime: CFTimeInterval = 0
     private var midiConnectedSourceName: String = ""
     private var isMIDILearning: Bool = false
+    private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
@@ -1821,7 +1847,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.openMIDIInputForRecording()
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
-                self.closeMIDIInput()
+                self.reconnectSelectedMIDIInput()
                 let message = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
                 Task { @MainActor in
@@ -1873,7 +1899,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         availableAudioDevices = audioDevices
         availableVideoDevices = videoDevices
-        availableMIDISourceNames = discoverMIDISourceNames()
+        refreshMIDISources()
 
         refreshAudioInputSelection(using: audioDevices)
 
@@ -2423,7 +2449,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let audioSnapshot = activeRoutineAudioNotationDetector?.snapshot() ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
         let motionEvents = activeRoutineDetectedNotationBuilder?.movementEvents() ?? []
         let capturedMidi = drainCapturedMidiCCEvents()
-        closeMIDIInput()
+        reconnectSelectedMIDIInput()
         let notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: motionEvents,
@@ -3449,9 +3475,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func startMIDILearn() {
         midiCaptureLock.lock()
         isMIDILearning = true
+        midiLearnRequestID &+= 1
+        let learnRequestID = midiLearnRequestID
+        let eventCountAtStart = midiEventsReceivedCount
         midiCaptureLock.unlock()
         Task { @MainActor in
             midiLearnState = .listening
+            midiLearnFeedback = "Listening..."
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self else { return }
+            let shouldWarn = self.midiCaptureLock.withLock {
+                self.isMIDILearning
+                    && self.midiLearnRequestID == learnRequestID
+                    && self.midiEventsReceivedCount == eventCountAtStart
+            }
+            guard shouldWarn else { return }
+            self.midiLearnFeedback = "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
         }
     }
 
@@ -3461,6 +3502,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         Task { @MainActor in
             midiLearnState = crossfaderCCMapping.map { .learned($0) } ?? .idle
+            midiLearnFeedback = ""
         }
     }
 
@@ -3473,6 +3515,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         Task { @MainActor in
             crossfaderCCMapping = nil
             midiLearnState = .idle
+            midiLearnFeedback = ""
         }
     }
 
@@ -3487,6 +3530,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         Task { @MainActor in
             crossfaderCCMapping = mapping
             midiLearnState = .learned(mapping)
+            midiLearnFeedback = "Learned Xfader: \(mapping.displayName)"
         }
     }
 
@@ -3503,34 +3547,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         capturedMidiCCEvents = []
         midiRecordingStartTime = CACurrentMediaTime()
-        midiConnectedSourceName = ""
         midiCaptureLock.unlock()
-
-        guard midiInputPort != 0 else { return }
-        let sourceCount = MIDIGetNumberOfSources()
-        for index in 0..<sourceCount {
-            let endpoint = MIDIGetSource(index)
-            guard endpoint != 0 else { continue }
-            var unmanagedName: Unmanaged<CFString>?
-            let status = MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &unmanagedName)
-            let name = (status == noErr ? unmanagedName?.takeRetainedValue() as String? : nil)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !name.isEmpty else { continue }
-            midiCaptureLock.lock()
-            midiConnectedSourceName = name
-            midiCaptureLock.unlock()
-            MIDIPortConnectSource(midiInputPort, endpoint, nil)
-            break
-        }
+        reconnectSelectedMIDIInput()
     }
 
     private func closeMIDIInput() {
         guard midiInputPort != 0 else { return }
-        let sourceCount = MIDIGetNumberOfSources()
-        for index in 0..<sourceCount {
-            let endpoint = MIDIGetSource(index)
-            guard endpoint != 0 else { continue }
+        for endpoint in midiSourceEndpoints.values {
             MIDIPortDisconnectSource(midiInputPort, endpoint)
+        }
+        midiCaptureLock.lock()
+        midiConnectedSourceName = ""
+        midiCaptureLock.unlock()
+        Task { @MainActor in
+            self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Selected"
         }
     }
 
@@ -3550,7 +3580,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let startTime = midiRecordingStartTime
         let deviceName = midiConnectedSourceName
         midiCaptureLock.unlock()
-        guard startTime > 0 else { return }
 
         var packetPtr = withUnsafePointer(to: packetListPtr.pointee.packet) {
             UnsafeMutablePointer(mutating: $0)
@@ -3579,19 +3608,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             }
 
                             let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
-                            let event = CaptureCore.RawMixerMIDIEvent(
-                                timestamp: now,
-                                takeRelativeTime: max(0, now - startTime),
-                                deviceName: deviceName,
+                            recordReceivedMIDICCEvent(
+                                sourceName: deviceName,
                                 channel: channel,
                                 controller: controller,
                                 value: value,
-                                normalizedValue: Double(value) / 127.0,
-                                mappedControl: mappedControl
+                                mappedControl: mappedControl,
+                                timestamp: now,
+                                recordingStartTime: startTime
                             )
-                            midiCaptureLock.lock()
-                            capturedMidiCCEvents.append(event)
-                            midiCaptureLock.unlock()
                             i += 3
                         } else if statusByte >= 0x80 {
                             switch statusByte & 0xF0 {
@@ -3609,10 +3634,155 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func discoverMIDISourceNames() -> [String] {
-        var names: [String] = []
+    var selectedMIDIInputSourceName: String {
+        availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID })?.name ?? "Not Connected"
+    }
+
+    var midiMonitorStatusLine: String {
+        if availableMIDISources.isEmpty {
+            return "Not Connected"
+        }
+        if midiEventsReceivedCount == 0 {
+            return "\(selectedMIDIInputSourceName) · \(lastMIDICCMessage)"
+        }
+        return "\(selectedMIDIInputSourceName) · \(lastMIDIEventSummary)"
+    }
+
+    var midiCrossfaderMappingStatus: String {
+        if let mapping = crossfaderCCMapping {
+            return "Learned Xfader: \(mapping.displayName)"
+        }
+        return "Crossfader not learned"
+    }
+
+    func refreshMIDISources() {
+        let discoveredSources = discoverMIDISources()
+        midiSourceEndpoints = Dictionary(uniqueKeysWithValues: discoveredSources.map { ($0.choice, $0.endpoint) })
+        let choices = discoveredSources.map(\.choice)
+        availableMIDISources = choices
+        availableMIDISourceNames = choices.map(\.name)
+        selectedMIDIInputSourceID = MacCaptureEngine.resolveMIDISourceSelectionID(
+            currentSelectionID: selectedMIDIInputSourceID,
+            availableSources: choices
+        )
+        if selectedMIDIInputSourceID.isEmpty {
+            midiListeningState = "Not Connected"
+        }
+        reconnectSelectedMIDIInput()
+    }
+
+    func recordReceivedMIDICCEvent(
+        sourceName: String,
+        channel: Int,
+        controller: Int,
+        value: Int,
+        mappedControl: String? = nil,
+        timestamp: Double = CACurrentMediaTime(),
+        recordingStartTime: CFTimeInterval? = nil
+    ) {
+        midiCaptureLock.lock()
+        let learning = isMIDILearning
+        let currentMapping = persistedCrossfaderMapping
+        midiCaptureLock.unlock()
+
+        let effectiveMapping: CrossfaderCCMapping?
+        if learning {
+            let learnedMapping = CrossfaderCCMapping(channel: channel, controller: controller)
+            effectiveMapping = learnedMapping
+            applyLearnedCrossfaderMapping(learnedMapping)
+        } else {
+            effectiveMapping = currentMapping
+        }
+
+        let effectiveMappedControl = mappedControl
+            ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
+        let normalizedValue = Double(value) / 127.0
+        let summary = "Received CC\(controller) Ch\(channel + 1) Value\(value)"
+        let applyMonitorUpdate = {
+            self.midiEventsReceivedCount += 1
+            self.lastMIDICCMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
+            self.lastMIDIEventSummary = summary
+            self.midiListeningState = "Listening"
+            if self.midiLearnState == .listening {
+                self.midiLearnFeedback = summary
+            }
+        }
+        if Thread.isMainThread {
+            applyMonitorUpdate()
+        } else {
+            Task { @MainActor in
+                applyMonitorUpdate()
+            }
+        }
+
+        let startTime = recordingStartTime ?? midiRecordingStartTime
+        guard startTime > 0 else { return }
+
+        let event = CaptureCore.RawMixerMIDIEvent(
+            timestamp: timestamp,
+            takeRelativeTime: max(0, timestamp - startTime),
+            deviceName: sourceName,
+            channel: channel,
+            controller: controller,
+            value: value,
+            normalizedValue: normalizedValue,
+            mappedControl: effectiveMappedControl
+        )
+        midiCaptureLock.lock()
+        capturedMidiCCEvents.append(event)
+        midiCaptureLock.unlock()
+    }
+
+    static func resolveMIDISourceSelectionID(
+        currentSelectionID: String,
+        availableSources: [MIDIInputSourceChoice]
+    ) -> String {
+        guard !availableSources.isEmpty else { return "" }
+        if availableSources.contains(where: { $0.id == currentSelectionID }) {
+            return currentSelectionID
+        }
+        if let iacBus = availableSources.first(where: { $0.name == "IAC Driver Bus 1" }) {
+            return iacBus.id
+        }
+        return availableSources.first?.id ?? ""
+    }
+
+    private func reconnectSelectedMIDIInput() {
+        guard midiInputPort != 0 else { return }
+        closeMIDIInput()
+        guard let selectedSource = availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID }),
+              let endpoint = midiSourceEndpoints[selectedSource] else {
+            Task { @MainActor in
+                self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
+            }
+            return
+        }
+
+        midiCaptureLock.lock()
+        midiConnectedSourceName = selectedSource.name
+        midiCaptureLock.unlock()
+        MIDIPortConnectSource(midiInputPort, endpoint, nil)
+        Task { @MainActor in
+            self.midiListeningState = "Listening"
+        }
+    }
+
+    private func resetMIDIMonitoringState() {
+        midiEventsReceivedCount = 0
+        lastMIDIEventSummary = "No MIDI received yet"
+        lastMIDICCMessage = "CC -- Ch -- Value --"
+        midiLearnFeedback = ""
+    }
+
+    private struct MIDISourceEndpoint {
+        let choice: MIDIInputSourceChoice
+        let endpoint: MIDIEndpointRef
+    }
+
+    private func discoverMIDISources() -> [MIDISourceEndpoint] {
+        var sources: [MIDISourceEndpoint] = []
         let sourceCount = MIDIGetNumberOfSources()
-        guard sourceCount > 0 else { return names }
+        guard sourceCount > 0 else { return sources }
 
         for index in 0..<sourceCount {
             let endpoint = MIDIGetSource(index)
@@ -3622,13 +3792,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let propertyStatus = MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDisplayName, &unmanagedName)
             let trimmedName = (propertyStatus == noErr ? unmanagedName?.takeRetainedValue() as String? : nil)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            var uniqueID = MIDIUniqueID(0)
+            let uniqueIDStatus = MIDIObjectGetIntegerProperty(endpoint, kMIDIPropertyUniqueID, &uniqueID)
+            let sourceID = uniqueIDStatus == noErr ? "midi_\(uniqueID)" : "endpoint_\(endpoint)"
 
             if let trimmedName, !trimmedName.isEmpty {
-                names.append(trimmedName)
+                sources.append(
+                    MIDISourceEndpoint(
+                        choice: MIDIInputSourceChoice(id: sourceID, name: trimmedName),
+                        endpoint: endpoint
+                    )
+                )
             }
         }
 
-        return Array(Set(names)).sorted()
+        return sources.sorted { lhs, rhs in
+            lhs.choice.name.localizedCaseInsensitiveCompare(rhs.choice.name) == .orderedAscending
+        }
     }
 
     #if DEBUG
