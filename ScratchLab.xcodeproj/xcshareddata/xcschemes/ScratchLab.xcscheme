@@ -67,6 +67,7 @@
       launchStyle = "0"
       useCustomWorkingDirectory = "YES"
       ignoresPersistentStateOnLaunch = "NO"
+      enableGameKitDebugMode = "YES"
       debugDocumentVersioning = "NO"
       debugXPCServices = "NO"
       debugServiceExtension = "internal"

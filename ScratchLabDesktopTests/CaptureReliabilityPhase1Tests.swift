@@ -5727,7 +5727,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Confidence",
             "Stroke count",
             "Fader event count",
-            "Mini notation timeline",
+            "Captured Notation",
             "No take ready for review",
             "Record a take in Capture to see detected notation, confidence, and label options.",
             "Accept",
@@ -5900,7 +5900,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("config.performerName = \"Unknown Performer\""))
         XCTAssertTrue(source.contains("config.bpm = CaptureClickTrackDefaults.defaultTimedBPM"))
         XCTAssertTrue(source.contains("sessionName(defaultAppName: \"Untitled Session\")"))
-        XCTAssertTrue(source.contains("CXL Take"))
+        XCTAssertTrue(source.contains("\"Take \\(formatter.string(from: date))"))
     }
 
     func testMacCaptureSourceUsesTruthfulMixerStatus() throws {

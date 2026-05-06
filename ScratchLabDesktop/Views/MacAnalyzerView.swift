@@ -2091,7 +2091,7 @@ struct MacAnalyzerView: View {
                     Text("Capture Session")
                         .font(.system(size: 28, weight: .semibold))
 
-                    Text("Simple workflow for clean CXL takes.")
+                    Text("Simple workflow for clean takes.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -4506,7 +4506,7 @@ struct MacAnalyzerView: View {
         let hasTake = captureEngine.lastRoutineRecordingURL != nil
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Mini notation timeline")
+            Text("Captured Notation")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
@@ -4543,7 +4543,7 @@ struct MacAnalyzerView: View {
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH-mm"
-        return "CXL Take \(formatter.string(from: date))"
+        return "Take \(formatter.string(from: date))"
     }
 
     private func testLabMetricBadge(title: String, value: String, color: Color) -> some View {

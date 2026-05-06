@@ -372,15 +372,21 @@ struct NotationVisualizerView: View {
                 Spacer(minLength: 0)
 
                 labelChip(
-                    "Source: \(snapshot.notationSource)",
+                    snapshot.notationSource == "detected" ? "Detected"
+                        : snapshot.notationSource == "partial" ? "Partial"
+                        : "Unavailable",
                     color: snapshot.notationSource == "detected"
                         ? Color(red: 0.2, green: 0.85, blue: 0.55)
-                        : Color(red: 1.0, green: 0.75, blue: 0.0)
+                        : snapshot.notationSource == "partial"
+                            ? Color(red: 1.0, green: 0.75, blue: 0.0)
+                            : Color(white: 0.40)
                 )
-                labelChip(
-                    "\(snapshot.audioEvents.count) audio · \(snapshot.recordMovementEvents.count) movement · \(snapshot.faderEvents.count) fader · \(snapshot.mixerMidiEvents.count) midi",
-                    color: Color(white: 0.45)
-                )
+                if !snapshot.detectionSources.isEmpty {
+                    labelChip(
+                        snapshot.detectionSources.joined(separator: " + "),
+                        color: Color(white: 0.45)
+                    )
+                }
                 if let confidence = snapshot.notationConfidence {
                     labelChip(
                         "Confidence \(Int((confidence * 100).rounded()))%",
@@ -415,7 +421,7 @@ struct NotationVisualizerView: View {
                     color: vm.isPlaying ? Color(red: 0.2, green: 0.85, blue: 0.55) : Color(white: 0.45)
                 )
                 labelChip(
-                    captureEngine.cxlIsRecording ? "CXL REC" : "CXL Idle",
+                    captureEngine.cxlIsRecording ? "Recording" : "Idle",
                     color: captureEngine.cxlIsRecording ? Color(red: 1.0, green: 0.25, blue: 0.25) : Color(white: 0.35)
                 )
                 labelChip(
@@ -514,10 +520,10 @@ struct NotationVisualizerView: View {
                 .frame(height: 28)
                 .background(Color(white: 0.25))
 
-            // CXL controls
+            // Capture controls
             HStack(spacing: 8) {
                 if captureEngine.cxlIsRecording {
-                    Button("Stop CXL") {
+                    Button("Stop Recording") {
                         captureEngine.stopCXLCapture()
                         vm.pause()
                     }
@@ -532,7 +538,7 @@ struct NotationVisualizerView: View {
                     .tint(Color(red: 0.1, green: 0.45, blue: 1.0))
                     .font(.system(size: 11, weight: .semibold))
                 } else {
-                    Button("Start CXL") {
+                    Button("Start Recording") {
                         captureEngine.startCXLCapture(
                             mode: "notationCoach",
                             loopDuration: vm.loopDuration
@@ -846,147 +852,158 @@ struct CapturedNotationDisplayView: View {
 
     let snapshot: CaptureCore.DetectedNotationSnapshot
 
-    private let forwardColor   = Color(red: 0.20, green: 0.88, blue: 0.55)
-    private let backColor      = Color(red: 1.00, green: 0.55, blue: 0.10)
-    private let audioColor     = Color(red: 0.45, green: 0.75, blue: 1.00)
-    private let cutColor       = Color(red: 1.00, green: 0.85, blue: 0.00)
-    private let gapColor       = Color(white: 0.40)
-    private let labelColor     = Color(white: 0.50)
+    // Palette
+    private let forwardColor = Color(red: 0.25, green: 0.88, blue: 0.55)
+    private let backColor    = Color(red: 1.00, green: 0.55, blue: 0.10)
+    private let audioColor   = Color(red: 0.55, green: 0.75, blue: 1.00)
+    private let cutColor     = Color(red: 1.00, green: 0.72, blue: 0.10)
+    private let faderColor   = Color(red: 1.00, green: 0.50, blue: 0.20)
+    private let gapColor     = Color(white: 0.38)
+    private let labelColor   = Color(white: 0.52)
+
+    // Shared timeline scale — recomputed once from the widest lane
+    private var totalDuration: Double {
+        let movEnd = snapshot.recordMovementEvents.map(\.endTime).max() ?? 0
+        let audEnd = snapshot.audioEvents.map(\.endTime).max() ?? 0
+        let fadEnd = snapshot.faderEvents.map(\.endTime).max() ?? 0
+        return max(movEnd, audEnd, fadEnd, 1.0)
+    }
 
     var body: some View {
         GeometryReader { geo in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
-                    sourceHeader
-                    if snapshot.recordMovementEvents.isEmpty && snapshot.audioEvents.isEmpty && snapshot.faderEvents.isEmpty {
+                    summaryHeader
+                    if snapshot.recordMovementEvents.isEmpty
+                        && snapshot.audioEvents.isEmpty
+                        && snapshot.faderEvents.isEmpty {
                         unavailablePane
                     } else {
+                        beatGridRuler(width: geo.size.width)
+                        if !snapshot.recordMovementEvents.isEmpty {
+                            movementLane(width: geo.size.width)
+                        } else {
+                            partialMovementPlaceholder
+                        }
                         if !snapshot.audioEvents.isEmpty {
                             audioLane(width: geo.size.width)
                         }
-                        if !snapshot.recordMovementEvents.isEmpty {
-                            movementLane(width: geo.size.width)
-                        } else if !snapshot.audioEvents.isEmpty {
-                            partialMessage
-                        }
-                        if !snapshot.faderEvents.isEmpty {
-                            faderLane(width: geo.size.width)
-                        }
+                        faderLane(width: geo.size.width)
+                        notationLegend
                     }
                 }
             }
         }
-        .background(Color(white: 0.10))
+        .background(Color(white: 0.095))
     }
 
-    private var sourceHeader: some View {
-        HStack(spacing: 12) {
-            Group {
-                switch snapshot.notationSource {
-                case "detected":
-                    Label("Detected notation", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(forwardColor)
-                case "partial":
-                    Label("Partial notation — audio only", systemImage: "waveform.path.badge.plus")
-                        .foregroundStyle(audioColor)
-                default:
-                    Label("Notation unavailable", systemImage: "waveform.path.ecg")
-                        .foregroundStyle(labelColor)
-                }
-            }
-            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+    // MARK: Summary header
 
-            Spacer()
+    private var summaryHeader: some View {
+        let isDetected = snapshot.notationSource == "detected"
+        let isPartial  = snapshot.notationSource == "partial"
+        let sourceLabel  = isDetected ? "Detected" : isPartial ? "Partial — Audio" : "Unavailable"
+        let sourceColor: Color = isDetected ? forwardColor : isPartial ? cutColor : labelColor
+        let sourceIcon   = isDetected ? "checkmark.seal.fill" : isPartial ? "waveform.path.badge.plus" : "waveform.path.ecg"
+
+        return HStack(spacing: 14) {
+            Label(sourceLabel, systemImage: sourceIcon)
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(sourceColor)
+
+            Spacer(minLength: 0)
 
             if let conf = snapshot.notationConfidence {
-                Text("Confidence \(Int((conf * 100).rounded()))%")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(labelColor)
+                headerChip("\(Int((conf * 100).rounded()))% confidence", color: labelColor)
+            }
+            if !snapshot.detectionSources.isEmpty {
+                headerChip(snapshot.detectionSources.joined(separator: " + "), color: labelColor)
             }
             if !snapshot.faderEvents.isEmpty {
-                Text("MIDI fader")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(cutColor)
+                headerChip("MIDI fader", color: faderColor)
             }
-            Text(snapshot.detectionSources.joined(separator: " + "))
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(labelColor)
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .background(Color(white: 0.14))
     }
 
-    private var partialMessage: some View {
-        Label(
-            "Notation detected from audio — direction pending video/motion confirmation.",
-            systemImage: "waveform.path.badge.plus"
-        )
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(audioColor)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-    }
+    // MARK: Beat grid / time ruler
 
-    private var unavailablePane: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "waveform.path.ecg")
-                .font(.system(size: 32))
-                .foregroundStyle(labelColor)
-            Text("Notation unavailable for this take.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(labelColor)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 48)
-    }
+    private func beatGridRuler(width: CGFloat) -> some View {
+        let laneWidth = max(width - 56, 200.0)
+        let duration = totalDuration
+        let scale = CGFloat(laneWidth) / CGFloat(duration)
+        let step = gridTickInterval(for: duration)
 
-    private func audioLane(width: CGFloat) -> some View {
-        let timelineWidth = max(width - 80, 200.0)
-        let duration = snapshot.audioEvents.map(\.endTime).max() ?? 1.0
-        let scale = timelineWidth / max(duration, 0.001)
-
-        return VStack(alignment: .leading, spacing: 0) {
-            laneHeader("AUDIO", count: snapshot.audioEvents.count)
+        return ZStack(alignment: .topLeading) {
+            Color(white: 0.115)
             Canvas { ctx, size in
-                for event in snapshot.audioEvents {
-                    let x = CGFloat(event.startTime) * scale + 60
-                    let w = max(2, CGFloat(event.duration) * scale)
-                    let rect = CGRect(x: x, y: size.height * 0.25, width: w, height: size.height * 0.5)
-                    let color: Color
-                    switch event.eventKind {
-                    case "scratchBurst":  color = audioColor
-                    case "possibleDrag":  color = forwardColor
-                    case "possibleCut":   color = cutColor
-                    default:              color = gapColor
+                let labelX: CGFloat = 56
+                var t = 0.0
+                while t <= duration + step * 0.5 {
+                    let x = labelX + CGFloat(t) * scale
+                    let isMajor = t.truncatingRemainder(dividingBy: step * 2).magnitude < step * 0.05
+                    var line = Path()
+                    line.move(to: CGPoint(x: x, y: isMajor ? 0 : size.height * 0.55))
+                    line.addLine(to: CGPoint(x: x, y: size.height))
+                    ctx.stroke(line,
+                               with: .color(Color(white: isMajor ? 0.30 : 0.20)),
+                               lineWidth: isMajor ? 1.0 : 0.5)
+                    if isMajor {
+                        ctx.draw(
+                            Text(String(format: "%.1fs", t))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(Color(white: 0.42)),
+                            at: CGPoint(x: x + 3, y: 3),
+                            anchor: .topLeading
+                        )
                     }
-                    ctx.fill(Path(rect), with: .color(color.opacity(0.7 + event.confidence * 0.3)))
+                    t += step
                 }
-                drawTimeAxis(ctx: ctx, size: size, duration: duration, scale: scale)
+                // Lane label
+                ctx.draw(
+                    Text("TIME")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.35)),
+                    at: CGPoint(x: 6, y: size.height / 2),
+                    anchor: .leading
+                )
             }
-            .frame(height: 60)
-            audioEventList
         }
-        .background(Color(white: 0.12))
-        .padding(.bottom, 2)
+        .frame(height: 24)
     }
+
+    // MARK: Record movement lane
 
     private func movementLane(width: CGFloat) -> some View {
-        let timelineWidth = max(width - 80, 200.0)
-        let duration = snapshot.recordMovementEvents.map(\.endTime).max() ?? 1.0
-        let scale = timelineWidth / max(duration, 0.001)
-        let laneH: CGFloat = 70
+        let laneWidth = max(width - 56, 200.0)
+        let duration = totalDuration
+        let scale = CGFloat(laneWidth) / CGFloat(duration)
+        let laneH: CGFloat = 96
 
         return VStack(alignment: .leading, spacing: 0) {
-            laneHeader("RECORD MOVEMENT", count: snapshot.recordMovementEvents.count)
+            laneHeader("RECORD", icon: "arrow.left.arrow.right")
             Canvas { ctx, size in
+                let labelX: CGFloat = 56
                 let mid = size.height / 2
-                let h = size.height * 0.38
+
+                // Mid baseline
+                var baseline = Path()
+                baseline.move(to: CGPoint(x: labelX, y: mid))
+                baseline.addLine(to: CGPoint(x: size.width, y: mid))
+                ctx.stroke(baseline, with: .color(Color(white: 0.22)), lineWidth: 0.5)
+
+                drawSharedGrid(ctx: ctx, size: size, duration: duration, scale: scale, labelX: labelX)
 
                 for event in snapshot.recordMovementEvents {
-                    let x1 = CGFloat(event.startTime) * scale + 60
-                    let x2 = CGFloat(event.endTime) * scale + 60
+                    let x1 = labelX + CGFloat(event.startTime) * scale
+                    let x2 = labelX + CGFloat(event.endTime) * scale
                     let isForward = event.direction == "forward"
+                    let heightFrac = movementHeightFraction(kind: event.movementKind)
+                    let h = (size.height * 0.44) * CGFloat(heightFrac)
+
+                    // Forward = rises (bottom to top); backward = falls (top to bottom)
                     let y1: CGFloat = isForward ? mid + h : mid - h
                     let y2: CGFloat = isForward ? mid - h : mid + h
                     let col = isForward ? forwardColor : backColor
@@ -994,183 +1011,312 @@ struct CapturedNotationDisplayView: View {
                     var path = Path()
                     path.move(to: CGPoint(x: x1, y: y1))
                     path.addLine(to: CGPoint(x: x2, y: y2))
-                    ctx.stroke(path, with: .color(col.opacity(0.5 + event.confidence * 0.5)), lineWidth: 2.5)
+                    ctx.stroke(path,
+                               with: .color(col.opacity(0.55 + event.confidence * 0.45)),
+                               lineWidth: 2.5)
 
                     let r: CGFloat = 4
-                    ctx.fill(
-                        Path(ellipseIn: CGRect(x: x1 - r, y: y1 - r, width: r * 2, height: r * 2)),
-                        with: .color(Color(white: 0.82))
-                    )
-                    ctx.fill(
-                        Path(ellipseIn: CGRect(x: x2 - r, y: y2 - r, width: r * 2, height: r * 2)),
-                        with: .color(Color(white: 0.82))
-                    )
+                    ctx.fill(Path(ellipseIn: CGRect(x: x1 - r, y: y1 - r, width: r * 2, height: r * 2)),
+                             with: .color(Color(white: 0.82)))
+                    ctx.fill(Path(ellipseIn: CGRect(x: x2 - r, y: y2 - r, width: r * 2, height: r * 2)),
+                             with: .color(Color(white: 0.82)))
                 }
-                drawTimeAxis(ctx: ctx, size: size, duration: duration, scale: scale)
+
+                // Forward / Back axis labels
+                ctx.draw(
+                    Text("FWD")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(forwardColor.opacity(0.55)),
+                    at: CGPoint(x: 4, y: mid - size.height * 0.38),
+                    anchor: .leading
+                )
+                ctx.draw(
+                    Text("BACK")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(backColor.opacity(0.55)),
+                    at: CGPoint(x: 4, y: mid + size.height * 0.30),
+                    anchor: .leading
+                )
             }
             .frame(height: laneH)
         }
-        .background(Color(white: 0.115))
-        .padding(.bottom, 2)
+        .background(Color(white: 0.108))
+        .padding(.bottom, 1)
     }
 
-    private func faderLane(width: CGFloat) -> some View {
-        let timelineWidth = max(width - 80, 200.0)
-        let duration = max(snapshot.faderEvents.map(\.endTime).max() ?? 1.0, 0.001)
-        let scale = timelineWidth / duration
+    // Slope height: faster = steeper
+    private func movementHeightFraction(kind: ScratchMovementKind) -> Double {
+        switch kind {
+        case .fastPush, .fastPull:         return 0.90
+        case .normalPush, .normalPull:     return 0.62
+        case .slowDrag, .slowPullDrag:     return 0.38
+        case .releaseNormalPlayback:       return 0.20
+        default:                           return 0.55
+        }
+    }
+
+    // MARK: Partial placeholder when no movement events
+
+    private var partialMovementPlaceholder: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "waveform.path.badge.plus")
+                .font(.system(size: 14))
+                .foregroundStyle(audioColor)
+            Text("Notation detected from audio — direction pending.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(audioColor)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(Color(white: 0.108))
+        .padding(.bottom, 1)
+    }
+
+    // MARK: Audio event lane
+
+    private func audioLane(width: CGFloat) -> some View {
+        let laneWidth = max(width - 56, 200.0)
+        let duration = totalDuration
+        let scale = CGFloat(laneWidth) / CGFloat(duration)
 
         return VStack(alignment: .leading, spacing: 0) {
-            laneHeader("FADER", count: snapshot.faderEvents.count)
+            laneHeader("AUDIO", icon: "waveform")
             Canvas { ctx, size in
-                let top = size.height * 0.18
-                let bottom = size.height * 0.82
-                let mid = size.height / 2
+                let labelX: CGFloat = 56
+                drawSharedGrid(ctx: ctx, size: size, duration: duration, scale: scale, labelX: labelX)
 
-                var baseline = Path()
-                baseline.move(to: CGPoint(x: 60, y: mid))
-                baseline.addLine(to: CGPoint(x: size.width, y: mid))
-                ctx.stroke(baseline, with: .color(Color(white: 0.20)), lineWidth: 1)
+                for event in snapshot.audioEvents {
+                    let x = labelX + CGFloat(event.startTime) * scale
+                    let w = max(3, CGFloat(event.duration) * scale)
+                    let color = audioEventColor(event.eventKind)
+                    let blockH = size.height * 0.58 * CGFloat(0.6 + event.confidence * 0.4)
+                    let blockY = (size.height - blockH) / 2
 
-                for event in snapshot.faderEvents {
-                    let x1 = CGFloat(event.startTime) * scale + 60
-                    let x2 = CGFloat(event.endTime) * scale + 60
-                    let y1 = bottom - CGFloat(event.fromValue) * (bottom - top)
-                    let y2 = bottom - CGFloat(event.toValue) * (bottom - top)
-                    let color = faderEventColor(event.eventKind)
+                    // Rounded block
+                    let rect = CGRect(x: x, y: blockY, width: w, height: blockH)
+                    ctx.fill(
+                        Path(roundedRect: rect, cornerRadius: 2),
+                        with: .color(color.opacity(0.55 + event.confidence * 0.35))
+                    )
 
-                    var path = Path()
-                    path.move(to: CGPoint(x: x1, y: y1))
-                    path.addLine(to: CGPoint(x: x2, y: y2))
-                    ctx.stroke(path, with: .color(color.opacity(0.45 + event.confidence * 0.55)), lineWidth: 2.5)
-
-                    if event.eventKind == .pulse || event.eventKind == .transformPulse {
-                        let markerX = (x1 + x2) / 2
-                        var marker = Path()
-                        marker.move(to: CGPoint(x: markerX, y: top))
-                        marker.addLine(to: CGPoint(x: markerX, y: bottom))
-                        ctx.stroke(marker, with: .color(color.opacity(0.55)), lineWidth: event.eventKind == .transformPulse ? 2.5 : 1.5)
+                    // Kind label inside wide-enough blocks
+                    if w > 32 {
+                        let shortLabel = audioEventShortLabel(event.eventKind)
+                        ctx.draw(
+                            Text(shortLabel)
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.black.opacity(0.65)),
+                            at: CGPoint(x: x + 3, y: size.height / 2),
+                            anchor: .leading
+                        )
                     }
-
-                    let radius: CGFloat = 3.5
-                    ctx.fill(Path(ellipseIn: CGRect(x: x1 - radius, y: y1 - radius, width: radius * 2, height: radius * 2)), with: .color(Color(white: 0.82)))
-                    ctx.fill(Path(ellipseIn: CGRect(x: x2 - radius, y: y2 - radius, width: radius * 2, height: radius * 2)), with: .color(Color(white: 0.82)))
-                }
-
-                drawTimeAxis(ctx: ctx, size: size, duration: duration, scale: scale)
-            }
-            .frame(height: 72)
-            faderEventList
-        }
-        .background(Color(white: 0.11))
-        .padding(.bottom, 2)
-    }
-
-    private func laneHeader(_ label: String, count: Int) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(labelColor)
-            Text("\(count) events")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color(white: 0.35))
-        }
-        .padding(.horizontal, 8)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
-    }
-
-    private var audioEventList: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(snapshot.audioEvents.enumerated()), id: \.offset) { _, event in
-                HStack(spacing: 8) {
-                    Text(event.eventKind)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(eventKindColor(event.eventKind))
-                        .frame(width: 100, alignment: .leading)
-                    Text(String(format: "%.3f–%.3f s", event.startTime, event.endTime))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(labelColor)
-                    Text(String(format: "conf %.2f", event.confidence))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.35))
                 }
             }
+            .frame(height: 56)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .background(Color(white: 0.10))
+        .padding(.bottom, 1)
     }
 
-    private var faderEventList: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(snapshot.faderEvents.enumerated()), id: \.offset) { _, event in
-                HStack(spacing: 8) {
-                    Text(event.eventKind.rawValue)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(faderEventColor(event.eventKind))
-                        .frame(width: 100, alignment: .leading)
-                    Text(String(format: "%.3f–%.3f s", event.startTime, event.endTime))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(labelColor)
-                    Text(String(format: "%.2f→%.2f", event.fromValue, event.toValue))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.62))
-                    Text(String(format: "conf %.2f", event.confidence))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.35))
-                }
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-    }
-
-    private func eventKindColor(_ kind: String) -> Color {
+    private func audioEventColor(_ kind: String) -> Color {
         switch kind {
-        case "scratchBurst":  return audioColor
-        case "possibleDrag":  return forwardColor
-        case "possibleCut":   return cutColor
-        default:              return gapColor
+        case "scratchBurst": return audioColor
+        case "possibleDrag": return forwardColor
+        case "possibleCut":  return cutColor
+        default:             return gapColor
         }
+    }
+
+    private func audioEventShortLabel(_ kind: String) -> String {
+        switch kind {
+        case "scratchBurst": return "SCRATCH"
+        case "possibleDrag": return "DRAG"
+        case "possibleCut":  return "CUT"
+        default:             return kind
+        }
+    }
+
+    // MARK: Fader lane
+
+    private func faderLane(width: CGFloat) -> some View {
+        let laneWidth = max(width - 56, 200.0)
+        let duration = totalDuration
+        let scale = CGFloat(laneWidth) / CGFloat(duration)
+
+        if snapshot.faderEvents.isEmpty {
+            return AnyView(
+                HStack(spacing: 8) {
+                    laneHeader("FADER", icon: "slider.horizontal.3")
+                    Text("No fader data")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.32))
+                    Spacer()
+                }
+                .padding(.vertical, 6)
+                .background(Color(white: 0.095))
+            )
+        }
+
+        return AnyView(
+            VStack(alignment: .leading, spacing: 0) {
+                laneHeader("FADER", icon: "slider.horizontal.3")
+                Canvas { ctx, size in
+                    let labelX: CGFloat = 56
+                    let top    = size.height * 0.12
+                    let bottom = size.height * 0.88
+                    let mid    = size.height / 2
+
+                    // Baseline
+                    var base = Path()
+                    base.move(to: CGPoint(x: labelX, y: mid))
+                    base.addLine(to: CGPoint(x: size.width, y: mid))
+                    ctx.stroke(base, with: .color(Color(white: 0.22)), lineWidth: 0.5)
+
+                    drawSharedGrid(ctx: ctx, size: size, duration: duration, scale: scale, labelX: labelX)
+
+                    for event in snapshot.faderEvents {
+                        let x1 = labelX + CGFloat(event.startTime) * scale
+                        let x2 = labelX + CGFloat(event.endTime) * scale
+                        let y1 = bottom - CGFloat(event.fromValue) * (bottom - top)
+                        let y2 = bottom - CGFloat(event.toValue) * (bottom - top)
+                        let col = faderEventColor(event.eventKind)
+
+                        var path = Path()
+                        path.move(to: CGPoint(x: x1, y: y1))
+                        path.addLine(to: CGPoint(x: x2, y: y2))
+                        ctx.stroke(path,
+                                   with: .color(col.opacity(0.50 + event.confidence * 0.50)),
+                                   lineWidth: 2.5)
+
+                        if event.eventKind == .pulse || event.eventKind == .transformPulse {
+                            let mx = (x1 + x2) / 2
+                            var marker = Path()
+                            marker.move(to: CGPoint(x: mx, y: top))
+                            marker.addLine(to: CGPoint(x: mx, y: bottom))
+                            ctx.stroke(marker,
+                                       with: .color(col.opacity(0.60)),
+                                       lineWidth: event.eventKind == .transformPulse ? 2.0 : 1.2)
+                        }
+
+                        let r: CGFloat = 3.5
+                        ctx.fill(Path(ellipseIn: CGRect(x: x1 - r, y: y1 - r, width: r * 2, height: r * 2)),
+                                 with: .color(Color(white: 0.82)))
+                        ctx.fill(Path(ellipseIn: CGRect(x: x2 - r, y: y2 - r, width: r * 2, height: r * 2)),
+                                 with: .color(Color(white: 0.82)))
+                    }
+                }
+                .frame(height: 64)
+            }
+            .background(Color(white: 0.096))
+            .padding(.bottom, 1)
+        )
     }
 
     private func faderEventColor(_ kind: ScratchFaderEventKind) -> Color {
         switch kind {
-        case .cut: return cutColor
-        case .pulse: return audioColor
+        case .cut:            return cutColor
+        case .pulse:          return faderColor
         case .transformPulse: return backColor
-        case .open: return forwardColor
-        case .closed: return Color.red
-        case .flareClick: return Color.purple
-        case .unknown: return gapColor
+        case .open:           return forwardColor
+        case .closed:         return Color(red: 1.0, green: 0.25, blue: 0.25)
+        case .flareClick:     return Color(red: 0.75, green: 0.45, blue: 1.00)
+        case .unknown:        return gapColor
         }
     }
 
-    private func drawTimeAxis(ctx: GraphicsContext, size: CGSize, duration: Double, scale: CGFloat) {
-        let step = tickInterval(for: duration)
-        var t = 0.0
-        while t <= duration + step {
-            let x = CGFloat(t) * scale + 60
-            var path = Path()
-            path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: size.height))
-            ctx.stroke(path, with: .color(Color(white: 0.22)), lineWidth: 0.5)
-            ctx.draw(
-                Text(String(format: "%.2f", t))
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(Color(white: 0.30)),
-                at: CGPoint(x: x + 2, y: size.height - 2),
-                anchor: .bottomLeading
-            )
+    // MARK: Legend
+
+    private var notationLegend: some View {
+        HStack(spacing: 18) {
+            legendItem(color: forwardColor, label: "Forward")
+            legendItem(color: backColor,    label: "Back")
+            legendItem(color: audioColor,   label: "Scratch burst")
+            legendItem(color: cutColor,     label: "Drag / Cut")
+            legendItem(color: faderColor,   label: "Fader")
+            legendItem(color: gapColor,     label: "Silence")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(Color(white: 0.11))
+    }
+
+    private func legendItem(color: Color, label: String) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(color)
+                .frame(width: 16, height: 6)
+            Text(label)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(labelColor)
+        }
+    }
+
+    // MARK: Unavailable
+
+    private var unavailablePane: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "waveform.path.ecg")
+                .font(.system(size: 30))
+                .foregroundStyle(labelColor)
+            Text("No notation detected for this take.")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(labelColor)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 52)
+    }
+
+    // MARK: Helpers
+
+    private func laneHeader(_ label: String, icon: String) -> some View {
+        Label(label, systemImage: icon)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(labelColor)
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 3)
+    }
+
+    private func headerChip(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    // Shared vertical grid lines across all lanes (keeps lanes visually aligned)
+    private func drawSharedGrid(
+        ctx: GraphicsContext,
+        size: CGSize,
+        duration: Double,
+        scale: CGFloat,
+        labelX: CGFloat
+    ) {
+        let step = gridTickInterval(for: duration)
+        var t = step
+        while t <= duration + step * 0.5 {
+            let x = labelX + CGFloat(t) * scale
+            let isMajor = t.truncatingRemainder(dividingBy: step * 2).magnitude < step * 0.05
+            var line = Path()
+            line.move(to: CGPoint(x: x, y: 0))
+            line.addLine(to: CGPoint(x: x, y: size.height))
+            ctx.stroke(line,
+                       with: .color(Color(white: isMajor ? 0.22 : 0.155)),
+                       lineWidth: isMajor ? 0.7 : 0.35)
             t += step
         }
     }
 
-    private func tickInterval(for duration: Double) -> Double {
+    private func gridTickInterval(for duration: Double) -> Double {
         switch duration {
-        case ..<1.0:  return 0.1
-        case ..<5.0:  return 0.5
-        case ..<15.0: return 1.0
-        default:      return 2.0
+        case ..<1.0:   return 0.10
+        case ..<3.0:   return 0.25
+        case ..<8.0:   return 0.50
+        case ..<20.0:  return 1.0
+        default:       return 2.0
         }
     }
 }

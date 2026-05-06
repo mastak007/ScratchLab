@@ -256,7 +256,9 @@
 		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
+		NST0000000NST001NST00001 /* NotationSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationSheetTests.swift; sourceTree = "<group>"; };
 		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
+		NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NST0000000NST001NST00001 /* NotationSheetTests.swift */; };
 		B2000007 /* CompanionCameraReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraReceiver.swift; sourceTree = "<group>"; };
 		B2000008 /* DJRigLayoutDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJRigLayoutDetector.swift; sourceTree = "<group>"; };
 		B2000009 /* DeckGamificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckGamificationOverlay.swift; sourceTree = "<group>"; };
@@ -313,6 +315,7 @@
 				7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */,
 				CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */,
 				SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */,
+				NST0000000NST001NST00001 /* NotationSheetTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -842,6 +845,7 @@
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
 				SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */,
+				NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
