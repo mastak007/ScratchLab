@@ -4489,6 +4489,88 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
     }
 
+    func testNotationFusionKeepsLowConfidenceDirectionalMotionPartial() {
+        let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
+        let audioSnapshot = ScratchAudioNotationSnapshot(
+            audioEvents: [
+                makeAudioNotationEventCandidate(
+                    startTime: 0.10,
+                    endTime: 0.24,
+                    peakLevel: 0.39,
+                    rmsLevel: 0.17,
+                    confidence: 0.66,
+                    eventKind: .scratchBurst
+                )
+            ],
+            confidence: 0.66
+        )
+        let weakMotion = [
+            makeMovementEvent(
+                startTime: 0.10,
+                endTime: 0.24,
+                startPosition: 0.14,
+                endPosition: 0.30,
+                direction: "forward",
+                confidence: 0.33
+            )
+        ]
+
+        let snapshot = fusion.snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: weakMotion,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.57
+        )
+
+        XCTAssertEqual(snapshot.notationSource, "partial")
+        XCTAssertEqual(snapshot.detectionSources, ["audio", "video"])
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertEqual(snapshot.audioEvents.count, 1)
+        XCTAssertEqual(try XCTUnwrap(snapshot.notationConfidence), 0.66, accuracy: 0.001)
+    }
+
+    func testNotationFusionRequiresTrustedFusedDirectionalEvidenceForDetected() {
+        let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
+        let audioSnapshot = ScratchAudioNotationSnapshot(
+            audioEvents: [
+                makeAudioNotationEventCandidate(
+                    startTime: 0.12,
+                    endTime: 0.24,
+                    peakLevel: 0.43,
+                    rmsLevel: 0.19,
+                    confidence: 0.74,
+                    eventKind: .scratchBurst
+                )
+            ],
+            confidence: 0.74
+        )
+        let offTimingMotion = [
+            makeMovementEvent(
+                startTime: 0.34,
+                endTime: 0.50,
+                startPosition: 0.10,
+                endPosition: 0.62,
+                direction: "forward",
+                confidence: 0.91
+            )
+        ]
+
+        let snapshot = fusion.snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: offTimingMotion,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.57
+        )
+
+        XCTAssertEqual(snapshot.notationSource, "partial")
+        XCTAssertEqual(snapshot.detectionSources, ["audio", "video"])
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertEqual(snapshot.audioEvents.count, 1)
+        XCTAssertEqual(try XCTUnwrap(snapshot.notationConfidence), 0.74, accuracy: 0.001)
+    }
+
     func testCanonicalExportManifestParity() throws {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root)

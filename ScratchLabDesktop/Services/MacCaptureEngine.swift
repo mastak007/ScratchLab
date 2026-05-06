@@ -530,6 +530,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     struct RoutineNotationFusionEngine {
         private let normalizer = RoutineNotationEventNormalizer()
+        private static let minNotationDetectedConfidence = 0.50
+        private static let minFusedMovementConfidence = 0.45
+        private static let minMotionConfidenceForDirectionalFusion = 0.45
+        private static let minAudioOverlapRatioForDirectionalNotation = 0.25
+        private static let minDirectionalEventCount = 1
 
         func snapshot(
             audioSnapshot: ScratchAudioNotationSnapshot,
@@ -539,7 +544,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             labelConfidence: Double?,
             capturedAt: Date = Date()
         ) -> CaptureCore.DetectedNotationSnapshot {
-            let fusedMovementEvents = fuseMovementEvents(
+            let candidateMovementEvents = fuseMovementEvents(
                 audioEvents: audioSnapshot.audioEvents,
                 motionEvents: motionEvents
             )
@@ -555,8 +560,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     source: $0.source
                 )
             }
+            let trustedDirectionalEvents = trustedDirectionalEvents(
+                from: candidateMovementEvents,
+                audioEvents: audioSnapshot.audioEvents
+            )
+            let detectedConfidence = trustedDirectionalEvents.isEmpty
+                ? nil
+                : trustedDirectionalEvents.map(\.confidence).reduce(0, +) / Double(trustedDirectionalEvents.count)
+            let hasDetectedDirectionalNotation = trustedDirectionalEvents.count >= Self.minDirectionalEventCount
+                && (detectedConfidence ?? 0) >= Self.minNotationDetectedConfidence
+
             let notationSource: String
-            if !fusedMovementEvents.isEmpty {
+            if hasDetectedDirectionalNotation {
                 notationSource = "detected"
             } else if !audioEvents.isEmpty {
                 notationSource = "partial"
@@ -565,8 +580,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
 
             let notationConfidence: Double?
-            if !fusedMovementEvents.isEmpty {
-                notationConfidence = fusedMovementEvents.map(\.confidence).reduce(0, +) / Double(fusedMovementEvents.count)
+            if hasDetectedDirectionalNotation {
+                notationConfidence = detectedConfidence
             } else if !audioEvents.isEmpty {
                 notationConfidence = audioEvents.map(\.confidence).reduce(0, +) / Double(audioEvents.count)
             } else {
@@ -588,12 +603,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 labelSource: labelSource,
                 labelConfidence: labelConfidence,
                 detectionSources: detectionSources,
-                recordMovementEvents: fusedMovementEvents,
+                recordMovementEvents: hasDetectedDirectionalNotation ? trustedDirectionalEvents : [],
                 audioEvents: audioEvents,
                 faderEvents: [],
                 mixerMidiEvents: [],
                 capturedAt: capturedAt
             )
+        }
+
+        private func trustedDirectionalEvents(
+            from events: [CaptureCore.DetectedNotationRecordMovementEvent],
+            audioEvents: [ScratchAudioNotationEventCandidate]
+        ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+            let burstAudioEvents = audioEvents.filter { event in
+                event.eventKind == .scratchBurst || event.eventKind == .possibleDrag
+            }
+
+            return events.filter { event in
+                guard event.confidence >= Self.minFusedMovementConfidence else { return false }
+                guard event.source == "fused" else { return false }
+                return audioOverlapRatio(for: event, audioEvents: burstAudioEvents) >= Self.minAudioOverlapRatioForDirectionalNotation
+            }
         }
 
         private func fuseMovementEvents(
@@ -618,6 +648,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 ) {
                     usedMotionIndexes.insert(match.index)
                     let motionEvent = match.event
+                    guard motionEvent.confidence >= Self.minMotionConfidenceForDirectionalFusion else {
+                        continue
+                    }
                     let provisionalEvent = CaptureCore.DetectedNotationRecordMovementEvent(
                         startTime: audioEvent.startTime,
                         endTime: audioEvent.endTime,
@@ -659,6 +692,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
 
             return normalizer.normalize(events: fused, audioEvents: burstAudioEvents)
+        }
+
+        private func audioOverlapRatio(
+            for event: CaptureCore.DetectedNotationRecordMovementEvent,
+            audioEvents: [ScratchAudioNotationEventCandidate]
+        ) -> Double {
+            let eventDuration = max(0.001, event.endTime - event.startTime)
+            let overlap = audioEvents.reduce(0.0) { partial, audioEvent in
+                let overlapStart = max(event.startTime, audioEvent.startTime)
+                let overlapEnd = min(event.endTime, audioEvent.endTime)
+                return partial + max(0, overlapEnd - overlapStart)
+            }
+            return min(1, overlap / eventDuration)
         }
 
         private func bestMotionMatch(
