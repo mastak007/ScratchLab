@@ -277,6 +277,7 @@ struct MacAnalyzerView: View {
     @ObservedObject private var runtimeDiagnostics = ScratchLabRuntimeDiagnostics.shared
     @State private var exportMixMode: ExportMixMode = .scratchOnly
     @State private var isBuildingDemoExportPackage = false
+    @State private var capturedNotationSnapshot: CaptureCore.DetectedNotationSnapshot?
     @State private var isPracticeSessionActive = false
     @State private var practiceTimeRemaining: TimeInterval = PracticeDuration.fiveMinutes.duration
     @State private var practiceDetectionCount = 0
@@ -532,7 +533,7 @@ struct MacAnalyzerView: View {
             advancedSidebar
                 .frame(minWidth: 340, idealWidth: 380, maxWidth: 460)
 
-            NotationVisualizerView(demo: babyScratchDemo)
+            NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot)
         }
     }
 
@@ -2319,6 +2320,17 @@ struct MacAnalyzerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if currentRoutineNotationSnapshot != nil {
+                    Button {
+                        capturedNotationSnapshot = currentRoutineNotationSnapshot
+                        workspaceTab = .advanced
+                    } label: {
+                        Label("View Captured Notation", systemImage: "waveform.path")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 Picker("Correct Label", selection: $reviewCorrectionSelection) {
                     ForEach(ReviewCorrection.allCases) { correction in
                         Text(correction.rawValue).tag(correction)
@@ -2712,10 +2724,17 @@ struct MacAnalyzerView: View {
                 .accessibilityIdentifier("practice-beat-playback-button")
 
                 if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
-                    Text(playbackErrorMessage)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(nsColor: .systemOrange))
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Text(playbackErrorMessage)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color(nsColor: .systemOrange))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Retry Beat") {
+                            practiceBeatStore.retryPlayback()
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.system(size: 12, weight: .semibold))
+                    }
                 }
             }
 

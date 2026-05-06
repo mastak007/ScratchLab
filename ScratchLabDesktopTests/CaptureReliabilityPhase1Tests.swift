@@ -45,10 +45,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     private final class MockPracticeBeatPlaybackEngine: PracticeBeatPlaybackEngine {
         var startCallCount = 0
         var stopCallCount = 0
+        var hardResetCallCount = 0
         var requestedModes: [BeatEngineMode] = []
         var requestedBPMs: [Int] = []
+        var shouldThrowOnStart = false
 
         func start(mode: BeatEngineMode, bpm: Int) throws {
+            if shouldThrowOnStart {
+                throw ScratchLabBeatEngineError.unableToStartAudio
+            }
             startCallCount += 1
             requestedModes.append(mode)
             requestedBPMs.append(bpm)
@@ -56,6 +61,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         func stop() {
             stopCallCount += 1
+        }
+
+        func hardResetBeatPlayback() {
+            hardResetCallCount += 1
         }
     }
 
@@ -407,6 +416,201 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(disabledRecordSetup.beatEngineMode, .clickTrack)
         XCTAssertTrue(disabledRecordSetup.clickEnabled)
         XCTAssertFalse(disabledRecordSetup.beatEnabled)
+    }
+
+    // MARK: - Beat Lifecycle Tests
+
+    @MainActor
+    func testBeatCanStartStopStartAgain() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        store.startPlayback()
+        XCTAssertTrue(store.isPlaying)
+        XCTAssertEqual(store.playbackState, .playing)
+
+        store.stopPlayback()
+        XCTAssertFalse(store.isPlaying)
+        XCTAssertEqual(store.playbackState, .stopped)
+
+        store.startPlayback()
+        XCTAssertTrue(store.isPlaying)
+        XCTAssertEqual(store.playbackState, .playing)
+        XCTAssertEqual(engine.startCallCount, 2)
+    }
+
+    @MainActor
+    func testHardResetReturnsBeatToReadyState() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        store.startPlayback()
+        store.stopPlayback()
+
+        store.retryPlayback()
+
+        XCTAssertEqual(engine.hardResetCallCount, 1)
+        XCTAssertEqual(engine.startCallCount, 2)
+        XCTAssertTrue(store.isPlaying)
+        XCTAssertEqual(store.playbackState, .playing)
+    }
+
+    @MainActor
+    func testStartBeatSelfHealsFromFailedState() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        engine.shouldThrowOnStart = true
+        store.startPlayback()
+        XCTAssertFalse(store.isPlaying)
+        guard case .failed = store.playbackState else {
+            return XCTFail("Expected failed state")
+        }
+
+        engine.shouldThrowOnStart = false
+        store.retryPlayback()
+        XCTAssertTrue(store.isPlaying)
+        XCTAssertEqual(store.playbackState, .playing)
+        XCTAssertEqual(engine.hardResetCallCount, 1)
+    }
+
+    @MainActor
+    func testBPMChangeAfterStopReschedulesAtNewTempo() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        store.setBPM(70)
+        store.startPlayback()
+        store.stopPlayback()
+        store.setBPM(90)
+        store.startPlayback()
+
+        XCTAssertEqual(engine.requestedBPMs, [70, 90])
+    }
+
+    @MainActor
+    func testStopPlaybackAfterStartSetsStoppedState() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        store.startPlayback()
+        store.stopPlayback()
+
+        XCTAssertEqual(store.playbackState, .stopped)
+        XCTAssertFalse(store.isPlaying)
+    }
+
+    @MainActor
+    func testStartFailureSurfacesFailedState() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        engine.shouldThrowOnStart = true
+        store.startPlayback()
+
+        guard case .failed(let reason) = store.playbackState else {
+            return XCTFail("Expected failed state")
+        }
+        XCTAssertFalse(reason.isEmpty)
+        XCTAssertNotNil(store.playbackErrorMessage)
+    }
+
+    @MainActor
+    func testBeatOffOnAfterFailureCallsHardReset() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        engine.shouldThrowOnStart = true
+        store.startPlayback()
+        engine.shouldThrowOnStart = false
+
+        store.retryPlayback()
+
+        XCTAssertEqual(engine.hardResetCallCount, 1)
+        XCTAssertTrue(store.isPlaying)
+    }
+
+    @MainActor
+    func testRepeatedTakesCanEachStartBeat() throws {
+        let defaults = try makeEphemeralUserDefaults()
+        let engine = MockPracticeBeatPlaybackEngine()
+        let store = PracticeBeatStore(defaults: defaults, beatEngine: engine)
+
+        store.setBeatEnabled(true)
+        for bpm in [70, 90, 110] {
+            store.setBPM(bpm)
+            store.startPlayback()
+            XCTAssertTrue(store.isPlaying, "Beat should be playing at \(bpm) BPM")
+            store.handleRecordingFlowStarted()
+            XCTAssertFalse(store.isPlaying, "Beat should stop after recording at \(bpm) BPM")
+        }
+        XCTAssertEqual(engine.startCallCount, 3)
+        XCTAssertEqual(engine.requestedBPMs, [70, 90, 110])
+    }
+
+    // MARK: - Captured Notation Display Model Tests
+
+    @MainActor
+    func testCapturedNotationSnapshotWithMovementEventsIsDetectedSource() {
+        let snapshot = makeDetectedNotationSnapshot()
+        XCTAssertEqual(snapshot.notationSource, "detected")
+        XCTAssertFalse(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertFalse(snapshot.audioEvents.isEmpty)
+    }
+
+    @MainActor
+    func testCapturedNotationSnapshotAudioOnlyIsPartialSource() {
+        let snapshot = makeAudioOnlyDetectedNotationSnapshot()
+        XCTAssertEqual(snapshot.notationSource, "partial")
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertFalse(snapshot.audioEvents.isEmpty)
+    }
+
+    @MainActor
+    func testCapturedNotationSnapshotPreservesAllAudioEvents() {
+        let snapshot = makeDetectedNotationSnapshot()
+        XCTAssertEqual(snapshot.audioEvents.count, 2)
+        XCTAssertEqual(snapshot.audioEvents.first?.eventKind, "scratchBurst")
+    }
+
+    @MainActor
+    func testCapturedNotationSnapshotPreservesAllMovementEvents() {
+        let snapshot = makeDetectedNotationSnapshot()
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 2)
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.direction, "forward")
+        XCTAssertEqual(snapshot.recordMovementEvents.last?.direction, "backward")
+    }
+
+    @MainActor
+    func testPartialNotationSnapshotHasNoMovementEvents() {
+        let snapshot = makeAudioOnlyDetectedNotationSnapshot()
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertFalse(snapshot.hasDetectedMovementEvents)
+        XCTAssertTrue(snapshot.hasAudioEvents)
+    }
+
+    @MainActor
+    func testCapturedNotationConfidenceReflectsSource() {
+        let detected = makeDetectedNotationSnapshot()
+        XCTAssertNotNil(detected.notationConfidence)
+        XCTAssertGreaterThan(detected.notationConfidence ?? 0, 0.0)
+
+        let partial = makeAudioOnlyDetectedNotationSnapshot()
+        XCTAssertNotNil(partial.notationConfidence)
     }
 
     func testSessionListPresentationCapsRecentSessionsAtThree() {
@@ -6214,10 +6418,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         // MacAnalyzerView owns the single coordinator instance and passes it to NotationVisualizerView.
         XCTAssertTrue(macSource.contains("@StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()"))
-        XCTAssertTrue(macSource.contains("NotationVisualizerView(demo: babyScratchDemo)"))
+        XCTAssertTrue(macSource.contains("NotationVisualizerView(demo: babyScratchDemo"))
 
         // NotationVisualizerView accepts the coordinator — no separate owned player.
-        XCTAssertTrue(notationSource.contains("init(demo: BabyScratchDemoPlaybackCoordinator)"))
+        XCTAssertTrue(notationSource.contains("init(demo: BabyScratchDemoPlaybackCoordinator"))
         XCTAssertFalse(notationSource.contains("ScratchCoachDemoAudioPlayer()"))
     }
 

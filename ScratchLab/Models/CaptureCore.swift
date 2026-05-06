@@ -1027,10 +1027,18 @@ final class SessionSetupViewModel: ObservableObject {
     }
 }
 
+enum BeatPlaybackState: Equatable, Sendable {
+    case ready
+    case playing
+    case stopped
+    case failed(reason: String)
+}
+
 @MainActor
 protocol PracticeBeatPlaybackEngine: AnyObject {
     func start(mode: BeatEngineMode, bpm: Int) throws
     func stop()
+    func hardResetBeatPlayback()
 }
 
 extension ScratchLabBeatEngine: PracticeBeatPlaybackEngine {
@@ -1065,6 +1073,7 @@ final class PracticeBeatStore: ObservableObject {
     @Published private(set) var preferences: PracticeBeatPreferences
     @Published private(set) var isPlaying = false
     @Published private(set) var playbackErrorMessage: String?
+    @Published private(set) var playbackState: BeatPlaybackState = .ready
 
     private let defaults: UserDefaults
     private let beatEngine: PracticeBeatPlaybackEngine
@@ -1186,15 +1195,27 @@ final class PracticeBeatStore: ObservableObject {
         do {
             try beatEngine.start(mode: preferences.beatEngineMode, bpm: preferences.bpm)
             isPlaying = true
+            playbackState = .playing
         } catch {
             isPlaying = false
             playbackErrorMessage = error.localizedDescription
+            playbackState = .failed(reason: error.localizedDescription)
         }
     }
 
     func stopPlayback() {
         beatEngine.stop()
         isPlaying = false
+        if case .playing = playbackState {
+            playbackState = .stopped
+        }
+    }
+
+    func retryPlayback() {
+        beatEngine.hardResetBeatPlayback()
+        playbackState = .ready
+        playbackErrorMessage = nil
+        startPlayback()
     }
 
     func handleLeavingPractice() {

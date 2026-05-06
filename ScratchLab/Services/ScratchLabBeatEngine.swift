@@ -91,13 +91,45 @@ final class ScratchLabBeatEngine: ObservableObject {
         ClickTrackEngine.currentHostTime()
     }
 
+    func hardResetBeatPlayback() {
+        cancelPendingUICallbacks()
+        clickTrackEngine.stop()
+
+        schedulingQueue.sync {
+            self.activeGeneration = UUID()
+            self.isRunning = false
+            self.scheduledStepCount = 0
+            self.consumedStepCount = 0
+            self.stepBuffers = []
+            self.beatFrameLength = 0
+            self.framesPerBar = 0
+            self.swingFrameOffset = 0
+        }
+
+        playerNode.stop()
+        playerNode.reset()
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        audioEngine.disconnectNodeOutput(playerNode)
+        audioEngine.detach(playerNode)
+        audioEngine.reset()
+        audioEngine.attach(playerNode)
+        if let fmt = playerFormat {
+            audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: fmt)
+        }
+        audioEngine.prepare()
+    }
+
     func start(
         mode: BeatEngineMode,
         bpm requestedBPM: Int,
         onCountInBeat: ((Int) -> Void)? = nil,
         onRecordingStart: (() -> Void)? = nil
     ) throws -> BeatEngineStartMetadata {
-        stop()
+        hardResetBeatPlayback()
 
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
         if mode == .clickTrack {
