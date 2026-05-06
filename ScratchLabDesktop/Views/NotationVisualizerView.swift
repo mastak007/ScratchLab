@@ -378,7 +378,7 @@ struct NotationVisualizerView: View {
                         : Color(red: 1.0, green: 0.75, blue: 0.0)
                 )
                 labelChip(
-                    "\(snapshot.audioEvents.count) audio · \(snapshot.recordMovementEvents.count) movement",
+                    "\(snapshot.audioEvents.count) audio · \(snapshot.recordMovementEvents.count) movement · \(snapshot.faderEvents.count) fader · \(snapshot.mixerMidiEvents.count) midi",
                     color: Color(white: 0.45)
                 )
                 if let confidence = snapshot.notationConfidence {
@@ -858,7 +858,7 @@ struct CapturedNotationDisplayView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     sourceHeader
-                    if snapshot.recordMovementEvents.isEmpty && snapshot.audioEvents.isEmpty {
+                    if snapshot.recordMovementEvents.isEmpty && snapshot.audioEvents.isEmpty && snapshot.faderEvents.isEmpty {
                         unavailablePane
                     } else {
                         if !snapshot.audioEvents.isEmpty {
@@ -868,6 +868,9 @@ struct CapturedNotationDisplayView: View {
                             movementLane(width: geo.size.width)
                         } else if !snapshot.audioEvents.isEmpty {
                             partialMessage
+                        }
+                        if !snapshot.faderEvents.isEmpty {
+                            faderLane(width: geo.size.width)
                         }
                     }
                 }
@@ -899,6 +902,11 @@ struct CapturedNotationDisplayView: View {
                 Text("Confidence \(Int((conf * 100).rounded()))%")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(labelColor)
+            }
+            if !snapshot.faderEvents.isEmpty {
+                Text("MIDI fader")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(cutColor)
             }
             Text(snapshot.detectionSources.joined(separator: " + "))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -1006,6 +1014,57 @@ struct CapturedNotationDisplayView: View {
         .padding(.bottom, 2)
     }
 
+    private func faderLane(width: CGFloat) -> some View {
+        let timelineWidth = max(width - 80, 200.0)
+        let duration = max(snapshot.faderEvents.map(\.endTime).max() ?? 1.0, 0.001)
+        let scale = timelineWidth / duration
+
+        return VStack(alignment: .leading, spacing: 0) {
+            laneHeader("FADER", count: snapshot.faderEvents.count)
+            Canvas { ctx, size in
+                let top = size.height * 0.18
+                let bottom = size.height * 0.82
+                let mid = size.height / 2
+
+                var baseline = Path()
+                baseline.move(to: CGPoint(x: 60, y: mid))
+                baseline.addLine(to: CGPoint(x: size.width, y: mid))
+                ctx.stroke(baseline, with: .color(Color(white: 0.20)), lineWidth: 1)
+
+                for event in snapshot.faderEvents {
+                    let x1 = CGFloat(event.startTime) * scale + 60
+                    let x2 = CGFloat(event.endTime) * scale + 60
+                    let y1 = bottom - CGFloat(event.fromValue) * (bottom - top)
+                    let y2 = bottom - CGFloat(event.toValue) * (bottom - top)
+                    let color = faderEventColor(event.eventKind)
+
+                    var path = Path()
+                    path.move(to: CGPoint(x: x1, y: y1))
+                    path.addLine(to: CGPoint(x: x2, y: y2))
+                    ctx.stroke(path, with: .color(color.opacity(0.45 + event.confidence * 0.55)), lineWidth: 2.5)
+
+                    if event.eventKind == .pulse || event.eventKind == .transformPulse {
+                        let markerX = (x1 + x2) / 2
+                        var marker = Path()
+                        marker.move(to: CGPoint(x: markerX, y: top))
+                        marker.addLine(to: CGPoint(x: markerX, y: bottom))
+                        ctx.stroke(marker, with: .color(color.opacity(0.55)), lineWidth: event.eventKind == .transformPulse ? 2.5 : 1.5)
+                    }
+
+                    let radius: CGFloat = 3.5
+                    ctx.fill(Path(ellipseIn: CGRect(x: x1 - radius, y: y1 - radius, width: radius * 2, height: radius * 2)), with: .color(Color(white: 0.82)))
+                    ctx.fill(Path(ellipseIn: CGRect(x: x2 - radius, y: y2 - radius, width: radius * 2, height: radius * 2)), with: .color(Color(white: 0.82)))
+                }
+
+                drawTimeAxis(ctx: ctx, size: size, duration: duration, scale: scale)
+            }
+            .frame(height: 72)
+            faderEventList
+        }
+        .background(Color(white: 0.11))
+        .padding(.bottom, 2)
+    }
+
     private func laneHeader(_ label: String, count: Int) -> some View {
         HStack(spacing: 8) {
             Text(label)
@@ -1041,12 +1100,48 @@ struct CapturedNotationDisplayView: View {
         .padding(.vertical, 6)
     }
 
+    private var faderEventList: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(snapshot.faderEvents.enumerated()), id: \.offset) { _, event in
+                HStack(spacing: 8) {
+                    Text(event.eventKind.rawValue)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(faderEventColor(event.eventKind))
+                        .frame(width: 100, alignment: .leading)
+                    Text(String(format: "%.3f–%.3f s", event.startTime, event.endTime))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(labelColor)
+                    Text(String(format: "%.2f→%.2f", event.fromValue, event.toValue))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.62))
+                    Text(String(format: "conf %.2f", event.confidence))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.35))
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
     private func eventKindColor(_ kind: String) -> Color {
         switch kind {
         case "scratchBurst":  return audioColor
         case "possibleDrag":  return forwardColor
         case "possibleCut":   return cutColor
         default:              return gapColor
+        }
+    }
+
+    private func faderEventColor(_ kind: ScratchFaderEventKind) -> Color {
+        switch kind {
+        case .cut: return cutColor
+        case .pulse: return audioColor
+        case .transformPulse: return backColor
+        case .open: return forwardColor
+        case .closed: return Color.red
+        case .flareClick: return Color.purple
+        case .unknown: return gapColor
         }
     }
 

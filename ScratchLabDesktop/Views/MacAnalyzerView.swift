@@ -1223,6 +1223,10 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.faderEvents.count ?? 0
     }
 
+    private var reviewMixerMIDIEventCount: Int {
+        currentRoutineNotationSnapshot?.mixerMidiEvents.count ?? 0
+    }
+
     private var reviewArtifactStatusSummary: String {
         guard let status = currentRoutineArtifactStatus else {
             return "No take ready for review"
@@ -2393,6 +2397,7 @@ struct MacAnalyzerView: View {
                 HStack(spacing: 8) {
                     testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
                     testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
+                    testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
                     testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
                 }
 

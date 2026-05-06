@@ -349,17 +349,24 @@ struct SessionExportAudioEvent: Codable, Equatable, Sendable {
 }
 
 struct SessionExportFaderEvent: Codable, Equatable, Sendable {
-    let time: Double?
-    let state: String?
-    let confidence: Double?
+    let startTime: Double
+    let endTime: Double
+    let eventKind: String
+    let control: String
+    let fromValue: Double
+    let toValue: Double
+    let source: String
+    let confidence: Double
 }
 
 struct SessionExportMixerMidiEvent: Codable, Equatable, Sendable {
-    let time: Double?
-    let status: Int?
-    let data1: Int?
-    let data2: Int?
-    let channel: Int?
+    let takeRelativeTime: Double
+    let deviceName: String
+    let channel: Int
+    let controller: Int
+    let value: Int
+    let normalizedValue: Double
+    let mappedControl: String?
 }
 
 struct SessionExportNotationBeatGrid: Codable, Equatable, Sendable {
@@ -2091,8 +2098,29 @@ struct SessionArchiveBuilder: Sendable {
             notationConfidence: notationConfidence,
             recordMovementEvents: detectedMovementEvents,
             audioEvents: detectedAudioEvents,
-            faderEvents: [],
-            mixerMidiEvents: [],
+            faderEvents: (detectedNotation?.faderEvents ?? []).map {
+                SessionExportFaderEvent(
+                    startTime: $0.startTime,
+                    endTime: $0.endTime,
+                    eventKind: $0.eventKind.rawValue,
+                    control: $0.control,
+                    fromValue: $0.fromValue,
+                    toValue: $0.toValue,
+                    source: $0.source,
+                    confidence: $0.confidence
+                )
+            },
+            mixerMidiEvents: (detectedNotation?.mixerMidiEvents ?? []).map {
+                SessionExportMixerMidiEvent(
+                    takeRelativeTime: $0.takeRelativeTime,
+                    deviceName: $0.deviceName,
+                    channel: $0.channel,
+                    controller: $0.controller,
+                    value: $0.value,
+                    normalizedValue: $0.normalizedValue,
+                    mappedControl: $0.mappedControl
+                )
+            },
             beatGrid: beatGrid,
             notes: notes
         )

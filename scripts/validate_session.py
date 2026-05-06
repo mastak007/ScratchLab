@@ -124,6 +124,33 @@ def validate_notation_document(
         if not isinstance(notation_payload.get(field), list):
             errors.append(f"{take_label}: notation JSON field {field} must be an array.")
 
+    for index, event in enumerate(notation_payload.get("faderEvents", [])):
+        if not isinstance(event, dict):
+            errors.append(f"{take_label}: faderEvents[{index}] must be an object.")
+            continue
+
+        for numeric_field in ("startTime", "endTime", "fromValue", "toValue", "confidence"):
+            value = event.get(numeric_field)
+            if not isinstance(value, (int, float)):
+                errors.append(f"{take_label}: faderEvents[{index}].{numeric_field} must be numeric.")
+
+        event_kind = event.get("eventKind")
+        if not isinstance(event_kind, str) or not event_kind.strip():
+            errors.append(f"{take_label}: faderEvents[{index}].eventKind must be a string.")
+
+        control = event.get("control")
+        if not isinstance(control, str) or control not in {"crossfader"}:
+            errors.append(f"{take_label}: faderEvents[{index}].control must be a known control.")
+
+        source = event.get("source")
+        if source != "midi":
+            errors.append(f"{take_label}: faderEvents[{index}].source must be 'midi'.")
+
+        for bounded_field in ("fromValue", "toValue", "confidence"):
+            value = event.get(bounded_field)
+            if isinstance(value, (int, float)) and not 0.0 <= float(value) <= 1.0:
+                errors.append(f"{take_label}: faderEvents[{index}].{bounded_field} must be between 0 and 1.")
+
     notation_source = notation_payload.get("notationSource")
     if not isinstance(notation_source, str) or not notation_source.strip():
         errors.append(f"{take_label}: notation JSON is missing notationSource.")

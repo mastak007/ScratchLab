@@ -4556,6 +4556,28 @@ enum CaptureCore {
         let source: String
     }
 
+    struct RawMixerMIDIEvent: Codable, Equatable, Sendable {
+        let timestamp: Double
+        let takeRelativeTime: Double
+        let deviceName: String
+        let channel: Int
+        let controller: Int
+        let value: Int
+        let normalizedValue: Double
+        let mappedControl: String?
+    }
+
+    struct DetectedNotationFaderEvent: Codable, Equatable, Sendable {
+        let startTime: Double
+        let endTime: Double
+        let eventKind: ScratchFaderEventKind
+        let control: String
+        let fromValue: Double
+        let toValue: Double
+        let source: String
+        let confidence: Double
+    }
+
     struct DetectedNotationSnapshot: Codable, Equatable, Sendable {
         let notationSource: String
         let notationConfidence: Double?
@@ -4565,12 +4587,12 @@ enum CaptureCore {
         let detectionSources: [String]
         let recordMovementEvents: [DetectedNotationRecordMovementEvent]
         let audioEvents: [DetectedNotationAudioEvent]
-        let faderEvents: [String]
-        let mixerMidiEvents: [String]
+        let faderEvents: [DetectedNotationFaderEvent]
+        let mixerMidiEvents: [RawMixerMIDIEvent]
         let capturedAt: Date
 
         var hasDetectedEvents: Bool {
-            !recordMovementEvents.isEmpty || !audioEvents.isEmpty
+            !recordMovementEvents.isEmpty || !audioEvents.isEmpty || !faderEvents.isEmpty
         }
 
         var hasDetectedMovementEvents: Bool {
@@ -4580,6 +4602,185 @@ enum CaptureCore {
         var hasAudioEvents: Bool {
             !audioEvents.isEmpty
         }
+
+        func withMixerMidiEvents(
+            _ events: [RawMixerMIDIEvent],
+            faderEvents explicitFaderEvents: [DetectedNotationFaderEvent]? = nil
+        ) -> DetectedNotationSnapshot {
+            let derivedFaderEvents = explicitFaderEvents ?? CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+            var updatedDetectionSources = detectionSources.filter { $0 != "midi" }
+            if !derivedFaderEvents.isEmpty {
+                updatedDetectionSources.append("midi")
+            }
+            return DetectedNotationSnapshot(
+                notationSource: notationSource,
+                notationConfidence: notationConfidence,
+                detectedLabel: detectedLabel,
+                labelSource: labelSource,
+                labelConfidence: labelConfidence,
+                detectionSources: updatedDetectionSources,
+                recordMovementEvents: recordMovementEvents,
+                audioEvents: audioEvents,
+                faderEvents: derivedFaderEvents,
+                mixerMidiEvents: events,
+                capturedAt: capturedAt
+            )
+        }
+    }
+
+    static func deriveDetectedNotationFaderEvents(
+        from mixerMidiEvents: [RawMixerMIDIEvent]
+    ) -> [DetectedNotationFaderEvent] {
+        struct PrimitiveEvent {
+            let startTime: Double
+            let endTime: Double
+            let fromValue: Double
+            let toValue: Double
+            let confidence: Double
+            let isCutCandidate: Bool
+
+            var signedDelta: Double { toValue - fromValue }
+        }
+
+        let minimumValueDelta = 0.10
+        let minimumCutDelta = 0.35
+        let maximumCutDuration = 0.15
+        let maximumPulseGap = 0.20
+        let minimumConfidence = 0.75
+
+        let crossfaderEvents = mixerMidiEvents
+            .filter { $0.mappedControl == "crossfader" }
+            .sorted { lhs, rhs in
+                if lhs.takeRelativeTime == rhs.takeRelativeTime {
+                    return lhs.timestamp < rhs.timestamp
+                }
+                return lhs.takeRelativeTime < rhs.takeRelativeTime
+            }
+
+        guard crossfaderEvents.count >= 2 else { return [] }
+
+        let primitives: [PrimitiveEvent] = zip(crossfaderEvents, crossfaderEvents.dropFirst()).compactMap { previous, current in
+            let duration = current.takeRelativeTime - previous.takeRelativeTime
+            let delta = abs(current.normalizedValue - previous.normalizedValue)
+            guard duration > 0, delta >= minimumValueDelta else { return nil }
+
+            let cutCandidate = delta >= minimumCutDelta && duration <= maximumCutDuration
+            let durationFactor = cutCandidate
+                ? max(0, 1 - (duration / maximumCutDuration))
+                : 0
+            let deltaFactor = min(1, delta)
+            let confidence = min(
+                0.97,
+                max(
+                    minimumConfidence,
+                    cutCandidate
+                        ? minimumConfidence + (durationFactor * 0.10) + (deltaFactor * 0.10)
+                        : minimumConfidence + max(0, deltaFactor - minimumValueDelta) * 0.10
+                )
+            )
+
+            return PrimitiveEvent(
+                startTime: previous.takeRelativeTime,
+                endTime: current.takeRelativeTime,
+                fromValue: previous.normalizedValue,
+                toValue: current.normalizedValue,
+                confidence: confidence,
+                isCutCandidate: cutCandidate
+            )
+        }
+
+        guard !primitives.isEmpty else { return [] }
+
+        func makeEvent(
+            startTime: Double,
+            endTime: Double,
+            eventKind: ScratchFaderEventKind,
+            fromValue: Double,
+            toValue: Double,
+            confidence: Double
+        ) -> DetectedNotationFaderEvent {
+            DetectedNotationFaderEvent(
+                startTime: startTime,
+                endTime: endTime,
+                eventKind: eventKind,
+                control: "crossfader",
+                fromValue: min(1, max(0, fromValue)),
+                toValue: min(1, max(0, toValue)),
+                source: "midi",
+                confidence: min(1, max(minimumConfidence, confidence))
+            )
+        }
+
+        var derived: [DetectedNotationFaderEvent] = []
+        var index = 0
+        while index < primitives.count {
+            let current = primitives[index]
+
+            if index + 2 < primitives.count {
+                let next = primitives[index + 1]
+                let third = primitives[index + 2]
+                let firstGap = next.startTime - current.endTime
+                let secondGap = third.startTime - next.endTime
+                let alternates = current.signedDelta.sign != next.signedDelta.sign &&
+                    next.signedDelta.sign != third.signedDelta.sign
+                if current.isCutCandidate,
+                   next.isCutCandidate,
+                   third.isCutCandidate,
+                   alternates,
+                   firstGap <= maximumPulseGap,
+                   secondGap <= maximumPulseGap {
+                    derived.append(
+                        makeEvent(
+                            startTime: current.startTime,
+                            endTime: third.endTime,
+                            eventKind: .transformPulse,
+                            fromValue: current.fromValue,
+                            toValue: third.toValue,
+                            confidence: (current.confidence + next.confidence + third.confidence) / 3
+                        )
+                    )
+                    index += 3
+                    continue
+                }
+            }
+
+            if index + 1 < primitives.count {
+                let next = primitives[index + 1]
+                let gap = next.startTime - current.endTime
+                let reversesDirection = current.signedDelta.sign != next.signedDelta.sign
+                if current.isCutCandidate,
+                   next.isCutCandidate,
+                   reversesDirection,
+                   gap <= maximumPulseGap {
+                    derived.append(
+                        makeEvent(
+                            startTime: current.startTime,
+                            endTime: next.endTime,
+                            eventKind: .pulse,
+                            fromValue: current.fromValue,
+                            toValue: next.toValue,
+                            confidence: (current.confidence + next.confidence) / 2
+                        )
+                    )
+                    index += 2
+                    continue
+                }
+            }
+
+            derived.append(
+                makeEvent(
+                    startTime: current.startTime,
+                    endTime: current.endTime,
+                    eventKind: current.isCutCandidate ? .cut : .unknown,
+                    fromValue: current.fromValue,
+                    toValue: current.toValue,
+                    confidence: current.confidence
+                )
+            )
+            index += 1
+        }
+
+        return derived
     }
 
     struct LocalRecordingSidecar: Codable, Equatable {

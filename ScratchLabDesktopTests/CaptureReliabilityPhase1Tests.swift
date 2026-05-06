@@ -8720,6 +8720,89 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertTrue(notationDocument.faderEvents.isEmpty, "faderEvents must stay empty when no fader mapping exists")
     }
 
+    func testUnmappedMIDIDoesNotCreateDerivedFaderEvents() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0,
+                takeRelativeTime: 0.10,
+                deviceName: "MixEmergency",
+                channel: 0,
+                controller: 7,
+                value: 0,
+                normalizedValue: 0.0,
+                mappedControl: nil
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.1,
+                takeRelativeTime: 0.18,
+                deviceName: "MixEmergency",
+                channel: 0,
+                controller: 7,
+                value: 127,
+                normalizedValue: 1.0,
+                mappedControl: nil
+            )
+        ]
+
+        XCTAssertTrue(CaptureCore.deriveDetectedNotationFaderEvents(from: events).isEmpty)
+    }
+
+    func testMappedCrossfaderMIDICreatesCutFaderEvent() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0,
+                takeRelativeTime: 0.10,
+                deviceName: "MixEmergency",
+                channel: 0,
+                controller: 7,
+                value: 5,
+                normalizedValue: 0.04,
+                mappedControl: "crossfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.1,
+                takeRelativeTime: 0.18,
+                deviceName: "MixEmergency",
+                channel: 0,
+                controller: 7,
+                value: 120,
+                normalizedValue: 0.94,
+                mappedControl: "crossfader"
+            )
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .cut)
+        XCTAssertEqual(derived.first?.control, "crossfader")
+        XCTAssertEqual(derived.first?.source, "midi")
+    }
+
+    func testQuickCrossfaderReversalCreatesPulseEvent() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "MixEmergency", channel: 0, controller: 7, value: 0, normalizedValue: 0.0, mappedControl: "crossfader"),
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.1, takeRelativeTime: 0.16, deviceName: "MixEmergency", channel: 0, controller: 7, value: 127, normalizedValue: 1.0, mappedControl: "crossfader"),
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.2, takeRelativeTime: 0.23, deviceName: "MixEmergency", channel: 0, controller: 7, value: 0, normalizedValue: 0.0, mappedControl: "crossfader")
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .pulse)
+    }
+
+    func testRepeatedCrossfaderPulsesCanCreateTransformPulseEvent() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "MixEmergency", channel: 0, controller: 7, value: 0, normalizedValue: 0.0, mappedControl: "crossfader"),
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.1, takeRelativeTime: 0.16, deviceName: "MixEmergency", channel: 0, controller: 7, value: 127, normalizedValue: 1.0, mappedControl: "crossfader"),
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.2, takeRelativeTime: 0.22, deviceName: "MixEmergency", channel: 0, controller: 7, value: 0, normalizedValue: 0.0, mappedControl: "crossfader"),
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1000.3, takeRelativeTime: 0.28, deviceName: "MixEmergency", channel: 0, controller: 7, value: 127, normalizedValue: 1.0, mappedControl: "crossfader")
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .transformPulse)
+    }
+
     func testDetectedNotationJSONIncludesMixerMidiEventsArray() throws {
         let root = try makeTemporaryDirectory()
         var package = try makeCanonicalPackage(rootURL: root)
@@ -8814,7 +8897,38 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(notationDocument.mixerMidiEvents.count, 1)
         XCTAssertEqual(exported.mappedControl, "crossfader")
         XCTAssertEqual(exported.normalizedValue, 1.0, accuracy: 0.001)
-        XCTAssertTrue(notationDocument.faderEvents.isEmpty)
+        XCTAssertTrue(notationDocument.faderEvents.isEmpty, "A single mapped MIDI event must not fake a fader event")
+    }
+
+    func testMappedCrossfaderMIDIRoundTripsExportWithFaderEvents() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+
+        let midiEvents = [
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1002.0, takeRelativeTime: 0.10, deviceName: "IAC Driver Bus 1", channel: 0, controller: 7, value: 0, normalizedValue: 0.0, mappedControl: "crossfader"),
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1002.1, takeRelativeTime: 0.18, deviceName: "IAC Driver Bus 1", channel: 0, controller: 7, value: 127, normalizedValue: 1.0, mappedControl: "crossfader")
+        ]
+        let snapshot = makeDetectedNotationSnapshot().withMixerMidiEvents(midiEvents)
+        sidecar = sidecar.withDetectedNotation(snapshot)
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let notationDocument = try JSONDecoder().decode(SessionExportNotationDocument.self, from: data)
+
+        XCTAssertEqual(notationDocument.mixerMidiEvents.count, 2)
+        XCTAssertEqual(notationDocument.faderEvents.count, 1)
+        XCTAssertEqual(notationDocument.faderEvents.first?.eventKind, "cut")
+        XCTAssertEqual(notationDocument.faderEvents.first?.control, "crossfader")
+        XCTAssertEqual(notationDocument.faderEvents.first?.source, "midi")
+        XCTAssertTrue(notationDocument.detectionSources.contains("midi"))
     }
 
     func testMIDILearnSourceCodePresence() throws {

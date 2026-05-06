@@ -520,6 +520,63 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assert_report_contains("- 110 BPM: 1 valid take(s), 1 renamed take(s)")
         self.assert_report_contains("70 BPM take 01: notationSource is unavailable.")
 
+    def test_validate_accepts_empty_fader_events(self) -> None:
+        self.create_session()
+        self.stage_raw_media()
+        self.install_take_log_fixture("happy_path_take_log.csv")
+        self.run_script("rename_files.py", self.session_dir)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir)
+        self.assertEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: PASS")
+
+    def test_validate_accepts_midi_fader_events_when_present(self) -> None:
+        self.create_session()
+        self.stage_raw_media()
+        self.install_take_log_fixture("happy_path_take_log.csv")
+        self.run_script("rename_files.py", self.session_dir)
+
+        notation_path = self.session_dir / "notation" / "take-001_detected_notation.json"
+        payload = json.loads(notation_path.read_text(encoding="utf-8"))
+        payload["faderEvents"] = [
+            {
+                "startTime": 0.10,
+                "endTime": 0.18,
+                "eventKind": "cut",
+                "control": "crossfader",
+                "fromValue": 0.0,
+                "toValue": 1.0,
+                "source": "midi",
+                "confidence": 0.89,
+            }
+        ]
+        payload["mixerMidiEvents"] = [
+            {
+                "takeRelativeTime": 0.10,
+                "deviceName": "IAC Driver Bus 1",
+                "channel": 0,
+                "controller": 7,
+                "value": 0,
+                "normalizedValue": 0.0,
+                "mappedControl": "crossfader",
+            },
+            {
+                "takeRelativeTime": 0.18,
+                "deviceName": "IAC Driver Bus 1",
+                "channel": 0,
+                "controller": 7,
+                "value": 127,
+                "normalizedValue": 1.0,
+                "mappedControl": "crossfader",
+            },
+        ]
+        payload["detectionSources"] = ["midi"]
+        notation_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        validate_result = self.run_script("validate_session.py", self.session_dir)
+        self.assertEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: PASS")
+
     def test_rename_fixture_fails_closed_on_blank_boolean(self) -> None:
         self.create_session()
         self.stage_raw_media()
