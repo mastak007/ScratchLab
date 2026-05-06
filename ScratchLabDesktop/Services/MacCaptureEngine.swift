@@ -13,6 +13,7 @@ import ImageIO
 
 private enum ScratchLabDesktopDefaultsKey {
     static let selectedAudioDeviceUniqueID = "scratchlab.mac.selectedAudioDeviceUniqueID"
+    static let selectedAudioDeviceWasExplicit = "scratchlab.mac.selectedAudioDeviceWasExplicit"
     static let selectedVideoDeviceUniqueID = "scratchlab.mac.selectedVideoDeviceUniqueID"
     static let calibrationLocked = "scratchlab.mac.calibrationLocked"
     static let practiceViewEnabled = "scratchlab.mac.practiceViewEnabled"
@@ -27,6 +28,26 @@ private enum ScratchLabDesktopDefaultsKey {
 }
 
 final class MacCaptureEngine: NSObject, ObservableObject {
+    struct AudioInputDeviceChoice: Equatable {
+        let uniqueID: String
+        let name: String
+    }
+
+    enum AudioSelectionPriority: Equatable {
+        case exactSeratoVirtualAudio
+        case seratoLike
+        case explicitUserSelection
+        case previousSelection
+        case systemDefault
+        case firstAvailable
+        case noneAvailable
+    }
+
+    struct AudioSelectionDecision: Equatable {
+        let device: AudioInputDeviceChoice?
+        let priority: AudioSelectionPriority
+    }
+
     private enum DirectCaptureRoute {
         case nativeSeratoVirtualAudio
         case privateProcessTap
@@ -809,6 +830,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
+            switch pendingAudioSelectionOrigin {
+            case .explicitUserChoice:
+                hasExplicitUserAudioSelection = !selectedAudioDeviceUniqueID.isEmpty
+            case .automatic:
+                if selectedAudioDeviceUniqueID.isEmpty {
+                    hasExplicitUserAudioSelection = false
+                }
+            }
+            UserDefaults.standard.set(hasExplicitUserAudioSelection, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceWasExplicit)
             syncDirectCaptureStatus(using: availableAudioDevices)
             resetAudioSignalLevel()
             guard oldValue != selectedAudioDeviceUniqueID, isRunning else { return }
@@ -930,6 +960,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     static let unavailableAudioPercent = "0%"
 
+    var selectedAudioDeviceStatusLine: String {
+        let selectedName = isSelectedAudioInputAvailable ? selectedAudioDeviceName : "No input found"
+        return "\(audioReadinessText) — \(selectedName)\(isSelectedAudioInputAvailable ? " — \(audioSignalStatusText)" : "")"
+    }
+
+    var hasSeratoCaptureAudioDeviceAvailable: Bool {
+        preferredSeratoAudioDevice(from: availableAudioDevices.map(Self.audioChoice(from:))) != nil
+    }
+
+    var shouldOfferUseSeratoAudio: Bool {
+        guard let seratoDevice = preferredSeratoAudioDevice(from: availableAudioDevices.map(Self.audioChoice(from:))) else {
+            return false
+        }
+        return seratoDevice.uniqueID != selectedAudioDeviceUniqueID
+    }
+
     var selectedAudioDeviceName: String {
         let selectedName = availableAudioDevices
             .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })?
@@ -968,6 +1014,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     var audioReadinessText: String {
+        guard !availableAudioDevices.isEmpty else { return "Audio Missing" }
         guard !selectedAudioDeviceUniqueID.isEmpty else { return "Choose input" }
         guard isSelectedAudioInputAvailable else { return "Audio Missing" }
         return "Audio Ready"
@@ -1348,6 +1395,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
     private var lastReceivedAudioSampleTime: CFTimeInterval = 0
     private var audioSignalDecayTimer: DispatchSourceTimer?
+    private enum AudioSelectionOrigin {
+        case automatic
+        case explicitUserChoice
+    }
+
+    private var pendingAudioSelectionOrigin: AudioSelectionOrigin = .automatic
+    private var hasExplicitUserAudioSelection = UserDefaults.standard.bool(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceWasExplicit)
     private static let routineSidecarDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -1614,6 +1668,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         directCaptureStatus = "\(seratoDirectCaptureDeviceName) is selected and feeding the analyzer."
     }
 
+    func selectAudioInput(uniqueID: String) {
+        setSelectedAudioDeviceUniqueID(uniqueID, origin: .explicitUserChoice)
+    }
+
+    func autoSelectCaptureAudioDeviceIfNeeded() {
+        refreshAudioInputSelection(forceReselect: false)
+    }
+
+    func usePreferredSeratoAudio() {
+        guard let device = preferredSeratoAudioDevice(from: availableAudioDevices.map(Self.audioChoice(from:))) else {
+            refreshDevices()
+            return
+        }
+        setSelectedAudioDeviceUniqueID(device.uniqueID, origin: .explicitUserChoice)
+    }
+
     func toggleRoutineRecording() {
         isRoutineRecording ? stopRoutineRecording() : startRoutineRecording()
     }
@@ -1768,9 +1838,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         availableVideoDevices = videoDevices
         availableMIDISourceNames = discoverMIDISourceNames()
 
-        if !audioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceUniqueID }) {
-            selectedAudioDeviceUniqueID = audioDevices.first?.uniqueID ?? ""
-        }
+        refreshAudioInputSelection(using: audioDevices)
 
         if !videoDevices.contains(where: { $0.uniqueID == selectedVideoDeviceUniqueID }) {
             selectedVideoDeviceUniqueID = videoDevices.first?.uniqueID ?? ""
@@ -1957,6 +2025,151 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private func isSeratoVirtualAudioDevice(_ device: AVCaptureDevice) -> Bool {
         device.localizedName.localizedCaseInsensitiveContains(seratoVirtualAudioDeviceName)
+    }
+
+    private func setSelectedAudioDeviceUniqueID(_ uniqueID: String, origin: AudioSelectionOrigin) {
+        pendingAudioSelectionOrigin = origin
+        selectedAudioDeviceUniqueID = uniqueID
+        pendingAudioSelectionOrigin = .automatic
+    }
+
+    private func refreshAudioInputSelection(
+        using audioDevices: [AVCaptureDevice]? = nil,
+        forceReselect: Bool = false
+    ) {
+        let resolvedAudioDevices = audioDevices ?? availableAudioDevices
+        let availableChoices = resolvedAudioDevices.map(Self.audioChoice(from:))
+        let currentSelection = selectedAudioDeviceUniqueID.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !forceReselect,
+           hasExplicitUserAudioSelection,
+           !currentSelection.isEmpty,
+           availableChoices.contains(where: { $0.uniqueID == currentSelection }) {
+            return
+        }
+
+        let decision = Self.preferredCaptureAudioDevice(
+            from: availableChoices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
+            systemDefaultUniqueID: defaultSystemAudioInputUniqueID()
+        )
+
+        guard forceReselect || currentSelection != decision.device?.uniqueID else {
+            if decision.device == nil, !currentSelection.isEmpty {
+                setSelectedAudioDeviceUniqueID("", origin: .automatic)
+            }
+            return
+        }
+
+        let needsAutomaticSelection: Bool
+        if let selectedDeviceID = decision.device?.uniqueID {
+            needsAutomaticSelection = selectedDeviceID != currentSelection || !hasExplicitUserAudioSelection
+        } else {
+            needsAutomaticSelection = !currentSelection.isEmpty
+        }
+
+        guard needsAutomaticSelection else { return }
+        setSelectedAudioDeviceUniqueID(decision.device?.uniqueID ?? "", origin: .automatic)
+    }
+
+    private func defaultSystemAudioInputUniqueID() -> String? {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioObjectID(0)
+        var propertySize = UInt32(MemoryLayout<AudioObjectID>.size)
+        let deviceStatus = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &deviceID
+        )
+        guard deviceStatus == noErr, deviceID != AudioObjectID(kAudioObjectUnknown) else {
+            return nil
+        }
+
+        var uidAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uidSize = UInt32(MemoryLayout<CFString?>.size)
+        var uid: CFString?
+        let uidStatus = AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
+        guard uidStatus == noErr else {
+            return nil
+        }
+
+        return uid as String?
+    }
+
+    private static func audioChoice(from device: AVCaptureDevice) -> AudioInputDeviceChoice {
+        AudioInputDeviceChoice(uniqueID: device.uniqueID, name: device.localizedName)
+    }
+
+    private static func isExactSeratoVirtualAudioDeviceName(_ name: String) -> Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Serato Virtual Audio") == .orderedSame
+    }
+
+    private static func isSeratoLikeDeviceName(_ name: String) -> Bool {
+        name.localizedCaseInsensitiveContains("Serato")
+    }
+
+    private func preferredSeratoAudioDevice(from devices: [AudioInputDeviceChoice]) -> AudioInputDeviceChoice? {
+        if let exactSerato = devices.first(where: { Self.isExactSeratoVirtualAudioDeviceName($0.name) }) {
+            return exactSerato
+        }
+        return devices.first(where: { Self.isSeratoLikeDeviceName($0.name) })
+    }
+
+    static func preferredCaptureAudioDevice(
+        from devices: [AudioInputDeviceChoice],
+        explicitSelectionUniqueID: String?,
+        previousSelectionUniqueID: String?,
+        systemDefaultUniqueID: String?
+    ) -> AudioSelectionDecision {
+        guard !devices.isEmpty else {
+            return AudioSelectionDecision(device: nil, priority: .noneAvailable)
+        }
+
+        let normalizedExplicitID = explicitSelectionUniqueID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedExplicitID,
+           !normalizedExplicitID.isEmpty,
+           let explicitDevice = devices.first(where: { $0.uniqueID == normalizedExplicitID }) {
+            return AudioSelectionDecision(device: explicitDevice, priority: .explicitUserSelection)
+        }
+
+        let exactSerato = devices.first(where: { isExactSeratoVirtualAudioDeviceName($0.name) })
+        if let exactSerato {
+            return AudioSelectionDecision(device: exactSerato, priority: .exactSeratoVirtualAudio)
+        }
+
+        let seratoLike = devices.first(where: { isSeratoLikeDeviceName($0.name) })
+        if let seratoLike {
+            return AudioSelectionDecision(device: seratoLike, priority: .seratoLike)
+        }
+
+        let normalizedPreviousID = previousSelectionUniqueID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedPreviousID,
+           !normalizedPreviousID.isEmpty,
+           let previousDevice = devices.first(where: { $0.uniqueID == normalizedPreviousID }) {
+            return AudioSelectionDecision(device: previousDevice, priority: .previousSelection)
+        }
+
+        let normalizedDefaultID = systemDefaultUniqueID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedDefaultID,
+           !normalizedDefaultID.isEmpty,
+           let defaultDevice = devices.first(where: { $0.uniqueID == normalizedDefaultID }) {
+            return AudioSelectionDecision(device: defaultDevice, priority: .systemDefault)
+        }
+
+        return AudioSelectionDecision(device: devices.first, priority: .firstAvailable)
     }
 
     private func syncDirectCaptureStatus(using audioDevices: [AVCaptureDevice]) {

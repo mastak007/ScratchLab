@@ -385,6 +385,7 @@ struct MacAnalyzerView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: routineSessionStore.alertState?.id)
         .onAppear {
+            captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
             if liveInputEnabled {
                 startMacLiveInput()
             } else {
@@ -426,6 +427,10 @@ struct MacAnalyzerView: View {
             captureEngine.preferMacCameraForDesktopDeck()
         }
         .onChange(of: workspaceTabRaw) { _, newValue in
+            if WorkspaceTab.resolved(from: newValue) == .capture {
+                captureEngine.refreshDevices()
+                captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+            }
             guard WorkspaceTab.resolved(from: newValue) != .practice else { return }
             babyScratchDemo.stop()
             demoModeController.stopDemo()
@@ -433,6 +438,11 @@ struct MacAnalyzerView: View {
             cancelTestLabPracticeSession()
         }
         .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active, workspaceTab == .capture {
+                captureEngine.refreshDevices()
+                captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+                return
+            }
             guard newPhase != .active else { return }
             babyScratchDemo.stop()
             demoModeController.stopDemo()
@@ -886,6 +896,13 @@ struct MacAnalyzerView: View {
     private var selectedAudioDevice: AVCaptureDevice? {
         captureEngine.availableAudioDevices
             .first(where: { $0.uniqueID == captureEngine.selectedAudioDeviceUniqueID })
+    }
+
+    private var selectedAudioDeviceBinding: Binding<String> {
+        Binding(
+            get: { captureEngine.selectedAudioDeviceUniqueID },
+            set: { captureEngine.selectAudioInput(uniqueID: $0) }
+        )
     }
 
     private var selectedAudioDeviceName: String {
@@ -2019,6 +2036,37 @@ struct MacAnalyzerView: View {
                     .controlSize(.large)
                     .disabled(captureEngine.isRoutineRecording)
             } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Audio Input")
+                        .font(.system(size: 13, weight: .semibold))
+
+                    Picker("Source", selection: selectedAudioDeviceBinding) {
+                        if captureEngine.availableAudioDevices.isEmpty {
+                            Text("No audio inputs found").tag("")
+                        } else {
+                            ForEach(captureEngine.availableAudioDevices, id: \.uniqueID) { device in
+                                Text(device.localizedName).tag(device.uniqueID)
+                            }
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
+
+                    Text(captureEngine.selectedAudioDeviceStatusLine)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if captureEngine.shouldOfferUseSeratoAudio {
+                        Button("Use Serato Audio") {
+                            captureEngine.usePreferredSeratoAudio()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
+                    }
+                }
+
                 TextField("Session name", text: routinePerformerBinding)
                     .textFieldStyle(.roundedBorder)
                     .disabled(captureEngine.isRoutineRecording)
@@ -2113,7 +2161,7 @@ struct MacAnalyzerView: View {
                 captureInputStatusTile(
                     title: "Audio",
                     value: captureEngine.audioReadinessText,
-                    detail: "\(captureEngine.selectedAudioDeviceName) — \(captureEngine.audioSignalStatusText)",
+                    detail: captureEngine.selectedAudioDeviceStatusLine,
                     systemImage: selectedAudioDevice == nil ? "waveform.slash" : "waveform",
                     color: selectedAudioDevice == nil ? .secondary : .green
                 )
@@ -3497,7 +3545,7 @@ struct MacAnalyzerView: View {
             Text("Audio Input")
                 .font(.headline)
 
-            Picker("Source", selection: $captureEngine.selectedAudioDeviceUniqueID) {
+            Picker("Source", selection: selectedAudioDeviceBinding) {
                 if captureEngine.availableAudioDevices.isEmpty {
                     Text("No audio inputs found").tag("")
                 } else {
@@ -3521,7 +3569,7 @@ struct MacAnalyzerView: View {
                 ProgressView(value: Double(captureEngine.currentAudioSignalLevel))
                     .tint(captureEngine.audioMeterColor)
 
-                Text("\(captureEngine.audioReadinessText) — \(captureEngine.audioSignalStatusText)")
+                Text(captureEngine.selectedAudioDeviceStatusLine)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
 
@@ -3618,7 +3666,7 @@ struct MacAnalyzerView: View {
             Text("Audio Input")
                 .font(.headline)
 
-            Picker("Source", selection: $captureEngine.selectedAudioDeviceUniqueID) {
+            Picker("Source", selection: selectedAudioDeviceBinding) {
                 if captureEngine.availableAudioDevices.isEmpty {
                     Text("No audio inputs found").tag("")
                 } else {
@@ -3645,7 +3693,7 @@ struct MacAnalyzerView: View {
                 ProgressView(value: Double(captureEngine.currentAudioSignalLevel))
                     .tint(captureEngine.audioMeterColor)
 
-                Text("\(captureEngine.audioReadinessText) — \(captureEngine.audioSignalStatusText)")
+                Text(captureEngine.selectedAudioDeviceStatusLine)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
 

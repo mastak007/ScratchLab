@@ -1753,7 +1753,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.selectedAudioDeviceUniqueID = ""
 
-        XCTAssertEqual(engine.practiceAudioStatusText, "Choose input")
+        XCTAssertEqual(engine.practiceAudioStatusText, "Audio Missing")
 
         engine.selectedAudioDeviceUniqueID = "missing-device"
         XCTAssertEqual(engine.practiceAudioStatusText, "Audio Missing")
@@ -1765,7 +1765,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         engine.availableAudioDevices = []
         engine.selectedAudioDeviceUniqueID = ""
 
-        XCTAssertEqual(engine.audioReadinessText, "Choose input")
+        XCTAssertEqual(engine.audioReadinessText, "Audio Missing")
         XCTAssertEqual(engine.audioSignalStatusText, "No input")
 
         let device = AVCaptureDevice.default(for: .audio)
@@ -1775,6 +1775,135 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             XCTAssertEqual(engine.audioReadinessText, "Audio Ready")
             XCTAssertEqual(engine.audioSignalStatusText, "No signal")
         }
+    }
+
+    func testPreferredCaptureAudioDeviceSelectsExactSeratoVirtualAudioOverMicrophone() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "mic"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "serato")
+        XCTAssertEqual(decision.priority, .exactSeratoVirtualAudio)
+    }
+
+    func testPreferredCaptureAudioDeviceSelectsSeratoLikeDeviceOverMicrophone() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "MacBook Pro Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "seratoAlt", name: "Serato DJ Pro Output")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "mic"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "seratoAlt")
+        XCTAssertEqual(decision.priority, .seratoLike)
+    }
+
+    func testPreferredCaptureAudioDevicePreservesExplicitUserSelectionWhenStillAvailable() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: "mic",
+            previousSelectionUniqueID: "mic",
+            systemDefaultUniqueID: "mic"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "mic")
+        XCTAssertEqual(decision.priority, .explicitUserSelection)
+    }
+
+    func testPreferredCaptureAudioDeviceFallsBackToSeratoWhenPreviousSelectionIsMissing() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "missing",
+            systemDefaultUniqueID: "mic"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "serato")
+        XCTAssertEqual(decision.priority, .exactSeratoVirtualAudio)
+    }
+
+    func testPreferredCaptureAudioDeviceFallsBackToSystemDefaultWhenSeratoIsMissing() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "first", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "default", name: "USB Mixer Record")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "default"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "default")
+        XCTAssertEqual(decision.priority, .systemDefault)
+    }
+
+    func testPreferredCaptureAudioDeviceFallsBackToFirstAvailableWhenNoHigherPriorityMatchExists() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "first", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "second", name: "USB Audio Codec")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "missing"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "first")
+        XCTAssertEqual(decision.priority, .firstAvailable)
+    }
+
+    func testCaptureInputStatusUsesSelectedAudioDeviceStatusLine() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("detail: captureEngine.selectedAudioDeviceStatusLine"))
+        XCTAssertTrue(source.contains("Text(captureEngine.selectedAudioDeviceStatusLine)"))
+        XCTAssertTrue(source.contains("Button(\"Use Serato Audio\")"))
+    }
+
+    func testRoutineRecordingMetadataUsesSelectedAudioDeviceNameAndUniqueID() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("let audioDeviceName = audioDevices.first(where: { $0.uniqueID == selectedAudioID })?.localizedName"))
+        XCTAssertTrue(source.contains("audioDeviceUniqueID: selectedAudioID"))
+        XCTAssertTrue(source.contains("audioDeviceName: audioDeviceName"))
+    }
+
+    func testCaptureTabAutoSelectsAudioWithoutPractice() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("captureEngine.autoSelectCaptureAudioDeviceIfNeeded()"))
+        XCTAssertTrue(source.contains("WorkspaceTab.resolved(from: newValue) == .capture"))
+        XCTAssertTrue(source.contains("captureEngine.refreshDevices()"))
     }
 
     @MainActor
