@@ -4333,6 +4333,162 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(notationDocument.notes, "Detected audio notation without confirmed movement direction")
     }
 
+    func testNotationNormalizerDropsNearZeroMovementNoise() {
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+        let noisyEvent = makeMovementEvent(
+            startTime: 0.10,
+            endTime: 0.42,
+            startPosition: 0.501,
+            endPosition: 0.502,
+            direction: "forward",
+            confidence: 0.72
+        )
+
+        let normalized = normalizer.normalize(events: [noisyEvent], audioEvents: [])
+
+        XCTAssertTrue(normalized.isEmpty)
+    }
+
+    func testNotationNormalizerMergesAdjacentSameDirectionSegments() {
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+        let first = makeMovementEvent(
+            startTime: 0.10,
+            endTime: 0.20,
+            startPosition: 0.05,
+            endPosition: 0.28,
+            direction: "forward",
+            confidence: 0.70
+        )
+        let second = makeMovementEvent(
+            startTime: 0.24,
+            endTime: 0.36,
+            startPosition: 0.28,
+            endPosition: 0.72,
+            direction: "forward",
+            confidence: 0.82
+        )
+
+        let normalized = normalizer.normalize(events: [first, second], audioEvents: [])
+
+        XCTAssertEqual(normalized.count, 1)
+        XCTAssertEqual(normalized.first?.direction, "forward")
+        XCTAssertEqual(try XCTUnwrap(normalized.first?.startTime), 0.10, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(normalized.first?.endTime), 0.36, accuracy: 0.001)
+    }
+
+    func testNotationNormalizerClassifiesForwardAndBackwardStrokeSpeeds() {
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+
+        XCTAssertEqual(
+            normalizer.classifyMovementKind(direction: "forward", duration: 0.09, delta: 0.48, speed: 5.33),
+            .fastPush
+        )
+        XCTAssertEqual(
+            normalizer.classifyMovementKind(direction: "forward", duration: 0.20, delta: 0.34, speed: 1.7),
+            .normalPush
+        )
+        XCTAssertEqual(
+            normalizer.classifyMovementKind(direction: "backward", duration: 0.42, delta: 0.20, speed: 0.48),
+            .slowPullDrag
+        )
+        XCTAssertEqual(
+            normalizer.classifyMovementKind(direction: "backward", duration: 0.10, delta: 0.40, speed: 4.0),
+            .fastPull
+        )
+    }
+
+    func testNotationFusionFallsBackToPartialWhenMotionIsOnlyJitter() {
+        let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
+        let audioSnapshot = ScratchAudioNotationSnapshot(
+            audioEvents: [
+                makeAudioNotationEventCandidate(
+                    startTime: 0.12,
+                    endTime: 0.24,
+                    peakLevel: 0.35,
+                    rmsLevel: 0.16,
+                    confidence: 0.68,
+                    eventKind: .scratchBurst
+                )
+            ],
+            confidence: 0.68
+        )
+        let jitterMotion = [
+            makeMovementEvent(
+                startTime: 0.11,
+                endTime: 0.23,
+                startPosition: 0.500,
+                endPosition: 0.503,
+                direction: "forward",
+                confidence: 0.81
+            )
+        ]
+
+        let snapshot = fusion.snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: jitterMotion,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.57
+        )
+
+        XCTAssertEqual(snapshot.notationSource, "partial")
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertEqual(snapshot.audioEvents.count, 1)
+        XCTAssertEqual(try XCTUnwrap(snapshot.notationConfidence), 0.68, accuracy: 0.001)
+    }
+
+    func testNotationFusionUsesFilteredMovementConfidenceForDetectedNotation() {
+        let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
+        let audioSnapshot = ScratchAudioNotationSnapshot(
+            audioEvents: [
+                makeAudioNotationEventCandidate(
+                    startTime: 0.10,
+                    endTime: 0.22,
+                    peakLevel: 0.42,
+                    rmsLevel: 0.19,
+                    confidence: 0.70,
+                    eventKind: .scratchBurst
+                )
+            ],
+            confidence: 0.70
+        )
+        let motionEvents = [
+            makeMovementEvent(
+                startTime: 0.09,
+                endTime: 0.23,
+                startPosition: 0.08,
+                endPosition: 0.68,
+                direction: "forward",
+                confidence: 0.80
+            ),
+            makeMovementEvent(
+                startTime: 0.28,
+                endTime: 0.45,
+                startPosition: 0.500,
+                endPosition: 0.501,
+                direction: "backward",
+                confidence: 0.75
+            )
+        ]
+
+        let snapshot = fusion.snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: motionEvents,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.57
+        )
+
+        XCTAssertEqual(snapshot.notationSource, "detected")
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1)
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.movementKind, .fastPush)
+        XCTAssertEqual(
+            try XCTUnwrap(snapshot.notationConfidence),
+            try XCTUnwrap(snapshot.recordMovementEvents.first?.confidence),
+            accuracy: 0.001
+        )
+    }
+
     func testCanonicalExportManifestParity() throws {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root)
@@ -7862,6 +8018,48 @@ extension CaptureReliabilityPhase1CoreTests {
             faderEvents: [],
             mixerMidiEvents: [],
             capturedAt: Date(timeIntervalSince1970: 1_715_000_010)
+        )
+    }
+
+    func makeMovementEvent(
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        startPosition: Double,
+        endPosition: Double,
+        direction: String,
+        confidence: Double,
+        source: String = "detected"
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: startTime,
+            endTime: endTime,
+            startPosition: startPosition,
+            endPosition: endPosition,
+            direction: direction,
+            movementKind: .hold,
+            speed: 0,
+            confidence: confidence,
+            source: source
+        )
+    }
+
+    func makeAudioNotationEventCandidate(
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        peakLevel: Float,
+        rmsLevel: Float,
+        confidence: Double,
+        eventKind: ScratchAudioNotationEventKind
+    ) -> ScratchAudioNotationEventCandidate {
+        ScratchAudioNotationEventCandidate(
+            startTime: startTime,
+            endTime: endTime,
+            duration: endTime - startTime,
+            peakLevel: peakLevel,
+            rmsLevel: rmsLevel,
+            confidence: confidence,
+            eventKind: eventKind,
+            source: "audio"
         )
     }
 

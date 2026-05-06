@@ -331,12 +331,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let resolvedEndPosition = endPosition
                 ?? Self.defaultEndPosition(for: activeMovement.direction)
             let distance = abs(resolvedEndPosition - resolvedStartPosition)
+            guard distance >= RoutineNotationEventNormalizer.minPositionDelta / 2 else { return }
             let speed = duration > 0 ? distance / duration : 0
-            let movementKind = Self.movementKind(
-                direction: activeMovement.direction,
-                duration: duration,
-                speed: speed
-            )
             let confidence = min(
                 1,
                 max(0, (activeMovement.startConfidence + endConfidence) / 2)
@@ -348,7 +344,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 startPosition: resolvedStartPosition,
                 endPosition: resolvedEndPosition,
                 direction: activeMovement.direction == .back ? "backward" : "forward",
-                movementKind: movementKind,
+                movementKind: .hold,
                 speed: speed,
                 confidence: confidence,
                 source: "detected"
@@ -376,24 +372,165 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         private static func defaultEndPosition(for direction: CXLDirection) -> Double {
             direction == .back ? 0 : 1
         }
+    }
 
-        private static func movementKind(
-            direction: CXLDirection,
+    struct RoutineNotationEventNormalizer {
+        static let minStrokeDuration: TimeInterval = 0.07
+        static let minPositionDelta: Double = 0.03
+        static let minSpeedForStroke: Double = 0.18
+        static let maxMergeGap: TimeInterval = 0.08
+        static let maxAudioAlignGap: TimeInterval = 0.09
+        static let fastStrokeDuration: TimeInterval = 0.13
+        static let fastStrokeSpeed: Double = 3.2
+        static let fastStrokeDelta: Double = 0.20
+        static let slowStrokeDuration: TimeInterval = 0.34
+        static let slowStrokeSpeed: Double = 0.9
+        static let slowStrokeDelta: Double = 0.12
+        static let unconfirmedConfidenceMultiplier: Double = 0.62
+        static let minConfidenceForStroke: Double = 0.12
+
+        func normalize(
+            events: [CaptureCore.DetectedNotationRecordMovementEvent],
+            audioEvents: [ScratchAudioNotationEventCandidate]
+        ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+            let burstAudioEvents = audioEvents.filter { event in
+                event.eventKind == .scratchBurst || event.eventKind == .possibleDrag
+            }
+            let mergedEvents = mergeAdjacentSameDirection(events.sorted(by: eventSort))
+            return mergedEvents.compactMap { event in
+                classify(event: event, audioEvents: burstAudioEvents)
+            }
+        }
+
+        func classify(
+            event: CaptureCore.DetectedNotationRecordMovementEvent,
+            audioEvents: [ScratchAudioNotationEventCandidate]
+        ) -> CaptureCore.DetectedNotationRecordMovementEvent? {
+            let duration = max(0, event.endTime - event.startTime)
+            guard duration > 0 else { return nil }
+
+            let delta = abs(event.endPosition - event.startPosition)
+            let speed = delta / max(duration, 0.001)
+            let overlapsAudio = overlapsAudioActivity(event: event, audioEvents: audioEvents)
+
+            guard duration >= Self.minStrokeDuration || overlapsAudio else { return nil }
+            guard delta >= Self.minPositionDelta else { return nil }
+            guard speed >= Self.minSpeedForStroke else { return nil }
+
+            var confidence = min(1, max(0, event.confidence))
+            if overlapsAudio {
+                confidence = min(1, confidence + 0.08)
+            } else {
+                confidence *= Self.unconfirmedConfidenceMultiplier
+            }
+            guard confidence >= Self.minConfidenceForStroke else { return nil }
+
+            let movementKind = classifyMovementKind(
+                direction: event.direction,
+                duration: duration,
+                delta: delta,
+                speed: speed
+            )
+            guard movementKind != .hold else { return nil }
+
+            return CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime,
+                endTime: event.endTime,
+                startPosition: event.startPosition,
+                endPosition: event.endPosition,
+                direction: event.direction,
+                movementKind: movementKind,
+                speed: speed,
+                confidence: confidence,
+                source: event.source
+            )
+        }
+
+        func classifyMovementKind(
+            direction: String,
             duration: TimeInterval,
+            delta: Double,
             speed: Double
         ) -> ScratchMovementKind {
-            let isBackward = direction == .back
-            if duration <= 0.11 || speed >= 5.5 {
+            guard delta >= Self.minPositionDelta, speed >= Self.minSpeedForStroke else {
+                return .hold
+            }
+
+            let isBackward = direction == "backward"
+            if duration <= Self.fastStrokeDuration,
+               delta >= Self.fastStrokeDelta,
+               speed >= Self.fastStrokeSpeed {
                 return isBackward ? .fastPull : .fastPush
             }
-            if duration >= 0.32 || speed <= 1.5 {
+            if duration >= Self.slowStrokeDuration,
+               delta >= Self.slowStrokeDelta,
+               speed <= Self.slowStrokeSpeed {
                 return isBackward ? .slowPullDrag : .slowDrag
             }
             return isBackward ? .normalPull : .normalPush
         }
+
+        private func mergeAdjacentSameDirection(
+            _ events: [CaptureCore.DetectedNotationRecordMovementEvent]
+        ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+            guard var active = events.first else { return [] }
+            var merged: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+
+            for event in events.dropFirst() {
+                let sameDirection = event.direction == active.direction
+                let gap = max(0, event.startTime - active.endTime)
+                if sameDirection && gap <= Self.maxMergeGap {
+                    active = CaptureCore.DetectedNotationRecordMovementEvent(
+                        startTime: active.startTime,
+                        endTime: max(active.endTime, event.endTime),
+                        startPosition: active.startPosition,
+                        endPosition: event.endPosition,
+                        direction: active.direction,
+                        movementKind: active.movementKind,
+                        speed: max(active.speed, event.speed),
+                        confidence: max(active.confidence, event.confidence),
+                        source: active.source == event.source ? active.source : "fused"
+                    )
+                } else {
+                    merged.append(active)
+                    active = event
+                }
+            }
+
+            merged.append(active)
+            return merged
+        }
+
+        private func overlapsAudioActivity(
+            event: CaptureCore.DetectedNotationRecordMovementEvent,
+            audioEvents: [ScratchAudioNotationEventCandidate]
+        ) -> Bool {
+            let midpoint = (event.startTime + event.endTime) / 2
+            return audioEvents.contains { audioEvent in
+                let overlapStart = max(event.startTime, audioEvent.startTime)
+                let overlapEnd = min(event.endTime, audioEvent.endTime)
+                if overlapEnd - overlapStart > 0 {
+                    return true
+                }
+                let audioMidpoint = (audioEvent.startTime + audioEvent.endTime) / 2
+                return abs(audioMidpoint - midpoint) <= Self.maxAudioAlignGap
+            }
+        }
+
+        private func eventSort(
+            _ lhs: CaptureCore.DetectedNotationRecordMovementEvent,
+            _ rhs: CaptureCore.DetectedNotationRecordMovementEvent
+        ) -> Bool {
+            if lhs.startTime == rhs.startTime {
+                return lhs.endTime < rhs.endTime
+            }
+            return lhs.startTime < rhs.startTime
+        }
     }
 
-    private struct RoutineNotationFusionEngine {
+    struct RoutineNotationFusionEngine {
+        private let normalizer = RoutineNotationEventNormalizer()
+
         func snapshot(
             audioSnapshot: ScratchAudioNotationSnapshot,
             motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
@@ -463,6 +600,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             audioEvents: [ScratchAudioNotationEventCandidate],
             motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+            let normalizedMotionEvents = normalizer.normalize(
+                events: motionEvents,
+                audioEvents: audioEvents
+            )
             var fused: [CaptureCore.DetectedNotationRecordMovementEvent] = []
             var usedMotionIndexes = Set<Int>()
             let burstAudioEvents = audioEvents.filter { event in
@@ -470,57 +611,54 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
 
             for audioEvent in burstAudioEvents {
-                if let match = bestMotionMatch(for: audioEvent, motionEvents: motionEvents, usedMotionIndexes: usedMotionIndexes) {
+                if let match = bestMotionMatch(
+                    for: audioEvent,
+                    motionEvents: normalizedMotionEvents,
+                    usedMotionIndexes: usedMotionIndexes
+                ) {
                     usedMotionIndexes.insert(match.index)
                     let motionEvent = match.event
-                    let duration = max(0.001, audioEvent.endTime - audioEvent.startTime)
-                    let distance = abs(motionEvent.endPosition - motionEvent.startPosition)
-                    let fusedSpeed = distance / duration
-                    let fusedConfidence = min(1, max(0, (motionEvent.confidence + audioEvent.confidence) / 2))
-                    let movementKind = movementKindForFusedEvent(
-                        direction: motionEvent.direction,
-                        audioEventKind: audioEvent.eventKind,
-                        duration: duration,
-                        speed: fusedSpeed
-                    )
-                    fused.append(
-                        CaptureCore.DetectedNotationRecordMovementEvent(
-                            startTime: audioEvent.startTime,
-                            endTime: audioEvent.endTime,
-                            startPosition: motionEvent.startPosition,
-                            endPosition: motionEvent.endPosition,
-                            direction: motionEvent.direction,
-                            movementKind: movementKind,
-                            speed: fusedSpeed,
-                            confidence: fusedConfidence,
-                            source: "fused"
-                        )
-                    )
-                }
-            }
-
-            for (index, motionEvent) in motionEvents.enumerated() where !usedMotionIndexes.contains(index) {
-                fused.append(
-                    CaptureCore.DetectedNotationRecordMovementEvent(
-                        startTime: motionEvent.startTime,
-                        endTime: motionEvent.endTime,
+                    let provisionalEvent = CaptureCore.DetectedNotationRecordMovementEvent(
+                        startTime: audioEvent.startTime,
+                        endTime: audioEvent.endTime,
                         startPosition: motionEvent.startPosition,
                         endPosition: motionEvent.endPosition,
                         direction: motionEvent.direction,
-                        movementKind: motionEvent.movementKind,
-                        speed: motionEvent.speed,
-                        confidence: min(1, max(0, motionEvent.confidence * 0.65)),
-                        source: "video"
+                        movementKind: .hold,
+                        speed: 0,
+                        confidence: min(1, max(0, (motionEvent.confidence + audioEvent.confidence) / 2)),
+                        source: "fused"
                     )
-                )
+                    if let classified = normalizer.classify(
+                        event: provisionalEvent,
+                        audioEvents: [audioEvent]
+                    ) {
+                        fused.append(classified)
+                    }
+                }
             }
 
-            return fused.sorted { lhs, rhs in
-                if lhs.startTime == rhs.startTime {
-                    return lhs.endTime < rhs.endTime
+            for (index, motionEvent) in normalizedMotionEvents.enumerated() where !usedMotionIndexes.contains(index) {
+                let downgradedEvent = CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: motionEvent.startTime,
+                    endTime: motionEvent.endTime,
+                    startPosition: motionEvent.startPosition,
+                    endPosition: motionEvent.endPosition,
+                    direction: motionEvent.direction,
+                    movementKind: motionEvent.movementKind,
+                    speed: motionEvent.speed,
+                    confidence: min(1, max(0, motionEvent.confidence * RoutineNotationEventNormalizer.unconfirmedConfidenceMultiplier)),
+                    source: "video"
+                )
+                if let classified = normalizer.classify(
+                    event: downgradedEvent,
+                    audioEvents: burstAudioEvents
+                ) {
+                    fused.append(classified)
                 }
-                return lhs.startTime < rhs.startTime
             }
+
+            return normalizer.normalize(events: fused, audioEvents: burstAudioEvents)
         }
 
         private func bestMotionMatch(
@@ -545,21 +683,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 .map { ($0.0, $0.1) }
         }
 
-        private func movementKindForFusedEvent(
-            direction: String,
-            audioEventKind: ScratchAudioNotationEventKind,
-            duration: TimeInterval,
-            speed: Double
-        ) -> ScratchMovementKind {
-            let isBackward = direction == "backward"
-            if audioEventKind == .possibleDrag || duration >= 0.32 || speed <= 1.5 {
-                return isBackward ? .slowPullDrag : .slowDrag
-            }
-            if duration <= 0.11 || speed >= 5.5 {
-                return isBackward ? .fastPull : .fastPush
-            }
-            return isBackward ? .normalPull : .normalPush
-        }
     }
 
     struct CompletedRoutineCaptureSnapshot: Equatable {
