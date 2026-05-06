@@ -369,6 +369,36 @@ def validate_manifest(
                     f"{take_label}: artifact probe metadata for {source} does not match the file on disk."
                 )
 
+        stem_availability = take.get("stem_availability")
+        if stem_availability is not None:
+            if not isinstance(stem_availability, dict):
+                errors.append(f"{take_label}: stem_availability must be an object.")
+            else:
+                valid_statuses = {"available", "unavailable"}
+                files_map = files if isinstance(files, dict) else {}
+                for stem in ("scratch_only", "beat_only", "scratch_with_beat"):
+                    status = stem_availability.get(stem)
+                    if status is None:
+                        continue
+                    if status not in valid_statuses:
+                        errors.append(
+                            f"{take_label}: stem_availability.{stem} has invalid value {status!r};"
+                            f" must be 'available' or 'unavailable'."
+                        )
+                        continue
+                    if status == "available":
+                        stem_path = files_map.get(stem)
+                        if not stem_path:
+                            errors.append(
+                                f"{take_label}: stem_availability marks {stem} as available"
+                                f" but files.{stem} is missing."
+                            )
+                        elif not (session_dir / str(stem_path)).exists():
+                            errors.append(
+                                f"{take_label}: stem_availability marks {stem} as available"
+                                f" but the file is missing on disk: {stem_path}"
+                            )
+
 
 def validate_take_log(
     take_rows: list[dict[str, str]],

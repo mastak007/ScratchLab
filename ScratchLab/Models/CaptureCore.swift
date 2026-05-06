@@ -1979,6 +1979,65 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
     }
 }
 
+extension ScratchNotation {
+    static func detectedPreview(
+        scratchID: String,
+        events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> ScratchNotation? {
+        let sortedEvents = events.sorted { lhs, rhs in
+            if lhs.startTime == rhs.startTime {
+                return lhs.endTime < rhs.endTime
+            }
+            return lhs.startTime < rhs.startTime
+        }
+        guard !sortedEvents.isEmpty else { return nil }
+
+        let strokes = sortedEvents.compactMap { event -> Stroke? in
+            guard event.endTime > event.startTime else { return nil }
+            let direction: ScratchNotationDirection
+            switch event.direction {
+            case "forward":
+                direction = .forward
+            case "backward":
+                direction = .backward
+            default:
+                return nil
+            }
+
+            let speedClassification: ScratchNotationSpeedClassification
+            switch event.movementKind {
+            case .fastPush, .fastPull:
+                speedClassification = .fast
+            case .slowDrag, .slowPullDrag:
+                speedClassification = .slow
+            default:
+                speedClassification = .medium
+            }
+
+            return Stroke(
+                startTime: event.startTime,
+                endTime: event.endTime,
+                direction: direction,
+                speedClassification: speedClassification,
+                faderState: .open
+            )
+        }
+        guard !strokes.isEmpty else { return nil }
+
+        let phraseEnd = max(strokes.last?.endTime ?? 0, sortedEvents.last?.endTime ?? 0)
+        return ScratchNotation(
+            version: 1,
+            scratchID: scratchID,
+            demoStart: 0,
+            demoEnd: phraseEnd,
+            phraseStart: 0,
+            phraseEnd: phraseEnd,
+            timingBasis: "detected_capture",
+            strokes: strokes
+        )
+    }
+}
+
 struct BabyScratchExtractedStrokeResource: Decodable, Equatable, Sendable {
     struct Stroke: Decodable, Equatable, Sendable {
         let startTime: TimeInterval
@@ -4453,6 +4512,34 @@ enum CaptureCore {
         let reviewedAt: Date
     }
 
+    struct DetectedNotationRecordMovementEvent: Codable, Equatable, Sendable {
+        let startTime: Double
+        let endTime: Double
+        let startPosition: Double
+        let endPosition: Double
+        let direction: String
+        let movementKind: ScratchMovementKind
+        let speed: Double
+        let confidence: Double
+        let source: String
+    }
+
+    struct DetectedNotationSnapshot: Codable, Equatable, Sendable {
+        let notationSource: String
+        let notationConfidence: Double?
+        let detectedLabel: String?
+        let labelSource: String
+        let labelConfidence: Double?
+        let recordMovementEvents: [DetectedNotationRecordMovementEvent]
+        let faderEvents: [String]
+        let mixerMidiEvents: [String]
+        let capturedAt: Date
+
+        var hasDetectedEvents: Bool {
+            !recordMovementEvents.isEmpty
+        }
+    }
+
     struct LocalRecordingSidecar: Codable, Equatable {
         static let currentSchemaVersion = "scratchlab_local_recording_sidecar_v1"
 
@@ -4492,6 +4579,7 @@ enum CaptureCore {
         var linkedMotionCaptureID: UUID?
         var linkedMotionFileName: String?
         var reviewDecision: CaptureReviewDecision?
+        var detectedNotation: DetectedNotationSnapshot?
         var auditTrail: [CaptureAuditEvent]
 
         init(
@@ -4524,6 +4612,7 @@ enum CaptureCore {
             linkedMotionCaptureID: UUID? = nil,
             linkedMotionFileName: String? = nil,
             reviewDecision: CaptureReviewDecision? = nil,
+            detectedNotation: DetectedNotationSnapshot? = nil,
             auditTrail: [CaptureAuditEvent] = []
         ) {
             self.schemaVersion = schemaVersion
@@ -4555,6 +4644,7 @@ enum CaptureCore {
             self.linkedMotionCaptureID = linkedMotionCaptureID
             self.linkedMotionFileName = linkedMotionFileName
             self.reviewDecision = reviewDecision
+            self.detectedNotation = detectedNotation
             self.auditTrail = auditTrail
         }
 
@@ -4698,6 +4788,24 @@ enum CaptureCore {
                     timestamp: reviewedAt,
                     category: "label_reviewed",
                     detail: "Review marked \(takeID) as \(label) with status \(status.rawValue)."
+                )
+            )
+            return updated
+        }
+
+        func withDetectedNotation(
+            _ detectedNotation: DetectedNotationSnapshot?,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.detectedNotation = detectedNotation
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: recordedAt,
+                    category: "notation_snapshot",
+                    detail: detectedNotation?.hasDetectedEvents == true
+                        ? "Captured detected notation snapshot with \(detectedNotation?.recordMovementEvents.count ?? 0) movement events."
+                        : "No detected notation events were available at save time."
                 )
             )
             return updated

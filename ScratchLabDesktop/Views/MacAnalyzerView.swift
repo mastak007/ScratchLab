@@ -957,7 +957,7 @@ struct MacAnalyzerView: View {
     }
 
     private var hasReviewNotationPreview: Bool {
-        hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)
+        currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false
     }
 
     private var lastRoutineTakeDisplayName: String {
@@ -1093,11 +1093,14 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewDetectedScratchLabel: String {
-        captureEngine.lastScratchDetection?.scratchName ?? "Unknown"
+        currentRoutineArtifactStatus?.detectedLabel
+            ?? captureEngine.lastScratchDetection?.scratchName
+            ?? "Unknown"
     }
 
     private var reviewConfidenceLabel: String {
-        guard let confidence = captureEngine.lastScratchDetection?.confidence else {
+        guard let confidence = currentRoutineArtifactStatus?.labelConfidence
+            ?? captureEngine.lastScratchDetection?.confidence else {
             return "Low"
         }
         if confidence >= 75 {
@@ -1132,6 +1135,30 @@ struct MacAnalyzerView: View {
 
     private var currentRoutineArtifactStatus: TakeArtifactStatusSnapshot? {
         captureEngine.routineTakeArtifactStatuses.last
+    }
+
+    private var currentRoutineNotationSnapshot: CaptureCore.DetectedNotationSnapshot? {
+        currentRoutineArtifactStatus?.detectedNotation ?? captureEngine.lastRoutineDetectedNotation
+    }
+
+    private var currentRoutineNotationPreview: ScratchNotation? {
+        guard let snapshot = currentRoutineNotationSnapshot,
+              snapshot.recordMovementEvents.isEmpty == false else {
+            return nil
+        }
+        let scratchID = routineSessionSetup.scratchType?.rawValue ?? "detected_capture"
+        return ScratchNotation.detectedPreview(
+            scratchID: scratchID,
+            events: snapshot.recordMovementEvents
+        )
+    }
+
+    private var reviewStrokeCount: Int {
+        currentRoutineNotationSnapshot?.recordMovementEvents.count ?? 0
+    }
+
+    private var reviewFaderEventCount: Int {
+        currentRoutineNotationSnapshot?.faderEvents.count ?? 0
     }
 
     private var reviewArtifactStatusSummary: String {
@@ -2255,19 +2282,19 @@ struct MacAnalyzerView: View {
                 }
 
                 HStack(spacing: 8) {
-                    testLabMetricBadge(title: "Detected scratch type", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
+                    testLabMetricBadge(title: "Detected scratch type", value: reviewDetectedScratchLabel, color: (currentRoutineArtifactStatus?.detectedLabel ?? captureEngine.lastScratchDetection?.scratchName) == nil ? .secondary : .green)
                     testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
                 }
 
                 HStack(spacing: 8) {
-                    testLabMetricBadge(title: "Stroke count", value: "\(captureEngine.scratchDetectionCount)", color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green)
-                    testLabMetricBadge(title: "Fader event count", value: "\(captureEngine.cxlEventCount)", color: captureEngine.cxlEventCount == 0 ? .secondary : .green)
+                    testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
+                    testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
                 }
 
                 if hasReviewNotationPreview {
                     miniNotationTimeline
                 } else {
-                    Label("Notation preview is only shown when this take has real captured stroke or event data.", systemImage: "waveform.path.ecg")
+                    Label("Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved.", systemImage: "waveform.path.ecg")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -4265,7 +4292,7 @@ struct MacAnalyzerView: View {
     }
 
     private var miniNotationTimeline: some View {
-        let notation = ScratchNotation.babyScratch
+        let notation = currentRoutineNotationPreview
         let hasTake = captureEngine.lastRoutineRecordingURL != nil
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -4273,14 +4300,21 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if hasTake {
+            if let notation {
                 ScratchNotationCanvasView(
                     notation: notation,
                     playbackTime: 0,
-                    loopDuration: notation?.timelineDuration ?? 2.1
+                    loopDuration: notation.timelineDuration
                 )
                 .frame(height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else if hasTake {
+                Text("Notation unavailable for this take.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
+                    .padding(10)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 Text("Record a routine first to see notation here.")
                     .font(.system(size: 12, weight: .medium))

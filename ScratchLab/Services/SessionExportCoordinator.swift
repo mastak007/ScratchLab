@@ -257,7 +257,8 @@ struct SessionExportTakeCaptureMetadata: Codable, Equatable, Sendable {
     let notationFile: String?
     let notationSource: String
     let labelSource: String
-    let confidence: Double?
+    let labelConfidence: Double?
+    let notationConfidence: Double?
 }
 
 struct SessionExportMetadataDocument: Codable, Equatable, Sendable {
@@ -297,7 +298,8 @@ struct SessionExportArtifactMetadata: Codable, Equatable, Sendable {
     let notationFile: String?
     let notationSource: String
     let labelSource: String
-    let confidence: Double?
+    let labelConfidence: Double?
+    let notationConfidence: Double?
 }
 
 struct SessionExportArtifactMetadataDocument: Codable, Equatable, Sendable {
@@ -326,6 +328,10 @@ struct SessionExportRecordMovementEvent: Codable, Equatable, Sendable {
     let direction: String?
     let startTime: Double?
     let endTime: Double?
+    let startPosition: Double?
+    let endPosition: Double?
+    let movementKind: String?
+    let speed: Double?
     let confidence: Double?
     let source: String?
 }
@@ -362,7 +368,8 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
     let captureMode: String
     let notationSource: SessionExportNotationSource
     let labelSource: SessionExportLabelSource
-    let confidence: Double?
+    let labelConfidence: Double?
+    let notationConfidence: Double?
     let recordMovementEvents: [SessionExportRecordMovementEvent]
     let faderEvents: [SessionExportFaderEvent]
     let mixerMidiEvents: [SessionExportMixerMidiEvent]
@@ -378,7 +385,8 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
         captureMode: String,
         notationSource: SessionExportNotationSource,
         labelSource: SessionExportLabelSource,
-        confidence: Double?,
+        labelConfidence: Double?,
+        notationConfidence: Double?,
         recordMovementEvents: [SessionExportRecordMovementEvent],
         faderEvents: [SessionExportFaderEvent],
         mixerMidiEvents: [SessionExportMixerMidiEvent],
@@ -394,7 +402,8 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
         self.captureMode = captureMode
         self.notationSource = notationSource
         self.labelSource = labelSource
-        self.confidence = confidence
+        self.labelConfidence = labelConfidence
+        self.notationConfidence = notationConfidence
         self.recordMovementEvents = recordMovementEvents
         self.faderEvents = faderEvents
         self.mixerMidiEvents = mixerMidiEvents
@@ -507,6 +516,9 @@ struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
     let videoBytes: Int64
     let finalizedAt: Date?
     let readiness: TakeArtifactReadiness
+    let detectedNotation: CaptureCore.DetectedNotationSnapshot?
+    let detectedLabel: String?
+    let labelConfidence: Double?
 
     var id: String { takeID }
 }
@@ -1516,7 +1528,8 @@ struct SessionArchiveBuilder: Sendable {
                 notationFile: notationExport.relativePath,
                 notationSource: notationExport.document.notationSource.rawValue,
                 labelSource: notationExport.document.labelSource.rawValue,
-                confidence: notationExport.document.confidence
+                labelConfidence: notationExport.document.labelConfidence,
+                notationConfidence: notationExport.document.notationConfidence
             )
         }
 
@@ -1944,7 +1957,8 @@ struct SessionArchiveBuilder: Sendable {
             notationFile: notationExport.relativePath,
             notationSource: notationExport.document.notationSource.rawValue,
             labelSource: notationExport.document.labelSource.rawValue,
-            confidence: notationExport.document.confidence
+            labelConfidence: notationExport.document.labelConfidence,
+            notationConfidence: notationExport.document.notationConfidence
         )
     }
 
@@ -1985,8 +1999,41 @@ struct SessionArchiveBuilder: Sendable {
         case .unknown:
             labelSource = .unknown
         case nil:
-            labelSource = .unknown
+            if sidecar.detectedNotation?.labelSource == SessionExportLabelSource.detected.rawValue {
+                labelSource = .detected
+            } else {
+                labelSource = .unknown
+            }
         }
+
+        let detectedNotation = sidecar.detectedNotation
+        let detectedMovementEvents = (detectedNotation?.recordMovementEvents ?? []).map {
+            SessionExportRecordMovementEvent(
+                direction: $0.direction,
+                startTime: $0.startTime,
+                endTime: $0.endTime,
+                startPosition: $0.startPosition,
+                endPosition: $0.endPosition,
+                movementKind: $0.movementKind.rawValue,
+                speed: $0.speed,
+                confidence: $0.confidence,
+                source: $0.source
+            )
+        }
+        let notationSource: SessionExportNotationSource = detectedMovementEvents.isEmpty ? .unavailable : .detected
+        let beatGrid = captureValues.bpm.map {
+            SessionExportNotationBeatGrid(
+                bpm: $0,
+                beatsPerBar: captureValues.beatsPerBar,
+                countInBeats: captureValues.countInBeats
+            )
+        }
+        let labelConfidence = reviewDecision?.confidence ?? detectedNotation?.labelConfidence
+        let notes = detectedMovementEvents.isEmpty
+            ? "No notation events detected"
+            : (take.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? take.note!
+                : "")
 
         let notationDocument = SessionExportNotationDocument(
             sessionID: sidecar.sessionID,
@@ -1995,14 +2042,15 @@ struct SessionArchiveBuilder: Sendable {
             scratchType: scratchType,
             bpm: captureValues.bpm,
             captureMode: captureValues.captureMode,
-            notationSource: .unavailable,
+            notationSource: notationSource,
             labelSource: labelSource,
-            confidence: reviewDecision?.confidence,
-            recordMovementEvents: [],
+            labelConfidence: labelConfidence,
+            notationConfidence: notationSource == .detected ? detectedNotation?.notationConfidence : nil,
+            recordMovementEvents: detectedMovementEvents,
             faderEvents: [],
             mixerMidiEvents: [],
-            beatGrid: nil,
-            notes: take.note ?? ""
+            beatGrid: beatGrid,
+            notes: notes
         )
         return ResolvedNotationExport(
             fileName: fileName,
@@ -2024,7 +2072,7 @@ struct SessionArchiveBuilder: Sendable {
             scratchTypeToken: scratchTypeToken,
             bpm: canonicalBPM,
             takeNumber: takeNumber,
-            source: "serato",
+            source: "scratch_only",
             fileExtension: audioExtension
         )
         let beatOnlyRelativePath: String?
@@ -2427,6 +2475,10 @@ struct SessionArchiveBuilder: Sendable {
             .appendingPathComponent(mediaURL.deletingPathExtension().lastPathComponent)
             .appendingPathExtension("wav")
         let bpm = SessionExportMetadataResolver.validatedSessionConfig(from: sidecar)?.bpm
+        let detectedLabel = sidecar.reviewDecision?.detectedLabel
+            ?? sidecar.detectedNotation?.detectedLabel
+            ?? sidecar.reviewDecision?.label
+        let labelConfidence = sidecar.reviewDecision?.confidence ?? sidecar.detectedNotation?.labelConfidence
 
         if sidecar.recordingStatus == "recording" {
             return TakeArtifactStatusSnapshot(
@@ -2440,7 +2492,10 @@ struct SessionArchiveBuilder: Sendable {
                 audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
                 videoBytes: (try? fileSize(for: mediaURL, fileManager: fileManager)) ?? 0,
                 finalizedAt: sidecar.endedAt,
-                readiness: .recording
+                readiness: .recording,
+                detectedNotation: sidecar.detectedNotation,
+                detectedLabel: detectedLabel,
+                labelConfidence: labelConfidence
             )
         }
 
@@ -2456,7 +2511,10 @@ struct SessionArchiveBuilder: Sendable {
                 audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
                 videoBytes: (try? fileSize(for: mediaURL, fileManager: fileManager)) ?? 0,
                 finalizedAt: sidecar.endedAt,
-                readiness: .failed(sidecar.errorDescription ?? "Capture did not complete.")
+                readiness: .failed(sidecar.errorDescription ?? "Capture did not complete."),
+                detectedNotation: sidecar.detectedNotation,
+                detectedLabel: detectedLabel,
+                labelConfidence: labelConfidence
             )
         }
 
@@ -2477,7 +2535,10 @@ struct SessionArchiveBuilder: Sendable {
                 audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
                 videoBytes: 0,
                 finalizedAt: sidecar.endedAt,
-                readiness: .missingVideo
+                readiness: .missingVideo,
+                detectedNotation: sidecar.detectedNotation,
+                detectedLabel: detectedLabel,
+                labelConfidence: labelConfidence
             )
         }
         guard videoCheck.isStable else {
@@ -2492,7 +2553,10 @@ struct SessionArchiveBuilder: Sendable {
                 audioBytes: (try? fileSize(for: audioURL, fileManager: fileManager)) ?? 0,
                 videoBytes: videoCheck.bytes,
                 finalizedAt: sidecar.endedAt,
-                readiness: .finalizing
+                readiness: .finalizing,
+                detectedNotation: sidecar.detectedNotation,
+                detectedLabel: detectedLabel,
+                labelConfidence: labelConfidence
             )
         }
 
@@ -2515,7 +2579,10 @@ struct SessionArchiveBuilder: Sendable {
                     audioBytes: 0,
                     videoBytes: videoCheck.bytes,
                     finalizedAt: sidecar.endedAt,
-                    readiness: .missingAudio
+                    readiness: .missingAudio,
+                    detectedNotation: sidecar.detectedNotation,
+                    detectedLabel: detectedLabel,
+                    labelConfidence: labelConfidence
                 )
             }
         }
@@ -2537,7 +2604,10 @@ struct SessionArchiveBuilder: Sendable {
                 audioBytes: audioCheck.bytes,
                 videoBytes: videoCheck.bytes,
                 finalizedAt: sidecar.endedAt,
-                readiness: .missingAudio
+                readiness: .missingAudio,
+                detectedNotation: sidecar.detectedNotation,
+                detectedLabel: detectedLabel,
+                labelConfidence: labelConfidence
             )
         }
         guard audioCheck.isStable else {
@@ -2552,7 +2622,10 @@ struct SessionArchiveBuilder: Sendable {
                 audioBytes: audioCheck.bytes,
                 videoBytes: videoCheck.bytes,
                 finalizedAt: sidecar.endedAt,
-                readiness: .finalizing
+                readiness: .finalizing,
+                detectedNotation: sidecar.detectedNotation,
+                detectedLabel: detectedLabel,
+                labelConfidence: labelConfidence
             )
         }
 
@@ -2567,7 +2640,10 @@ struct SessionArchiveBuilder: Sendable {
             audioBytes: audioCheck.bytes,
             videoBytes: videoCheck.bytes,
             finalizedAt: sidecar.endedAt,
-            readiness: .ready
+            readiness: .ready,
+            detectedNotation: sidecar.detectedNotation,
+            detectedLabel: detectedLabel,
+            labelConfidence: labelConfidence
         )
     }
 

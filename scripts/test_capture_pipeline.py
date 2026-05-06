@@ -748,6 +748,142 @@ class CapturePipelineFixtureTests(unittest.TestCase):
             "70 BPM take 01: could not probe artifact metadata for watch: DJFIXTURE_baby_070_take01_watch.csv has only 2 watch samples; expected at least 10."
         )
 
+    # --- stem export tests ---
+
+    def _setup_renamed_session(self) -> dict:
+        """Return the manifest for a fully renamed session."""
+        self.create_session()
+        self.stage_raw_media()
+        self.install_take_log_fixture("happy_path_take_log.csv")
+        self.run_script("rename_files.py", self.session_dir)
+        return self.read_manifest()
+
+    def test_validate_accepts_scratch_only_wav_as_serato_alias(self) -> None:
+        """A _scratch_only.wav file in audio/ is accepted by the validator as the serato audio."""
+        manifest = self._setup_renamed_session()
+
+        # Rename the 70bpm serato wav to _scratch_only.wav (simulating Swift export coordinator output)
+        old_path = self.session_dir / "audio" / "DJFIXTURE_baby_070_take01_serato.wav"
+        new_path = self.session_dir / "audio" / "DJFIXTURE_baby_070_take01_scratch_only.wav"
+        old_path.rename(new_path)
+
+        # Update the manifest to point to the new filename
+        for take in manifest["takes"]:
+            if take["bpm"] == 70:
+                take["files"]["serato"] = "audio/DJFIXTURE_baby_070_take01_scratch_only.wav"
+                take["files"]["scratch_only"] = "audio/DJFIXTURE_baby_070_take01_scratch_only.wav"
+                take["artifacts"]["serato"]["path"] = "audio/DJFIXTURE_baby_070_take01_scratch_only.wav"
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir)
+        self.assertEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: PASS")
+
+    def test_validate_accepts_stem_availability_with_unavailable_beat_stems(self) -> None:
+        """stem_availability with unavailable beat_only/scratch_with_beat passes validation."""
+        manifest = self._setup_renamed_session()
+
+        for take in manifest["takes"]:
+            # Mirror the Swift export coordinator: files.scratch_only aliases files.serato
+            serato_path = take["files"].get("serato", "")
+            take["files"]["scratch_only"] = serato_path
+            take["stem_availability"] = {
+                "scratch_only": "available",
+                "beat_only": "unavailable",
+                "scratch_with_beat": "unavailable",
+            }
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir)
+        self.assertEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: PASS")
+
+    def test_validate_fails_when_stem_marked_available_but_missing_from_files(self) -> None:
+        """stem_availability marks beat_only as available but files.beat_only is absent."""
+        manifest = self._setup_renamed_session()
+
+        for take in manifest["takes"]:
+            if take["bpm"] == 70:
+                take["stem_availability"] = {
+                    "scratch_only": "available",
+                    "beat_only": "available",
+                    "scratch_with_beat": "unavailable",
+                }
+                # deliberately omit files["beat_only"]
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir, expect_success=False)
+        self.assertNotEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: FAIL")
+        self.assert_report_contains(
+            "70 BPM take 01: stem_availability marks beat_only as available but files.beat_only is missing."
+        )
+
+    def test_validate_fails_when_stem_marked_available_but_file_missing_on_disk(self) -> None:
+        """stem_availability marks beat_only as available and files has a path, but the file is absent."""
+        manifest = self._setup_renamed_session()
+
+        for take in manifest["takes"]:
+            if take["bpm"] == 70:
+                take["stem_availability"] = {
+                    "scratch_only": "available",
+                    "beat_only": "available",
+                    "scratch_with_beat": "unavailable",
+                }
+                take["files"]["beat_only"] = "audio/DJFIXTURE_baby_070_take01_beat_only.wav"
+        self.write_manifest(manifest)
+
+        # file does not exist on disk
+        validate_result = self.run_script("validate_session.py", self.session_dir, expect_success=False)
+        self.assertNotEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: FAIL")
+        self.assert_report_contains(
+            "70 BPM take 01: stem_availability marks beat_only as available"
+            " but the file is missing on disk: audio/DJFIXTURE_baby_070_take01_beat_only.wav"
+        )
+
+    def test_validate_fails_when_stem_availability_has_invalid_value(self) -> None:
+        """stem_availability with an unrecognised status value is an error."""
+        manifest = self._setup_renamed_session()
+
+        for take in manifest["takes"]:
+            if take["bpm"] == 70:
+                take["stem_availability"] = {
+                    "scratch_only": "available",
+                    "beat_only": "pending",
+                }
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir, expect_success=False)
+        self.assertNotEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: FAIL")
+        self.assert_report_contains(
+            "70 BPM take 01: stem_availability.beat_only has invalid value 'pending';"
+            " must be 'available' or 'unavailable'."
+        )
+
+    def test_validate_scratch_only_availability_requires_files_entry(self) -> None:
+        """stem_availability marks scratch_only as available but files.scratch_only is absent."""
+        manifest = self._setup_renamed_session()
+
+        for take in manifest["takes"]:
+            if take["bpm"] == 70:
+                take["stem_availability"] = {
+                    "scratch_only": "available",
+                    "beat_only": "unavailable",
+                    "scratch_with_beat": "unavailable",
+                }
+                # Remove scratch_only from files to trigger the validation
+                take["files"].pop("scratch_only", None)
+        self.write_manifest(manifest)
+
+        validate_result = self.run_script("validate_session.py", self.session_dir, expect_success=False)
+        self.assertNotEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: FAIL")
+        self.assert_report_contains(
+            "70 BPM take 01: stem_availability marks scratch_only as available but files.scratch_only is missing."
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

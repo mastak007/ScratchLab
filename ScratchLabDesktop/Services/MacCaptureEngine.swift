@@ -249,6 +249,169 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    private final class RoutineDetectedNotationBuilder {
+        private struct ActiveMovement {
+            let direction: CXLDirection
+            let startTime: TimeInterval
+            let startPosition: Double?
+            let startConfidence: Double
+        }
+
+        private let startedAt: CFTimeInterval
+        private var activeMovement: ActiveMovement?
+        private var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+
+        init(startedAt: CFTimeInterval = CACurrentMediaTime()) {
+            self.startedAt = startedAt
+        }
+
+        func recordStateChange(
+            from previousState: HandMotionState,
+            to newState: HandMotionState,
+            position: CGPoint?,
+            confidence: Double,
+            now: CFTimeInterval = CACurrentMediaTime()
+        ) {
+            let previousDirection = Self.direction(for: previousState)
+            let newDirection = Self.direction(for: newState)
+            let normalizedPosition = position.map { Double(min(max($0.x, 0), 1)) }
+            let elapsed = max(0, now - startedAt)
+
+            if let activeMovement, previousDirection != newDirection {
+                finishActiveMovement(
+                    activeMovement,
+                    endTime: elapsed,
+                    endPosition: normalizedPosition,
+                    endConfidence: confidence
+                )
+            }
+
+            guard newDirection == .forward || newDirection == .back else {
+                activeMovement = nil
+                return
+            }
+
+            if previousDirection != newDirection {
+                activeMovement = ActiveMovement(
+                    direction: newDirection,
+                    startTime: elapsed,
+                    startPosition: normalizedPosition,
+                    startConfidence: confidence
+                )
+            }
+        }
+
+        func snapshot(
+            detectedLabel: String?,
+            labelSource: String,
+            labelConfidence: Double?,
+            capturedAt: Date = Date(),
+            now: CFTimeInterval = CACurrentMediaTime()
+        ) -> CaptureCore.DetectedNotationSnapshot {
+            if let activeMovement {
+                finishActiveMovement(
+                    activeMovement,
+                    endTime: max(0, now - startedAt),
+                    endPosition: nil,
+                    endConfidence: activeMovement.startConfidence
+                )
+            }
+            activeMovement = nil
+
+            let notationConfidence = events.isEmpty
+                ? nil
+                : events.map(\.confidence).reduce(0, +) / Double(events.count)
+
+            return CaptureCore.DetectedNotationSnapshot(
+                notationSource: events.isEmpty ? "unavailable" : "detected",
+                notationConfidence: notationConfidence,
+                detectedLabel: detectedLabel,
+                labelSource: labelSource,
+                labelConfidence: labelConfidence,
+                recordMovementEvents: events,
+                faderEvents: [],
+                mixerMidiEvents: [],
+                capturedAt: capturedAt
+            )
+        }
+
+        private func finishActiveMovement(
+            _ activeMovement: ActiveMovement,
+            endTime: TimeInterval,
+            endPosition: Double?,
+            endConfidence: Double
+        ) {
+            guard endTime > activeMovement.startTime else { return }
+            let duration = endTime - activeMovement.startTime
+            guard duration >= 0.045 else { return }
+
+            let resolvedStartPosition = activeMovement.startPosition
+                ?? Self.defaultStartPosition(for: activeMovement.direction)
+            let resolvedEndPosition = endPosition
+                ?? Self.defaultEndPosition(for: activeMovement.direction)
+            let distance = abs(resolvedEndPosition - resolvedStartPosition)
+            let speed = duration > 0 ? distance / duration : 0
+            let movementKind = Self.movementKind(
+                direction: activeMovement.direction,
+                duration: duration,
+                speed: speed
+            )
+            let confidence = min(
+                1,
+                max(0, (activeMovement.startConfidence + endConfidence) / 2)
+            )
+
+            let event = CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: activeMovement.startTime,
+                endTime: endTime,
+                startPosition: resolvedStartPosition,
+                endPosition: resolvedEndPosition,
+                direction: activeMovement.direction == .back ? "backward" : "forward",
+                movementKind: movementKind,
+                speed: speed,
+                confidence: confidence,
+                source: "detected"
+            )
+            events.append(event)
+        }
+
+        private static func direction(for state: HandMotionState) -> CXLDirection {
+            switch state {
+            case .movingRight:
+                return .forward
+            case .movingLeft:
+                return .back
+            case .steady:
+                return .idle
+            case .searching:
+                return .searching
+            }
+        }
+
+        private static func defaultStartPosition(for direction: CXLDirection) -> Double {
+            direction == .back ? 1 : 0
+        }
+
+        private static func defaultEndPosition(for direction: CXLDirection) -> Double {
+            direction == .back ? 0 : 1
+        }
+
+        private static func movementKind(
+            direction: CXLDirection,
+            duration: TimeInterval,
+            speed: Double
+        ) -> ScratchMovementKind {
+            let isBackward = direction == .back
+            if duration <= 0.11 || speed >= 5.5 {
+                return isBackward ? .fastPull : .fastPush
+            }
+            if duration >= 0.32 || speed <= 1.5 {
+                return isBackward ? .slowPullDrag : .slowDrag
+            }
+            return isBackward ? .normalPull : .normalPush
+        }
+    }
+
     struct CompletedRoutineCaptureSnapshot: Equatable {
         let mediaURL: URL
         let sidecarURL: URL
@@ -426,6 +589,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
     @Published private(set) var routineTakeArtifactStatuses: [TakeArtifactStatusSnapshot] = []
+    @Published private(set) var lastRoutineDetectedNotation: CaptureCore.DetectedNotationSnapshot?
     @Published private(set) var routineAudioBuffersReceived = 0
     @Published private(set) var routineAudioBuffersAppended = 0
     @Published private(set) var routineAudioBuffersSkipped = 0
@@ -853,6 +1017,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRoutineRecordingSidecarURL: URL?
     private var activeRoutineAudioCaptureWriter: RoutineAudioCaptureWriter?
+    private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
     private var routineArtifactRefreshTask: Task<Void, Never>?
@@ -948,6 +1113,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             if self.movieOutput.isRecording {
                 self.movieOutput.stopRecording()
             }
+            self.activeRoutineDetectedNotationBuilder = nil
             self.audioQueue.async {
                 self.activeRoutineAudioCaptureWriter = nil
                 self.publishRoutineAudioCaptureDiagnostics(nil)
@@ -956,6 +1122,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.captureSession.stopRunning()
             }
         }
+        lastRoutineDetectedNotation = nil
     }
 
     func setPerformerMonitorStreamingEnabled(_ enabled: Bool) {
@@ -1215,11 +1382,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 try self.writeRoutineRecordingSidecar(preparedRecording.sidecar, to: preparedRecording.sidecarURL)
                 self.activeRoutineRecordingSidecar = preparedRecording.sidecar
                 self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
+                self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder()
                 self.audioQueue.sync {
                     self.activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter(destinationURL: preparedRecording.audioURL)
                     self.publishRoutineAudioCaptureDiagnostics(self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot())
                 }
                 Task { @MainActor in
+                    self.lastRoutineDetectedNotation = nil
                     self.routineRecordingStatus = "Starting routine recording"
                 }
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
@@ -1664,6 +1833,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         defer {
             activeRoutineRecordingSidecar = nil
             activeRoutineRecordingSidecarURL = nil
+            activeRoutineDetectedNotationBuilder = nil
             pendingRoutineTakeIdentity = nil
             pendingWatchReply = nil
         }
@@ -1676,10 +1846,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return ("Finalizing \(outputFileURL.lastPathComponent)...", nil, nil)
         }
 
+        let labelSource = lastScratchDetection == nil ? "unknown" : "detected"
+        let notationSnapshot = activeRoutineDetectedNotationBuilder?.snapshot(
+            detectedLabel: lastScratchDetection?.scratchName,
+            labelSource: labelSource,
+            labelConfidence: lastScratchDetection?.confidence
+        )
+
         sidecar = sidecar.finalized(
             mediaFileName: outputFileURL.lastPathComponent,
             captureErrorDescription: captureErrorDescription
         )
+        .withDetectedNotation(notationSnapshot)
         let sidecarURL = activeRoutineRecordingSidecarURL
             ?? CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: outputFileURL)
 
@@ -1689,6 +1867,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 sidecar: sidecar
             )
             try writeRoutineRecordingSidecar(sidecar, to: sidecarURL)
+            Task { @MainActor in
+                self.lastRoutineDetectedNotation = notationSnapshot
+            }
             try? CaptureJournalStore.appendTransactionFinalized(
                 storageKind: .routine,
                 sidecar: sidecar
@@ -1770,6 +1951,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             await MainActor.run {
                 guard self.routineRecordingsFolderURL == directory else { return }
                 self.routineTakeArtifactStatuses = statuses
+                self.lastRoutineDetectedNotation = statuses.last?.detectedNotation
                 if let latest = statuses.last {
                     self.applyRoutineArtifactStatusToMessage(latest)
                 }
@@ -1837,7 +2019,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             audioBytes: fileSizeOrZero(at: audioURL),
             videoBytes: fileSizeOrZero(at: mediaURL),
             finalizedAt: sidecar.endedAt,
-            readiness: readiness
+            readiness: readiness,
+            detectedNotation: sidecar.detectedNotation,
+            detectedLabel: sidecar.reviewDecision?.detectedLabel
+                ?? sidecar.detectedNotation?.detectedLabel
+                ?? sidecar.reviewDecision?.label,
+            labelConfidence: sidecar.reviewDecision?.confidence ?? sidecar.detectedNotation?.labelConfidence
         )
     }
 
@@ -2299,6 +2486,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.handDetected = detected
             self.handPosition = position
             self.handMotionState = state
+
+            if self.isRoutineRecording, stateChanged {
+                self.activeRoutineDetectedNotationBuilder?.recordStateChange(
+                    from: prevState,
+                    to: state,
+                    position: position,
+                    confidence: motionConfidence
+                )
+            }
 
             // CXL: record motion stroke on active-direction transitions.
             if self.cxlRecorder.isRecording && stateChanged {

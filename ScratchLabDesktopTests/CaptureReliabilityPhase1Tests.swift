@@ -4221,6 +4221,88 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(decoded.auditTrail.last?.category, "label_reviewed")
     }
 
+    func testLocalRecordingSidecarPersistsDetectedNotationSnapshot() throws {
+        let now = Date(timeIntervalSince1970: 1_715_000_000)
+        let files = CaptureCore.LocalRecordingFiles(
+            baseName: "routine-session_take001_routine",
+            mediaURL: URL(fileURLWithPath: "/tmp/routine-session_take001_routine.mov"),
+            sidecarURL: URL(fileURLWithPath: "/tmp/routine-session_take001_routine.json")
+        )
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "routine-session",
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: "routine-session", takeNumber: 1),
+            files: files,
+            recordingRole: "routine_capture",
+            platform: "macOS",
+            appSurface: "mac_desktop",
+            sourceDeviceName: "ScratchLab Mac",
+            startedAt: now
+        )
+        let notation = makeDetectedNotationSnapshot()
+        let finalized = sidecar
+            .finalized(
+                endedAt: now.addingTimeInterval(2),
+                mediaFileName: files.mediaURL.lastPathComponent,
+                captureErrorDescription: nil
+            )
+            .withDetectedNotation(notation, recordedAt: now.addingTimeInterval(2))
+
+        let decoded = try JSONDecoder.captureCoreDecoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: try finalized.encodedData()
+        )
+
+        XCTAssertEqual(decoded.detectedNotation?.notationSource, "detected")
+        XCTAssertEqual(decoded.detectedNotation?.recordMovementEvents.count, 2)
+        XCTAssertEqual(decoded.detectedNotation?.recordMovementEvents.first?.direction, "forward")
+        XCTAssertEqual(decoded.auditTrail.last?.category, "notation_snapshot")
+    }
+
+    func testExportedDetectedNotationUsesSavedSnapshot() throws {
+        let root = try makeTemporaryDirectory()
+        var package = try makeCanonicalPackage(rootURL: root)
+        let take = try XCTUnwrap(package.takes.first)
+        let sidecarData = try Data(contentsOf: take.sidecarURL)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+        sidecar = sidecar.withDetectedNotation(makeDetectedNotationSnapshot())
+        try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let decoder = JSONDecoder()
+        let notationDocument = try decoder.decode(SessionExportNotationDocument.self, from: data)
+
+        XCTAssertEqual(notationDocument.notationSource, .detected)
+        XCTAssertEqual(notationDocument.labelSource, .detected)
+        XCTAssertEqual(notationDocument.labelConfidence, 57)
+        XCTAssertEqual(try XCTUnwrap(notationDocument.notationConfidence), 0.79, accuracy: 0.001)
+        XCTAssertEqual(notationDocument.recordMovementEvents.count, 2)
+        XCTAssertEqual(notationDocument.recordMovementEvents.first?.direction, "forward")
+        XCTAssertEqual(notationDocument.recordMovementEvents.first?.movementKind, "normalPush")
+    }
+
+    func testExportedUnavailableNotationClearsNotationConfidence() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root)
+        let builder = makeCanonicalValidationBuilder()
+        let archive = try builder.createArchive(from: try builder.preparePackage(from: .package(package)))
+        let unzipRoot = try makeTemporaryDirectory()
+        let archiveRoot = try unzipArchive(archive.archiveURL, to: unzipRoot)
+        let notationURL = archiveRoot.appendingPathComponent("notation/take-001_detected_notation.json")
+        let data = try Data(contentsOf: notationURL)
+        let decoder = JSONDecoder()
+        let notationDocument = try decoder.decode(SessionExportNotationDocument.self, from: data)
+
+        XCTAssertEqual(notationDocument.notationSource, .unavailable)
+        XCTAssertTrue(notationDocument.recordMovementEvents.isEmpty)
+        XCTAssertNil(notationDocument.notationConfidence)
+        XCTAssertEqual(notationDocument.notes, "No notation events detected")
+    }
+
     func testCanonicalExportManifestParity() throws {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root)
@@ -4318,8 +4400,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(takes.count, 3)
         let firstFiles = try XCTUnwrap(takes.first?["files"] as? [String: String])
         XCTAssertEqual(firstFiles["camA"], "video/DJALPHA_baby_070_take01_camA.mov")
-        XCTAssertEqual(firstFiles["serato"], "audio/DJALPHA_baby_070_take01_serato.wav")
-        XCTAssertEqual(firstFiles["scratch_only"], "audio/DJALPHA_baby_070_take01_serato.wav")
+        XCTAssertEqual(firstFiles["serato"], "audio/DJALPHA_baby_070_take01_scratch_only.wav")
+        XCTAssertEqual(firstFiles["scratch_only"], "audio/DJALPHA_baby_070_take01_scratch_only.wav")
         XCTAssertNil(firstFiles["beat_only"])
         XCTAssertNil(firstFiles["scratch_with_beat"])
         XCTAssertEqual(firstFiles["notation"], "notation/take-001_detected_notation.json")
@@ -4327,6 +4409,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(firstStemAvailability["scratch_only"], "available")
         XCTAssertEqual(firstStemAvailability["beat_only"], "unavailable")
         XCTAssertEqual(firstStemAvailability["scratch_with_beat"], "unavailable")
+        let firstArtifacts = try XCTUnwrap(takes.first?["artifacts"] as? [String: [String: Any]])
+        XCTAssertEqual(firstArtifacts["scratch_only"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_only.wav")
+        XCTAssertEqual(firstArtifacts["serato"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_only.wav")
+        XCTAssertNil(firstArtifacts["beat_only"])
+        XCTAssertNil(firstArtifacts["scratch_with_beat"])
 
         let takeLog = preview.takeLogCSV
         XCTAssertTrue(takeLog.contains("bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes"))
@@ -4341,7 +4428,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(metadataDocument.takes.first?.notationFile, "notation/take-001_detected_notation.json")
         XCTAssertEqual(metadataDocument.takes.first?.notationSource, "unavailable")
         XCTAssertEqual(metadataDocument.takes.first?.labelSource, "unknown")
-        XCTAssertNil(metadataDocument.takes.first?.confidence)
+        XCTAssertNil(metadataDocument.takes.first?.labelConfidence)
+        XCTAssertNil(metadataDocument.takes.first?.notationConfidence)
     }
 
     func testRoutineCaptureExportAcceptsRecordedBPMSubset() throws {
@@ -4453,8 +4541,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let files = try XCTUnwrap(firstTake["files"] as? [String: String])
         XCTAssertEqual(files["camA"], "video/DJALPHA_stab_090_take01_camA.mov")
         XCTAssertEqual(files["notation"], "notation/take-001_detected_notation.json")
-        XCTAssertEqual(files["serato"], "audio/DJALPHA_stab_090_take01_serato.wav")
-        XCTAssertEqual(files["scratch_only"], "audio/DJALPHA_stab_090_take01_serato.wav")
+        XCTAssertEqual(files["serato"], "audio/DJALPHA_stab_090_take01_scratch_only.wav")
+        XCTAssertEqual(files["scratch_only"], "audio/DJALPHA_stab_090_take01_scratch_only.wav")
         XCTAssertNil(files["beat_only"])
         XCTAssertNil(files["scratch_with_beat"])
     }
@@ -4990,6 +5078,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                 "Primary Practice/Capture source exposes \(forbidden)"
             )
         }
+    }
+
+    func testReviewPreviewUsesSavedNotationSnapshotNotLiveDetectionCounters() throws {
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false"))
+        XCTAssertTrue(source.contains("ScratchNotation.detectedPreview("))
+        XCTAssertTrue(source.contains("Notation unavailable for this take."))
+        XCTAssertFalse(source.contains("hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)"))
     }
 
     func testMacReviewScreenContainsCorrectionAndExportLabels() throws {
@@ -7613,6 +7711,80 @@ extension CaptureReliabilityPhase1CoreTests {
         return try decoder.decode(SessionExportArtifactMetadataDocument.self, from: data)
     }
 
+    func makeDetectedNotationSnapshot() -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.79,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 57,
+            recordMovementEvents: [
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: 0.10,
+                    endTime: 0.28,
+                    startPosition: 0.02,
+                    endPosition: 0.96,
+                    direction: "forward",
+                    movementKind: .normalPush,
+                    speed: 5.2,
+                    confidence: 0.82,
+                    source: "detected"
+                ),
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: 0.34,
+                    endTime: 0.56,
+                    startPosition: 0.94,
+                    endPosition: 0.08,
+                    direction: "backward",
+                    movementKind: .normalPull,
+                    speed: 3.9,
+                    confidence: 0.76,
+                    source: "detected"
+                )
+            ],
+            faderEvents: [],
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 1_715_000_000)
+        )
+    }
+
+    func makeCanonicalValidationBuilder() -> SessionArchiveBuilder {
+        SessionArchiveBuilder { source, _, generatedData in
+            switch source {
+            case "camA":
+                return [
+                    "kind": .string("video"),
+                    "duration_seconds": .double(1.0),
+                    "width": .int(1920),
+                    "height": .int(1080),
+                    "frame_rate_fps": .double(30.0),
+                    "codec": .string("h264")
+                ]
+            case "serato", "scratch_only", "beat_only", "scratch_with_beat":
+                return [
+                    "kind": .string("audio"),
+                    "duration_seconds": .double(1.0),
+                    "sample_rate_hz": .int(44_100),
+                    "channel_count": .int(2),
+                    "frame_count": .int(44_100),
+                    "sample_width_bytes": .int(2)
+                ]
+            case "watch":
+                guard let generatedData else {
+                    throw SessionExportError.missingRequiredFiles
+                }
+                return [
+                    "kind": .string("csv"),
+                    "row_count": .int(String(data: generatedData, encoding: .utf8)?.split(whereSeparator: \.isNewline).count ?? 0),
+                    "data_row_count": .int(12),
+                    "column_count": .int(CaptureCanonicalRules.watchCSVHeader.count)
+                ]
+            default:
+                throw SessionExportError.invalidSessionMetadata
+            }
+        }
+    }
+
     func makeWatchSession(sessionID: String, takeID: String) -> WatchMotionCaptureSession {
         let samples = (0..<12).map { index in
             WatchMotionSample(
@@ -8113,6 +8285,19 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         XCTAssertTrue(source.contains("appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)"))
         XCTAssertTrue(source.contains("activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter"))
         XCTAssertTrue(source.contains("let audioURL = directory"))
+    }
+
+    func testStemExportScratchOnlyFileIsPhysicallyNamed() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // Primary audio must use scratch_only source token so the file is named _scratch_only.wav
+        XCTAssertTrue(source.contains("source: \"scratch_only\""))
+        // serato and scratch_only must share the same physical artifact (alias)
+        XCTAssertTrue(source.contains("artifacts[\"serato\"] = scratchArtifact"))
+        XCTAssertTrue(source.contains("artifacts[\"scratch_only\"] = scratchArtifact"))
+        // both files.serato and files.scratch_only must point to scratchOnlyRelativePath
+        XCTAssertTrue(source.contains("\"serato\": context.scratchOnlyRelativePath"))
+        XCTAssertTrue(source.contains("\"scratch_only\": context.scratchOnlyRelativePath"))
     }
 
     func testCanonicalExportAddsScratchAndBeatStemKeys() throws {
