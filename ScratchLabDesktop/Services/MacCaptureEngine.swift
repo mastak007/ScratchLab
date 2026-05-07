@@ -142,6 +142,172 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let lastErrorMessage: String?
     }
 
+    enum RoutineMovementRawDropReason: String, CaseIterable {
+        case durationTooShort
+        case deltaTooSmall
+    }
+
+    enum RoutineMovementNormalizedDropReason: String, CaseIterable {
+        case durationTooShort
+        case deltaTooSmall
+        case speedTooLow
+        case confidenceTooLow
+        case movementKindHold
+    }
+
+    enum RoutineMovementTrustDropReason: String, CaseIterable {
+        case lowConfidence
+        case notFused
+        case lowAudioOverlap
+    }
+
+    struct RoutineMovementDiagnosticsSnapshot {
+        let framesReceived: Int
+        let framesAnalyzed: Int
+        let handObservationsReceived: Int
+        let observationsWithConfidence: Int
+        let rawDirectionChanges: Int
+        let semanticDirectionChanges: Int
+        let builderSamplesReceived: Int
+        let rawMovementEventsCreated: Int
+        let mergedSegments: Int
+        let normalizedMovementEvents: Int
+        let fusedMovementEvents: Int
+        let trustedDirectionalEvents: Int
+        let finalRecordMovementEvents: Int
+        let handPoseIntervalMS: Int
+        let rawDropReasons: [String: Int]
+        let normalizedDropReasons: [String: Int]
+        let trustDropReasons: [String: Int]
+        let recentSamples: [String]
+        let recentDirections: [String]
+    }
+
+    final class RoutineMovementDebugSession {
+        private let sampleLimit = 10
+        let handPoseIntervalMS: Int
+
+        var framesReceived = 0
+        var framesAnalyzed = 0
+        var handObservationsReceived = 0
+        var observationsWithConfidence = 0
+        var rawDirectionChanges = 0
+        var semanticDirectionChanges = 0
+        var builderSamplesReceived = 0
+        var rawMovementEventsCreated = 0
+        var mergedSegments = 0
+        var normalizedMovementEvents = 0
+        var fusedMovementEvents = 0
+        var trustedDirectionalEvents = 0
+        var finalRecordMovementEvents = 0
+
+        private var rawDropReasons: [RoutineMovementRawDropReason: Int] = [:]
+        private var normalizedDropReasons: [RoutineMovementNormalizedDropReason: Int] = [:]
+        private var trustDropReasons: [RoutineMovementTrustDropReason: Int] = [:]
+        private var recentSamples: [String] = []
+        private var recentDirections: [String] = []
+
+        init(handPoseInterval: CFTimeInterval) {
+            handPoseIntervalMS = Int((handPoseInterval * 1_000).rounded())
+        }
+
+        func recordSample(rawPoint: CGPoint?, displayedPoint: CGPoint?, confidence: Double, rawDirection: HandDirectionTracker.Direction, semanticState: HandMotionState) {
+            handObservationsReceived += 1
+            if confidence > 0 {
+                observationsWithConfidence += 1
+            }
+            let rawDescription = rawPoint.map { String(format: "%.3f,%.3f", $0.x, $0.y) } ?? "--"
+            let displayedDescription = displayedPoint.map { String(format: "%.3f,%.3f", $0.x, $0.y) } ?? "--"
+            append(&recentSamples, value: "raw[\(rawDescription)] sm[\(displayedDescription)] c=\(String(format: "%.2f", confidence))")
+            append(&recentDirections, value: "raw=\(rawDirection.debugName) semantic=\(semanticState.debugName)")
+        }
+
+        func recordRawDirectionChange() {
+            rawDirectionChanges += 1
+        }
+
+        func recordSemanticDirectionChange() {
+            semanticDirectionChanges += 1
+        }
+
+        func recordBuilderSample(state: HandMotionState, position: CGPoint?, confidence: Double) {
+            builderSamplesReceived += 1
+            let positionDescription = position.map { String(format: "%.3f,%.3f", $0.x, $0.y) } ?? "--"
+            append(&recentSamples, value: "builder[\(state.debugName)] p=\(positionDescription) c=\(String(format: "%.2f", confidence))")
+        }
+
+        func recordRawMovementEventCreated() {
+            rawMovementEventsCreated += 1
+        }
+
+        func recordRawDrop(_ reason: RoutineMovementRawDropReason) {
+            rawDropReasons[reason, default: 0] += 1
+        }
+
+        func recordNormalizedDrop(_ reason: RoutineMovementNormalizedDropReason) {
+            normalizedDropReasons[reason, default: 0] += 1
+        }
+
+        func recordMerge() {
+            mergedSegments += 1
+        }
+
+        func recordNormalizedMovementCount(_ count: Int) {
+            normalizedMovementEvents = count
+        }
+
+        func recordFusedMovementCount(_ count: Int) {
+            fusedMovementEvents = count
+        }
+
+        func recordTrustedDirectionalCount(_ count: Int) {
+            trustedDirectionalEvents = count
+        }
+
+        func recordFinalMovementCount(_ count: Int) {
+            finalRecordMovementEvents = count
+        }
+
+        func recordTrustDrop(_ reason: RoutineMovementTrustDropReason) {
+            trustDropReasons[reason, default: 0] += 1
+        }
+
+        func snapshot() -> RoutineMovementDiagnosticsSnapshot {
+            RoutineMovementDiagnosticsSnapshot(
+                framesReceived: framesReceived,
+                framesAnalyzed: framesAnalyzed,
+                handObservationsReceived: handObservationsReceived,
+                observationsWithConfidence: observationsWithConfidence,
+                rawDirectionChanges: rawDirectionChanges,
+                semanticDirectionChanges: semanticDirectionChanges,
+                builderSamplesReceived: builderSamplesReceived,
+                rawMovementEventsCreated: rawMovementEventsCreated,
+                mergedSegments: mergedSegments,
+                normalizedMovementEvents: normalizedMovementEvents,
+                fusedMovementEvents: fusedMovementEvents,
+                trustedDirectionalEvents: trustedDirectionalEvents,
+                finalRecordMovementEvents: finalRecordMovementEvents,
+                handPoseIntervalMS: handPoseIntervalMS,
+                rawDropReasons: dictionary(from: rawDropReasons),
+                normalizedDropReasons: dictionary(from: normalizedDropReasons),
+                trustDropReasons: dictionary(from: trustDropReasons),
+                recentSamples: recentSamples,
+                recentDirections: recentDirections
+            )
+        }
+
+        private func append(_ values: inout [String], value: String) {
+            values.append(value)
+            if values.count > sampleLimit {
+                values.removeFirst(values.count - sampleLimit)
+            }
+        }
+
+        private func dictionary<T: RawRepresentable>(from values: [T: Int]) -> [String: Int] where T.RawValue == String {
+            Dictionary(uniqueKeysWithValues: values.map { ($0.key.rawValue, $0.value) })
+        }
+    }
+
     private enum RoutineAudioCaptureWriterError: LocalizedError {
         case unsupportedSourceFormat
         case unableToReadSampleBuffer
@@ -312,9 +478,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         private let startedAt: CFTimeInterval
         private var activeMovement: ActiveMovement?
         private var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+        private let debugSession: RoutineMovementDebugSession?
 
-        init(startedAt: CFTimeInterval = CACurrentMediaTime()) {
+        init(
+            startedAt: CFTimeInterval = CACurrentMediaTime(),
+            debugSession: RoutineMovementDebugSession? = nil
+        ) {
             self.startedAt = startedAt
+            self.debugSession = debugSession
         }
 
         func recordObservation(
@@ -323,6 +494,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             confidence: Double,
             now: CFTimeInterval = CACurrentMediaTime()
         ) {
+            #if DEBUG
+            debugSession?.recordBuilderSample(state: state, position: position, confidence: confidence)
+            #endif
             let newDirection = Self.direction(for: state)
             let normalizedPosition = position.map { Double(min(max($0.x, 0), 1)) }
             let elapsed = max(0, now - startedAt)
@@ -424,12 +598,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             guard endTime > activeMovement.startTime else { return }
             let duration = endTime - activeMovement.startTime
-            guard duration >= 0.045 else { return }
+            guard duration >= 0.045 else {
+                #if DEBUG
+                debugSession?.recordRawDrop(.durationTooShort)
+                #endif
+                return
+            }
 
             let resolvedStartPosition = activeMovement.startPosition
                 ?? Self.defaultStartPosition(for: activeMovement.direction)
             let distance = abs(resolvedEndPosition - resolvedStartPosition)
-            guard distance >= RoutineNotationEventNormalizer.minPositionDelta / 2 else { return }
+            guard distance >= RoutineNotationEventNormalizer.minPositionDelta / 2 else {
+                #if DEBUG
+                debugSession?.recordRawDrop(.deltaTooSmall)
+                #endif
+                return
+            }
             let speed = duration > 0 ? distance / duration : 0
             let confidence = min(
                 1,
@@ -448,6 +632,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 source: "detected"
             )
             events.append(event)
+            #if DEBUG
+            debugSession?.recordRawMovementEventCreated()
+            #endif
         }
 
         private static func direction(for state: HandMotionState) -> CXLDirection {
@@ -489,20 +676,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         func normalize(
             events: [CaptureCore.DetectedNotationRecordMovementEvent],
-            audioEvents: [ScratchAudioNotationEventCandidate]
+            audioEvents: [ScratchAudioNotationEventCandidate],
+            debugSession: RoutineMovementDebugSession? = nil
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             let burstAudioEvents = audioEvents.filter { event in
                 event.eventKind == .scratchBurst || event.eventKind == .possibleDrag
             }
-            let mergedEvents = mergeAdjacentSameDirection(events.sorted(by: eventSort))
-            return mergedEvents.compactMap { event in
-                classify(event: event, audioEvents: burstAudioEvents)
+            let mergedEvents = mergeAdjacentSameDirection(
+                events.sorted(by: eventSort),
+                debugSession: debugSession
+            )
+            let normalized = mergedEvents.compactMap { event in
+                classify(
+                    event: event,
+                    audioEvents: burstAudioEvents,
+                    debugSession: debugSession
+                )
             }
+            #if DEBUG
+            debugSession?.recordNormalizedMovementCount(normalized.count)
+            #endif
+            return normalized
         }
 
         func classify(
             event: CaptureCore.DetectedNotationRecordMovementEvent,
-            audioEvents: [ScratchAudioNotationEventCandidate]
+            audioEvents: [ScratchAudioNotationEventCandidate],
+            debugSession: RoutineMovementDebugSession? = nil
         ) -> CaptureCore.DetectedNotationRecordMovementEvent? {
             let duration = max(0, event.endTime - event.startTime)
             guard duration > 0 else { return nil }
@@ -511,9 +711,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let speed = delta / max(duration, 0.001)
             let overlapsAudio = overlapsAudioActivity(event: event, audioEvents: audioEvents)
 
-            guard duration >= Self.minStrokeDuration || overlapsAudio else { return nil }
-            guard delta >= Self.minPositionDelta else { return nil }
-            guard speed >= Self.minSpeedForStroke else { return nil }
+            guard duration >= Self.minStrokeDuration || overlapsAudio else {
+                #if DEBUG
+                debugSession?.recordNormalizedDrop(.durationTooShort)
+                #endif
+                return nil
+            }
+            guard delta >= Self.minPositionDelta else {
+                #if DEBUG
+                debugSession?.recordNormalizedDrop(.deltaTooSmall)
+                #endif
+                return nil
+            }
+            guard speed >= Self.minSpeedForStroke else {
+                #if DEBUG
+                debugSession?.recordNormalizedDrop(.speedTooLow)
+                #endif
+                return nil
+            }
 
             var confidence = min(1, max(0, event.confidence))
             if overlapsAudio {
@@ -521,7 +736,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             } else {
                 confidence *= Self.unconfirmedConfidenceMultiplier
             }
-            guard confidence >= Self.minConfidenceForStroke else { return nil }
+            guard confidence >= Self.minConfidenceForStroke else {
+                #if DEBUG
+                debugSession?.recordNormalizedDrop(.confidenceTooLow)
+                #endif
+                return nil
+            }
 
             let movementKind = classifyMovementKind(
                 direction: event.direction,
@@ -529,7 +749,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 delta: delta,
                 speed: speed
             )
-            guard movementKind != .hold else { return nil }
+            guard movementKind != .hold else {
+                #if DEBUG
+                debugSession?.recordNormalizedDrop(.movementKindHold)
+                #endif
+                return nil
+            }
 
             return CaptureCore.DetectedNotationRecordMovementEvent(
                 startTime: event.startTime,
@@ -569,7 +794,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         private func mergeAdjacentSameDirection(
-            _ events: [CaptureCore.DetectedNotationRecordMovementEvent]
+            _ events: [CaptureCore.DetectedNotationRecordMovementEvent],
+            debugSession: RoutineMovementDebugSession? = nil
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             guard var active = events.first else { return [] }
             var merged: [CaptureCore.DetectedNotationRecordMovementEvent] = []
@@ -578,6 +804,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 let sameDirection = event.direction == active.direction
                 let gap = max(0, event.startTime - active.endTime)
                 if sameDirection && gap <= Self.maxMergeGap {
+                    #if DEBUG
+                    debugSession?.recordMerge()
+                    #endif
                     active = CaptureCore.DetectedNotationRecordMovementEvent(
                         startTime: active.startTime,
                         endTime: max(active.endTime, event.endTime),
@@ -640,11 +869,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             detectedLabel: String?,
             labelSource: String,
             labelConfidence: Double?,
-            capturedAt: Date = Date()
+            capturedAt: Date = Date(),
+            debugSession: RoutineMovementDebugSession? = nil
         ) -> CaptureCore.DetectedNotationSnapshot {
             let candidateMovementEvents = fuseMovementEvents(
                 audioEvents: audioSnapshot.audioEvents,
-                motionEvents: motionEvents
+                motionEvents: motionEvents,
+                debugSession: debugSession
             )
             let audioEvents = audioSnapshot.audioEvents.map {
                 CaptureCore.DetectedNotationAudioEvent(
@@ -660,8 +891,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             let trustedDirectionalEvents = trustedDirectionalEvents(
                 from: candidateMovementEvents,
-                audioEvents: audioSnapshot.audioEvents
+                audioEvents: audioSnapshot.audioEvents,
+                debugSession: debugSession
             )
+            #if DEBUG
+            debugSession?.recordFinalMovementCount(candidateMovementEvents.count)
+            #endif
             let detectedConfidence = trustedDirectionalEvents.isEmpty
                 ? nil
                 : trustedDirectionalEvents.map(\.confidence).reduce(0, +) / Double(trustedDirectionalEvents.count)
@@ -701,7 +936,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 labelSource: labelSource,
                 labelConfidence: labelConfidence,
                 detectionSources: detectionSources,
-                recordMovementEvents: hasDetectedDirectionalNotation ? trustedDirectionalEvents : [],
+                recordMovementEvents: candidateMovementEvents,
                 audioEvents: audioEvents,
                 faderEvents: [],
                 mixerMidiEvents: [],
@@ -711,26 +946,50 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         private func trustedDirectionalEvents(
             from events: [CaptureCore.DetectedNotationRecordMovementEvent],
-            audioEvents: [ScratchAudioNotationEventCandidate]
+            audioEvents: [ScratchAudioNotationEventCandidate],
+            debugSession: RoutineMovementDebugSession? = nil
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             let burstAudioEvents = audioEvents.filter { event in
                 event.eventKind == .scratchBurst || event.eventKind == .possibleDrag
             }
 
-            return events.filter { event in
-                guard event.confidence >= Self.minFusedMovementConfidence else { return false }
-                guard event.source == "fused" else { return false }
-                return audioOverlapRatio(for: event, audioEvents: burstAudioEvents) >= Self.minAudioOverlapRatioForDirectionalNotation
+            let trusted = events.filter { event in
+                guard event.confidence >= Self.minFusedMovementConfidence else {
+                    #if DEBUG
+                    debugSession?.recordTrustDrop(.lowConfidence)
+                    #endif
+                    return false
+                }
+                guard event.source == "fused" || event.source == "detected" else {
+                    #if DEBUG
+                    debugSession?.recordTrustDrop(.notFused)
+                    #endif
+                    return false
+                }
+                let overlap = audioOverlapRatio(for: event, audioEvents: burstAudioEvents)
+                guard overlap >= Self.minAudioOverlapRatioForDirectionalNotation || event.source == "detected" else {
+                    #if DEBUG
+                    debugSession?.recordTrustDrop(.lowAudioOverlap)
+                    #endif
+                    return false
+                }
+                return true
             }
+            #if DEBUG
+            debugSession?.recordTrustedDirectionalCount(trusted.count)
+            #endif
+            return trusted
         }
 
         private func fuseMovementEvents(
             audioEvents: [ScratchAudioNotationEventCandidate],
-            motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+            motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+            debugSession: RoutineMovementDebugSession? = nil
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             let normalizedMotionEvents = normalizer.normalize(
                 events: motionEvents,
-                audioEvents: audioEvents
+                audioEvents: audioEvents,
+                debugSession: debugSession
             )
             var fused: [CaptureCore.DetectedNotationRecordMovementEvent] = []
             var usedMotionIndexes = Set<Int>()
@@ -762,7 +1021,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     )
                     if let classified = normalizer.classify(
                         event: provisionalEvent,
-                        audioEvents: [audioEvent]
+                        audioEvents: [audioEvent],
+                        debugSession: debugSession
                     ) {
                         fused.append(classified)
                     }
@@ -783,13 +1043,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 )
                 if let classified = normalizer.classify(
                     event: downgradedEvent,
-                    audioEvents: burstAudioEvents
+                    audioEvents: burstAudioEvents,
+                    debugSession: debugSession
                 ) {
                     fused.append(classified)
                 }
             }
 
-            return normalizer.normalize(events: fused, audioEvents: burstAudioEvents)
+            let finalEvents = normalizer.normalize(
+                events: fused,
+                audioEvents: burstAudioEvents,
+                debugSession: debugSession
+            )
+            #if DEBUG
+            debugSession?.recordFusedMovementCount(finalEvents.count)
+            #endif
+            return finalEvents
         }
 
         private func audioOverlapRatio(
@@ -1449,13 +1718,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let seratoDirectCaptureDeviceUIDValue = "com.machelpnz.scratchlab.mac.serato-direct-capture"
 
     private var isRunning = false
-    private let activeHandPoseInterval: CFTimeInterval = 0.12
+    private let idleHandPoseInterval: CFTimeInterval = 0.12
+    private let routineRecordingHandPoseInterval: CFTimeInterval = 0.04
     private var lastVisionFrameTime: CFTimeInterval = 0
     private var lastPerformerMonitorFrameTime: CFTimeInterval = 0
     private let audioLevelPublishInterval: CFTimeInterval = 0.05
     private var lastPublishedAudioLevelTime: CFTimeInterval = 0
     private var smoothedHandPoint: CGPoint?
     private var missedHandTrackingFrames = 0
+    #if DEBUG
+    @Published private(set) var routineMovementDiagnostics: RoutineMovementDiagnosticsSnapshot?
+    private var activeRoutineMovementDebugSession: RoutineMovementDebugSession?
+    private var debugLastRawDirection: HandDirectionTracker.Direction = .idle
+    #endif
 
     #if DEBUG
     private var debugFramesReceived = 0
@@ -1596,6 +1871,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         missedHandTrackingFrames = 0
         performerMonitorFrame = nil
         lastStarAwardAt = nil
+        #if DEBUG
+        activeRoutineMovementDebugSession = nil
+        publishRoutineMovementDiagnostics(nil)
+        debugLastRawDirection = .idle
+        #endif
         resetAudioSignalLevel()
         videoQueue.async {
             self.clearFixedRigLayout()
@@ -1607,6 +1887,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             self.activeRoutineDetectedNotationBuilder = nil
             self.activeRoutineAudioNotationDetector = nil
+            #if DEBUG
+            self.activeRoutineMovementDebugSession = nil
+            self.publishRoutineMovementDiagnostics(nil)
+            #endif
             self.audioQueue.async {
                 self.activeRoutineAudioCaptureWriter = nil
                 self.publishRoutineAudioCaptureDiagnostics(nil)
@@ -1904,7 +2188,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 try self.writeRoutineRecordingSidecar(preparedRecording.sidecar, to: preparedRecording.sidecarURL)
                 self.activeRoutineRecordingSidecar = preparedRecording.sidecar
                 self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
+                #if DEBUG
+                let movementDebugSession = RoutineMovementDebugSession(handPoseInterval: self.routineRecordingHandPoseInterval)
+                self.activeRoutineMovementDebugSession = movementDebugSession
+                self.publishRoutineMovementDiagnostics(movementDebugSession.snapshot())
+                self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder(debugSession: movementDebugSession)
+                #else
                 self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder()
+                #endif
                 self.activeRoutineAudioNotationDetector = ScratchAudioNotationDetector()
                 self.audioQueue.sync {
                     self.activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter(destinationURL: preparedRecording.audioURL)
@@ -2503,6 +2794,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             activeRoutineRecordingSidecarURL = nil
             activeRoutineDetectedNotationBuilder = nil
             activeRoutineAudioNotationDetector = nil
+            #if DEBUG
+            activeRoutineMovementDebugSession = nil
+            #endif
             pendingRoutineTakeIdentity = nil
             pendingWatchReply = nil
         }
@@ -2525,8 +2819,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             motionEvents: motionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
-            labelConfidence: lastScratchDetection?.confidence
+            labelConfidence: lastScratchDetection?.confidence,
+            debugSession: activeRoutineMovementDebugSession
         ).withMixerMidiEvents(capturedMidi)
+        #if DEBUG
+        publishRoutineMovementDiagnostics(activeRoutineMovementDebugSession?.snapshot())
+        #endif
 
         sidecar = sidecar.finalized(
             mediaFileName: outputFileURL.lastPathComponent,
@@ -2762,6 +3060,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         #if DEBUG
         debugFramesReceived += 1
+        activeRoutineMovementDebugSession?.framesReceived += 1
         #endif
 
         let detectedLayout = fixedRigLayout == nil
@@ -2783,6 +3082,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         #if DEBUG
         debugFramesAnalyzed += 1
+        activeRoutineMovementDebugSession?.framesAnalyzed += 1
         let trackingRegion = resolvedHandTrackingRegion(for: layout)
         debugLastROI = trackingRegion
         #else
@@ -2812,11 +3112,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let movementState = handMotionState(from: direction)
 
             #if DEBUG
+            if direction != debugLastRawDirection {
+                activeRoutineMovementDebugSession?.recordRawDirectionChange()
+                debugLastRawDirection = direction
+            }
             if movementState != prevState { debugDirectionChanges += 1 }
+            if movementState != prevState {
+                activeRoutineMovementDebugSession?.recordSemanticDirectionChange()
+            }
             #endif
 
             // Use the smoothed point only for display position.
             let currentPoint = smoothedTrackingPoint(from: rawTrackedPoint)
+            #if DEBUG
+            activeRoutineMovementDebugSession?.recordSample(
+                rawPoint: rawTrackedPoint,
+                displayedPoint: currentPoint,
+                confidence: Double(handDirectionTracker.confidence),
+                rawDirection: direction,
+                semanticState: movementState
+            )
+            publishRoutineMovementDiagnostics(activeRoutineMovementDebugSession?.snapshot())
+            #endif
             publishHandTrackingIfNeeded(detected: true, position: currentPoint, state: movementState)
         } catch {
             Task { @MainActor in
@@ -2849,6 +3166,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case .movingForward, .movingBackward:
             return .steady
         }
+    }
+
+    private var activeHandPoseInterval: CFTimeInterval {
+        isRoutineRecording ? routineRecordingHandPoseInterval : idleHandPoseInterval
     }
 
     private func publishPerformerMonitorFrame(from pixelBuffer: CVPixelBuffer, layout: DJRigLayout?, at now: CFTimeInterval) {
@@ -3182,6 +3503,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     position: position,
                     confidence: motionConfidence
                 )
+                #if DEBUG
+                self.publishRoutineMovementDiagnostics(self.activeRoutineMovementDebugSession?.snapshot())
+                #endif
             }
 
             // CXL: record motion stroke on active-direction transitions.
@@ -3223,6 +3547,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         handDirectionTracker.reset()
         smoothedHandPoint = nil
         missedHandTrackingFrames = 0
+        #if DEBUG
+        debugLastRawDirection = .idle
+        #endif
         lastPublishedRigLayout = nil
         lastPublishedUsesManualRigGuide = false
         lastPublishedHandDetected = false
@@ -3535,6 +3862,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.lastRoutineAudioWriterError = snapshot?.lastErrorMessage
         }
     }
+
+    #if DEBUG
+    private func publishRoutineMovementDiagnostics(_ snapshot: RoutineMovementDiagnosticsSnapshot?) {
+        Task { @MainActor in
+            self.routineMovementDiagnostics = snapshot
+        }
+    }
+    #endif
 
     private func startAudioSignalDecayTimer() {
         let timer = DispatchSource.makeTimerSource(queue: audioQueue)
@@ -3914,8 +4249,53 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             audioScratchCount: scratchDetectionCount
         )
     }
+
+    static func summarizeDebugCounters(_ counters: [String: Int]) -> String {
+        guard !counters.isEmpty else { return "none" }
+        return counters
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key < rhs.key
+                }
+                return lhs.value > rhs.value
+            }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ", ")
+    }
     #endif
 }
+
+#if DEBUG
+private extension HandDirectionTracker.Direction {
+    var debugName: String {
+        switch self {
+        case .idle:
+            return "idle"
+        case .movingForward:
+            return "movingForward"
+        case .movingBackward:
+            return "movingBackward"
+        case .searching:
+            return "searching"
+        }
+    }
+}
+
+private extension MacCaptureEngine.HandMotionState {
+    var debugName: String {
+        switch self {
+        case .searching:
+            return "searching"
+        case .steady:
+            return "steady"
+        case .movingLeft:
+            return "movingLeft"
+        case .movingRight:
+            return "movingRight"
+        }
+    }
+}
+#endif
 
 extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {

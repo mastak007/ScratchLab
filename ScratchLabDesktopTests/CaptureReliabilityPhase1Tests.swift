@@ -4967,7 +4967,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
     }
 
-    func testNotationFusionKeepsLowConfidenceDirectionalMotionPartial() {
+    func testNotationFusionDropsLowConfidenceDirectionalMotionWhileRemainingPartial() {
         let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
         let audioSnapshot = ScratchAudioNotationSnapshot(
             audioEvents: [
@@ -5008,7 +5008,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(snapshot.notationConfidence), 0.66, accuracy: 0.001)
     }
 
-    func testNotationFusionRequiresTrustedFusedDirectionalEvidenceForDetected() {
+    func testNotationFusionKeepsOffTimingDirectionalMotionTruthfulWhileRemainingPartial() {
         let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
         let audioSnapshot = ScratchAudioNotationSnapshot(
             audioEvents: [
@@ -5044,7 +5044,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.notationSource, "partial")
         XCTAssertEqual(snapshot.detectionSources, ["audio", "video"])
-        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1)
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.direction, "forward")
         XCTAssertEqual(snapshot.audioEvents.count, 1)
         XCTAssertEqual(try XCTUnwrap(snapshot.notationConfidence), 0.74, accuracy: 0.001)
     }
@@ -5876,6 +5877,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("return .backward"))
         XCTAssertTrue(source.contains("return .forward"))
         XCTAssertTrue(source.contains("Self.normalizedRecordDirection(forCameraSpaceDirection: direction)"))
+    }
+
+    func testMacCaptureEngineSourcePublishesMovementDiagnosticsAndTruthfulCapturedEvents() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private let routineRecordingHandPoseInterval: CFTimeInterval = 0.04"))
+        XCTAssertTrue(source.contains("@Published private(set) var routineMovementDiagnostics"))
+        XCTAssertTrue(source.contains("private func publishRoutineMovementDiagnostics("))
+        XCTAssertTrue(source.contains("recordMovementEvents: candidateMovementEvents"))
+        XCTAssertTrue(source.contains("debugSession?.recordRawDrop(.durationTooShort)"))
+        XCTAssertTrue(source.contains("debugSession?.recordNormalizedDrop(.deltaTooSmall)"))
     }
 
     func testMacReviewScreenContainsCorrectionAndExportLabels() throws {

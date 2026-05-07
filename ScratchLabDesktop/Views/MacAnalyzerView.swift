@@ -1939,6 +1939,30 @@ struct MacAnalyzerView: View {
                    !lastRoutineAudioWriterError.isEmpty {
                     diagnosticRow(title: "Last audio writer error", value: lastRoutineAudioWriterError)
                 }
+                #if DEBUG
+                if let movementDiagnostics = captureEngine.routineMovementDiagnostics {
+                    diagnosticRow(
+                        title: "Movement pipeline",
+                        value: "\(movementDiagnostics.finalRecordMovementEvents) final / \(movementDiagnostics.trustedDirectionalEvents) trusted / \(movementDiagnostics.fusedMovementEvents) fused / \(movementDiagnostics.normalizedMovementEvents) normalized / \(movementDiagnostics.rawMovementEventsCreated) raw"
+                    )
+                    diagnosticRow(
+                        title: "Movement samples",
+                        value: "\(movementDiagnostics.observationsWithConfidence)/\(movementDiagnostics.handObservationsReceived) confident, \(movementDiagnostics.builderSamplesReceived) builder"
+                    )
+                    diagnosticRow(
+                        title: "Movement directions",
+                        value: "\(movementDiagnostics.semanticDirectionChanges) semantic / \(movementDiagnostics.rawDirectionChanges) raw"
+                    )
+                    diagnosticRow(
+                        title: "Video frames",
+                        value: "\(movementDiagnostics.framesAnalyzed)/\(movementDiagnostics.framesReceived) analyzed @ \(movementDiagnostics.handPoseIntervalMS)ms"
+                    )
+                    diagnosticRow(
+                        title: "Movement drops",
+                        value: "raw[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.rawDropReasons))] norm[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.normalizedDropReasons))] trust[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.trustDropReasons))]"
+                    )
+                }
+                #endif
                 diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", runtimeDiagnostics.notationLastTickDurationMS))
                 diagnosticRow(title: "Approx tick rate", value: diagnosticsTickRateValue)
                 diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", runtimeDiagnostics.coachLastUpdateDurationMS))
