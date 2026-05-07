@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Dispatch
@@ -611,6 +612,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         let partial = makeAudioOnlyDetectedNotationSnapshot()
         XCTAssertNotNil(partial.notationConfidence)
+    }
+
+    @MainActor
+    func testMacCaptureEngineNormalizesCameraSpaceDirectionToRecordDirection() {
+        XCTAssertEqual(
+            MacCaptureEngine.normalizedRecordDirection(forCameraSpaceDirection: .movingBackward),
+            .forward
+        )
+        XCTAssertEqual(
+            MacCaptureEngine.normalizedRecordDirection(forCameraSpaceDirection: .movingForward),
+            .backward
+        )
+        XCTAssertNil(MacCaptureEngine.normalizedRecordDirection(forCameraSpaceDirection: .idle))
+        XCTAssertNil(MacCaptureEngine.normalizedRecordDirection(forCameraSpaceDirection: .searching))
     }
 
     func testSessionListPresentationCapsRecentSessionsAtThree() {
@@ -4730,6 +4745,136 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
     }
 
+    func testRoutineDetectedNotationBuilderEmitsMultipleAlternatingMovementEventsForBabyScratchPhrase() {
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 100)
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+
+        let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
+            (100.00, .steady, 0.50),
+            (100.05, .movingRight, 0.56),
+            (100.10, .movingRight, 0.68),
+            (100.16, .movingRight, 0.84),
+            (100.20, .movingLeft, 0.78),
+            (100.26, .movingLeft, 0.60),
+            (100.32, .movingLeft, 0.32),
+            (100.38, .movingRight, 0.46),
+            (100.44, .movingRight, 0.70),
+            (100.50, .movingRight, 0.88),
+            (100.56, .movingLeft, 0.74),
+            (100.62, .movingLeft, 0.52),
+            (100.70, .movingLeft, 0.20)
+        ]
+
+        for (time, state, x) in observations {
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.92,
+                now: time
+            )
+        }
+
+        let rawEvents = builder.movementEvents(now: 100.72)
+        let normalized = normalizer.normalize(events: rawEvents, audioEvents: [])
+
+        XCTAssertEqual(rawEvents.count, 4)
+        XCTAssertEqual(rawEvents.map(\.direction), ["forward", "backward", "forward", "backward"])
+        XCTAssertEqual(normalized.count, 4)
+        XCTAssertEqual(normalized.map(\.direction), ["forward", "backward", "forward", "backward"])
+    }
+
+    func testRoutineDetectedNotationBuilderSplitsDirectionChangesInsteadOfMergingStrokes() {
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 200)
+
+        let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
+            (200.00, .movingRight, 0.24),
+            (200.07, .movingRight, 0.48),
+            (200.13, .movingRight, 0.78),
+            (200.18, .movingLeft, 0.72),
+            (200.24, .movingLeft, 0.51),
+            (200.31, .movingLeft, 0.18)
+        ]
+
+        for (time, state, x) in observations {
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.88,
+                now: time
+            )
+        }
+
+        let events = builder.movementEvents(now: 200.33)
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[0].direction, "forward")
+        XCTAssertEqual(events[1].direction, "backward")
+        XCTAssertLessThan(events[0].endTime, events[1].startTime)
+        XCTAssertGreaterThan(abs(events[0].endPosition - events[0].startPosition), 0.40)
+        XCTAssertGreaterThan(abs(events[1].endPosition - events[1].startPosition), 0.40)
+    }
+
+    func testRoutineDetectedNotationBuilderKeepsNormalBabyScratchRepetitionsAboveSuppressionThresholds() {
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 300)
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+
+        let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
+            (300.00, .movingRight, 0.40),
+            (300.06, .movingRight, 0.52),
+            (300.12, .movingRight, 0.64),
+            (300.18, .movingLeft, 0.58),
+            (300.24, .movingLeft, 0.46),
+            (300.30, .movingLeft, 0.34),
+            (300.36, .movingRight, 0.42),
+            (300.42, .movingRight, 0.54),
+            (300.48, .movingRight, 0.66),
+            (300.54, .movingLeft, 0.58),
+            (300.60, .movingLeft, 0.46),
+            (300.66, .movingLeft, 0.34)
+        ]
+
+        for (time, state, x) in observations {
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.84,
+                now: time
+            )
+        }
+
+        let normalized = normalizer.normalize(events: builder.movementEvents(now: 300.68), audioEvents: [])
+
+        XCTAssertEqual(normalized.count, 4)
+        XCTAssertTrue(normalized.allSatisfy { $0.movementKind == .normalPush || $0.movementKind == .normalPull })
+    }
+
+    func testRoutineDetectedNotationBuilderRejectsTinyJitterWithoutCreatingMovementEvents() {
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 400)
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+
+        let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
+            (400.00, .movingRight, 0.500),
+            (400.05, .movingRight, 0.507),
+            (400.10, .movingLeft, 0.503),
+            (400.15, .movingLeft, 0.496),
+            (400.20, .movingRight, 0.502),
+            (400.25, .movingRight, 0.509)
+        ]
+
+        for (time, state, x) in observations {
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.80,
+                now: time
+            )
+        }
+
+        let normalized = normalizer.normalize(events: builder.movementEvents(now: 400.27), audioEvents: [])
+
+        XCTAssertTrue(normalized.isEmpty)
+    }
+
     func testNotationFusionFallsBackToPartialWhenMotionIsOnlyJitter() {
         let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
         let audioSnapshot = ScratchAudioNotationSnapshot(
@@ -5718,6 +5863,19 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("movingLeft -> backward"))
         XCTAssertTrue(source.contains("struct ScratchAudioNotationEventCandidate"))
         XCTAssertTrue(source.contains("let eventKind: ScratchAudioNotationEventKind"))
+    }
+
+    func testMacCaptureEngineSourceDocumentsSingleDirectionNormalizationHelper() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("static func normalizedRecordDirection("))
+        XCTAssertTrue(source.contains("final class RoutineDetectedNotationBuilder"))
+        XCTAssertTrue(source.contains("func recordObservation("))
+        XCTAssertTrue(source.contains("self.activeRoutineDetectedNotationBuilder?.recordObservation("))
+        XCTAssertTrue(source.contains("return .backward"))
+        XCTAssertTrue(source.contains("return .forward"))
+        XCTAssertTrue(source.contains("Self.normalizedRecordDirection(forCameraSpaceDirection: direction)"))
     }
 
     func testMacReviewScreenContainsCorrectionAndExportLabels() throws {

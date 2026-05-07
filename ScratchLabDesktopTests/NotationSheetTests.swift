@@ -280,6 +280,34 @@ struct NotationSheetTests {
         #expect(source.contains("No fader data"))
     }
 
+    @Test("Detected preview preserves forward and backward stroke directions")
+    func detectedPreviewPreservesForwardAndBackwardDirections() throws {
+        let preview = try #require(
+            ScratchNotation.detectedPreview(
+                scratchID: "baby_scratch",
+                events: [
+                    makeMovementEvent(start: 0.0, end: 0.2, direction: "forward", kind: .normalPush),
+                    makeMovementEvent(start: 0.3, end: 0.5, direction: "backward", kind: .normalPull)
+                ]
+            )
+        )
+        #expect(preview.strokes.count == 2)
+        #expect(preview.strokes[0].direction == .forward)
+        #expect(preview.strokes[1].direction == .backward)
+    }
+
+    @Test("CapturedNotationDisplayView renders forward and backward events directly from event.direction")
+    func capturedNotationRendererUsesEventDirectionStrings() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.contains("let isForward = event.direction == \"forward\""))
+        #expect(source.contains("let y1: CGFloat = isForward ? mid + h : mid - h"))
+        #expect(source.contains("let y2: CGFloat = isForward ? mid - h : mid + h"))
+    }
+
     @Test("Template Demo source keeps Baby Scratch Template only in the template branch")
     func templateDemoStillOwnsBabyScratchTemplateLabel() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)

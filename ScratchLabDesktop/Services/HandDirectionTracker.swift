@@ -39,8 +39,8 @@ final class HandDirectionTracker {
 
     enum Direction: Equatable {
         /// Hand moving in the positive-X (rightward) direction in unmirrored camera space.
-        /// MacCaptureEngine maps this to the Baby Scratch "forward" cue for the front-facing
-        /// camera convention; top-down Desk View may need a future calibration-specific mapping.
+        /// MacCaptureEngine normalizes this camera-space direction into semantic
+        /// record-motion forward/backward cues for capture and notation.
         case movingForward
         /// Hand moving in the negative-X (leftward) direction in unmirrored camera space.
         case movingBackward

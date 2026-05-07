@@ -30,6 +30,11 @@ private enum ScratchLabDesktopDefaultsKey {
 }
 
 final class MacCaptureEngine: NSObject, ObservableObject {
+    enum LiveRecordDirection: String, Equatable {
+        case forward
+        case backward
+    }
+
     struct AudioInputDeviceChoice: Equatable {
         let uniqueID: String
         let name: String
@@ -290,12 +295,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private final class RoutineDetectedNotationBuilder {
+    final class RoutineDetectedNotationBuilder {
         private struct ActiveMovement {
             let direction: CXLDirection
             let startTime: TimeInterval
             let startPosition: Double?
             let startConfidence: Double
+            var latestTime: TimeInterval
+            var latestPosition: Double?
+            var latestConfidence: Double
+            var furthestTime: TimeInterval
+            var furthestPosition: Double?
+            var peakConfidence: Double
         }
 
         private let startedAt: CFTimeInterval
@@ -306,77 +317,123 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.startedAt = startedAt
         }
 
-        func recordStateChange(
-            from previousState: HandMotionState,
-            to newState: HandMotionState,
+        func recordObservation(
+            state: HandMotionState,
             position: CGPoint?,
             confidence: Double,
             now: CFTimeInterval = CACurrentMediaTime()
         ) {
-            let previousDirection = Self.direction(for: previousState)
-            let newDirection = Self.direction(for: newState)
+            let newDirection = Self.direction(for: state)
             let normalizedPosition = position.map { Double(min(max($0.x, 0), 1)) }
             let elapsed = max(0, now - startedAt)
 
-            if let activeMovement, previousDirection != newDirection {
-                finishActiveMovement(
-                    activeMovement,
-                    endTime: elapsed,
-                    endPosition: normalizedPosition,
-                    endConfidence: confidence
-                )
+            if var activeMovement {
+                if activeMovement.direction == newDirection {
+                    updateActiveMovement(
+                        &activeMovement,
+                        position: normalizedPosition,
+                        confidence: confidence,
+                        elapsed: elapsed
+                    )
+                    self.activeMovement = activeMovement
+                    return
+                }
+
+                finishActiveMovement(activeMovement)
+                self.activeMovement = nil
             }
 
-            guard newDirection == .forward || newDirection == .back else {
-                activeMovement = nil
-                return
-            }
+            guard newDirection == .forward || newDirection == .back else { return }
 
-            if previousDirection != newDirection {
-                activeMovement = ActiveMovement(
-                    direction: newDirection,
-                    startTime: elapsed,
-                    startPosition: normalizedPosition,
-                    startConfidence: confidence
-                )
-            }
+            let movement = ActiveMovement(
+                direction: newDirection,
+                startTime: elapsed,
+                startPosition: normalizedPosition,
+                startConfidence: confidence,
+                latestTime: elapsed,
+                latestPosition: normalizedPosition,
+                latestConfidence: confidence,
+                furthestTime: elapsed,
+                furthestPosition: normalizedPosition,
+                peakConfidence: confidence
+            )
+            self.activeMovement = movement
         }
 
         func movementEvents(
             now: CFTimeInterval = CACurrentMediaTime()
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-            if let activeMovement {
-                finishActiveMovement(
-                    activeMovement,
-                    endTime: max(0, now - startedAt),
-                    endPosition: nil,
-                    endConfidence: activeMovement.startConfidence
+            if var activeMovement {
+                let elapsed = max(0, now - startedAt)
+                updateActiveMovement(
+                    &activeMovement,
+                    position: activeMovement.latestPosition,
+                    confidence: activeMovement.latestConfidence,
+                    elapsed: elapsed
                 )
+                finishActiveMovement(activeMovement)
             }
             activeMovement = nil
             return events
         }
 
-        private func finishActiveMovement(
-            _ activeMovement: ActiveMovement,
-            endTime: TimeInterval,
-            endPosition: Double?,
-            endConfidence: Double
+        private func updateActiveMovement(
+            _ activeMovement: inout ActiveMovement,
+            position: Double?,
+            confidence: Double,
+            elapsed: TimeInterval
         ) {
+            activeMovement.latestTime = max(activeMovement.latestTime, elapsed)
+            activeMovement.latestConfidence = confidence
+            activeMovement.peakConfidence = max(activeMovement.peakConfidence, confidence)
+
+            guard let position else { return }
+            activeMovement.latestPosition = position
+
+            guard let currentExtreme = activeMovement.furthestPosition else {
+                activeMovement.furthestPosition = position
+                activeMovement.furthestTime = elapsed
+                return
+            }
+
+            let shouldAdvanceExtreme: Bool
+            switch activeMovement.direction {
+            case .forward:
+                shouldAdvanceExtreme = position >= currentExtreme
+            case .back:
+                shouldAdvanceExtreme = position <= currentExtreme
+            default:
+                shouldAdvanceExtreme = false
+            }
+
+            if shouldAdvanceExtreme {
+                activeMovement.furthestPosition = position
+                activeMovement.furthestTime = elapsed
+            }
+        }
+
+        private func finishActiveMovement(_ activeMovement: ActiveMovement) {
+            let resolvedEndPosition = activeMovement.furthestPosition
+                ?? activeMovement.latestPosition
+                ?? Self.defaultEndPosition(for: activeMovement.direction)
+            let endTime: TimeInterval
+            if activeMovement.furthestPosition != nil {
+                endTime = activeMovement.furthestTime
+            } else {
+                endTime = activeMovement.latestTime
+            }
             guard endTime > activeMovement.startTime else { return }
             let duration = endTime - activeMovement.startTime
             guard duration >= 0.045 else { return }
 
             let resolvedStartPosition = activeMovement.startPosition
                 ?? Self.defaultStartPosition(for: activeMovement.direction)
-            let resolvedEndPosition = endPosition
-                ?? Self.defaultEndPosition(for: activeMovement.direction)
             let distance = abs(resolvedEndPosition - resolvedStartPosition)
             guard distance >= RoutineNotationEventNormalizer.minPositionDelta / 2 else { return }
             let speed = duration > 0 ? distance / duration : 0
             let confidence = min(
                 1,
-                max(0, (activeMovement.startConfidence + endConfidence) / 2)
+                max(0, (activeMovement.startConfidence + activeMovement.peakConfidence) / 2)
             )
 
             let event = CaptureCore.DetectedNotationRecordMovementEvent(
@@ -416,9 +473,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     struct RoutineNotationEventNormalizer {
-        static let minStrokeDuration: TimeInterval = 0.07
-        static let minPositionDelta: Double = 0.03
-        static let minSpeedForStroke: Double = 0.18
+        static let minStrokeDuration: TimeInterval = 0.055
+        static let minPositionDelta: Double = 0.02
+        static let minSpeedForStroke: Double = 0.14
         static let maxMergeGap: TimeInterval = 0.08
         static let maxAudioAlignGap: TimeInterval = 0.09
         static let fastStrokeDuration: TimeInterval = 0.13
@@ -1673,6 +1730,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    static func normalizedRecordDirection(
+        forCameraSpaceDirection direction: HandDirectionTracker.Direction
+    ) -> LiveRecordDirection? {
+        switch direction {
+        case .movingForward:
+            return .backward
+        case .movingBackward:
+            return .forward
+        case .idle, .searching:
+            return nil
+        }
+    }
+
     private func cxlSignalSource() -> CXLSignalSource {
         switch coachSignalSource {
         case "Fused":     return .fused
@@ -2756,17 +2826,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func handMotionState(from direction: HandDirectionTracker.Direction) -> HandMotionState {
-        // Vision uses un-mirrored pixel-buffer coordinates on macOS (AVCaptureVideoDataOutput
-        // does not mirror; only the preview layer mirrors for front-facing cameras).
-        // Convention: x increases rightward in the frame. For a front-facing camera looking at
-        // the DJ, frame-right = DJ's physical left. A right-hand forward scratch stroke moves
-        // the hand to the DJ's left → frame-right → x increases → .movingForward.
-        // Desk View (top-down) maps differently; that limitation is documented in HandDirectionTracker.
+        // Vision reports unmirrored camera-space X from the raw pixel buffer, while capture
+        // notation needs semantic record movement. Manual routine-capture validation showed the
+        // previous direct mapping was inverted at the source: positive-X camera motion was being
+        // published as forward even though the corresponding record movement is backward. Keep
+        // the normalization in one place so live guidance, notation events, and CXL all inherit
+        // the same direction contract.
+        if let normalizedDirection = Self.normalizedRecordDirection(forCameraSpaceDirection: direction) {
+            switch normalizedDirection {
+            case .forward:
+                return .movingRight
+            case .backward:
+                return .movingLeft
+            }
+        }
+
         switch direction {
-        case .movingForward:  return .movingRight
-        case .movingBackward: return .movingLeft
-        case .idle:           return .steady
-        case .searching:      return .searching
+        case .idle:
+            return .steady
+        case .searching:
+            return .searching
+        case .movingForward, .movingBackward:
+            return .steady
         }
     }
 
@@ -3095,10 +3176,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.handPosition = position
             self.handMotionState = state
 
-            if self.isRoutineRecording, stateChanged {
-                self.activeRoutineDetectedNotationBuilder?.recordStateChange(
-                    from: prevState,
-                    to: state,
+            if self.isRoutineRecording {
+                self.activeRoutineDetectedNotationBuilder?.recordObservation(
+                    state: state,
                     position: position,
                     confidence: motionConfidence
                 )
