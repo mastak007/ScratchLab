@@ -24,6 +24,8 @@
 		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
 		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
 		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
+		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
+		AA200002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA200001 /* PrivacyInfo.xcprivacy */; };
 		203015F013837B25E7DAB626 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC2FA5C155AEA197428B94F6 /* Foundation.framework */; };
 		210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* MacCameraPreviewView.swift */; };
 		219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
@@ -219,6 +221,8 @@
 		A2000011 /* ProgressManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressManager.swift; sourceTree = "<group>"; };
 		A2000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA100001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		AA200001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A2000014 /* AIBattleModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBattleModeView.swift; sourceTree = "<group>"; };
 		A2000015 /* ScratchAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzer.swift; sourceTree = "<group>"; };
 		A2000019 /* ScratchFormulaAST.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaAST.swift; sourceTree = "<group>"; };
@@ -398,6 +402,7 @@
 				A2000035 /* Resources/CoachDemoMotion */,
 				A2000036 /* Resources/Notation */,
 				A2000013 /* Info.plist */,
+				AA100001 /* PrivacyInfo.xcprivacy */,
 				28D8D49DD481E6AE162278BE /* ThirdParty */,
 			);
 			path = ScratchLab;
@@ -499,6 +504,7 @@
 				B5000003 /* Services */,
 				B2000010 /* AppIcon.icns */,
 				B2000011 /* ScratchLabDesktop.entitlements */,
+				AA200001 /* PrivacyInfo.xcprivacy */,
 			);
 			path = ScratchLabDesktop;
 			sourceTree = "<group>";
@@ -682,6 +688,7 @@
 				B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */,
 				B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */,
 				772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */,
+				AA200002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 		};
 		A6000003 /* Resources */ = {
@@ -693,6 +700,7 @@
 				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
 				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
 				A1000012 /* Assets.xcassets in Resources */,
+				AA100002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 		};
 		DAACC32517BBFFB3FF712CCF /* Resources */ = {
@@ -1080,7 +1088,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_USE_OPTIMIZATION_PROFILE = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1116,7 +1124,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_USE_OPTIMIZATION_PROFILE = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
