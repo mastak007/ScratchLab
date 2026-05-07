@@ -192,6 +192,86 @@ struct NotationSheetTests {
         #expect(snap.detectionSources == ["camera", "audio"])
     }
 
+    // MARK: 10. Advanced lab defaults to captured mode when snapshot is present
+
+    @Test("NotationLabDisplayMode defaults to capturedTake when a snapshot is provided")
+    func advancedDefaultsToCapturedModeWhenSnapshotExists() {
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [makeMovementEvent(start: 0, end: 0.3)],
+            audio: [makeAudioEvent(start: 0, end: 0.3)]
+        )
+        let expectedMode = NotationLabDisplayMode.capturedTake
+        #expect(snap.hasDetectedEvents)
+        #expect(expectedMode == .capturedTake)
+        #expect(expectedMode != .templateDemo)
+    }
+
+    // MARK: 11. Captured snapshot source never surfaces demo audio filename
+
+    @Test("Captured snapshot detectionSources do not contain baby_noBeat.wav")
+    func capturedSourceDoesNotReferenceDemoAudio() {
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [makeMovementEvent(start: 0, end: 0.2)],
+            detectionSources: ["camera", "audio"]
+        )
+        #expect(snap.notationSource != "baby_noBeat.wav")
+        for src in snap.detectionSources {
+            #expect(!src.contains("baby_noBeat"))
+            #expect(!src.contains("baby_nobeat"))
+        }
+    }
+
+    // MARK: 12. Unavailable snapshot has no events — no fake strokes can be drawn
+
+    @Test("Unavailable snapshot contains no movement, audio, or fader events")
+    func unavailableSnapshotHasNoFakeStrokes() {
+        let snap = makeSnapshot(source: "unavailable")
+        #expect(snap.recordMovementEvents.isEmpty)
+        #expect(snap.audioEvents.isEmpty)
+        #expect(snap.faderEvents.isEmpty)
+        #expect(!snap.hasDetectedEvents)
+    }
+
+    // MARK: 13. Partial audio triggers direction-pending path (no movement events)
+
+    @Test("Partial snapshot with only audio events has empty movement events")
+    func partialAudioSnapshotTriggersDirectionPendingPath() {
+        let snap = makeSnapshot(
+            source: "partial",
+            audio: [makeAudioEvent(start: 0.0, end: 0.5, kind: "scratchBurst", confidence: 0.80)]
+        )
+        #expect(snap.recordMovementEvents.isEmpty)
+        #expect(!snap.audioEvents.isEmpty)
+        #expect(snap.notationSource == "partial")
+    }
+
+    // MARK: 14. No CXL strings surface in snapshot user-facing fields
+
+    @Test("DetectedNotationSnapshot source fields contain no CXL strings")
+    func snapshotHasNoCXLStrings() {
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [makeMovementEvent(start: 0, end: 0.2)],
+            detectionSources: ["camera", "audio"]
+        )
+        #expect(!snap.notationSource.contains("CXL"))
+        #expect(!snap.notationSource.contains("cxl"))
+        for src in snap.detectionSources {
+            #expect(!src.uppercased().contains("CXL"))
+        }
+    }
+
+    // MARK: 15. Template and captured modes are distinct and clearly labelled
+
+    @Test("NotationLabDisplayMode cases have correct raw value labels")
+    func displayModesHaveCorrectLabels() {
+        #expect(NotationLabDisplayMode.capturedTake.rawValue == "Captured Take")
+        #expect(NotationLabDisplayMode.templateDemo.rawValue == "Template Demo")
+        #expect(NotationLabDisplayMode.capturedTake != NotationLabDisplayMode.templateDemo)
+    }
+
     // MARK: Bonus: movement kind slope encoding
 
     @Test("Fast push/pull have higher height fraction than slow drag")

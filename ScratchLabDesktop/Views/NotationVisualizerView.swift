@@ -2,6 +2,13 @@ import SwiftUI
 import AppKit
 import QuartzCore
 
+// MARK: - Display Mode
+
+enum NotationLabDisplayMode: String, CaseIterable {
+    case capturedTake = "Captured Take"
+    case templateDemo = "Template Demo"
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -312,6 +319,7 @@ struct NotationVisualizerView: View {
     @StateObject private var vm: NotationVisualizerViewModel
 
     let capturedSnapshot: CaptureCore.DetectedNotationSnapshot?
+    @State private var displayMode: NotationLabDisplayMode
 
     private let ticker = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
@@ -319,14 +327,21 @@ struct NotationVisualizerView: View {
         _demo = ObservedObject(wrappedValue: demo)
         _vm = StateObject(wrappedValue: NotationVisualizerViewModel(demo: demo))
         self.capturedSnapshot = capturedSnapshot
+        _displayMode = State(initialValue: capturedSnapshot != nil ? .capturedTake : .templateDemo)
     }
+
+    private var showingCaptured: Bool { displayMode == .capturedTake }
 
     var body: some View {
         VStack(spacing: 0) {
             notationStatusBar
-            if let snapshot = capturedSnapshot {
-                CapturedNotationDisplayView(snapshot: snapshot)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if showingCaptured {
+                if let snapshot = capturedSnapshot {
+                    CapturedNotationDisplayView(snapshot: snapshot)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    noCapturedTakePane
+                }
             } else {
                 ScratchNotationCanvasView(
                     notation: vm.notation,
@@ -340,22 +355,43 @@ struct NotationVisualizerView: View {
         }
         .background(Color(white: 0.10))
         .onAppear {
-            if capturedSnapshot == nil {
+            if !showingCaptured {
                 demo.configureBabyScratchIfNeeded()
             }
         }
         .onReceive(ticker) { _ in
-            guard capturedSnapshot == nil else { return }
+            guard !showingCaptured else { return }
             vm.tick(captureEngine: captureEngine)
         }
         .onChange(of: captureEngine.handMotionState) { _, newState in
-            guard capturedSnapshot == nil else { return }
+            guard !showingCaptured else { return }
             guard vm.isPlaying || captureEngine.cxlIsRecording else { return }
             vm.recordObservedMotion(newState, loopTime: vm.playbackTime)
+        }
+        .onChange(of: displayMode) { _, newMode in
+            if newMode == .templateDemo {
+                demo.configureBabyScratchIfNeeded()
+            }
         }
         .onDisappear {
             vm.pause()
         }
+    }
+
+    private var noCapturedTakePane: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "waveform.path.ecg")
+                .font(.system(size: 32))
+                .foregroundStyle(Color(white: 0.35))
+            Text("No captured take selected.")
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color(white: 0.50))
+            Text("Record a take in Capture or open a saved take from Review.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color(white: 0.35))
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Status bar
@@ -364,13 +400,23 @@ struct NotationVisualizerView: View {
         HStack(spacing: 16) {
             ScratchLabBrandMark(size: 22)
 
-            if let snapshot = capturedSnapshot {
-                Text("Notation Lab · Captured Notation")
+            if capturedSnapshot != nil {
+                Picker("Mode", selection: $displayMode) {
+                    ForEach(NotationLabDisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+            } else {
+                Text("Notation Lab")
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white)
+            }
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
+            if showingCaptured, let snapshot = capturedSnapshot {
                 labelChip(
                     snapshot.notationSource == "detected" ? "Detected"
                         : snapshot.notationSource == "partial" ? "Partial"
@@ -394,12 +440,10 @@ struct NotationVisualizerView: View {
                     )
                 }
             } else {
-                Text("Notation Lab · Advanced technical view")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
-
-                Spacer(minLength: 0)
-
+                labelChip(
+                    "Baby Scratch Template",
+                    color: Color(red: 0.55, green: 0.75, blue: 1.0).opacity(0.75)
+                )
                 labelChip(
                     "Phrase \(String(format: "%.3f", vm.loopDuration))s",
                     color: Color(white: 0.45)
@@ -407,10 +451,6 @@ struct NotationVisualizerView: View {
                 labelChip(
                     demo.isAudioAvailable ? "Audio ready" : "Audio missing",
                     color: demo.isAudioAvailable ? Color(red: 0.2, green: 0.85, blue: 0.55) : Color(red: 1.0, green: 0.45, blue: 0.25)
-                )
-                labelChip(
-                    "Source: \(ScratchLabDemoSessionBuilder.demoAudioFileName)",
-                    color: Color(white: 0.45)
                 )
                 labelChip(
                     "Audio \(String(format: "%.1f", demo.currentAudioTime))s",
@@ -423,10 +463,6 @@ struct NotationVisualizerView: View {
                 labelChip(
                     captureEngine.cxlIsRecording ? "Recording" : "Idle",
                     color: captureEngine.cxlIsRecording ? Color(red: 1.0, green: 0.25, blue: 0.25) : Color(white: 0.35)
-                )
-                labelChip(
-                    "Baby Scratch Template",
-                    color: Color(white: 0.35)
                 )
             }
         }

@@ -543,7 +543,7 @@ struct MacAnalyzerView: View {
             advancedSidebar
                 .frame(minWidth: 340, idealWidth: 380, maxWidth: 460)
 
-            NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot)
+            NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
         }
     }
 

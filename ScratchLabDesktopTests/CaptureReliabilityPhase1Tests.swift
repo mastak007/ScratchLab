@@ -5943,7 +5943,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(macSource.contains("true (Live Input)"))
         XCTAssertTrue(macSource.contains("live preview"))
-        XCTAssertTrue(notationSource.contains("Notation Lab · Advanced technical view"))
+        XCTAssertTrue(notationSource.contains("Baby Scratch Template"))
         XCTAssertTrue(coreSource.contains("func markNotationIdle()"))
         XCTAssertTrue(notationSource.contains("ScratchLabRuntimeDiagnostics.shared.markNotationIdle()"))
     }
