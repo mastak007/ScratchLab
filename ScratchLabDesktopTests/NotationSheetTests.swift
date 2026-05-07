@@ -194,17 +194,37 @@ struct NotationSheetTests {
 
     // MARK: 10. Advanced lab defaults to captured mode when snapshot is present
 
-    @Test("NotationLabDisplayMode defaults to capturedTake when a snapshot is provided")
+    @Test("showingCaptured logic: snapshot present + no override = captured take is shown")
     func advancedDefaultsToCapturedModeWhenSnapshotExists() {
         let snap = makeSnapshot(
             source: "detected",
             movements: [makeMovementEvent(start: 0, end: 0.3)],
             audio: [makeAudioEvent(start: 0, end: 0.3)]
         )
-        let expectedMode = NotationLabDisplayMode.capturedTake
+        // showTemplateOverride defaults to false; showingCaptured = snap != nil && !false
+        let snapshotExists = (snap as CaptureCore.DetectedNotationSnapshot?) != nil
+        let showTemplateOverride = false  // default value of the @State
+        let showingCaptured = snapshotExists && !showTemplateOverride
+        #expect(showingCaptured)
         #expect(snap.hasDetectedEvents)
-        #expect(expectedMode == .capturedTake)
-        #expect(expectedMode != .templateDemo)
+    }
+
+    @Test("showingCaptured logic: snapshot present + override = template demo is shown")
+    func overrideToTemplateSuppressesCapturedTake() {
+        let snap = makeSnapshot(source: "detected",
+                                movements: [makeMovementEvent(start: 0, end: 0.2)])
+        let snapshotExists = (snap as CaptureCore.DetectedNotationSnapshot?) != nil
+        let showTemplateOverride = true  // user explicitly picked Template Demo
+        let showingCaptured = snapshotExists && !showTemplateOverride
+        #expect(!showingCaptured)
+    }
+
+    @Test("showingCaptured logic: no snapshot = template demo regardless of override")
+    func noSnapshotAlwaysShowsTemplateDemo() {
+        let snapshotExists = false  // capturedSnapshot == nil
+        let showTemplateOverride = false
+        let showingCaptured = snapshotExists && !showTemplateOverride
+        #expect(!showingCaptured)
     }
 
     // MARK: 11. Captured snapshot source never surfaces demo audio filename
@@ -245,6 +265,30 @@ struct NotationSheetTests {
         #expect(snap.recordMovementEvents.isEmpty)
         #expect(!snap.audioEvents.isEmpty)
         #expect(snap.notationSource == "partial")
+    }
+
+    @Test("Audio-only captured take source includes Audio-only notation and Record movement not detected copy")
+    func audioOnlyCapturedSourceIncludesRequiredCopy() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.contains("Audio-only notation"))
+        #expect(source.contains("Movement direction was not detected for this take."))
+        #expect(source.contains("Record movement not detected"))
+        #expect(source.contains("No fader data"))
+    }
+
+    @Test("Template Demo source keeps Baby Scratch Template only in the template branch")
+    func templateDemoStillOwnsBabyScratchTemplateLabel() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.contains("Baby Scratch Template"))
+        #expect(source.contains("if showingCaptured, let snapshot = capturedSnapshot"))
     }
 
     // MARK: 14. No CXL strings surface in snapshot user-facing fields

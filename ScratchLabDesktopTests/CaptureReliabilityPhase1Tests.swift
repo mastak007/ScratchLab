@@ -5687,7 +5687,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false"))
         XCTAssertTrue(source.contains("hasPartialReviewNotation"))
-        XCTAssertTrue(source.contains("Notation detected from audio. Direction pending video/motion confirmation."))
+        XCTAssertTrue(source.contains("Audio-only notation"))
+        XCTAssertTrue(source.contains("Movement direction was not detected for this take."))
+        XCTAssertTrue(source.contains("Record movement not detected"))
         XCTAssertTrue(source.contains("ScratchNotation.detectedPreview("))
         XCTAssertTrue(source.contains("Notation unavailable for this take."))
         XCTAssertFalse(source.contains("hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)"))
@@ -5728,6 +5730,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Stroke count",
             "Fader event count",
             "Captured Notation",
+            "Audio-only notation",
+            "Record movement not detected",
+            "Movement direction was not detected for this take.",
             "No take ready for review",
             "Record a take in Capture to see detected notation, confidence, and label options.",
             "Accept",
@@ -5746,6 +5751,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("without changing the raw captured media"))
         XCTAssertTrue(source.contains("if hasRecordedTake {"))
         XCTAssertTrue(source.contains("if hasReviewNotationPreview {"))
+        XCTAssertFalse(source.contains("title: \"Mini Notation Timeline\""))
     }
 
     func testMacAdvancedScreenContainsTechnicalToolsOutsidePrimaryNavigation() throws {
@@ -5944,6 +5950,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(macSource.contains("true (Live Input)"))
         XCTAssertTrue(macSource.contains("live preview"))
         XCTAssertTrue(notationSource.contains("Baby Scratch Template"))
+        XCTAssertTrue(notationSource.contains("Audio-only notation"))
+        XCTAssertTrue(notationSource.contains("Record movement not detected"))
+        XCTAssertFalse(notationSource.contains("Notation detected from audio — direction pending."))
         XCTAssertTrue(coreSource.contains("func markNotationIdle()"))
         XCTAssertTrue(notationSource.contains("ScratchLabRuntimeDiagnostics.shared.markNotationIdle()"))
     }

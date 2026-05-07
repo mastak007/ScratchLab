@@ -319,7 +319,9 @@ struct NotationVisualizerView: View {
     @StateObject private var vm: NotationVisualizerViewModel
 
     let capturedSnapshot: CaptureCore.DetectedNotationSnapshot?
-    @State private var displayMode: NotationLabDisplayMode
+    /// True only when user has explicitly picked Template Demo while a snapshot exists.
+    /// Starts false so any arriving snapshot immediately shows as Captured Take.
+    @State private var showTemplateOverride = false
 
     private let ticker = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
@@ -327,10 +329,10 @@ struct NotationVisualizerView: View {
         _demo = ObservedObject(wrappedValue: demo)
         _vm = StateObject(wrappedValue: NotationVisualizerViewModel(demo: demo))
         self.capturedSnapshot = capturedSnapshot
-        _displayMode = State(initialValue: capturedSnapshot != nil ? .capturedTake : .templateDemo)
     }
 
-    private var showingCaptured: Bool { displayMode == .capturedTake }
+    /// Captured Take is shown when a snapshot exists AND the user hasn't overridden to template.
+    private var showingCaptured: Bool { capturedSnapshot != nil && !showTemplateOverride }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -368,8 +370,14 @@ struct NotationVisualizerView: View {
             guard vm.isPlaying || captureEngine.cxlIsRecording else { return }
             vm.recordObservedMotion(newState, loopTime: vm.playbackTime)
         }
-        .onChange(of: displayMode) { _, newMode in
-            if newMode == .templateDemo {
+        .onChange(of: capturedSnapshot == nil) { _, isNil in
+            if !isNil {
+                // A snapshot just arrived — reset override so Captured Take is shown.
+                showTemplateOverride = false
+            }
+        }
+        .onChange(of: showTemplateOverride) { _, prefersTemplate in
+            if prefersTemplate {
                 demo.configureBabyScratchIfNeeded()
             }
         }
@@ -401,7 +409,10 @@ struct NotationVisualizerView: View {
             ScratchLabBrandMark(size: 22)
 
             if capturedSnapshot != nil {
-                Picker("Mode", selection: $displayMode) {
+                Picker("Mode", selection: Binding<NotationLabDisplayMode>(
+                    get: { showingCaptured ? .capturedTake : .templateDemo },
+                    set: { showTemplateOverride = ($0 == .templateDemo) }
+                )) {
                     ForEach(NotationLabDisplayMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
@@ -897,6 +908,22 @@ struct CapturedNotationDisplayView: View {
     private let gapColor     = Color(white: 0.38)
     private let labelColor   = Color(white: 0.52)
 
+    private var hasMovementEvents: Bool { !snapshot.recordMovementEvents.isEmpty }
+    private var hasAudioEvents: Bool { !snapshot.audioEvents.isEmpty }
+    private var hasFaderEvents: Bool { !snapshot.faderEvents.isEmpty }
+    private var isAudioOnlyPartial: Bool {
+        snapshot.notationSource == "partial" && !hasMovementEvents && hasAudioEvents
+    }
+    private var visibleDetectionSources: [String] {
+        snapshot.detectionSources.filter { source in
+            let lowercased = source.lowercased()
+            return !lowercased.contains("baby_nobeat")
+                && !lowercased.contains("baby_nobeat.wav")
+                && !lowercased.contains("baby_no beat")
+                && !lowercased.contains("baby scratch template")
+        }
+    }
+
     // Shared timeline scale — recomputed once from the widest lane
     private var totalDuration: Double {
         let movEnd = snapshot.recordMovementEvents.map(\.endTime).max() ?? 0
@@ -910,24 +937,23 @@ struct CapturedNotationDisplayView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     summaryHeader
-                    if snapshot.recordMovementEvents.isEmpty
-                        && snapshot.audioEvents.isEmpty
-                        && snapshot.faderEvents.isEmpty {
+                    if !snapshot.hasDetectedEvents {
                         unavailablePane
                     } else {
                         beatGridRuler(width: geo.size.width)
-                        if !snapshot.recordMovementEvents.isEmpty {
+                        if hasMovementEvents {
                             movementLane(width: geo.size.width)
                         } else {
                             partialMovementPlaceholder
                         }
-                        if !snapshot.audioEvents.isEmpty {
+                        if hasAudioEvents {
                             audioLane(width: geo.size.width)
                         }
                         faderLane(width: geo.size.width)
                         notationLegend
                     }
                 }
+                .padding(14)
             }
         }
         .background(Color(white: 0.095))
@@ -938,30 +964,51 @@ struct CapturedNotationDisplayView: View {
     private var summaryHeader: some View {
         let isDetected = snapshot.notationSource == "detected"
         let isPartial  = snapshot.notationSource == "partial"
-        let sourceLabel  = isDetected ? "Detected" : isPartial ? "Partial — Audio" : "Unavailable"
+        let sourceLabel  = isDetected ? "Detected notation" : isAudioOnlyPartial ? "Audio-only notation" : isPartial ? "Partial notation" : "Unavailable"
         let sourceColor: Color = isDetected ? forwardColor : isPartial ? cutColor : labelColor
         let sourceIcon   = isDetected ? "checkmark.seal.fill" : isPartial ? "waveform.path.badge.plus" : "waveform.path.ecg"
 
-        return HStack(spacing: 14) {
-            Label(sourceLabel, systemImage: sourceIcon)
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundStyle(sourceColor)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                Label(sourceLabel, systemImage: sourceIcon)
+                    .font(.system(size: isAudioOnlyPartial ? 15 : 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(sourceColor)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            if let conf = snapshot.notationConfidence {
-                headerChip("\(Int((conf * 100).rounded()))% confidence", color: labelColor)
+                if let conf = snapshot.notationConfidence {
+                    headerChip("\(Int((conf * 100).rounded()))% confidence", color: labelColor)
+                }
+                if !visibleDetectionSources.isEmpty {
+                    headerChip(visibleDetectionSources.joined(separator: " + "), color: labelColor)
+                }
+                if hasFaderEvents {
+                    headerChip("MIDI fader", color: faderColor)
+                }
             }
-            if !snapshot.detectionSources.isEmpty {
-                headerChip(snapshot.detectionSources.joined(separator: " + "), color: labelColor)
+
+            if isAudioOnlyPartial {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Movement direction was not detected for this take.")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Record movement not detected")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(labelColor)
+                }
             }
-            if !snapshot.faderEvents.isEmpty {
-                headerChip("MIDI fader", color: faderColor)
+
+            HStack(spacing: 8) {
+                summaryCountChip("Record movement \(snapshot.recordMovementEvents.count)", color: hasMovementEvents ? forwardColor : labelColor)
+                summaryCountChip("Audio \(snapshot.audioEvents.count)", color: hasAudioEvents ? audioColor : labelColor)
+                summaryCountChip("Fader \(snapshot.faderEvents.count)", color: hasFaderEvents ? faderColor : labelColor)
+                summaryCountChip("Mixer MIDI \(snapshot.mixerMidiEvents.count)", color: snapshot.mixerMidiEvents.isEmpty ? labelColor : cutColor)
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 11)
-        .background(Color(white: 0.14))
+        .padding(.vertical, isAudioOnlyPartial ? 16 : 11)
+        .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.bottom, 8)
     }
 
     // MARK: Beat grid / time ruler
@@ -984,8 +1031,8 @@ struct CapturedNotationDisplayView: View {
                     line.move(to: CGPoint(x: x, y: isMajor ? 0 : size.height * 0.55))
                     line.addLine(to: CGPoint(x: x, y: size.height))
                     ctx.stroke(line,
-                               with: .color(Color(white: isMajor ? 0.30 : 0.20)),
-                               lineWidth: isMajor ? 1.0 : 0.5)
+                               with: .color(Color(white: isMajor ? (isAudioOnlyPartial ? 0.42 : 0.30) : (isAudioOnlyPartial ? 0.28 : 0.20))),
+                               lineWidth: isMajor ? (isAudioOnlyPartial ? 1.4 : 1.0) : (isAudioOnlyPartial ? 0.85 : 0.5))
                     if isMajor {
                         ctx.draw(
                             Text(String(format: "%.1fs", t))
@@ -1007,7 +1054,9 @@ struct CapturedNotationDisplayView: View {
                 )
             }
         }
-        .frame(height: 24)
+        .frame(height: isAudioOnlyPartial ? 34 : 24)
+        .background(Color(white: 0.115), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.bottom, 6)
     }
 
     // MARK: Record movement lane
@@ -1094,19 +1143,29 @@ struct CapturedNotationDisplayView: View {
     // MARK: Partial placeholder when no movement events
 
     private var partialMovementPlaceholder: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: "waveform.path.badge.plus")
-                .font(.system(size: 14))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(audioColor)
-            Text("Notation detected from audio — direction pending.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(audioColor)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Audio-only notation")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text("Record movement not detected")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(audioColor)
+                Text("Movement direction was not detected for this take.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(labelColor)
+            }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(Color(white: 0.108))
-        .padding(.bottom, 1)
+        .padding(.vertical, 18)
+        .background(Color(white: 0.108), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.bottom, 8)
     }
 
     // MARK: Audio event lane
@@ -1115,6 +1174,7 @@ struct CapturedNotationDisplayView: View {
         let laneWidth = max(width - 56, 200.0)
         let duration = totalDuration
         let scale = CGFloat(laneWidth) / CGFloat(duration)
+        let laneHeight: CGFloat = isAudioOnlyPartial ? 108 : 56
 
         return VStack(alignment: .leading, spacing: 0) {
             laneHeader("AUDIO", icon: "waveform")
@@ -1124,35 +1184,35 @@ struct CapturedNotationDisplayView: View {
 
                 for event in snapshot.audioEvents {
                     let x = labelX + CGFloat(event.startTime) * scale
-                    let w = max(3, CGFloat(event.duration) * scale)
+                    let w = max(isAudioOnlyPartial ? 16 : 6, CGFloat(event.duration) * scale)
                     let color = audioEventColor(event.eventKind)
-                    let blockH = size.height * 0.58 * CGFloat(0.6 + event.confidence * 0.4)
+                    let blockH = size.height * (isAudioOnlyPartial ? 0.72 : 0.58) * CGFloat(0.68 + event.confidence * 0.32)
                     let blockY = (size.height - blockH) / 2
 
                     // Rounded block
                     let rect = CGRect(x: x, y: blockY, width: w, height: blockH)
                     ctx.fill(
-                        Path(roundedRect: rect, cornerRadius: 2),
+                        Path(roundedRect: rect, cornerRadius: isAudioOnlyPartial ? 8 : 4),
                         with: .color(color.opacity(0.55 + event.confidence * 0.35))
                     )
 
                     // Kind label inside wide-enough blocks
-                    if w > 32 {
+                    if w > (isAudioOnlyPartial ? 44 : 32) {
                         let shortLabel = audioEventShortLabel(event.eventKind)
                         ctx.draw(
                             Text(shortLabel)
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .font(.system(size: isAudioOnlyPartial ? 10 : 8, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Color.black.opacity(0.65)),
-                            at: CGPoint(x: x + 3, y: size.height / 2),
+                            at: CGPoint(x: x + (isAudioOnlyPartial ? 8 : 3), y: size.height / 2),
                             anchor: .leading
                         )
                     }
                 }
             }
-            .frame(height: 56)
+            .frame(height: laneHeight)
         }
-        .background(Color(white: 0.10))
-        .padding(.bottom, 1)
+        .background(Color(white: 0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.bottom, 8)
     }
 
     private func audioEventColor(_ kind: String) -> Color {
@@ -1190,7 +1250,7 @@ struct CapturedNotationDisplayView: View {
                     Spacer()
                 }
                 .padding(.vertical, 6)
-                .background(Color(white: 0.095))
+                .background(Color(white: 0.095), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             )
         }
 
@@ -1244,8 +1304,8 @@ struct CapturedNotationDisplayView: View {
                 }
                 .frame(height: 64)
             }
-            .background(Color(white: 0.096))
-            .padding(.bottom, 1)
+            .background(Color(white: 0.096), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.bottom, 8)
         )
     }
 
@@ -1274,7 +1334,7 @@ struct CapturedNotationDisplayView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(Color(white: 0.11))
+        .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func legendItem(color: Color, label: String) -> some View {
@@ -1323,6 +1383,15 @@ struct CapturedNotationDisplayView: View {
             .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 4))
     }
 
+    private func summaryCountChip(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     // Shared vertical grid lines across all lanes (keeps lanes visually aligned)
     private func drawSharedGrid(
         ctx: GraphicsContext,
@@ -1340,8 +1409,8 @@ struct CapturedNotationDisplayView: View {
             line.move(to: CGPoint(x: x, y: 0))
             line.addLine(to: CGPoint(x: x, y: size.height))
             ctx.stroke(line,
-                       with: .color(Color(white: isMajor ? 0.22 : 0.155)),
-                       lineWidth: isMajor ? 0.7 : 0.35)
+                       with: .color(Color(white: isMajor ? (isAudioOnlyPartial ? 0.34 : 0.22) : (isAudioOnlyPartial ? 0.24 : 0.155))),
+                       lineWidth: isMajor ? (isAudioOnlyPartial ? 1.0 : 0.7) : (isAudioOnlyPartial ? 0.65 : 0.35))
             t += step
         }
     }

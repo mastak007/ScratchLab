@@ -1020,3 +1020,15 @@ Keep working top-to-bottom from here once the checked items above are complete.
 - [x] Minimal App Review fix pass for sandboxed save destinations and review-risk bundled audio cleanup
   - Files: `TASKS.md`, `DEV_LOG.md`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktop/ScratchLabDesktop.entitlements`, `ScratchLab/Audio/AudioEngine.swift`, `ScratchLabDesktop/Services/MacScratchDetector.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLab.xcodeproj/project.pbxproj`
   - Done when: macOS `Save ZIP...` works with user-selected destinations in the sandboxed app, shipping iOS/macOS targets no longer bundle the review-risk reference/CXL Dataset/backing-track audio resources, hard-coded `/Users/...` development fallbacks are removed from shipped audio discovery, and the required build/test matrix stays green
+
+- [x] Fix captured audio-only notation review UI
+  - Root cause: captured takes with audioEvents but zero recordMovementEvents show only a thin audio lane, so the user cannot clearly read partial notation.
+  - Scope:
+    - Review mini panel title should be "Captured Notation", not "Mini Notation Timeline".
+    - Captured partial mode should clearly show "Audio-only notation" and "Record movement not detected".
+    - Make audio-only captured notation visually readable with a larger audio lane/time grid.
+    - Do not fake forward/back strokes when recordMovementEvents is empty.
+    - Keep Template Demo clearly labelled "Baby Scratch Template".
+    - Add/update tests.
+    - Run build/test/capture pipeline/git diff check.
+  - Completed: renamed the Review stage card to `Captured Notation`, changed captured partial copy to `Audio-only notation`, `Movement direction was not detected for this take.`, and `Record movement not detected`, kept full detected mode on real `recordMovementEvents`, filtered captured detection-source display so captured mode does not surface demo/template labels, enlarged the partial captured card with a stronger time grid plus a 108 px audio lane and larger rounded audio blocks, kept `No fader data` explicit when fader events are absent, updated notation/review source regressions for the new wording and captured/template separation, and verified with `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' build`, a clean rerun of `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' test` using an isolated derived-data path, `python3 scripts/test_capture_pipeline.py`, full `./scripts/build.sh`, and `git diff --check`.

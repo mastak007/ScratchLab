@@ -1228,7 +1228,7 @@ struct MacAnalyzerView: View {
             return "Review label: \(decision.rawValue)"
         }
         if hasPartialReviewNotation {
-            return "Notation detected from audio · Direction pending video/motion confirmation"
+            return "Audio-only notation · Record movement not detected"
         }
         return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
     }
@@ -1292,7 +1292,7 @@ struct MacAnalyzerView: View {
 
     private var reviewNotationAvailabilityMessage: String {
         if hasPartialReviewNotation {
-            return "Notation detected from audio. Direction pending video/motion confirmation."
+            return "Audio-only notation. Movement direction was not detected for this take. Record movement not detected."
         }
         return "Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved."
     }
@@ -2594,12 +2594,18 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.white)
 
             cameraStageCard(
-                title: "Mini Notation Timeline",
+                title: "Captured Notation",
                 subtitle: "Detected label, confidence, and correction state stay separate from raw captured files."
             ) {
                 VStack(spacing: 22) {
-                    miniNotationTimeline
-                        .padding(.horizontal, 32)
+                    if let snapshot = currentRoutineNotationSnapshot {
+                        CapturedNotationDisplayView(snapshot: snapshot)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 18)
+                    } else {
+                        miniNotationTimeline
+                            .padding(.horizontal, 32)
+                    }
 
                     Text(reviewDecisionSummary)
                         .font(.system(size: 20, weight: .semibold))
@@ -4519,14 +4525,26 @@ struct MacAnalyzerView: View {
                 .frame(height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else if hasTake {
-                Text(hasPartialReviewNotation
-                     ? "Notation detected from audio. Direction pending video/motion confirmation."
-                     : "Notation unavailable for this take.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
-                    .padding(10)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 6) {
+                    if hasPartialReviewNotation {
+                        Text("Audio-only notation")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text("Record movement not detected")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text("Movement direction was not detected for this take.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Notation unavailable for this take.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                .padding(12)
+                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 Text("Record a routine first to see notation here.")
                     .font(.system(size: 12, weight: .medium))
