@@ -59,6 +59,39 @@ class ScratchTypeAliasTests(unittest.TestCase):
         self.assertEqual(normalize("backward_scratch"), "backward_scratch")
         self.assertEqual(normalize("backward scratch"), "backward_scratch")
 
+    def test_tip_aliases_normalize_to_stab(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("tip"), "stab")
+        self.assertEqual(normalize("tips"), "stab")
+
+    def test_tip_aliases_are_case_insensitive(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("Tips"), "stab")
+        self.assertEqual(normalize("TIP"), "stab")
+
+    def test_existing_stab_alias_still_normalizes(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("stab"), "stab")
+
+    def test_original_flare_aliases_normalize_to_flare_1click(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("originalflare"), "flare_1click")
+        self.assertEqual(normalize("original_flare"), "flare_1click")
+        self.assertEqual(normalize("original flare"), "flare_1click")
+        self.assertEqual(normalize("original 1-click flare"), "flare_1click")
+
+    def test_original_flare_aliases_are_case_insensitive(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("OriginalFlare"), "flare_1click")
+        self.assertEqual(normalize("ORIGINAL FLARE"), "flare_1click")
+
+    def test_existing_flare_1click_aliases_still_normalize(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("flare_1click"), "flare_1click")
+        self.assertEqual(normalize("1 click flare"), "flare_1click")
+        self.assertEqual(normalize("1-click flare"), "flare_1click")
+        self.assertEqual(normalize("flare1click"), "flare_1click")
+
     def test_unrelated_baseline_canonicals_unchanged(self) -> None:
         normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
         self.assertEqual(normalize("baby"), "baby")
