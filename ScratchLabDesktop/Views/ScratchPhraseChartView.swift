@@ -26,7 +26,15 @@ struct ScratchPhraseChartView: View {
     private let dotCol     = Color(white: 0.82)
 
     var body: some View {
-        Canvas { ctx, size in
+        switch source {
+        case .target:
+            ScratchLabPerformanceSignpost.event("TargetNotationRender")
+        case .captured(let events):
+            ScratchLabPerformanceSignpost.event("CapturedNotationRender", count: events.count)
+        case .empty:
+            break
+        }
+        return Canvas { ctx, size in
             guard size.width > 0, size.height > 0 else { return }
             switch source {
             case .target(let notation):    drawTarget(ctx: ctx, size: size, notation: notation)

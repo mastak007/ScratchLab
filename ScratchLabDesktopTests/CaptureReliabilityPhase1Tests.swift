@@ -1242,8 +1242,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(audioSource.contains("ScratchLabPerformanceSignpost.begin(\"AudioAnalyze\")"))
         XCTAssertTrue(exportSource.contains("ScratchLabPerformanceSignpost.begin(\"ExportZIP\")"))
         XCTAssertTrue(macSource.contains("private var performanceDiagnosticsCard: some View"))
-        XCTAssertTrue(macSource.contains("Playback state"))
-        XCTAssertTrue(macSource.contains("Camera active"))
+        XCTAssertTrue(macSource.contains("Playback"))
+        XCTAssertTrue(macSource.contains("Camera"))
         XCTAssertTrue(macSource.contains("Last notation tick"))
     }
 

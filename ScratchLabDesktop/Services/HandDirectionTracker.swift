@@ -88,6 +88,7 @@ final class HandDirectionTracker {
     /// - Returns: The direction to display immediately.
     @discardableResult
     func recordObservation(rawPoint: CGPoint, at time: CFTimeInterval) -> Direction {
+        ScratchLabPerformanceSignpost.event("HandDirectionAnalyze")
         missedCount = 0
         history.append(Sample(position: rawPoint, time: time))
         if history.count > Self.historyCapacity {

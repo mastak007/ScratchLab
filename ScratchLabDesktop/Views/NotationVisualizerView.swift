@@ -162,6 +162,7 @@ final class NotationVisualizerViewModel: ObservableObject {
 
         // Audio player time is the master clock. Map it to notation phrase time.
         let audioTime = demo.currentAudioTime
+        ScratchLabPerformanceSignpost.event("CoachPlaybackTick", time: audioTime)
         let cycleDur = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
 
         let currentCycleIndex = cycleDur > 0 ? Int(audioTime / cycleDur) : 0
@@ -673,7 +674,8 @@ struct NotationTimelineCanvas: View {
     private let dotColor      = Color(white: 0.82)
 
     var body: some View {
-        Canvas { ctx, size in
+        ScratchLabPerformanceSignpost.event("TargetNotationRender")
+        return Canvas { ctx, size in
             let now = vm.playbackTime
             let loop = vm.loopDuration
             let targetH = size.height * targetLaneHeightFraction
@@ -948,7 +950,11 @@ struct CapturedNotationDisplayView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
+        ScratchLabPerformanceSignpost.event(
+            "CapturedNotationRender",
+            count: snapshot.recordMovementEvents.count
+        )
+        return GeometryReader { geo in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     summaryHeader

@@ -35,6 +35,49 @@ enum ScratchLabPerformanceSignpost {
         defer { end(name, signpostID) }
         return try work()
     }
+
+    /// Fire-and-forget Points-of-Interest marker. Use for high-frequency
+    /// signals like audio buffers / MIDI packets where opening an interval
+    /// would add overhead without surfacing useful timing.
+    static func event(_ name: StaticString) {
+        os_signpost(.event, log: log, name: name)
+    }
+
+    /// Event with a single integer payload (counts).
+    static func event(_ name: StaticString, count: Int) {
+        os_signpost(.event, log: log, name: name, "count=%{public}d", count)
+    }
+
+    /// Event with a single double payload (seconds, ms, normalised value).
+    static func event(_ name: StaticString, time: Double) {
+        os_signpost(.event, log: log, name: name, "time=%{public}.4f", time)
+    }
+
+    /// Event with a count plus take number — useful for take-scoped pipeline
+    /// stages so the Instruments timeline groups by take.
+    static func event(_ name: StaticString, count: Int, take: Int) {
+        os_signpost(.event, log: log, name: name, "count=%{public}d take=%{public}d", count, take)
+    }
+
+    /// Notation-snapshot event: records the three event-lane counts and the
+    /// take number so a snapshot can be inspected without dumping payload.
+    static func eventNotationSnapshot(
+        movement: Int,
+        audio: Int,
+        fader: Int,
+        take: Int
+    ) {
+        os_signpost(
+            .event,
+            log: log,
+            name: "NotationSnapshotCreate",
+            "movement=%{public}d audio=%{public}d fader=%{public}d take=%{public}d",
+            movement,
+            audio,
+            fader,
+            take
+        )
+    }
 }
 
 final class ScratchLabRuntimeDiagnostics: ObservableObject {
@@ -3417,7 +3460,8 @@ final class BabyScratchDemoPlaybackCoordinator: ObservableObject {
     }
 
     nonisolated static func coachPose(for audioTime: TimeInterval) -> BabyScratchReferenceMotionPose {
-        BabyScratchReferenceMotionTimeline.pose(at: audioTime)
+        ScratchLabPerformanceSignpost.event("CoachPoseLookup", time: audioTime)
+        return BabyScratchReferenceMotionTimeline.pose(at: audioTime)
     }
 
     nonisolated static func coachAnimationState(

@@ -2855,8 +2855,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let labelSource = lastScratchDetection == nil ? "unknown" : "detected"
         let audioSnapshot = activeRoutineAudioNotationDetector?.snapshot() ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
         let motionEvents = activeRoutineDetectedNotationBuilder?.movementEvents() ?? []
+        ScratchLabPerformanceSignpost.event(
+            "MovementEventBuild",
+            count: motionEvents.count,
+            take: sidecar.appLocalTakeNumber
+        )
         let capturedMidi = drainCapturedMidiCCEvents()
         reconnectSelectedMIDIInput()
+        let normalizeID = ScratchLabPerformanceSignpost.begin("MovementNormalize")
         let notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: motionEvents,
@@ -2865,6 +2871,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             labelConfidence: lastScratchDetection?.confidence,
             debugSession: activeRoutineMovementDebugSession
         ).withMixerMidiEvents(capturedMidi)
+        ScratchLabPerformanceSignpost.end("MovementNormalize", normalizeID)
+        ScratchLabPerformanceSignpost.eventNotationSnapshot(
+            movement: notationSnapshot.recordMovementEvents.count,
+            audio: notationSnapshot.audioEvents.count,
+            fader: notationSnapshot.faderEvents.count,
+            take: sidecar.appLocalTakeNumber
+        )
         #if DEBUG
         publishRoutineMovementDiagnostics(activeRoutineMovementDebugSession?.snapshot())
         #endif
@@ -3278,6 +3291,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let hasFiniteMeasuredLevel = measuredLevel.isFinite
         let sanitizedLevel = hasFiniteMeasuredLevel ? min(max(measuredLevel, 0), 1) : 0
         let detection = scratchDetector.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
+        if detection != nil {
+            ScratchLabPerformanceSignpost.event("AudioOnsetDetected")
+        }
         if isRoutineRecording || movieOutput.isRecording {
             activeRoutineAudioNotationDetector?.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
         }
@@ -4036,6 +4052,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
+        ScratchLabPerformanceSignpost.event(
+            "MIDIReceived",
+            count: Int(packetListPtr.pointee.numPackets)
+        )
         let now = CACurrentMediaTime()
         midiCaptureLock.lock()
         let startTime = midiRecordingStartTime
@@ -4069,6 +4089,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             }
 
                             let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
+                            if mappedControl == "crossfader" {
+                                ScratchLabPerformanceSignpost.event("FaderMap", count: value)
+                            }
                             recordReceivedMIDICCEvent(
                                 sourceName: deviceName,
                                 channel: channel,
@@ -4346,6 +4369,10 @@ private extension MacCaptureEngine.HandMotionState {
 extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         if output is AVCaptureAudioDataOutput {
+            ScratchLabPerformanceSignpost.event(
+                "AudioBufferReceived",
+                count: Int(CMSampleBufferGetNumSamples(sampleBuffer))
+            )
             appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)
         }
         guard shouldProcessCaptureSamples else { return }
