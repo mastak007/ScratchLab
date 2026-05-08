@@ -20,3 +20,29 @@ auto-task.sh
 __pycache__/
 *.pyc
 DesignReferences/
+
+# Local build/test output
+build/
+DerivedData*/
+DerivedData-*/
+.derived-data-log-*
+*.xcresult
+*.log
+test-*.log
+capture-*.log
+detector-*.log
+routine-*.log
+
+# Xcode caches
+ModuleCache.noindex/
+Index.noindex/
+SDKStatCaches.noindex/
+CompilationCache.noindex/
+xcuserdata/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Signing/private certs
+*.p12
