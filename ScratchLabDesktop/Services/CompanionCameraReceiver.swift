@@ -25,11 +25,11 @@ final class RelayedWatchCaptureStore: ObservableObject {
             case .idle:
                 return "Watch motion relay is idle."
             case .starting:
-                return "Starting watch motion capture through iPhone."
+                return "Starting watch motion capture through companion device."
             case .acknowledged:
                 return "Watch motion capture acknowledged."
             case .stopping:
-                return "Stopping watch motion capture through iPhone."
+                return "Stopping watch motion capture through companion device."
             case .timedOut(let message), .unavailable(let message), .failed(let message):
                 return message
             }
@@ -37,7 +37,7 @@ final class RelayedWatchCaptureStore: ObservableObject {
     }
 
     @Published private(set) var importedSessions: [RelayedWatchMotionCapture] = []
-    @Published private(set) var lastImportStatus = "Waiting for a watch capture relay from iPhone."
+    @Published private(set) var lastImportStatus = "Waiting for a watch capture relay from companion device."
     @Published private(set) var remoteControlState: RemoteControlState = .idle
 
     private let fileManager = FileManager.default
@@ -109,7 +109,7 @@ final class RelayedWatchCaptureStore: ObservableObject {
             )
             reconcileStoredSessions()
             loadStoredSessions()
-            lastImportStatus = "Imported watch motion relay from \(sourcePeerName ?? "iPhone") at \(formatDate(storedCapture.session.deviceRecordedAtStart))."
+            lastImportStatus = "Imported watch motion relay from \(sourcePeerName ?? "companion device") at \(formatDate(storedCapture.session.deviceRecordedAtStart))."
         } catch {
             lastImportStatus = "Watch motion relay failed to import."
         }
@@ -281,7 +281,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
                 sessionID: sessionID,
                 takeID: takeID,
                 syncState: .unavailable,
-                detail: "Connect the iPhone companion before trying to control watch capture."
+                detail: "Connect the companion device before trying to control watch capture."
             )
             relayedWatchCaptureStore.noteRemoteControlStatus(reply)
             return reply
@@ -294,7 +294,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
                 sessionID: sessionID,
                 takeID: takeID,
                 syncState: .failed,
-                detail: "ScratchLab couldn't send the watch control command to iPhone."
+                detail: "ScratchLab couldn't send the watch control command to the companion device."
             )
             relayedWatchCaptureStore.noteRemoteControlStatus(reply)
             return reply
@@ -349,7 +349,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
                     sessionID: sessionID,
                     takeID: takeID,
                     syncState: .failed,
-                    detail: "ScratchLab couldn't send the watch stop command to iPhone."
+                    detail: "ScratchLab couldn't send the watch stop command to the companion device."
                 )
             )
         }

@@ -545,7 +545,7 @@ enum CXLExportError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noActiveSession: return "No CXL session is active. Start a session before exporting."
+        case .noActiveSession: return "No notation capture session is active. Start a session before exporting."
         }
     }
 }

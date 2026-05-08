@@ -302,7 +302,7 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         }
 
         guard watchSession.isReachable else {
-            let detail = "Open ScratchLab on the watch so iPhone can control motion capture."
+            let detail = "Open ScratchLab on the watch so this device can control motion capture."
             remoteCaptureState = .unavailable(detail)
             completion(
                 WatchCaptureControlReply(
