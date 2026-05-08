@@ -141,7 +141,7 @@ struct ScratchNotationCanvasView: View {
                 let loopT = t.truncatingRemainder(dividingBy: loop)
                 ctx.draw(
                     Text(String(format: "%.2f", loopT < 0 ? loopT + loop : loopT))
-                        .font(.system(size: 8, design: .monospaced))
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Color(white: 0.33)),
                     at: CGPoint(x: x + 3, y: size.height - 2),
                     anchor: .bottomLeading
@@ -156,7 +156,7 @@ struct ScratchNotationCanvasView: View {
     private func drawLaneLabel(ctx: GraphicsContext, text: String, y: CGFloat, size: CGSize) {
         ctx.draw(
             Text(text)
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color(white: 0.38)),
             at: CGPoint(x: 6, y: y),
             anchor: .topLeading

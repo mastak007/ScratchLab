@@ -188,8 +188,8 @@ struct ScratchPhraseChartView: View {
             if beat > 0 {
                 ctx.draw(
                     Text("\(beat)")
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.30)),
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.55)),
                     at: CGPoint(x: x + 2, y: size.height - 2),
                     anchor: .bottomLeading
                 )
@@ -202,14 +202,14 @@ struct ScratchPhraseChartView: View {
     private func drawAxisLabels(ctx: GraphicsContext, size: CGSize, midY: CGFloat) {
         ctx.draw(
             Text("FWD")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(forwardCol.opacity(0.55)),
             at: CGPoint(x: 4, y: midY - size.height * 0.38),
             anchor: .leading
         )
         ctx.draw(
             Text("BACK")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(backCol.opacity(0.55)),
             at: CGPoint(x: 4, y: midY + size.height * 0.30),
             anchor: .leading

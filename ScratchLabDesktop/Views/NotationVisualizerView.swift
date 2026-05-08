@@ -405,13 +405,13 @@ struct NotationVisualizerView: View {
         VStack(spacing: 10) {
             Image(systemName: "waveform.path.ecg")
                 .font(.system(size: 32))
-                .foregroundStyle(Color(white: 0.35))
+                .foregroundStyle(.secondary)
             Text("No captured take selected.")
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color(white: 0.50))
+                .foregroundStyle(.primary)
             Text("Record a take in Capture or open a saved take from Review.")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color(white: 0.35))
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -529,8 +529,8 @@ struct NotationVisualizerView: View {
         let (label, color): (String, Color) = switch state {
         case .movingRight: ("▶▶ Forward",  Color(red: 0.2,  green: 0.85, blue: 0.55))
         case .movingLeft:  ("◀◀ Back",     Color(red: 1.0,  green: 0.55, blue: 0.10))
-        case .steady:      ("— Steady",    Color(white: 0.50))
-        case .searching:   ("⊘ Searching", Color(white: 0.30))
+        case .steady:      ("— Steady",    Color(white: 0.62))
+        case .searching:   ("⊘ Searching", Color(white: 0.55))
         }
         return Text(label)
             .font(.system(size: 12, weight: .bold, design: .monospaced))
@@ -643,11 +643,11 @@ struct NotationVisualizerView: View {
     private func scoreBadge(_ label: String, count: Int, color: Color) -> some View {
         HStack(spacing: 3) {
             Text(label)
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color(white: 0.50))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
             Text("\(count)")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(count > 0 ? color : Color(white: 0.30))
+                .foregroundStyle(count > 0 ? color : .secondary)
         }
     }
 }
@@ -781,8 +781,8 @@ struct NotationTimelineCanvas: View {
                 let beatLabel = String(format: "%.2f", t.truncatingRemainder(dividingBy: loop))
                 ctx.draw(
                     Text(beatLabel)
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.35)),
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.55)),
                     at: CGPoint(x: x + 3, y: size.height - 2),
                     anchor: .bottomLeading
                 )
@@ -1092,7 +1092,7 @@ struct CapturedNotationDisplayView: View {
                 ctx.draw(
                     Text("TIME")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.35)),
+                        .foregroundStyle(Color(white: 0.55)),
                     at: CGPoint(x: 6, y: size.height / 2),
                     anchor: .leading
                 )
@@ -1154,14 +1154,14 @@ struct CapturedNotationDisplayView: View {
                 // Forward / Back axis labels
                 ctx.draw(
                     Text("FWD")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(forwardColor.opacity(0.55)),
                     at: CGPoint(x: 4, y: mid - size.height * 0.38),
                     anchor: .leading
                 )
                 ctx.draw(
                     Text("BACK")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(backColor.opacity(0.55)),
                     at: CGPoint(x: 4, y: mid + size.height * 0.30),
                     anchor: .leading
@@ -1222,7 +1222,7 @@ struct CapturedNotationDisplayView: View {
                 // Disclaimer label at right
                 ctx.draw(
                     Text("estimated")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(inferredColor.opacity(0.45)),
                     at: CGPoint(x: size.width - 4, y: size.height - 4),
                     anchor: .bottomTrailing
@@ -1349,9 +1349,9 @@ struct CapturedNotationDisplayView: View {
             return AnyView(
                 HStack(spacing: 8) {
                     laneHeader("FADER", icon: "slider.horizontal.3")
-                    Text("No fader data")
+                    Text("No fader data captured.")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.32))
+                        .foregroundStyle(.secondary)
                     Spacer()
                 }
                 .padding(.vertical, 6)
@@ -1429,25 +1429,59 @@ struct CapturedNotationDisplayView: View {
     // MARK: Legend
 
     private var notationLegend: some View {
-        HStack(spacing: 14) {
-            legendItem(color: forwardColor,                            label: "Forward")
-            legendItem(color: backColor,                               label: "Back")
-            legendItem(color: ScratchLabDesign.Notation.audioInferred, label: "Audio inferred")
-            legendItem(color: audioColor,                              label: "Scratch burst")
-            legendItem(color: cutColor,                                label: "Drag / cut")
-            legendItem(color: faderColor,                              label: "Fader")
-            legendItem(color: gapColor,                                label: "Silence")
+        // Each legend item carries a non-colour cue: a slope glyph + letter
+        // ("↗ F" / "↘ B") for directional strokes, an SF Symbol for
+        // non-directional events. A colour-blind user can still tell
+        // Forward from Back by the arrow and the F/B letter, which match
+        // the chart's per-stroke labels in ScratchPhraseChartView.
+        // ViewThatFits picks the single-row layout when the panel is wide
+        // enough; on narrow stage widths it falls back to two rows so the
+        // legend never clips or shrinks below 10pt.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                legendItem(color: forwardColor,                            label: "Forward",       glyph: "↗ F")
+                legendItem(color: backColor,                               label: "Back",          glyph: "↘ B")
+                legendItem(color: ScratchLabDesign.Notation.audioInferred, label: "Audio inferred", systemImage: "ear.and.waveform")
+                legendItem(color: audioColor,                              label: "Scratch burst",  systemImage: "waveform")
+                legendItem(color: cutColor,                                label: "Drag / cut",     systemImage: "scissors")
+                legendItem(color: faderColor,                              label: "Fader",          systemImage: "slider.horizontal.3")
+                legendItem(color: gapColor,                                label: "Silence",        systemImage: "pause")
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 14) {
+                    legendItem(color: forwardColor,                            label: "Forward",       glyph: "↗ F")
+                    legendItem(color: backColor,                               label: "Back",          glyph: "↘ B")
+                    legendItem(color: ScratchLabDesign.Notation.audioInferred, label: "Audio inferred", systemImage: "ear.and.waveform")
+                    legendItem(color: audioColor,                              label: "Scratch burst",  systemImage: "waveform")
+                }
+                HStack(spacing: 14) {
+                    legendItem(color: cutColor,                                label: "Drag / cut",     systemImage: "scissors")
+                    legendItem(color: faderColor,                              label: "Fader",          systemImage: "slider.horizontal.3")
+                    legendItem(color: gapColor,                                label: "Silence",        systemImage: "pause")
+                }
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
         .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func legendItem(color: Color, label: String) -> some View {
+    private func legendItem(color: Color, label: String, glyph: String? = nil, systemImage: String? = nil) -> some View {
         HStack(spacing: 5) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(color)
                 .frame(width: 16, height: 6)
+            if let glyph {
+                Text(glyph)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(color)
+                    .accessibilityHidden(true)
+            } else if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(color)
+                    .accessibilityHidden(true)
+            }
             Text(label)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(labelColor)

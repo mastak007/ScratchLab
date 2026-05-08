@@ -85,7 +85,7 @@ struct MacAnalyzerView: View {
             case .chirp: return "Chirp"
             case .transform: return "Transform"
             case .flare: return "Flare"
-            case .unknown: return "Unknown"
+            case .unknown: return "Other"
             }
         }
 
@@ -266,8 +266,8 @@ struct MacAnalyzerView: View {
             switch self {
             case .overview:       return "Overview"
             case .audio:          return "Audio"
-            case .cameraDeck:     return "Camera / Deck"
-            case .midiFader:      return "MIDI / Fader"
+            case .cameraDeck:     return "Camera & deck"
+            case .midiFader:      return "MIDI & fader"
             case .monitor:        return "Monitor / Connection"
             case .captureDetails: return "Capture details"
             }
@@ -590,15 +590,36 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceSidebar: some View {
-        // Coach + practice controls sit at the top. Audio input, scratch
-        // detection, ability rating, and quick workflow live behind a single
-        // collapsed Diagnostics group so the coaching screen doesn't read like
-        // a diagnostics dashboard.
+        // Practice is the coaching surface. The first scroll viewport shows
+        // the Practice header + Coach + Practice run cards. Try the demo,
+        // Progress tiles, and Diagnostics & workflow all collapse behind
+        // disclosures so the coaching screen doesn't feel like a dashboard.
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 practiceHeaderCard
-                macDemoModeCard
-                practiceControlCard
+                practiceCoachCard
+                practiceRunCard
+                practiceBeatTrainerCard
+
+                DisclosureGroup {
+                    macDemoModeCard
+                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+                } label: {
+                    Label("Try the demo", systemImage: "play.circle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
+
+                DisclosureGroup {
+                    practiceProgressTilesRow
+                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+                } label: {
+                    Label("Progress", systemImage: "chart.bar")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
 
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 18) {
@@ -607,7 +628,7 @@ struct MacAnalyzerView: View {
                         practiceFeedbackCard
                         practiceWorkflowCard
                     }
-                    .padding(.top, 12)
+                    .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
                 } label: {
                     Label("Diagnostics & workflow", systemImage: "slider.horizontal.3")
                         .font(.system(size: 13, weight: .semibold))
@@ -1071,13 +1092,13 @@ struct MacAnalyzerView: View {
 
     private var midiSourcePickerRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("MIDI Source")
+            Text("MIDI source")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            Picker("MIDI Source", selection: midiSourceSelectionBinding) {
+            Picker("MIDI source", selection: midiSourceSelectionBinding) {
                 if captureEngine.availableMIDISources.isEmpty {
-                    Text("Not Connected").tag("")
+                    Text("No MIDI device").tag("")
                 } else {
                     ForEach(captureEngine.availableMIDISources) { source in
                         Text(source.name).tag(source.id)
@@ -1087,6 +1108,17 @@ struct MacAnalyzerView: View {
             .pickerStyle(.menu)
             .labelsHidden()
             .disabled(captureEngine.availableMIDISources.isEmpty)
+            .accessibilityLabel("MIDI source")
+
+            // When the picker is disabled (no controller connected), surface
+            // a one-line reason so accessibility users aren't left guessing
+            // why the control is dim.
+            if captureEngine.availableMIDISources.isEmpty {
+                Label("Connect a controller to map a crossfader.", systemImage: "cable.connector")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -1971,8 +2003,7 @@ struct MacAnalyzerView: View {
                 }
 
                 Button("New Session", action: createNewSessionAction)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                    .scratchLabPrimaryButton()
                     .disabled(captureEngine.isRoutineRecording)
 
                 Spacer()
@@ -2018,17 +2049,20 @@ struct MacAnalyzerView: View {
                 headerStatusPill(
                     title: "Audio",
                     value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not connected" : "Ready",
-                    color: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .secondary : .green
+                    color: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .secondary : .green,
+                    systemImage: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "circle.dashed" : "waveform"
                 )
                 headerStatusPill(
                     title: "Device",
                     value: companionReceiver.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
-                    color: companionReceiver.connectedPeerNames.isEmpty ? .secondary : .green
+                    color: companionReceiver.connectedPeerNames.isEmpty ? .secondary : .green,
+                    systemImage: companionReceiver.connectedPeerNames.isEmpty ? "circle.dashed" : "checkmark.seal.fill"
                 )
                 headerStatusPill(
                     title: "Monitor",
                     value: performerBroadcaster.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
-                    color: performerBroadcaster.connectedPeerNames.isEmpty ? .secondary : .green
+                    color: performerBroadcaster.connectedPeerNames.isEmpty ? .secondary : .green,
+                    systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "circle.dashed" : "dot.radiowaves.left.and.right"
                 )
             }
 
@@ -2100,23 +2134,56 @@ struct MacAnalyzerView: View {
             Text("Performance")
                 .font(.headline)
 
-            // Layer 1 — friendly status pills always visible.
-            VStack(spacing: 8) {
-                diagnosticRow(title: "Playback", value: friendlyPlaybackState)
-                diagnosticRow(title: "Capture", value: (captureEngine.isRoutineRecording || captureEngine.cxlIsRecording) ? "Recording" : "Idle")
-                diagnosticRow(title: "Camera", value: diagnosticsCameraValue)
-                diagnosticRow(title: "Audio", value: captureEngine.selectedAudioDeviceName)
-                diagnosticRow(title: "Signal", value: captureEngine.audioSignalStatusText)
-                if let lastRoutineAudioWriterError = captureEngine.lastRoutineAudioWriterError,
-                   !lastRoutineAudioWriterError.isEmpty {
-                    diagnosticRow(title: "Last audio writer error", value: lastRoutineAudioWriterError)
-                }
+            // Layer 1 — five friendly status pills always visible:
+            // Playback · Capture · Camera · Audio · Signal. Rendered as the
+            // shared headerStatusPill (icon + TITLE + value) so the panel
+            // doesn't read like a key/value debug dump. Transient errors and
+            // raw counters live in Layer 2 below.
+            let isRecording = captureEngine.isRoutineRecording || captureEngine.cxlIsRecording
+            let hasAudioDevice = !captureEngine.selectedAudioDeviceUniqueID.isEmpty
+            VStack(alignment: .leading, spacing: 8) {
+                headerStatusPill(
+                    title: "Playback",
+                    value: friendlyPlaybackState,
+                    color: babyScratchDemo.playbackState == .playing ? .green : .secondary,
+                    systemImage: babyScratchDemo.playbackState == .playing ? "play.fill" : "play.circle"
+                )
+                headerStatusPill(
+                    title: "Capture",
+                    value: isRecording ? "Recording" : "Idle",
+                    color: isRecording ? Color(nsColor: .systemRed) : .secondary,
+                    systemImage: isRecording ? "record.circle.fill" : "pause.circle"
+                )
+                headerStatusPill(
+                    title: "Camera",
+                    value: diagnosticsCameraValue,
+                    color: captureEngine.isCameraActive ? .green : .secondary,
+                    systemImage: captureEngine.isCameraActive ? "video" : "circle.dashed"
+                )
+                headerStatusPill(
+                    title: "Audio",
+                    value: hasAudioDevice ? captureEngine.selectedAudioDeviceName : "No input",
+                    color: hasAudioDevice ? .green : .secondary,
+                    systemImage: hasAudioDevice ? "waveform" : "circle.dashed"
+                )
+                headerStatusPill(
+                    title: "Signal",
+                    value: captureEngine.audioSignalStatusText,
+                    color: captureEngine.audioMeterColor,
+                    systemImage: "waveform.path"
+                )
             }
 
             // Layer 2 — raw counters / timings / booleans tucked behind a
             // disclosure so the default view doesn't read like a print() log.
+            // Transient writer errors live here too — they're diagnostics,
+            // not a headline status, and only appear when non-empty.
             DisclosureGroup {
                 VStack(spacing: 8) {
+                    if let lastRoutineAudioWriterError = captureEngine.lastRoutineAudioWriterError,
+                       !lastRoutineAudioWriterError.isEmpty {
+                        diagnosticRow(title: "Last audio writer error", value: lastRoutineAudioWriterError)
+                    }
                     diagnosticRow(title: "Audio time", value: String(format: "%.3fs", babyScratchDemo.currentAudioTime))
                     diagnosticRow(title: "Notation playing", value: babyScratchDemo.playbackState == .playing ? "true" : "false")
                     diagnosticRow(title: "Coach playing", value: babyScratchDemo.isPlaying ? "true" : "false")
@@ -2333,14 +2400,13 @@ struct MacAnalyzerView: View {
             }
 
             if selectedRoutineSession == nil {
-                Text("Press Record to create an Untitled Session automatically. ScratchLab will keep audio, video, watch, timing, detection, and export data attached to the same session ID.")
+                Text("Press Record to start a new Untitled Session.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Button("New Session", action: createNewSessionAction)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                    .scratchLabPrimaryButton()
                     .disabled(captureEngine.isRoutineRecording)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
@@ -2359,10 +2425,10 @@ struct MacAnalyzerView: View {
                     .pickerStyle(.menu)
                     .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
 
-                    Text(captureEngine.selectedAudioDeviceStatusLine)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Engine's selectedAudioDeviceStatusLine is intentionally
+                    // omitted here — the Inputs grid below already surfaces
+                    // device + signal state without the chained-redundant
+                    // "Audio Ready — Virtual audio device — No signal" copy.
 
                     if captureEngine.shouldOfferUseSeratoAudio {
                         Button("Use Serato Audio") {
@@ -2374,9 +2440,14 @@ struct MacAnalyzerView: View {
                     }
                 }
 
-                TextField("Session name", text: routinePerformerBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(captureEngine.isRoutineRecording)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Session name")
+                        .font(.system(size: 13, weight: .semibold))
+                    TextField("e.g. Friday battle", text: routinePerformerBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(captureEngine.isRoutineRecording)
+                        .accessibilityLabel("Session name")
+                }
 
                 Picker("Target", selection: captureTargetBinding) {
                     ForEach(CaptureTarget.allCases) { target in
@@ -2428,8 +2499,10 @@ struct MacAnalyzerView: View {
                 .disabled(routineCountInBeat != nil)
 
                 // After a take exists, Review this take is the dominant
-                // next step. Save Take / Retake demote to small bordered
-                // utilities; Export Session lives in Review when ready.
+                // next step. Save take / Record another demote to bordered
+                // utilities; Discard sits trailing as the destructive action.
+                // Action row uses the shared button-hierarchy modifiers so
+                // sizing stays consistent with the rest of the app.
                 if hasRecordedTake {
                     VStack(alignment: .leading, spacing: 10) {
                         Button {
@@ -2438,23 +2511,20 @@ struct MacAnalyzerView: View {
                             Label("Review this take", systemImage: "checkmark.seal")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                        .scratchLabPrimaryButton(fillsWidth: true)
                         .disabled(captureEngine.isRoutineRecording)
 
                         HStack(spacing: 8) {
-                            Button("Save Take") {
+                            Button("Save take") {
                                 markLastTakeSaved()
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .scratchLabSecondaryButton()
                             .disabled(captureEngine.isRoutineRecording)
 
                             Button("Record another") {
                                 prepareRetake()
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            .scratchLabSecondaryButton()
                             .disabled(captureEngine.isRoutineRecording)
 
                             Spacer(minLength: 0)
@@ -2462,9 +2532,7 @@ struct MacAnalyzerView: View {
                             Button("Discard") {
                                 prepareRetake()
                             }
-                            .buttonStyle(.borderless)
-                            .controlSize(.small)
-                            .foregroundStyle(Color(nsColor: .systemRed))
+                            .scratchLabDestructiveButton()
                             .disabled(captureEngine.isRoutineRecording)
                         }
                     }
@@ -2486,14 +2554,14 @@ struct MacAnalyzerView: View {
                     title: "Audio",
                     value: captureEngine.audioReadinessText,
                     detail: captureEngine.selectedAudioDeviceStatusLine,
-                    systemImage: selectedAudioDevice == nil ? "waveform.slash" : "waveform",
+                    systemImage: selectedAudioDevice == nil ? "circle.dashed" : "waveform",
                     color: selectedAudioDevice == nil ? .secondary : .green
                 )
                 captureInputStatusTile(
                     title: "Camera",
                     value: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "Missing" : "Camera Ready",
                     detail: captureEngine.selectedVideoDeviceName,
-                    systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "video.slash.fill" : "video.fill",
+                    systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "circle.dashed" : "video",
                     color: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .secondary : .green
                 )
                 captureInputStatusTile(
@@ -2512,8 +2580,22 @@ struct MacAnalyzerView: View {
                 )
             }
 
-            midiSourcePickerRow
-            midiLearnRow
+            // MIDI source picker + Learn crossfader / Clear mapping live
+            // behind a single "Input details" disclosure so the Inputs grid
+            // stays the headline and the picker doesn't dominate the card
+            // when no controller is connected. Bindings unchanged — the
+            // disclosure only re-parents the existing sub-views.
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    midiSourcePickerRow
+                    midiLearnRow
+                }
+                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+            } label: {
+                Label("Input details", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
@@ -2755,9 +2837,7 @@ struct MacAnalyzerView: View {
                         Label("View captured notation", systemImage: "waveform.path")
                             .font(.system(size: 12, weight: .semibold))
                     }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .foregroundStyle(.secondary)
+                    .scratchLabTertiaryButton()
                 }
 
                 Picker("Correct Label", selection: $reviewCorrectionSelection) {
@@ -2783,18 +2863,14 @@ struct MacAnalyzerView: View {
                     Button("Leave unknown") {
                         leaveReviewLabelUnknown()
                     }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .foregroundStyle(.secondary)
+                    .scratchLabTertiaryButton()
 
                     if currentRoutineArtifactStatus?.readiness != .ready {
                         Spacer(minLength: 0)
                         Button("Retake") {
                             prepareRetake()
                         }
-                        .buttonStyle(.borderless)
-                        .controlSize(.small)
-                        .foregroundStyle(Color(nsColor: .systemRed))
+                        .scratchLabDestructiveButton()
                     }
                 }
             } else {
@@ -2839,9 +2915,7 @@ struct MacAnalyzerView: View {
                 Button("Retake") {
                     prepareRetake()
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .foregroundStyle(Color(nsColor: .systemRed))
+                .scratchLabDestructiveButton()
                 .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
             }
 
@@ -2914,15 +2988,22 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewCapturedNotationStageCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let capturedSource = reviewCapturedSource
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Captured evidence")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                 Spacer(minLength: 0)
-                Text(reviewCapturedSourceLabel)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(reviewCapturedSourceColor)
+                HStack(spacing: 4) {
+                    Image(systemName: capturedSource.systemImage)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(capturedSource.color)
+                        .accessibilityHidden(true)
+                    Text(capturedSource.label)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(capturedSource.color)
+                }
             }
             if let snapshot = currentRoutineNotationSnapshot,
                snapshot.hasDetectedEvents {
@@ -2964,24 +3045,30 @@ struct MacAnalyzerView: View {
             return "Pattern not confirmed"
         }()
         let confidence: String = reviewConfidenceLabel
-        let source: String = reviewCapturedSourceLabel
+        let capturedSource = reviewCapturedSource
         let exportReady: Bool = currentRoutineArtifactStatus?.readiness == .ready
         return HStack(alignment: .top, spacing: 12) {
-            reviewFooterMetric(title: "Target", value: scratchType.title, color: .white)
-            reviewFooterMetric(title: "Detected", value: detectedLabel, color: detectedLabel == "Pattern not confirmed" ? .secondary : .green)
-            reviewFooterMetric(title: "Confidence", value: confidence, color: reviewConfidenceColor)
-            reviewFooterMetric(title: "Source", value: source, color: reviewCapturedSourceColor)
-            reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", color: exportReady ? .green : .secondary)
+            reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: .white)
+            reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: "checkmark.seal", color: detectedLabel == "Pattern not confirmed" ? .secondary : .green)
+            reviewFooterMetric(title: "Confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
+            reviewFooterMetric(title: "Source", value: capturedSource.label, systemImage: capturedSource.systemImage, color: capturedSource.color)
+            reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? .green : .secondary)
         }
         .padding(14)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func reviewFooterMetric(title: String, value: String, color: Color) -> some View {
+    private func reviewFooterMetric(title: String, value: String, systemImage: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.55))
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .accessibilityHidden(true)
+                Text(title.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(color)
@@ -2992,25 +3079,37 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var reviewCapturedSourceLabel: String {
-        guard let snapshot = currentRoutineNotationSnapshot else { return "None" }
-        if !snapshot.recordMovementEvents.isEmpty {
-            return snapshot.notationSource == "detected" ? "Video movement" : "Movement recorded"
-        }
-        if !snapshot.faderEvents.isEmpty { return "Fader" }
-        if !snapshot.audioEvents.isEmpty { return "Audio inferred" }
-        if !snapshot.mixerMidiEvents.isEmpty { return "Raw MIDI unmapped" }
-        return "None"
+    /// Captured-evidence source descriptor: human label + canonical SF Symbol
+    /// + status colour, derived from the snapshot's event lanes. Single source
+    /// of truth for the captured-evidence header and the Review footer Source
+    /// cell so they can never disagree about which lane drove notation.
+    private struct ReviewCapturedSource {
+        let label: String
+        let systemImage: String
+        let color: Color
     }
 
-    private var reviewCapturedSourceColor: Color {
-        guard let snapshot = currentRoutineNotationSnapshot else { return .secondary }
-        if !snapshot.recordMovementEvents.isEmpty {
-            return snapshot.notationSource == "detected" ? .green : Color(red: 1.0, green: 0.72, blue: 0.10)
+    private var reviewCapturedSource: ReviewCapturedSource {
+        let amber = Color(red: 1.0, green: 0.72, blue: 0.10)
+        guard let snapshot = currentRoutineNotationSnapshot else {
+            return ReviewCapturedSource(label: "None", systemImage: "circle.dashed", color: .secondary)
         }
-        if !snapshot.faderEvents.isEmpty { return .green }
-        if !snapshot.audioEvents.isEmpty { return Color(red: 1.0, green: 0.72, blue: 0.10) }
-        return .secondary
+        if !snapshot.recordMovementEvents.isEmpty {
+            if snapshot.notationSource == "detected" {
+                return ReviewCapturedSource(label: "Video movement", systemImage: "figure.wave", color: .green)
+            }
+            return ReviewCapturedSource(label: "Movement recorded", systemImage: "figure.wave", color: amber)
+        }
+        if !snapshot.faderEvents.isEmpty {
+            return ReviewCapturedSource(label: "Fader", systemImage: "slider.horizontal.3", color: .green)
+        }
+        if !snapshot.audioEvents.isEmpty {
+            return ReviewCapturedSource(label: "Audio inferred", systemImage: "ear.and.waveform", color: amber)
+        }
+        if !snapshot.mixerMidiEvents.isEmpty {
+            return ReviewCapturedSource(label: "Raw MIDI unmapped", systemImage: "pianokeys", color: .secondary)
+        }
+        return ReviewCapturedSource(label: "None", systemImage: "circle.dashed", color: .secondary)
     }
 
     private var practiceHeaderCard: some View {
@@ -3043,24 +3142,28 @@ struct MacAnalyzerView: View {
                     headerStatusPill(
                         title: "Audio",
                         value: captureEngine.practiceAudioStatusText,
-                        color: captureEngine.practiceAudioStatusColor
+                        color: captureEngine.practiceAudioStatusColor,
+                        systemImage: "waveform"
                     )
                 } else {
                     headerStatusPill(
                         title: "Demo",
                         value: demoModeController.isReady ? "Replay ready" : "Demo",
-                        color: .green
+                        color: .green,
+                        systemImage: "play.fill"
                     )
                 }
                 headerStatusPill(
                     title: "Matches",
                     value: "\(captureEngine.scratchDetectionCount)",
-                    color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green
+                    color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green,
+                    systemImage: captureEngine.scratchDetectionCount == 0 ? "circle.dashed" : "checkmark.seal.fill"
                 )
                 headerStatusPill(
                     title: liveInputEnabled ? "Stars" : "Hardware",
                     value: liveInputEnabled ? "\(captureEngine.visibleStarCount)/5" : "Optional",
-                    color: liveInputEnabled && captureEngine.visibleStarCount > 0 ? .green : .secondary
+                    color: liveInputEnabled && captureEngine.visibleStarCount > 0 ? .green : .secondary,
+                    systemImage: liveInputEnabled ? "star.fill" : "cable.connector"
                 )
             }
 
@@ -3077,7 +3180,64 @@ struct MacAnalyzerView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private var practiceControlCard: some View {
+    // MARK: - Practice cards (decomposed from the legacy monolithic
+    // `practiceControlCard`). Three sibling cards + a Progress tile row,
+    // all powered by the existing demo-mode controller, practiceBeatStore,
+    // captureEngine, and progressManager — no new state, no new model
+    // fields, no new engine calls.
+
+    private var practiceCoachCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Coach")
+                        .font(.headline)
+
+                    Text("Hear the Baby Scratch reference. One clean push forward, one clean pull back, fader open.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                Label("Beginner", systemImage: "graduationcap.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    startMacDemo()
+                } label: {
+                    Label(demoModeController.isReady ? "Replay" : "Listen", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button {
+                    demoModeController.pauseDemo()
+                } label: {
+                    Label("Pause", systemImage: "pause.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!demoModeController.demoPlayer.isPlaying)
+            }
+
+            Text(demoModeController.statusMessage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var practiceRunCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -3086,7 +3246,7 @@ struct MacAnalyzerView: View {
 
                     Text(
                         isPracticeSessionActive
-                            ? "This timed Baby Scratch run is live. Finish and save it to update your progress on Mac."
+                            ? "This timed Baby Scratch run is live. Finish and save it to update your progress."
                             : "Time a Baby Scratch run and save it to your progress."
                     )
                     .font(.system(size: 12, weight: .medium))
@@ -3110,164 +3270,6 @@ struct MacAnalyzerView: View {
             }
             .pickerStyle(.segmented)
             .disabled(isPracticeSessionActive)
-
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Practice beat")
-                        .font(.system(size: 13, weight: .semibold))
-
-                    Spacer()
-
-                    Text(practiceBeatStore.isBeatEnabled ? "On" : "Off")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(practiceBeatStore.isBeatEnabled ? Color(nsColor: .systemGreen) : .secondary)
-                }
-
-                // No Beat / Beat On toggle uses the shared chip selection
-                // style. Selected = accent (not yellow / green — those are
-                // reserved for warning / health roles in the design system).
-                HStack(spacing: 10) {
-                    Chip(
-                        isSelected: !practiceBeatStore.isBeatEnabled,
-                        action: { practiceBeatStore.setBeatEnabled(false) }
-                    ) {
-                        Text("Off")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .accessibilityIdentifier("practice-beat-no-beat-button")
-
-                    Chip(
-                        isSelected: practiceBeatStore.isBeatEnabled,
-                        action: { practiceBeatStore.setBeatEnabled(true) }
-                    ) {
-                        Text("On")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .accessibilityIdentifier("practice-beat-on-button")
-                }
-
-                if practiceBeatStore.isBeatEnabled {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Beat style")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
-
-                        // Beat-style picker uses the shared chip selection
-                        // style. Selected = accent fill + accent border;
-                        // checkmark glyph removed (selection is signified by
-                        // the accent border alone, per design system).
-                        LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
-                            ForEach(practiceBeatStore.availableBeatModes) { mode in
-                                Chip(
-                                    isSelected: practiceBeatStore.selectedBeatMode == mode,
-                                    action: { practiceBeatStore.selectBeatMode(mode) }
-                                ) {
-                                    Text(mode.title)
-                                        .multilineTextAlignment(.leading)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .accessibilityIdentifier("practice-beat-mode-\(mode.rawValue)")
-                            }
-                        }
-                    }
-                } else {
-                    Text("Beat off. Practise from live scratch audio only until you want timing guidance.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Button {
-                            practiceBeatStore.stepBPM(by: -1)
-                        } label: {
-                            Image(systemName: "minus")
-                                .font(.system(size: 13, weight: .bold))
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    Color(nsColor: .controlBackgroundColor),
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                )
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-
-                        VStack(spacing: 2) {
-                            Text("\(practiceBeatStore.bpmValue) BPM")
-                                .font(.system(size: 18, weight: .bold, design: .monospaced))
-
-                            Text("Range \(CaptureClickTrackDefaults.supportedBPMRange.lowerBound)-\(CaptureClickTrackDefaults.supportedBPMRange.upperBound)")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Button {
-                            practiceBeatStore.stepBPM(by: 1)
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 13, weight: .bold))
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    Color(nsColor: .controlBackgroundColor),
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    HStack(spacing: 8) {
-                        ForEach(practiceBeatStore.allowedBPMList, id: \.self) { bpm in
-                            Chip(
-                                isSelected: practiceBeatStore.bpmValue == bpm,
-                                isNumeric: true,
-                                action: { practiceBeatStore.setBPM(bpm) }
-                            ) {
-                                Text("\(bpm)")
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-                    }
-                }
-
-                Button {
-                    practiceBeatStore.togglePlayback()
-                } label: {
-                    Text(practiceBeatStore.isPlaying ? "Stop beat" : "Play beat")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            practiceBeatStore.isBeatEnabled
-                                ? (practiceBeatStore.isPlaying
-                                    ? Color(nsColor: .systemOrange)
-                                    : Color(nsColor: .systemGreen))
-                                : Color(nsColor: .disabledControlTextColor).opacity(0.25),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(!practiceBeatStore.isBeatEnabled)
-                .accessibilityIdentifier("practice-beat-playback-button")
-
-                if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
-                    HStack(spacing: 8) {
-                        Text(playbackErrorMessage)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color(nsColor: .systemOrange))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Retry Beat") {
-                            practiceBeatStore.retryPlayback()
-                        }
-                        .buttonStyle(.bordered)
-                        .font(.system(size: 12, weight: .semibold))
-                    }
-                }
-            }
 
             HStack(spacing: 8) {
                 testLabMetricBadge(
@@ -3319,42 +3321,15 @@ struct MacAnalyzerView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 if isPracticeSessionActive {
                     Button("Cancel") {
                         cancelTestLabPracticeSession()
                     }
                     .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .controlSize(.regular)
                 }
-            }
-
-            Divider()
-
-            HStack(spacing: 8) {
-                testLabMetricBadge(
-                    title: "Best",
-                    value: "\(Int((progressManager.babyScratchProgress?.bestAccuracy ?? 0).rounded()))%",
-                    color: (progressManager.babyScratchProgress?.bestAccuracy ?? 0) == 0 ? .secondary : .green
-                )
-                testLabMetricBadge(
-                    title: "Attempts",
-                    value: "\(progressManager.babyScratchProgress?.practiceCount ?? 0)",
-                    color: (progressManager.babyScratchProgress?.practiceCount ?? 0) == 0 ? .secondary : .green
-                )
-                testLabMetricBadge(
-                    title: "Recent",
-                    value: "\(Int((progressManager.babyScratchProgress?.averageAccuracy ?? 0).rounded()))%",
-                    color: (progressManager.babyScratchProgress?.averageAccuracy ?? 0) == 0 ? .secondary : .green
-                )
-                testLabMetricBadge(
-                    title: "Mastery",
-                    value: progressManager.isScratchMastered("baby_scratch")
-                        ? "Mastered"
-                        : "\(Int((progressManager.babyScratchProgress?.progressToMastery ?? 0).rounded()))%",
-                    color: progressManager.isScratchMastered("baby_scratch") ? .green : .secondary
-                )
             }
 
             if let practiceLastSavedAt {
@@ -3377,21 +3352,251 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func headerStatusPill(title: String, value: String, color: Color) -> some View {
+    private var practiceBeatTrainerCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Beat trainer")
+                    .font(.headline)
+
+                Spacer()
+
+                Text(practiceBeatStore.isBeatEnabled ? "On" : "Off")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(practiceBeatStore.isBeatEnabled ? Color(nsColor: .systemGreen) : .secondary)
+            }
+
+            HStack(spacing: 10) {
+                Chip(
+                    isSelected: !practiceBeatStore.isBeatEnabled,
+                    action: { practiceBeatStore.setBeatEnabled(false) }
+                ) {
+                    Text("Off")
+                        .frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("practice-beat-no-beat-button")
+
+                Chip(
+                    isSelected: practiceBeatStore.isBeatEnabled,
+                    action: { practiceBeatStore.setBeatEnabled(true) }
+                ) {
+                    Text("On")
+                        .frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("practice-beat-on-button")
+            }
+
+            if practiceBeatStore.isBeatEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Beat style")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+
+                    LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
+                        ForEach(practiceBeatStore.availableBeatModes) { mode in
+                            Chip(
+                                isSelected: practiceBeatStore.selectedBeatMode == mode,
+                                action: { practiceBeatStore.selectBeatMode(mode) }
+                            ) {
+                                Text(mode.title)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .accessibilityIdentifier("practice-beat-mode-\(mode.rawValue)")
+                        }
+                    }
+                }
+            } else {
+                Text("Beat off. Practise from live scratch audio only until you want timing guidance.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    // 36×36 hit target with visible 1pt outline + ⌘← keyboard
+                    // shortcut for accessibility (decrease BPM by 1).
+                    Button {
+                        practiceBeatStore.stepBPM(by: -1)
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.system(size: 14, weight: .bold))
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Color(nsColor: .controlBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.18), lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    .accessibilityLabel("Decrease BPM")
+                    .help("Decrease BPM (⌘←)")
+
+                    Spacer()
+
+                    VStack(spacing: 2) {
+                        Text("\(practiceBeatStore.bpmValue) BPM")
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+
+                        Text("Range \(CaptureClickTrackDefaults.supportedBPMRange.lowerBound)–\(CaptureClickTrackDefaults.supportedBPMRange.upperBound)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        practiceBeatStore.stepBPM(by: 1)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .bold))
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Color(nsColor: .controlBackgroundColor),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.18), lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                    .accessibilityLabel("Increase BPM")
+                    .help("Increase BPM (⌘→)")
+                }
+
+                HStack(spacing: 8) {
+                    ForEach(practiceBeatStore.allowedBPMList, id: \.self) { bpm in
+                        Chip(
+                            isSelected: practiceBeatStore.bpmValue == bpm,
+                            isNumeric: true,
+                            action: { practiceBeatStore.setBPM(bpm) }
+                        ) {
+                            Text("\(bpm)")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+            }
+
+            Button {
+                practiceBeatStore.togglePlayback()
+            } label: {
+                Text(practiceBeatStore.isPlaying ? "Stop beat" : "Play beat")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        practiceBeatStore.isBeatEnabled
+                            ? (practiceBeatStore.isPlaying
+                                ? Color(nsColor: .systemOrange)
+                                : Color(nsColor: .systemGreen))
+                            : Color(nsColor: .disabledControlTextColor).opacity(0.25),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(!practiceBeatStore.isBeatEnabled)
+            .accessibilityIdentifier("practice-beat-playback-button")
+
+            if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
+                HStack(spacing: 8) {
+                    Text(playbackErrorMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Retry beat") {
+                        practiceBeatStore.retryPlayback()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 12, weight: .semibold))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var practiceProgressTilesRow: some View {
+        HStack(spacing: 8) {
+            testLabMetricBadge(
+                title: "Best",
+                value: "\(Int((progressManager.babyScratchProgress?.bestAccuracy ?? 0).rounded()))%",
+                color: (progressManager.babyScratchProgress?.bestAccuracy ?? 0) == 0 ? .secondary : .green
+            )
+            testLabMetricBadge(
+                title: "Attempts",
+                value: "\(progressManager.babyScratchProgress?.practiceCount ?? 0)",
+                color: (progressManager.babyScratchProgress?.practiceCount ?? 0) == 0 ? .secondary : .green
+            )
+            testLabMetricBadge(
+                title: "Recent",
+                value: "\(Int((progressManager.babyScratchProgress?.averageAccuracy ?? 0).rounded()))%",
+                color: (progressManager.babyScratchProgress?.averageAccuracy ?? 0) == 0 ? .secondary : .green
+            )
+            testLabMetricBadge(
+                title: "Mastery",
+                value: progressManager.isScratchMastered("baby_scratch")
+                    ? "Mastered"
+                    : "\(Int((progressManager.babyScratchProgress?.progressToMastery ?? 0).rounded()))%",
+                color: progressManager.isScratchMastered("baby_scratch") ? .green : .secondary
+            )
+        }
+    }
+
+    private func headerStatusPill(title: String, value: String, color: Color, systemImage: String? = nil) -> some View {
         // Strip the title prefix from the value so we never render
         // "Audio · Audio Ready" — the design system requires "TITLE · STATE".
+        // Optional leading SF Symbol gives a non-colour cue for state — vital
+        // for users who can't distinguish red/green by hue alone.
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            Text(Self.dedupedStatusValue(title: title, value: value))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(color)
+            HStack(spacing: 4) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(color)
+                        .accessibilityHidden(true)
+                }
+                Text(Self.dedupedStatusValue(title: title, value: value))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(color)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Default SF Symbol mapping for the canonical input/status titles.
+    /// Used by `headerStatusPill` callers that don't pass an explicit symbol.
+    static func defaultStatusSymbol(forTitle title: String) -> String {
+        switch title.lowercased() {
+        case "audio":              return "waveform"
+        case "camera":             return "video"
+        case "device":             return "iphone.gen2"
+        case "monitor":            return "dot.radiowaves.left.and.right"
+        case "mixer midi", "midi", "fader": return "slider.horizontal.3"
+        case "watch":              return "applewatch"
+        case "matches":            return "checkmark.seal"
+        case "stars":              return "star.fill"
+        case "demo":               return "play.fill"
+        case "hardware":           return "cable.connector"
+        default:                   return "circle.dashed"
+        }
     }
 
     /// Drop the title token from the value when it appears as a prefix or
@@ -5122,20 +5327,21 @@ private struct RoutineSessionRow: View {
                     pb.clearContents()
                     pb.setString(copyableID, forType: .string)
                 } label: {
-                    Label("Copy ID", systemImage: "doc.on.doc")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(isSelected ? .white.opacity(0.85) : .secondary)
                 .help("Copy session ID")
+                .accessibilityLabel("Copy session ID")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
-            (isSelected ? Color.accentColor : Color(nsColor: .windowBackgroundColor)),
+            (isSelected ? ScratchLabDesign.Sem.accent : Color(nsColor: .windowBackgroundColor)),
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay(
