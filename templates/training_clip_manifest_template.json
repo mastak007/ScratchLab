@@ -1,0 +1,44 @@
+{
+  "spec_version": "training_clip_manifest_v1",
+  "notes_for_use": [
+    "This template is for OFFLINE / PRIVATE training only.",
+    "It is not bundled into the ScratchLab app and is not consumed at runtime.",
+    "Do NOT add source disc names, ripper tool names, vendor product names, absolute home-directory paths, or any rights / provenance metadata. See docs/training_dataset_plan.md for the full blocklist.",
+    "Only fill in the safe product-facing fields below.",
+    "Each entry describes one labelled training clip referenced by a clip_id, not by an absolute path."
+  ],
+  "clips": [
+    {
+      "clip_id": "example_baby_001",
+      "scratch_type": "baby",
+      "bpm": 90,
+      "beat_mode": "withBeat",
+      "performer": "in_house_demo",
+      "capture_device": "studio_camera_audio",
+      "has_video": true,
+      "has_audio": true,
+      "has_motion": false,
+      "label_confidence": 1.0,
+      "split": "train",
+      "duration_seconds": 4.0,
+      "notes": "Clean reference of a steady baby scratch."
+    },
+    {
+      "clip_id": "example_chirp_001",
+      "scratch_type": "chirp",
+      "bpm": 90,
+      "beat_mode": "withBeat",
+      "performer": "in_house_demo",
+      "capture_device": "studio_camera_audio",
+      "has_video": true,
+      "has_audio": true,
+      "has_motion": false,
+      "label_confidence": 0.9,
+      "split": "validation",
+      "duration_seconds": 3.5,
+      "notes": "Forward stab cut by a closing crossfader."
+    }
+  ],
+  "allowed_splits": ["train", "validation", "test"],
+  "allowed_beat_modes": ["withBeat", "noBeat", "metronome", "unknown"]
+}

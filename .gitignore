@@ -54,3 +54,21 @@ prompts/
 
 # Local Claude workspace
 .claude/
+
+# Local / offline scratch training data — never ship raw clips, source media,
+# or any provenance metadata in the repo. These directories are private to the
+# author's machine and are routed through scripts/dataset_processor for
+# normalization before any derived model artifacts are committed.
+LocalTrainingData/
+TrainingData/
+Datasets/
+build/training/
+build/eval/
+*.trace
+*.mkv
+*.iso
+training_runs/
+training_runs_*/
+local_dataset_cache/
+local_dataset_cache_*/
+offline_eval_outputs/

@@ -151,6 +151,10 @@
 		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
 		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
 		SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
+		SCT0001000SCT001SCT00001 /* ScratchClassifying.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */; };
+		STS0001000STS001STS00001 /* ScratchTypeMetadataSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */; };
+		SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */; };
+		STT0001000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -297,6 +301,10 @@
 		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
 		SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPhraseChartView.swift; sourceTree = "<group>"; };
+		SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifying.swift; sourceTree = "<group>"; };
+		STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTypeMetadataSafety.swift; sourceTree = "<group>"; };
+		SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifierRegistryTests.swift; sourceTree = "<group>"; };
+		STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTypeMetadataSafetyTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -346,6 +354,8 @@
 				CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */,
 				SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */,
 				NST0000000NST001NST00001 /* NotationSheetTests.swift */,
+				SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */,
+				STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -563,6 +573,8 @@
 				7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */,
 				CXL0000000010001CXL00001 /* CXLNotationCapture.swift */,
 				SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */,
+				SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */,
+				STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -778,6 +790,8 @@
 				10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */,
 				7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */,
 				CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */,
+				SCT0001000SCT001SCT00001 /* ScratchClassifying.swift in Sources */,
+				STS0001000STS001STS00001 /* ScratchTypeMetadataSafety.swift in Sources */,
 				NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */,
 				SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */,
 				SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */,
@@ -913,6 +927,8 @@
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
 				SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */,
 				NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */,
+				SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */,
+				STT0001000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
