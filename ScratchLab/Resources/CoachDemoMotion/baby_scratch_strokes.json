@@ -1,124 +1,92 @@
 {
-  "demoEnd": 83.450033,
-  "demoStart": 35.035,
-  "phraseEnd": 2.126,
-  "phraseStart": 0.03,
+  "demoEnd": 42.866625,
+  "demoStart": 0.0,
+  "phraseEnd": 5.743,
+  "phraseStart": 0.27,
   "scratchID": "baby",
   "strokes": [
     {
       "direction": "forward",
       "endProgress": 1.0,
-      "endTime": 0.218,
-      "holdAfter": 0.142,
+      "endTime": 0.778,
+      "holdAfter": 0.292,
       "startProgress": 0.0,
-      "startTime": 0.03
+      "startTime": 0.27
     },
     {
       "direction": "backward",
       "endProgress": 0.0,
-      "endTime": 0.503,
-      "holdAfter": 0.02,
+      "endTime": 1.378,
+      "holdAfter": 0.082,
       "startProgress": 1.0,
-      "startTime": 0.36
+      "startTime": 1.07
     },
     {
       "direction": "forward",
       "endProgress": 1.0,
-      "endTime": 0.6566,
-      "holdAfter": 0.0,
+      "endTime": 1.763,
+      "holdAfter": 0.077,
       "startProgress": 0.0,
-      "startTime": 0.523
+      "startTime": 1.46
     },
     {
       "direction": "backward",
       "endProgress": 0.0,
-      "endTime": 0.7902,
-      "holdAfter": 0.0,
+      "endTime": 2.368,
+      "holdAfter": 0.237,
       "startProgress": 1.0,
-      "startTime": 0.6566
+      "startTime": 1.84
     },
     {
       "direction": "forward",
       "endProgress": 1.0,
-      "endTime": 0.9237,
-      "holdAfter": 0.0,
+      "endTime": 2.913,
+      "holdAfter": 0.077,
       "startProgress": 0.0,
-      "startTime": 0.7902
+      "startTime": 2.605
     },
     {
       "direction": "backward",
       "endProgress": 0.0,
-      "endTime": 1.0573,
-      "holdAfter": 0.0,
+      "endTime": 3.278,
+      "holdAfter": 0.082,
       "startProgress": 1.0,
-      "startTime": 0.9237
+      "startTime": 2.99
     },
     {
       "direction": "forward",
       "endProgress": 1.0,
-      "endTime": 1.1909,
-      "holdAfter": 0.0,
+      "endTime": 3.928,
+      "holdAfter": 0.202,
       "startProgress": 0.0,
-      "startTime": 1.0573
+      "startTime": 3.36
     },
     {
       "direction": "backward",
       "endProgress": 0.0,
-      "endTime": 1.3245,
-      "holdAfter": 0.0,
+      "endTime": 4.453,
+      "holdAfter": 0.067,
       "startProgress": 1.0,
-      "startTime": 1.1909
+      "startTime": 4.13
     },
     {
       "direction": "forward",
       "endProgress": 1.0,
-      "endTime": 1.4581,
-      "holdAfter": 0.0,
+      "endTime": 4.803,
+      "holdAfter": 0.092,
       "startProgress": 0.0,
-      "startTime": 1.3245
+      "startTime": 4.52
     },
     {
       "direction": "backward",
       "endProgress": 0.0,
-      "endTime": 1.5917,
+      "endTime": 5.743,
       "holdAfter": 0.0,
       "startProgress": 1.0,
-      "startTime": 1.4581
-    },
-    {
-      "direction": "forward",
-      "endProgress": 1.0,
-      "endTime": 1.7252,
-      "holdAfter": 0.0,
-      "startProgress": 0.0,
-      "startTime": 1.5917
-    },
-    {
-      "direction": "backward",
-      "endProgress": 0.0,
-      "endTime": 1.8588,
-      "holdAfter": 0.0,
-      "startProgress": 1.0,
-      "startTime": 1.7252
-    },
-    {
-      "direction": "forward",
-      "endProgress": 1.0,
-      "endTime": 1.9924,
-      "holdAfter": 0.0,
-      "startProgress": 0.0,
-      "startTime": 1.8588
-    },
-    {
-      "direction": "backward",
-      "endProgress": 0.0,
-      "endTime": 2.126,
-      "holdAfter": 0.0,
-      "startProgress": 1.0,
-      "startTime": 1.9924
+      "startTime": 4.895
     }
   ],
-  "timelineDuration": 2.126,
+  "timelineDuration": 5.743,
   "timingSource": "wav_transient_extraction",
   "version": 1
 }

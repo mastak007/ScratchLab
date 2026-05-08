@@ -1,107 +1,79 @@
 {
-  "demoEnd": 83.450033,
-  "demoStart": 35.035,
-  "phraseEnd": 2.126,
-  "phraseStart": 0.03,
+  "demoEnd": 42.866625,
+  "demoStart": 0.0,
+  "phraseEnd": 5.743,
+  "phraseStart": 0.27,
   "scratchID": "baby",
   "strokes": [
     {
       "direction": "forward",
-      "endTime": 0.218,
+      "endTime": 0.778,
       "faderState": "open",
       "speedClassification": "slow",
-      "startTime": 0.03
+      "startTime": 0.27
     },
     {
       "direction": "backward",
-      "endTime": 0.503,
+      "endTime": 1.378,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.07
+    },
+    {
+      "direction": "forward",
+      "endTime": 1.763,
+      "faderState": "open",
+      "speedClassification": "fast",
+      "startTime": 1.46
+    },
+    {
+      "direction": "backward",
+      "endTime": 2.368,
       "faderState": "open",
       "speedClassification": "slow",
-      "startTime": 0.36
+      "startTime": 1.84
     },
     {
       "direction": "forward",
-      "endTime": 0.6566,
+      "endTime": 2.913,
       "faderState": "open",
       "speedClassification": "fast",
-      "startTime": 0.523
+      "startTime": 2.605
     },
     {
       "direction": "backward",
-      "endTime": 0.7902,
+      "endTime": 3.278,
       "faderState": "open",
       "speedClassification": "fast",
-      "startTime": 0.6566
+      "startTime": 2.99
     },
     {
       "direction": "forward",
-      "endTime": 0.9237,
+      "endTime": 3.928,
       "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 0.7902
+      "speedClassification": "slow",
+      "startTime": 3.36
     },
     {
       "direction": "backward",
-      "endTime": 1.0573,
+      "endTime": 4.453,
       "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 0.9237
+      "speedClassification": "medium",
+      "startTime": 4.13
     },
     {
       "direction": "forward",
-      "endTime": 1.1909,
+      "endTime": 4.803,
       "faderState": "open",
       "speedClassification": "fast",
-      "startTime": 1.0573
+      "startTime": 4.52
     },
     {
       "direction": "backward",
-      "endTime": 1.3245,
+      "endTime": 5.743,
       "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.1909
-    },
-    {
-      "direction": "forward",
-      "endTime": 1.4581,
-      "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.3245
-    },
-    {
-      "direction": "backward",
-      "endTime": 1.5917,
-      "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.4581
-    },
-    {
-      "direction": "forward",
-      "endTime": 1.7252,
-      "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.5917
-    },
-    {
-      "direction": "backward",
-      "endTime": 1.8588,
-      "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.7252
-    },
-    {
-      "direction": "forward",
-      "endTime": 1.9924,
-      "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.8588
-    },
-    {
-      "direction": "backward",
-      "endTime": 2.126,
-      "faderState": "open",
-      "speedClassification": "fast",
-      "startTime": 1.9924
+      "speedClassification": "slow",
+      "startTime": 4.895
     }
   ],
   "timingBasis": "audio_transient_peaks",

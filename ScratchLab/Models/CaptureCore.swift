@@ -2241,11 +2241,11 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     static let stickerStartViewerHour: Double = 6
     static let stickerEndViewerHour: Double = 8
     static let recordRotationRangeDegrees: Double = 60
-    // The bundled WAV is trimmed to this source chapter, so app playback time 0 maps to demoStart.
-    static let demoStart: TimeInterval = 35.035
-    static let demoEnd: TimeInterval = 83.450033
+    // The bundled WAV is itself the demo, so app playback time 0 == demoStart.
+    static let demoStart: TimeInterval = 0
+    static let demoEnd: TimeInterval = 42.866625
     static let phaseOffset: TimeInterval = 0
-    static let demoAudioPhraseCycleCount = 8
+    static let demoAudioPhraseCycleCount = 4
     private static let fallbackPhraseDuration: TimeInterval = 1.0
     private static let notationResource = ScratchNotation.loadBabyScratchFromBundle()
     private static let extractedStrokeResource = BabyScratchExtractedStrokeResource.loadFromBundle()
@@ -2525,7 +2525,7 @@ struct BabyScratchCoachTimingProbe: Equatable, Sendable {
 }
 
 extension BabyScratchReferenceMotionTimeline {
-    static let debugProbePlaybackTimes: [TimeInterval] = [0.03, 0.218, 0.503, 0.523, 2.183, 2.203]
+    static let debugProbePlaybackTimes: [TimeInterval] = [0.27, 0.778, 2.368, 1.46, 5.85, 5.997]
 
     static func debugTimingProbe(
         at playbackTime: TimeInterval,

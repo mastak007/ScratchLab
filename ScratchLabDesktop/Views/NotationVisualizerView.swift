@@ -17,7 +17,7 @@ final class NotationVisualizerViewModel: ObservableObject {
     // MARK: Notation data (loaded once)
 
     let notation: ScratchNotation?
-    // Display duration: the notation phrase window (e.g. 2.126s). Audio cycles are longer;
+    // Display duration: the notation phrase window. Audio cycles are longer;
     // timing within each cycle is mapped via BabyScratchReferenceMotionTimeline.
     var loopDuration: TimeInterval { BabyScratchReferenceMotionTimeline.phraseEnd }
 
