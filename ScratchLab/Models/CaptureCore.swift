@@ -894,11 +894,16 @@ final class SessionSetupViewModel: ObservableObject {
         }
     }
 
+    var hasValidScratchTypeSelection: Bool {
+        guard let scratchType else { return false }
+        return scratchType != .unknown
+    }
+
     var validationMessages: [String] {
         var messages: [String] = []
 
-        if scratchType == nil {
-            messages.append("Choose the scratch type before starting capture.")
+        if !hasValidScratchTypeSelection {
+            messages.append("Choose a scratch type before recording.")
         }
         if captureMode == .timedClick {
             if let bpmValue,
@@ -4601,6 +4606,18 @@ enum CaptureCore {
 
         var hasAudioEvents: Bool {
             !audioEvents.isEmpty
+        }
+
+        var effectiveDetectedLabel: String? {
+            guard hasDetectedEvents else { return nil }
+            let trimmed = detectedLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let trimmed, !trimmed.isEmpty else { return nil }
+            return trimmed
+        }
+
+        var effectiveLabelConfidence: Double? {
+            guard effectiveDetectedLabel != nil else { return nil }
+            return labelConfidence
         }
 
         func withMixerMidiEvents(

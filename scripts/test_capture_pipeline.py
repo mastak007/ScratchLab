@@ -232,7 +232,7 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assertIn('case .iosCompanion:\n                self.config = .guidedCaptureDefaults()', capture_core)
         self.assertIn("case .macRoutine:", capture_core)
         self.assertIn("self.config = .routineCapture(", capture_core)
-        self.assertIn('messages.append("Choose the scratch type before starting capture.")', capture_core)
+        self.assertIn('messages.append("Choose a scratch type before recording.")', capture_core)
         self.assertNotIn('messages.append("Add performer name before starting capture.")', capture_core)
         self.assertNotIn('messages.append("Enter BPM before starting capture.")', capture_core)
 

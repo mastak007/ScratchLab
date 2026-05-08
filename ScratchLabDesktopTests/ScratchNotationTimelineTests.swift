@@ -33,6 +33,13 @@ private func makeTimeline() -> ScratchNotationTimeline {
 @Suite("ScratchNotationTimeline")
 struct ScratchNotationTimelineTests {
 
+    @Test("Target notation timeline exists even without captured events")
+    func targetNotationTimelineExistsWithoutCapturedEvents() {
+        let timeline = makeTimeline()
+        #expect(!timeline.notation.strokes.isEmpty)
+        #expect(timeline.targetDirection(at: 0.1) == .forward)
+    }
+
     @Test("Baby Scratch alternates Forward / Back strokes")
     func alternatingDirections() {
         let timeline = makeTimeline()

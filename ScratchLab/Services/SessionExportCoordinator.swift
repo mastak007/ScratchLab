@@ -533,6 +533,7 @@ struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
     let takeID: String
     let takeNumber: Int
     let bpm: Int?
+    let targetLabel: String?
     let audioSourceURL: URL?
     let videoSourceURL: URL?
     let audioExists: Bool
@@ -2547,16 +2548,18 @@ struct SessionArchiveBuilder: Sendable {
             .appendingPathComponent(mediaURL.deletingPathExtension().lastPathComponent)
             .appendingPathExtension("wav")
         let bpm = SessionExportMetadataResolver.validatedSessionConfig(from: sidecar)?.bpm
-        let detectedLabel = sidecar.reviewDecision?.detectedLabel
-            ?? sidecar.detectedNotation?.detectedLabel
-            ?? sidecar.reviewDecision?.label
-        let labelConfidence = sidecar.reviewDecision?.confidence ?? sidecar.detectedNotation?.labelConfidence
+        let detectedLabel = sidecar.detectedNotation?.effectiveDetectedLabel
+        let labelConfidence = sidecar.detectedNotation?.effectiveLabelConfidence
+        let targetLabel = sidecar.sessionConfig?.scratchType.flatMap {
+            $0 == .unknown ? nil : $0.title
+        }
 
         if sidecar.recordingStatus == "recording" {
             return TakeArtifactStatusSnapshot(
                 takeID: sidecar.takeID,
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
+                targetLabel: targetLabel,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2576,6 +2579,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeID: sidecar.takeID,
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
+                targetLabel: targetLabel,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2600,6 +2604,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeID: sidecar.takeID,
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
+                targetLabel: targetLabel,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2618,6 +2623,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeID: sidecar.takeID,
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
+                targetLabel: targetLabel,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2644,6 +2650,7 @@ struct SessionArchiveBuilder: Sendable {
                     takeID: sidecar.takeID,
                     takeNumber: sidecar.appLocalTakeNumber,
                     bpm: bpm,
+                    targetLabel: targetLabel,
                     audioSourceURL: audioURL,
                     videoSourceURL: mediaURL,
                     audioExists: false,
@@ -2669,6 +2676,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeID: sidecar.takeID,
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
+                targetLabel: targetLabel,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: audioCheck.exists,
@@ -2687,6 +2695,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeID: sidecar.takeID,
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
+                targetLabel: targetLabel,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: true,
@@ -2705,6 +2714,7 @@ struct SessionArchiveBuilder: Sendable {
             takeID: sidecar.takeID,
             takeNumber: sidecar.appLocalTakeNumber,
             bpm: bpm,
+            targetLabel: targetLabel,
             audioSourceURL: audioURL,
             videoSourceURL: mediaURL,
             audioExists: true,
