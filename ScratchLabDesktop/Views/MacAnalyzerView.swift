@@ -683,17 +683,24 @@ struct MacAnalyzerView: View {
     }
 
     private var advancedSidebar: some View {
+        // Match captureSidebar / reviewSidebar pattern: a single ScrollView
+        // child so the entire sidebar is scrollable. Previously, the four
+        // static cards above the ScrollView (advancedHeaderCard +
+        // advancedToolsCard + performanceDiagnosticsCard + optional active
+        // session) had a combined intrinsic height that exceeded the pane
+        // height once the macOS toolbar/tab strip consumed its share, which
+        // forced SwiftUI's layout to clip the top of advancedHeaderCard.
         VStack(alignment: .leading, spacing: 18) {
-            advancedHeaderCard
-            advancedToolsCard
-            performanceDiagnosticsCard
-
-            if let activeSession = routineSessionPresentation.activeSession {
-                activeRoutineSessionCard(activeSession)
-            }
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    advancedHeaderCard
+                    advancedToolsCard
+                    performanceDiagnosticsCard
+
+                    if let activeSession = routineSessionPresentation.activeSession {
+                        activeRoutineSessionCard(activeSession)
+                    }
+
                     routineSessionCard
                     if selectedRoutineSession != nil {
                         routineRecordingCard
