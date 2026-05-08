@@ -203,7 +203,7 @@ struct MacAnalyzerView: View {
             case .blackHole:
                 return "Mirror Serato into a Multi-Output Device with BlackHole, then select the BlackHole input here."
             case .loopback:
-                return "Send Serato DJ Pro into a Loopback virtual device, then choose that Loopback input above."
+                return "Send your DJ app into a virtual audio device, then choose that Loopback input above."
             case .interfaceLoopback:
                 return "If your mixer or interface exposes loopback, REC, or USB return channels, pick that hardware input here."
             }
@@ -3688,7 +3688,7 @@ struct MacAnalyzerView: View {
                 }
             }
 
-            Text("Use this when the main screen is tilted down at the decks and you still want Serato DJ Pro visible on a connected display.")
+            Text("Use this when the main screen is tilted down at the decks and you still want your DJ app visible on a connected display.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
 
@@ -6182,16 +6182,16 @@ private final class SeratoWindowMover: ObservableObject {
         }
 
         guard let application = runningSeratoApplication else {
-            statusMessage = "Ready to send Serato DJ Pro to \(secondary.localizedName) once Serato is open."
+            statusMessage = "Ready to send the DJ app to \(secondary.localizedName) once Serato is open."
             return
         }
 
         if let windowElement = targetWindow(for: application),
            let currentScreen = screenContaining(window: windowElement) {
             if currentScreen.localizedName == secondary.localizedName {
-                statusMessage = "Serato DJ Pro is already showing on \(currentScreen.localizedName)."
+                statusMessage = "The DJ app is already showing on \(currentScreen.localizedName)."
             } else {
-                statusMessage = "Serato DJ Pro is on \(currentScreen.localizedName). Ready to send it to \(secondary.localizedName)."
+                statusMessage = "The DJ app is on \(currentScreen.localizedName). Ready to send it to \(secondary.localizedName)."
             }
             return
         }
@@ -6246,19 +6246,19 @@ private final class SeratoWindowMover: ObservableObject {
 
         if runningSeratoApplication == nil {
             launchSeratoIfInstalled()
-            statusMessage = "Opening Serato DJ Pro. Press \(preferredDisplayButtonTitle) again once its main window appears."
+            statusMessage = "Opening the DJ app. Press \(preferredDisplayButtonTitle) again once its main window appears."
             return
         }
 
         guard let application = runningSeratoApplication else {
-            statusMessage = "Serato DJ Pro is not running."
+            statusMessage = "The DJ app is not running."
             return
         }
 
         application.activate(options: [.activateAllWindows])
 
         guard let window = targetWindow(for: application) else {
-            statusMessage = "Serato DJ Pro is running, but its main window is not ready yet."
+            statusMessage = "The DJ app is running, but its main window is not ready yet."
             return
         }
 
@@ -6274,7 +6274,7 @@ private final class SeratoWindowMover: ObservableObject {
 
     private func launchSeratoIfInstalled() {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.seratoBundleIdentifier) else {
-            statusMessage = "Serato DJ Pro is not installed in /Applications."
+            statusMessage = "The DJ app is not installed in /Applications."
             return
         }
 

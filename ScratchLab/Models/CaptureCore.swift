@@ -2612,7 +2612,7 @@ extension BabyScratchReferenceAsset {
         videoAngles: [
             BabyScratchReferenceVideoAngle(
                 angleID: "angle_1",
-                path: "processed_makemkv/baby/79bpm/angle_1_video.mkv",
+                path: "CoachDemoVideo/baby_angle_1_reference",
                 role: .primary,
                 validationFocus: [
                     .handPosition,
@@ -2624,7 +2624,7 @@ extension BabyScratchReferenceAsset {
             ),
             BabyScratchReferenceVideoAngle(
                 angleID: "angle_2",
-                path: "processed_makemkv/baby/79bpm/angle_2_video.mkv",
+                path: "CoachDemoVideo/baby_angle_2_reference",
                 role: .validation,
                 validationFocus: [
                     .handPosition,
@@ -2633,7 +2633,7 @@ extension BabyScratchReferenceAsset {
             ),
             BabyScratchReferenceVideoAngle(
                 angleID: "angle_3",
-                path: "processed_makemkv/baby/79bpm/angle_3_video.mkv",
+                path: "CoachDemoVideo/baby_angle_3_reference",
                 role: .validation,
                 validationFocus: [
                     .recordStickerMovement,
@@ -2642,7 +2642,7 @@ extension BabyScratchReferenceAsset {
             ),
             BabyScratchReferenceVideoAngle(
                 angleID: "angle_4",
-                path: "processed_makemkv/baby/79bpm/angle_4_video.mkv",
+                path: "CoachDemoVideo/baby_angle_4_reference",
                 role: .validation,
                 validationFocus: [
                     .directionChanges,
