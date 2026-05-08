@@ -1229,7 +1229,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var rigLayout: DJRigLayout?
     @Published var highlightedZoneRole: DJRigZone.Role = .leftDeck
     @Published var sessionStars = 0
-    @Published var calibrationLocked: Bool = UserDefaults.standard.object(forKey: ScratchLabDesktopDefaultsKey.calibrationLocked) as? Bool ?? false {
+    @Published var calibrationLocked: Bool = UserDefaults.standard.object(forKey: ScratchLabDesktopDefaultsKey.calibrationLocked) as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(calibrationLocked, forKey: ScratchLabDesktopDefaultsKey.calibrationLocked)
             guard oldValue != calibrationLocked else { return }
@@ -1296,7 +1296,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
     @Published private(set) var performerMonitorFrame: PerformerMonitorFrame?
     @Published var statusMessage = "Requesting camera and microphone access"
-    @Published private(set) var directCaptureStatus = "Open Serato DJ Pro to prepare Direct Capture."
+    @Published private(set) var directCaptureStatus = "Open your DJ app to prepare Direct Capture."
     @Published private(set) var directCaptureDeviceUID: String?
     @Published private(set) var isCameraActive = false
     @Published private(set) var isRoutineRecording = false
@@ -1348,7 +1348,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             .localizedName
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let selectedName, !selectedName.isEmpty {
-            return selectedName
+            return displayAudioDeviceName(selectedName)
         }
         return "Default audio input"
     }
@@ -1359,7 +1359,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             .localizedName
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let selectedName, !selectedName.isEmpty {
-            return selectedName
+            return displayVideoDeviceName(selectedName)
         }
         return "Default camera"
     }
@@ -1454,7 +1454,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             if currentAudioSignalLevel > 0.03 {
                 return "Signal is live. Play a clean forward-and-back baby scratch and the analyzer will lock it."
             }
-            return "Pick a routed DJ source like BlackHole, Loopback, or your interface and start playback."
+            return "Pick a routed deck source like a virtual device or interface loopback and start playback."
         }
 
         return "Last hit \(Int(lastScratchDetection.accuracy))% accuracy, \(Int(lastScratchDetection.confidence))% confidence. Session detections: \(scratchDetectionCount)."
@@ -1609,12 +1609,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return "Desk View"
         }
         if isBuiltInMacCamera(device) {
-            return "Built-in Camera"
+            return "Built-in camera"
         }
         if isPhoneContinuityCamera(device) {
-            return "External Camera"
+            return "External camera"
         }
-        return "External Camera"
+        return "External camera"
     }
 
     var isUsingMacCameraForDesktopDeck: Bool {
@@ -1637,7 +1637,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     var showRigGuides: Bool {
-        !practiceViewEnabled
+        !calibrationLocked
     }
 
     func zoneAdjustment(for role: DJRigZone.Role) -> ZoneAdjustment {
@@ -1677,7 +1677,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         if isUsingManualRigGuide {
-            return "Manual deck guide active"
+            return "Deck estimate in use"
         }
 
         if rigLayout.confidence >= 0.65 {
@@ -1693,7 +1693,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         if isUsingManualRigGuide {
-            return "Auto-detect missed this angle, so the manual rig guide is driving the overlay. Use Deck Calibration to line the boxes up with your decks and mixer."
+            return "Hand tracking is using your saved deck position. Recalibrate if tracking feels off."
         }
 
         return "Recognition active. Perform clean scratches to progress. Use Deck Calibration if the layout drifts."
@@ -2305,7 +2305,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private func refreshSeratoDirectCaptureState(discoveredAudioDevices: [AVCaptureDevice]) {
         guard #available(macOS 14.2, *) else {
-            directCaptureStatus = "Direct Serato Capture needs macOS 14.2 or later."
+            directCaptureStatus = "Direct Capture needs macOS 14.2 or later."
             directCaptureDeviceUID = nil
             directCaptureRoute = nil
             destroySeratoDirectCapture()
@@ -2316,7 +2316,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let currentProcessIdentifiers = runningSeratoApps.map(\.processIdentifier).sorted()
 
         guard !currentProcessIdentifiers.isEmpty else {
-            directCaptureStatus = "Open Serato DJ Pro to create the ScratchLab Direct Serato input."
+            directCaptureStatus = "Open your DJ app to create the ScratchLab direct capture input."
             directCaptureDeviceUID = nil
             directCaptureRoute = nil
             destroySeratoDirectCapture()
@@ -2327,7 +2327,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             directCaptureDeviceUID = seratoVirtualAudioDevice.uniqueID
             directCaptureRoute = .nativeSeratoVirtualAudio
             directCaptureStatus = isUsingDirectSeratoCapture
-                ? "Audio is connected and ready."
+                ? "Audio input connected."
                 : "Direct Capture is ready."
             destroySeratoDirectCapture()
             return
@@ -2365,7 +2365,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let tapStatus = AudioHardwareCreateProcessTap(tapDescription, &tapID)
         guard tapStatus == noErr else {
             print("Unable to create Serato process tap: \(tapStatus)")
-            directCaptureStatus = "Direct Capture is unavailable right now. Restart Serato and try again."
+            directCaptureStatus = "Direct Capture is unavailable right now. Restart the DJ app and try again."
             directCaptureDeviceUID = nil
             directCaptureRoute = nil
             return
@@ -2388,7 +2388,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard aggregateStatus == noErr else {
             AudioHardwareDestroyProcessTap(tapID)
             print("Unable to publish Serato direct-capture input: \(aggregateStatus)")
-            directCaptureStatus = "Direct Capture is unavailable right now. Restart Serato and try again."
+            directCaptureStatus = "Direct Capture is unavailable right now. Restart the DJ app and try again."
             directCaptureDeviceUID = nil
             directCaptureRoute = nil
             return
@@ -2545,6 +2545,49 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         name.localizedCaseInsensitiveContains("Serato")
     }
 
+    /// Map raw device names to generic, App-Store-safe labels for user-visible UI.
+    /// Keeps device-routing identifiers untouched — only the display string changes.
+    private func displayAudioDeviceName(_ name: String) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return "Audio input" }
+
+        let lowercasedName = trimmedName.lowercased()
+        if lowercasedName.contains("serato")
+            || lowercasedName.contains("virtual")
+            || lowercasedName.contains("blackhole")
+            || lowercasedName.contains("loopback")
+            || lowercasedName.contains("rogue amoeba") {
+            return "Virtual audio device"
+        }
+        if lowercasedName.contains("mic")
+            || lowercasedName.contains("microphone")
+            || lowercasedName.contains("built-in")
+            || lowercasedName.contains("internal") {
+            return "Built-in microphone"
+        }
+        if lowercasedName.contains("djm")
+            || lowercasedName.contains("scarlett")
+            || lowercasedName.contains("interface")
+            || lowercasedName.contains("usb")
+            || lowercasedName.contains("record") {
+            return "Audio interface"
+        }
+        return "Audio input"
+    }
+
+    private func displayVideoDeviceName(_ name: String) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return "Camera" }
+
+        let lowercasedName = trimmedName.lowercased()
+        if lowercasedName.contains("built-in")
+            || lowercasedName.contains("facetime")
+            || lowercasedName.contains("desk view") {
+            return "Built-in camera"
+        }
+        return "External camera"
+    }
+
     private func preferredSeratoAudioDevice(from devices: [AudioInputDeviceChoice]) -> AudioInputDeviceChoice? {
         if let exactSerato = devices.first(where: { Self.isExactSeratoVirtualAudioDeviceName($0.name) }) {
             return exactSerato
@@ -2601,7 +2644,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         if audioDevices.contains(where: { $0.uniqueID == directCaptureDeviceUID }) {
             directCaptureStatus = isUsingDirectSeratoCapture
-                ? "Audio is connected and ready."
+                ? "Audio input connected."
                 : "Direct Capture is ready."
         } else if seratoDirectCaptureAggregateDeviceID != 0 {
             directCaptureStatus = "Direct Capture is getting ready."
@@ -2985,6 +3028,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             takeID: sidecar.takeID,
             takeNumber: sidecar.appLocalTakeNumber,
             bpm: sidecar.sessionConfig?.bpm,
+            targetLabel: sidecar.sessionConfig?.scratchType.flatMap {
+                $0 == .unknown ? nil : $0.title
+            },
             audioSourceURL: audioURL,
             videoSourceURL: mediaURL,
             audioExists: audioExists,
