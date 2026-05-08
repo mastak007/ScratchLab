@@ -2607,7 +2607,7 @@ extension BabyScratchReferenceAsset {
         bpm: 79,
         demoStart: BabyScratchReferenceMotionTimeline.demoStart,
         demoEnd: BabyScratchReferenceMotionTimeline.demoEnd,
-        audioPath: "processed_makemkv/baby/79bpm/angle_1_noBeat.wav",
+        audioPath: "CoachDemoAudio/baby_noBeat.wav",
         timingSource: .wavAudio,
         videoAngles: [
             BabyScratchReferenceVideoAngle(

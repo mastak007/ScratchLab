@@ -6196,7 +6196,7 @@ private final class SeratoWindowMover: ObservableObject {
             return
         }
 
-        statusMessage = "Serato DJ Pro is open. Use Send to move it to \(secondary.localizedName)."
+        statusMessage = "The DJ app is open. Use Send to move it to \(secondary.localizedName)."
     }
 
     func moveSeratoToPreferredSecondaryDisplay() {
@@ -6266,9 +6266,9 @@ private final class SeratoWindowMover: ObservableObject {
         let didSetFrame = setFrame(targetFrame, on: window)
 
         if didSetFrame {
-            statusMessage = "Serato DJ Pro moved to \(screen.localizedName)."
+            statusMessage = "The DJ app moved to \(screen.localizedName)."
         } else {
-            statusMessage = "ScratchLab could not move the Serato DJ Pro window. Make sure Serato's main window is open and unlocked."
+            statusMessage = "ScratchLab could not move the DJ app window. Make sure the main window is open and unlocked."
         }
     }
 
