@@ -1033,10 +1033,10 @@ struct CapturedNotationDisplayView: View {
                 }
             } else if hasAudioOnly {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Audio activity detected — direction could not be confirmed.")
+                    Text("Audio activity detected. Direction wasn't confirmed visually — these are estimates from sound.")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("Audio inferred · direction not confirmed visually")
+                    Text("Audio inferred")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(labelColor)
                 }
@@ -1432,9 +1432,9 @@ struct CapturedNotationDisplayView: View {
         HStack(spacing: 14) {
             legendItem(color: forwardColor,                            label: "Forward")
             legendItem(color: backColor,                               label: "Back")
-            legendItem(color: Color(red: 1.00, green: 0.72, blue: 0.10), label: "Audio inferred")
+            legendItem(color: ScratchLabDesign.Notation.audioInferred, label: "Audio inferred")
             legendItem(color: audioColor,                              label: "Scratch burst")
-            legendItem(color: cutColor,                                label: "Drag / Cut")
+            legendItem(color: cutColor,                                label: "Drag / cut")
             legendItem(color: faderColor,                              label: "Fader")
             legendItem(color: gapColor,                                label: "Silence")
         }

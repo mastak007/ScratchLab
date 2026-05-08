@@ -338,7 +338,7 @@ struct MacAnalyzerView: View {
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
     @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
-    @State private var reviewStatusMessage = "Review detected labels before export."
+    @State private var reviewStatusMessage = "Confirm before export."
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
     @State private var isShowingStagingInspector = false
@@ -431,7 +431,7 @@ struct MacAnalyzerView: View {
             if liveInputEnabled {
                 startMacLiveInput()
             } else {
-                captureEngine.statusMessage = "Try Demo is ready. No hardware is needed for the demo path. Start Live Input only when hardware is connected."
+                captureEngine.statusMessage = "Demo is ready. No hardware is needed. Start live input only when hardware is connected."
             }
             performerBroadcaster.refreshAdvertising()
             sessionUploadManager.refresh()
@@ -623,17 +623,17 @@ struct MacAnalyzerView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Try Demo")
+                    Text("Demo")
                         .font(.system(size: 24, weight: .semibold))
 
-                    Text("See scratch feedback instantly")
+                    Text("Hear the Baby Scratch reference and watch the coach react in real time.")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 12)
 
-                Label("No hardware needed for demo", systemImage: "checkmark.seal.fill")
+                Label("No hardware needed", systemImage: "checkmark.seal.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color(nsColor: .systemGreen))
             }
@@ -652,7 +652,7 @@ struct MacAnalyzerView: View {
                 Button {
                     startMacDemo()
                 } label: {
-                    Label(demoModeController.isReady ? "Replay Demo" : "Try Demo", systemImage: "play.fill")
+                    Label(demoModeController.isReady ? "Replay" : "Listen", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -857,7 +857,7 @@ struct MacAnalyzerView: View {
 
             Spacer()
 
-            Button(liveInputEnabled ? "Live Input Enabled" : "Start Live Input") {
+            Button(liveInputEnabled ? "Live input on" : "Start live input") {
                 startMacLiveInput()
             }
             .buttonStyle(.borderedProminent)
@@ -950,7 +950,7 @@ struct MacAnalyzerView: View {
                             .font(.system(size: 38, weight: .semibold))
                             .foregroundStyle(.white)
 
-                        Text(demoModeController.isReady ? "Coach animation and feedback are running from bundled demo data." : "Click Try Demo to start the bundled demo flow.")
+                        Text(demoModeController.isReady ? "Coach animation and feedback are playing the bundled reference." : "Tap Listen to play the bundled Baby Scratch reference.")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.white.opacity(0.72))
                             .multilineTextAlignment(.center)
@@ -1014,7 +1014,7 @@ struct MacAnalyzerView: View {
         if isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing {
             return "Preparing Demo ZIP"
         }
-        return "Export Demo ZIP"
+        return "Export demo session"
     }
 
     private var selectedAudioDevice: AVCaptureDevice? {
@@ -1115,7 +1115,7 @@ struct MacAnalyzerView: View {
             HStack(spacing: 8) {
                 switch captureEngine.midiLearnState {
                 case .idle:
-                    Button("Learn Crossfader") { captureEngine.startMIDILearn() }
+                    Button("Learn crossfader") { captureEngine.startMIDILearn() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 case .listening:
@@ -1123,7 +1123,7 @@ struct MacAnalyzerView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 case .learned:
-                    Button("Learn Crossfader") { captureEngine.startMIDILearn() }
+                    Button("Learn crossfader") { captureEngine.startMIDILearn() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     Button("Clear") { captureEngine.clearCrossfaderMapping() }
@@ -1315,9 +1315,11 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewDetectedScratchLabel: String {
+        // Friendly empty state — never surface "Unknown" as a primary label
+        // when no detection has happened yet.
         currentRoutineArtifactStatus?.detectedLabel
             ?? captureEngine.lastScratchDetection?.scratchName
-            ?? "Unknown"
+            ?? "Awaiting take"
     }
 
     private var reviewConfidenceLabel: String {
@@ -1347,7 +1349,7 @@ struct MacAnalyzerView: View {
 
     private var reviewDecisionSummary: String {
         guard hasRecordedTake else {
-            return "No take ready for review"
+            return "No take to review yet"
         }
         if let decision = reviewDecisionByTakeID[reviewTakeID] {
             return "Review label: \(decision.rawValue)"
@@ -1396,7 +1398,7 @@ struct MacAnalyzerView: View {
 
     private var reviewArtifactStatusSummary: String {
         guard let status = currentRoutineArtifactStatus else {
-            return "No take ready for review"
+            return "No take to review yet"
         }
         let takeLabel = "Take \(String(format: "%03d", status.takeNumber))"
         switch status.readiness {
@@ -1555,7 +1557,7 @@ struct MacAnalyzerView: View {
         }
         return coachInstruction.demoAudioRole == "withBeat"
             ? "Coach demo includes beat and scratch together."
-            : "Coach demo is isolated for scratch focus."
+            : "Coach plays the scratch only — no beat behind it."
     }
 
     private var coachCardTheme: ScratchCoachCardTheme {
@@ -1995,12 +1997,12 @@ struct MacAnalyzerView: View {
                 Spacer(minLength: 12)
 
                 HStack(spacing: 8) {
-                    Button("New Session", action: createNewSessionAction)
+                    Button("New session", action: createNewSessionAction)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .disabled(captureEngine.isRoutineRecording)
 
-                    Button("Open Monitor View") {
+                    Button("Open Performer Monitor") {
                         openWindow(id: "performer-monitor")
                     }
                     .buttonStyle(.bordered)
@@ -2008,24 +2010,24 @@ struct MacAnalyzerView: View {
                 }
             }
 
-            Text("Technical tools for input diagnostics, deck calibration, notation lab, export inspection, and timing checks.")
+            Text("Diagnostics, calibration, and notation tools.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
                 headerStatusPill(
                     title: "Audio",
-                    value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not Connected" : "Ready",
+                    value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not connected" : "Ready",
                     color: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .secondary : .green
                 )
                 headerStatusPill(
                     title: "Device",
-                    value: companionReceiver.connectedPeerNames.isEmpty ? "Searching" : "Connected",
+                    value: companionReceiver.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
                     color: companionReceiver.connectedPeerNames.isEmpty ? .secondary : .green
                 )
                 headerStatusPill(
                     title: "Monitor",
-                    value: performerBroadcaster.connectedPeerNames.isEmpty ? "Searching" : "Connected",
+                    value: performerBroadcaster.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
                     color: performerBroadcaster.connectedPeerNames.isEmpty ? .secondary : .green
                 )
             }
@@ -2038,9 +2040,9 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(performerBroadcaster.connectedPeerNames.isEmpty ? Color.secondary : Color.green)
 
-            DisclosureGroup("Advanced connection") {
+            DisclosureGroup("Connect manually") {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Use this only if nearby discovery does not find ScratchLab.")
+                    Text("Use this only if nearby discovery doesn't find ScratchLab.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
 
@@ -2052,7 +2054,7 @@ struct MacAnalyzerView: View {
             }
             .font(.system(size: 12, weight: .semibold))
 
-            Text("Open Performer Monitor here, then send that window to an external display if one is available. If not, open ScratchLab on another device and tap Performer Monitor to receive the same deck view directly.")
+            Text("Open Performer Monitor and send that window to an external display, or run ScratchLab on a second device and tap Performer Monitor there.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -2063,23 +2065,23 @@ struct MacAnalyzerView: View {
 
     private var advancedToolsCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Technical Tools")
+            Text("Tools")
                 .font(.headline)
 
-            Text("Notation Lab, Input diagnostics, MIDI device mapping, Deck/mixer calibration, Export manifest info, App Review demo tools, Test Lab, Raw JSON/sidecar inspection, Watch motion diagnostics, Timing checks, and Advanced Capture Details live here instead of primary capture.")
+            Text("Notation lab, input diagnostics, MIDI mapping, deck calibration, export manifest, raw sidecar inspection, watch motion, and timing checks.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                Button("Notation Lab") {
+                Button("Notation lab") {
                     babyScratchDemo.configureBabyScratchIfNeeded()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 #if DEBUG
-                Button("Raw JSON/sidecar inspection") {
+                Button("Inspect raw sidecar") {
                     rawJSONInspector.openForCurrentSelection(selectedRawJSONURL)
                     isShowingRawJSONInspector = true
                 }
@@ -2095,59 +2097,82 @@ struct MacAnalyzerView: View {
 
     private var performanceDiagnosticsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Performance Diagnostics")
+            Text("Performance")
                 .font(.headline)
 
+            // Layer 1 — friendly status pills always visible.
             VStack(spacing: 8) {
-                diagnosticRow(title: "Playback state", value: babyScratchDemo.playbackState.rawValue)
-                diagnosticRow(title: "Audio time", value: String(format: "%.3fs", babyScratchDemo.currentAudioTime))
-                diagnosticRow(title: "Notation playing", value: babyScratchDemo.playbackState == .playing ? "true" : "false")
-                diagnosticRow(title: "Coach playing", value: babyScratchDemo.isPlaying ? "true" : "false")
-                diagnosticRow(title: "Recording", value: (captureEngine.isRoutineRecording || captureEngine.cxlIsRecording) ? "true" : "false")
-                diagnosticRow(title: "Camera active", value: diagnosticsCameraValue)
-                diagnosticRow(
-                    title: "Raw audio buffers",
-                    value: "\(captureEngine.routineAudioBuffersAppended)/\(captureEngine.routineAudioBuffersReceived) appended"
-                )
-                diagnosticRow(title: "Audio buffers skipped", value: "\(captureEngine.routineAudioBuffersSkipped)")
-                diagnosticRow(title: "Audio device", value: captureEngine.selectedAudioDeviceName)
+                diagnosticRow(title: "Playback", value: friendlyPlaybackState)
+                diagnosticRow(title: "Capture", value: (captureEngine.isRoutineRecording || captureEngine.cxlIsRecording) ? "Recording" : "Idle")
+                diagnosticRow(title: "Camera", value: diagnosticsCameraValue)
+                diagnosticRow(title: "Audio", value: captureEngine.selectedAudioDeviceName)
                 diagnosticRow(title: "Signal", value: captureEngine.audioSignalStatusText)
                 if let lastRoutineAudioWriterError = captureEngine.lastRoutineAudioWriterError,
                    !lastRoutineAudioWriterError.isEmpty {
                     diagnosticRow(title: "Last audio writer error", value: lastRoutineAudioWriterError)
                 }
-                #if DEBUG
-                if let movementDiagnostics = captureEngine.routineMovementDiagnostics {
+            }
+
+            // Layer 2 — raw counters / timings / booleans tucked behind a
+            // disclosure so the default view doesn't read like a print() log.
+            DisclosureGroup {
+                VStack(spacing: 8) {
+                    diagnosticRow(title: "Audio time", value: String(format: "%.3fs", babyScratchDemo.currentAudioTime))
+                    diagnosticRow(title: "Notation playing", value: babyScratchDemo.playbackState == .playing ? "true" : "false")
+                    diagnosticRow(title: "Coach playing", value: babyScratchDemo.isPlaying ? "true" : "false")
+                    diagnosticRow(title: "Recording", value: (captureEngine.isRoutineRecording || captureEngine.cxlIsRecording) ? "true" : "false")
                     diagnosticRow(
-                        title: "Movement pipeline",
-                        value: "\(movementDiagnostics.finalRecordMovementEvents) final / \(movementDiagnostics.trustedDirectionalEvents) trusted / \(movementDiagnostics.fusedMovementEvents) fused / \(movementDiagnostics.normalizedMovementEvents) normalized / \(movementDiagnostics.rawMovementEventsCreated) raw"
+                        title: "Raw audio buffers",
+                        value: "\(captureEngine.routineAudioBuffersAppended)/\(captureEngine.routineAudioBuffersReceived) appended"
                     )
-                    diagnosticRow(
-                        title: "Movement samples",
-                        value: "\(movementDiagnostics.observationsWithConfidence)/\(movementDiagnostics.handObservationsReceived) confident, \(movementDiagnostics.builderSamplesReceived) builder"
-                    )
-                    diagnosticRow(
-                        title: "Movement directions",
-                        value: "\(movementDiagnostics.semanticDirectionChanges) semantic / \(movementDiagnostics.rawDirectionChanges) raw"
-                    )
-                    diagnosticRow(
-                        title: "Video frames",
-                        value: "\(movementDiagnostics.framesAnalyzed)/\(movementDiagnostics.framesReceived) analyzed @ \(movementDiagnostics.handPoseIntervalMS)ms"
-                    )
-                    diagnosticRow(
-                        title: "Movement drops",
-                        value: "raw[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.rawDropReasons))] norm[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.normalizedDropReasons))] trust[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.trustDropReasons))]"
-                    )
+                    diagnosticRow(title: "Audio buffers skipped", value: "\(captureEngine.routineAudioBuffersSkipped)")
+                    #if DEBUG
+                    if let movementDiagnostics = captureEngine.routineMovementDiagnostics {
+                        diagnosticRow(
+                            title: "Movement pipeline",
+                            value: "\(movementDiagnostics.finalRecordMovementEvents) final / \(movementDiagnostics.trustedDirectionalEvents) trusted / \(movementDiagnostics.fusedMovementEvents) fused / \(movementDiagnostics.normalizedMovementEvents) normalized / \(movementDiagnostics.rawMovementEventsCreated) raw"
+                        )
+                        diagnosticRow(
+                            title: "Movement samples",
+                            value: "\(movementDiagnostics.observationsWithConfidence)/\(movementDiagnostics.handObservationsReceived) confident, \(movementDiagnostics.builderSamplesReceived) builder"
+                        )
+                        diagnosticRow(
+                            title: "Movement directions",
+                            value: "\(movementDiagnostics.semanticDirectionChanges) semantic / \(movementDiagnostics.rawDirectionChanges) raw"
+                        )
+                        diagnosticRow(
+                            title: "Video frames",
+                            value: "\(movementDiagnostics.framesAnalyzed)/\(movementDiagnostics.framesReceived) analyzed @ \(movementDiagnostics.handPoseIntervalMS)ms"
+                        )
+                        diagnosticRow(
+                            title: "Movement drops",
+                            value: "raw[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.rawDropReasons))] norm[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.normalizedDropReasons))] trust[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.trustDropReasons))]"
+                        )
+                    }
+                    #endif
+                    diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", runtimeDiagnostics.notationLastTickDurationMS))
+                    diagnosticRow(title: "Approx tick rate", value: diagnosticsTickRateValue)
+                    diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", runtimeDiagnostics.coachLastUpdateDurationMS))
                 }
-                #endif
-                diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", runtimeDiagnostics.notationLastTickDurationMS))
-                diagnosticRow(title: "Approx tick rate", value: diagnosticsTickRateValue)
-                diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", runtimeDiagnostics.coachLastUpdateDurationMS))
+                .padding(.top, 8)
+            } label: {
+                Label("Show technical details", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var friendlyPlaybackState: String {
+        switch babyScratchDemo.playbackState {
+        case .playing:           return "Playing"
+        case .paused:            return "Paused"
+        case .stopped:           return "Idle"
+        default:                 return "Idle"
+        }
     }
 
     private func diagnosticRow(title: String, value: String) -> some View {
@@ -2186,7 +2211,7 @@ struct MacAnalyzerView: View {
     private var routineSessionCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Recent Sessions")
+                Text("Recent sessions")
                     .font(.headline)
 
                 Spacer()
@@ -2212,7 +2237,7 @@ struct MacAnalyzerView: View {
                     }
                 }
 
-                DisclosureGroup("All Sessions", isExpanded: $isShowingAllRoutineSessions) {
+                DisclosureGroup("Show all sessions", isExpanded: $isShowingAllRoutineSessions) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(routineSessionPresentation.allSessions) { session in
                             routineSessionButton(session)
@@ -2247,7 +2272,7 @@ struct MacAnalyzerView: View {
         _ session: SessionListPresentationModel<RoutineSessionDraft>.Entry
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Active Session")
+            Text("Active session")
                 .font(.headline)
 
             Button {
@@ -2291,10 +2316,10 @@ struct MacAnalyzerView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Capture Session")
+                    Text("Capture")
                         .font(.system(size: 28, weight: .semibold))
 
-                    Text("Simple workflow for clean takes.")
+                    Text("Record clean takes for review and export.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -2319,7 +2344,7 @@ struct MacAnalyzerView: View {
                     .disabled(captureEngine.isRoutineRecording)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Audio Input")
+                    Text("Audio source")
                         .font(.system(size: 13, weight: .semibold))
 
                     Picker("Source", selection: selectedAudioDeviceBinding) {
@@ -2453,7 +2478,7 @@ struct MacAnalyzerView: View {
 
     private var captureInputStatusCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Input Status")
+            Text("Inputs")
                 .font(.headline)
 
             LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
@@ -2542,7 +2567,7 @@ struct MacAnalyzerView: View {
                 .font(.headline)
 
             HStack(spacing: 8) {
-                testLabMetricBadge(title: "Take count", value: "\(visibleTakeCount)", color: visibleTakeCount == 0 ? .secondary : .green)
+                testLabMetricBadge(title: "Takes", value: "\(visibleTakeCount)", color: visibleTakeCount == 0 ? .secondary : .green)
                 testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
                 testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
             }
@@ -2614,7 +2639,7 @@ struct MacAnalyzerView: View {
             Text("Review")
                 .font(.system(size: 28, weight: .semibold))
 
-            Text("Accept or correct detected labels without changing the raw captured media.")
+            Text("Confirm the detected scratch type, or correct it before export. Audio and video stay untouched.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
@@ -2677,7 +2702,7 @@ struct MacAnalyzerView: View {
 
     private var reviewTakeCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Take Review")
+            Text("Take detail")
                 .font(.headline)
 
             if hasRecordedTake {
@@ -2692,7 +2717,7 @@ struct MacAnalyzerView: View {
                 }
 
                 HStack(spacing: 8) {
-                    testLabMetricBadge(title: "Detected scratch type", value: reviewDetectedScratchLabel, color: (currentRoutineArtifactStatus?.detectedLabel ?? captureEngine.lastScratchDetection?.scratchName) == nil ? .secondary : .green)
+                    testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: (currentRoutineArtifactStatus?.detectedLabel ?? captureEngine.lastScratchDetection?.scratchName) == nil ? .secondary : .green)
                     testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
                 }
 
@@ -2774,10 +2799,10 @@ struct MacAnalyzerView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("No take ready for review")
+                    Text("No take to review yet")
                         .font(.system(size: 16, weight: .semibold))
 
-                    Text("Record a take in Capture to see detected notation, confidence, and label options.")
+                    Text("Record a take in Capture and it'll show up here.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2794,7 +2819,7 @@ struct MacAnalyzerView: View {
             Text("Export")
                 .font(.headline)
 
-            Text(sessionExportCoordinator.statusMessage ?? "Export ZIP when review is complete.")
+            Text(sessionExportCoordinator.statusMessage ?? "Export a ZIP once you've reviewed the take.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2836,7 +2861,7 @@ struct MacAnalyzerView: View {
     private var reviewStage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Review Timeline")
+                Text("Review timeline")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.white)
 
@@ -2880,7 +2905,7 @@ struct MacAnalyzerView: View {
                         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
-            Text("Reference pattern for the selected target. Stays visible even when captured notation is missing.")
+            Text("Reference pattern. Stays visible even when no captured notation is available.")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
         }
@@ -3009,7 +3034,7 @@ struct MacAnalyzerView: View {
                 .controlSize(.small)
             }
 
-            Text("Use Try Demo, Listen, and Replay for the App Review path. No hardware is needed unless you choose Live Input.")
+            Text("Try the Baby Scratch demo, listen to the coach, and start a practice run.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
@@ -3023,7 +3048,7 @@ struct MacAnalyzerView: View {
                 } else {
                     headerStatusPill(
                         title: "Demo",
-                        value: demoModeController.isReady ? "Replay ready" : "Try Demo",
+                        value: demoModeController.isReady ? "Replay ready" : "Demo",
                         color: .green
                     )
                 }
@@ -3043,7 +3068,7 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(captureEngine.scratchStatusColor)
 
-            Text("Open Capture when you need to record a take.")
+            Text("Record takes from the Capture tab.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -3056,13 +3081,13 @@ struct MacAnalyzerView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Practice Log")
+                    Text("Practice run")
                         .font(.headline)
 
                     Text(
                         isPracticeSessionActive
                             ? "This timed Baby Scratch run is live. Finish and save it to update your progress on Mac."
-                            : "Start a timed Baby Scratch run here and save the result into the same progress model the iPhone practice flow uses."
+                            : "Time a Baby Scratch run and save it to your progress."
                     )
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -3093,7 +3118,7 @@ struct MacAnalyzerView: View {
 
                     Spacer()
 
-                    Text(practiceBeatStore.isBeatEnabled ? "Beat On" : "No Beat")
+                    Text(practiceBeatStore.isBeatEnabled ? "On" : "Off")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(practiceBeatStore.isBeatEnabled ? Color(nsColor: .systemGreen) : .secondary)
                 }
@@ -3106,7 +3131,7 @@ struct MacAnalyzerView: View {
                         isSelected: !practiceBeatStore.isBeatEnabled,
                         action: { practiceBeatStore.setBeatEnabled(false) }
                     ) {
-                        Text("No Beat")
+                        Text("Off")
                             .frame(maxWidth: .infinity)
                     }
                     .accessibilityIdentifier("practice-beat-no-beat-button")
@@ -3115,7 +3140,7 @@ struct MacAnalyzerView: View {
                         isSelected: practiceBeatStore.isBeatEnabled,
                         action: { practiceBeatStore.setBeatEnabled(true) }
                     ) {
-                        Text("Beat On")
+                        Text("On")
                             .frame(maxWidth: .infinity)
                     }
                     .accessibilityIdentifier("practice-beat-on-button")
@@ -3146,7 +3171,7 @@ struct MacAnalyzerView: View {
                         }
                     }
                 } else {
-                    Text("No Beat. Practise from live scratch audio only until you want timing guidance.")
+                    Text("Beat off. Practise from live scratch audio only until you want timing guidance.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3211,7 +3236,7 @@ struct MacAnalyzerView: View {
                 Button {
                     practiceBeatStore.togglePlayback()
                 } label: {
-                    Text(practiceBeatStore.isPlaying ? "Stop Beat" : "Play Beat")
+                    Text(practiceBeatStore.isPlaying ? "Stop beat" : "Play beat")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.black)
                         .frame(maxWidth: .infinity)
@@ -3286,7 +3311,7 @@ struct MacAnalyzerView: View {
             }
 
             HStack(spacing: 10) {
-                Button(isPracticeSessionActive ? "Finish & Save" : "Start Practice") {
+                Button(isPracticeSessionActive ? "Finish & save" : "Start practice") {
                     if isPracticeSessionActive {
                         finishPracticeSession(saveResult: true)
                     } else {
@@ -3319,7 +3344,7 @@ struct MacAnalyzerView: View {
                     color: (progressManager.babyScratchProgress?.practiceCount ?? 0) == 0 ? .secondary : .green
                 )
                 testLabMetricBadge(
-                    title: "Recent Avg",
+                    title: "Recent",
                     value: "\(Int((progressManager.babyScratchProgress?.averageAccuracy ?? 0).rounded()))%",
                     color: (progressManager.babyScratchProgress?.averageAccuracy ?? 0) == 0 ? .secondary : .green
                 )
@@ -3341,7 +3366,7 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(Color(nsColor: .systemGreen))
                 .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("No Mac practice run saved yet. Start a session here, then finish and save it to build your Baby Scratch stats.")
+                Text("No saved runs yet. Finish a practice run to start tracking.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3895,7 +3920,7 @@ struct MacAnalyzerView: View {
                     }
                 }
 
-                TextField("Custom BPM (60–140)", text: $bpmText)
+                TextField("Custom BPM · 60–140", text: $bpmText)
                     .textFieldStyle(.roundedBorder)
             }
         }
@@ -4446,7 +4471,7 @@ struct MacAnalyzerView: View {
             }
 
             if captureEngine.isUsingManualRigGuide {
-                Label("Manual deck guide is active right now.", systemImage: "slider.horizontal.3")
+                Label("Deck position saved.", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color(nsColor: .systemOrange))
             }
@@ -4674,16 +4699,24 @@ struct MacAnalyzerView: View {
     }
 
     private var workflowCard: some View {
+        // Permanent step-by-step workflow used to dominate the Advanced
+        // sidebar in screenshots. Tucked behind a "First time setting up?"
+        // disclosure so it stays available without burning into App Store
+        // screenshots.
         VStack(alignment: .leading, spacing: 10) {
-            Text("Routine Workflow")
-                .font(.headline)
-
-            Text(stageLayout == .desktopDeck
-                 ? "1. Put the built-in camera above or in front of the decks.\n2. Route DJ software into a virtual audio device.\n3. Adjust Deck Calibration until the boxes line up with the rig.\n4. Start a Routine Recording when the view and audio are ready.\n5. If Serato feels crowded, open Monitor View and move it to a second display."
-                 : "1. Route DJ software into a virtual audio device.\n2. Pick that device here for clean audio.\n3. Bring a companion device into Dual Cam if you want the extra angle.\n4. Start a Routine Recording when the take is framed.\n5. Open Monitor View if you want the feedback window off the main screen.")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup {
+                Text(stageLayout == .desktopDeck
+                     ? "1. Put the built-in camera above or in front of the decks.\n2. Route your DJ app into a virtual audio device.\n3. Adjust Deck Calibration until the boxes line up with the rig.\n4. Start a routine recording when the view and audio are ready.\n5. If your DJ app feels crowded, open Performer Monitor and move it to a second display."
+                     : "1. Route your DJ app into a virtual audio device.\n2. Pick that device here for clean audio.\n3. Bring a companion device into Dual Cam if you want the extra angle.\n4. Start a routine recording when the take is framed.\n5. Open Performer Monitor if you want the feedback window off the main screen.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            } label: {
+                Label("First time setting up?", systemImage: "info.circle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
