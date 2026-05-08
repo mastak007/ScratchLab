@@ -339,8 +339,18 @@ struct NotationVisualizerView: View {
             notationStatusBar
             if showingCaptured {
                 if let snapshot = capturedSnapshot {
-                    CapturedNotationDisplayView(snapshot: snapshot)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Wrap the captured timeline in a vertically-scrollable
+                    // container with sane horizontal margins so strokes don't
+                    // explode on tall windows and the timeline always has
+                    // room to breathe.
+                    ScrollView(.vertical) {
+                        CapturedNotationDisplayView(snapshot: snapshot)
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 360)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 14)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     noCapturedTakePane
                 }
@@ -350,8 +360,13 @@ struct NotationVisualizerView: View {
                     playbackTime: vm.playbackTime,
                     loopDuration: vm.loopDuration
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 220, maxHeight: 480)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
                 notationMotionLane
+                    .padding(.horizontal, 18)
+                Spacer(minLength: 0)
                 notationTransportBar
             }
         }

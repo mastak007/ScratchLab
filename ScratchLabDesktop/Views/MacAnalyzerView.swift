@@ -252,6 +252,48 @@ struct MacAnalyzerView: View {
         }
     }
 
+    private enum AdvancedSection: String, CaseIterable, Identifiable {
+        case overview
+        case audio
+        case cameraDeck
+        case midiFader
+        case monitor
+        case captureDetails
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .overview:       return "Overview"
+            case .audio:          return "Audio"
+            case .cameraDeck:     return "Camera / Deck"
+            case .midiFader:      return "MIDI / Fader"
+            case .monitor:        return "Monitor / Connection"
+            case .captureDetails: return "Capture details"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .overview:       return "rectangle.grid.2x2"
+            case .audio:          return "waveform"
+            case .cameraDeck:     return "video"
+            case .midiFader:      return "slider.horizontal.3"
+            case .monitor:        return "dot.radiowaves.left.and.right"
+            case .captureDetails: return "doc.text.magnifyingglass"
+            }
+        }
+    }
+
+    @AppStorage("scratchlab.mac.advancedSection") private var advancedSectionRaw = AdvancedSection.overview.rawValue
+    private var advancedSection: AdvancedSection {
+        get { AdvancedSection(rawValue: advancedSectionRaw) ?? .overview }
+        nonmutating set { advancedSectionRaw = newValue.rawValue }
+    }
+    private var advancedSectionBinding: Binding<AdvancedSection> {
+        Binding(get: { advancedSection }, set: { advancedSection = $0 })
+    }
+
     @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.practice.rawValue
     @AppStorage("scratchlab.mac.stageLayout") private var stageLayoutRaw = StageLayout.desktopDeck.rawValue
     @AppStorage("scratchlab.mac.practiceDuration") private var practiceDurationRaw = PracticeDuration.fiveMinutes.rawValue
@@ -548,15 +590,30 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceSidebar: some View {
+        // Coach + practice controls sit at the top. Audio input, scratch
+        // detection, ability rating, and quick workflow live behind a single
+        // collapsed Diagnostics group so the coaching screen doesn't read like
+        // a diagnostics dashboard.
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                macDemoModeCard
                 practiceHeaderCard
+                macDemoModeCard
                 practiceControlCard
-                practiceAudioCard
-                scratchCard
-                practiceFeedbackCard
-                practiceWorkflowCard
+
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 18) {
+                        practiceAudioCard
+                        scratchCard
+                        practiceFeedbackCard
+                        practiceWorkflowCard
+                    }
+                    .padding(.top, 12)
+                } label: {
+                    Label("Diagnostics & workflow", systemImage: "slider.horizontal.3")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
             }
             .padding(24)
         }
@@ -650,14 +707,28 @@ struct MacAnalyzerView: View {
     }
 
     private var captureSidebar: some View {
+        // Primary action chain stays visible (workflow, inputs, latest take).
+        // The session list + workflow summary collapse behind a single
+        // Sessions & workflow disclosure to remove the long debug-style scroll.
         VStack(alignment: .leading, spacing: 18) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     captureSessionWorkflowCard
                     captureInputStatusCard
                     captureLatestTakeCard
-                    captureSessionListCard
-                    captureWorkflowSummaryCard
+
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 18) {
+                            captureSessionListCard
+                            captureWorkflowSummaryCard
+                        }
+                        .padding(.top, 12)
+                    } label: {
+                        Label("Sessions & workflow", systemImage: "list.bullet.rectangle")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 4)
                 }
                 .padding(.bottom, 24)
             }
@@ -683,48 +754,93 @@ struct MacAnalyzerView: View {
     }
 
     private var advancedSidebar: some View {
-        // Match captureSidebar / reviewSidebar pattern: a single ScrollView
-        // child so the entire sidebar is scrollable. Previously, the four
-        // static cards above the ScrollView (advancedHeaderCard +
-        // advancedToolsCard + performanceDiagnosticsCard + optional active
-        // session) had a combined intrinsic height that exceeded the pane
-        // height once the macOS toolbar/tab strip consumed its share, which
-        // forced SwiftUI's layout to clip the top of advancedHeaderCard.
+        // Header + section picker stay pinned. The right-hand cards are gated
+        // by the selected AdvancedSection so the panel is no longer one
+        // endless technical scroll. All cards remain reachable — pick a
+        // section to bring them into view.
         VStack(alignment: .leading, spacing: 18) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     advancedHeaderCard
-                    advancedToolsCard
-                    performanceDiagnosticsCard
+                    advancedSectionPickerCard
 
                     if let activeSession = routineSessionPresentation.activeSession {
                         activeRoutineSessionCard(activeSession)
                     }
 
-                    routineSessionCard
-                    if selectedRoutineSession != nil {
-                        routineRecordingCard
-                    }
-                    midiMonitorCard
-                    Group {
-                        seratoScreenCard
-                        stageModeCard
-                        audioCard
-                        cameraCard
-                        deckCalibrationCard
-                        companionCard
-                    }
-                    .disabled(captureEngine.isRoutineRecording)
-                    scratchCard
-                    handMotionCard
-                    cxlCaptureCard
-                    workflowCard
+                    advancedSelectedSectionContent
                 }
                 .padding(.bottom, 24)
             }
         }
         .padding(.horizontal, 24)
         .padding(.top, 24)
+    }
+
+    private var advancedSectionPickerCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Advanced section")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Picker("Advanced section", selection: advancedSectionBinding) {
+                ForEach(AdvancedSection.allCases) { section in
+                    Label(section.title, systemImage: section.systemImage).tag(section)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var advancedSelectedSectionContent: some View {
+        switch advancedSection {
+        case .overview:
+            VStack(alignment: .leading, spacing: 22) {
+                advancedToolsCard
+                performanceDiagnosticsCard
+                routineSessionCard
+                workflowCard
+            }
+        case .audio:
+            VStack(alignment: .leading, spacing: 22) {
+                audioCard
+                    .disabled(captureEngine.isRoutineRecording)
+                seratoScreenCard
+                    .disabled(captureEngine.isRoutineRecording)
+                scratchCard
+            }
+        case .cameraDeck:
+            VStack(alignment: .leading, spacing: 22) {
+                cameraCard
+                    .disabled(captureEngine.isRoutineRecording)
+                deckCalibrationCard
+                    .disabled(captureEngine.isRoutineRecording)
+                handMotionCard
+                stageModeCard
+                    .disabled(captureEngine.isRoutineRecording)
+            }
+        case .midiFader:
+            VStack(alignment: .leading, spacing: 22) {
+                midiMonitorCard
+            }
+        case .monitor:
+            VStack(alignment: .leading, spacing: 22) {
+                companionCard
+                    .disabled(captureEngine.isRoutineRecording)
+            }
+        case .captureDetails:
+            VStack(alignment: .leading, spacing: 22) {
+                if selectedRoutineSession != nil {
+                    routineRecordingCard
+                }
+                cxlCaptureCard
+            }
+        }
     }
 
     private var practiceStageHeader: some View {
@@ -1068,7 +1184,9 @@ struct MacAnalyzerView: View {
         guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
             return fallbackTakeDisplayName()
         }
-        return lastRoutineRecordingURL.deletingPathExtension().lastPathComponent
+        // Use a friendly "Take N" label rather than leaking the underlying
+        // `<UUID>_takeNNN_routine.mov` filename in primary UI surfaces.
+        return Self.friendlyTakeLabel(from: lastRoutineRecordingURL)
     }
 
     private var selectedRawJSONURL: URL? {
@@ -1464,14 +1582,66 @@ struct MacAnalyzerView: View {
     }
 
     private func routineSessionTitle(for session: RoutineSessionDraft) -> String {
+        // Treat empty or 1–2 character performer names as display-empty so
+        // ad-hoc names like "k" / "h" never surface as primary card titles.
+        // The raw stored value is preserved — display only.
         let performerName = session.config.performerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return performerName.isEmpty ? "Untitled Session" : performerName
+        if performerName.count >= 3 { return performerName }
+        return "Untitled session"
     }
 
     private func routineSessionSubtitle(for session: RoutineSessionDraft) -> String {
         let scratchLabel = session.config.scratchType?.title ?? "Scratch type later"
         let bpmLabel = session.config.bpm.map { "\($0) BPM" } ?? "BPM later"
         return "\(scratchLabel) · \(bpmLabel)"
+    }
+
+    // MARK: - Display helpers
+
+    /// Strips UUIDs and `.mov` filenames out of a status string so primary
+    /// surfaces don't leak engineering identifiers. Replaces the UUID +
+    /// filename block with "this take" when one is present.
+    static func friendlyStatusMessage(_ raw: String) -> String {
+        var cleaned = raw
+        // Replace `<UUID>_takeNNN_routine.mov[.]` with `take N` (humanized).
+        let uuidTakeFile = #"[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}_take(\d{1,4})(?:_[A-Za-z0-9_-]+)?\.mov\.?"#
+        if let regex = try? NSRegularExpression(pattern: uuidTakeFile) {
+            let range = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, range: range, withTemplate: "take $1.")
+        }
+        // Strip any remaining bare UUID.
+        let uuidOnly = #"[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}"#
+        if let regex = try? NSRegularExpression(pattern: uuidOnly) {
+            let range = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, range: range, withTemplate: "this session")
+        }
+        // Drop any leftover trailing `.mov` filename clauses.
+        let movFile = #"[A-Za-z0-9_-]+\.mov\.?"#
+        if let regex = try? NSRegularExpression(pattern: movFile) {
+            let range = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+            cleaned = regex.stringByReplacingMatches(in: cleaned, range: range, withTemplate: "this take")
+        }
+        // Collapse double spaces left behind by replacements.
+        while cleaned.contains("  ") { cleaned = cleaned.replacingOccurrences(of: "  ", with: " ") }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Friendly take label from a recording URL, e.g. "Take 2".
+    static func friendlyTakeLabel(from url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        if let regex = try? NSRegularExpression(pattern: #"_take(\d{1,4})"#),
+           let match = regex.firstMatch(in: stem, range: NSRange(stem.startIndex..., in: stem)),
+           let r = Range(match.range(at: 1), in: stem) {
+            let n = Int(stem[r]) ?? 0
+            return n > 0 ? "Take \(n)" : "Take"
+        }
+        return "Take"
+    }
+
+    /// Compact identifier string for "Copy ID" affordances.
+    static func shortIdentifier(_ id: String) -> String {
+        guard id.count > 12 else { return id }
+        return String(id.prefix(8)) + "…" + String(id.suffix(4))
     }
 
     private func applyCaptureTimingMode(_ mode: CaptureTimingMode) {
@@ -2086,7 +2256,8 @@ struct MacAnalyzerView: View {
                 RoutineSessionRow(
                     title: routineSessionTitle(for: session.session),
                     subtitle: routineSessionSubtitle(for: session.session),
-                    detail: session.id,
+                    detail: nil,
+                    copyableID: session.id,
                     isSelected: routineSessionStore.selectedSessionID == session.id
                 )
             }
@@ -2107,7 +2278,8 @@ struct MacAnalyzerView: View {
             RoutineSessionRow(
                 title: routineSessionTitle(for: session.session),
                 subtitle: routineSessionSubtitle(for: session.session),
-                detail: session.id,
+                detail: nil,
+                copyableID: session.id,
                 isSelected: routineSessionStore.selectedSessionID == session.id
             )
         }
@@ -2205,7 +2377,7 @@ struct MacAnalyzerView: View {
                     .disabled(captureEngine.isRoutineRecording)
                 }
 
-                Label(captureEngine.routineRecordingStatus, systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
+                Label(Self.friendlyStatusMessage(captureEngine.routineRecordingStatus), systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2230,31 +2402,48 @@ struct MacAnalyzerView: View {
                 .tint(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : Color(nsColor: .systemGreen))
                 .disabled(routineCountInBeat != nil)
 
-                HStack(spacing: 10) {
-                    Button("Save Take") {
-                        markLastTakeSaved()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
+                // After a take exists, Review this take is the dominant
+                // next step. Save Take / Retake demote to small bordered
+                // utilities; Export Session lives in Review when ready.
+                if hasRecordedTake {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button {
+                            workspaceTab = .review
+                        } label: {
+                            Label("Review this take", systemImage: "checkmark.seal")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(captureEngine.isRoutineRecording)
 
-                    Button("Retake") {
-                        prepareRetake()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
+                        HStack(spacing: 8) {
+                            Button("Save Take") {
+                                markLastTakeSaved()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(captureEngine.isRoutineRecording)
 
-                    Button("Review") {
-                        workspaceTab = .review
+                            Button("Record another") {
+                                prepareRetake()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(captureEngine.isRoutineRecording)
+
+                            Spacer(minLength: 0)
+
+                            Button("Discard") {
+                                prepareRetake()
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                            .foregroundStyle(Color(nsColor: .systemRed))
+                            .disabled(captureEngine.isRoutineRecording)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
                 }
-
-                Button("Export Session") {
-                    shareLastRoutineSession()
-                }
-                .buttonStyle(.bordered)
-                .disabled(!hasRecordedTake || captureEngine.isRoutineRecording || sessionExportCoordinator.isPreparing)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2507,11 +2696,21 @@ struct MacAnalyzerView: View {
                     testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
                 }
 
-                HStack(spacing: 8) {
-                    testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
-                    testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
-                    testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
-                    testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
+                // Zero-counter grid was reading like a debug dashboard.
+                // Tucked behind a disclosure so it's available but not
+                // dominant when every value is zero.
+                DisclosureGroup {
+                    HStack(spacing: 8) {
+                        testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
+                        testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
+                        testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
+                        testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("Show technical details", systemImage: "slider.horizontal.3")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
 
                 if hasReviewNotationPreview {
@@ -2528,10 +2727,12 @@ struct MacAnalyzerView: View {
                         capturedNotationSnapshot = currentRoutineNotationSnapshot
                         workspaceTab = .advanced
                     } label: {
-                        Label("View Captured Notation", systemImage: "waveform.path")
+                        Label("View captured notation", systemImage: "waveform.path")
                             .font(.system(size: 12, weight: .semibold))
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
                 }
 
                 Picker("Correct Label", selection: $reviewCorrectionSelection) {
@@ -2541,27 +2742,34 @@ struct MacAnalyzerView: View {
                 }
                 .pickerStyle(.menu)
 
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Button("Accept") {
                         acceptReviewLabel()
                     }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
 
-                    Button("Correct Label") {
+                    Button("Correct label") {
                         correctReviewLabel()
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.small)
 
-                    Button("Leave Unknown") {
+                    Button("Leave unknown") {
                         leaveReviewLabelUnknown()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
 
                     if currentRoutineArtifactStatus?.readiness != .ready {
-                        Button("Retake Take") {
+                        Spacer(minLength: 0)
+                        Button("Retake") {
                             prepareRetake()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .foregroundStyle(Color(nsColor: .systemRed))
                     }
                 }
             } else {
@@ -2591,17 +2799,24 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 10) {
-                Button("Export ZIP") {
+            HStack(spacing: 8) {
+                Button {
                     shareLastRoutineSession()
+                } label: {
+                    Label("Export ZIP", systemImage: "square.and.arrow.up")
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
                 .disabled(!hasRecordedTake || sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
 
-                Button("Retake Take") {
+                Spacer(minLength: 0)
+
+                Button("Retake") {
                     prepareRetake()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .foregroundStyle(Color(nsColor: .systemRed))
                 .disabled(!hasRecordedTake || captureEngine.isRoutineRecording)
             }
 
@@ -2619,38 +2834,158 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewStage: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Review Timeline")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(.white)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Review Timeline")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.white)
 
-            cameraStageCard(
-                title: "Captured Notation",
-                subtitle: "Detected label, confidence, and correction state stay separate from raw captured files."
-            ) {
-                VStack(spacing: 22) {
-                    if let snapshot = currentRoutineNotationSnapshot {
-                        CapturedNotationDisplayView(snapshot: snapshot)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 18)
-                    } else {
-                        miniNotationTimeline
-                            .padding(.horizontal, 32)
-                    }
-
-                    Text(reviewDecisionSummary)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white.opacity(0.04))
+                reviewTargetNotationStageCard
+                reviewCapturedNotationStageCard
+                reviewSummaryFooterCard
             }
-
-            Spacer(minLength: 0)
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(18)
         .background(Color.black)
+    }
+
+    private var reviewTargetNotationStageCard: some View {
+        let scratchType = routineSessionSetup.scratchType ?? .babyScratch
+        let notation: ScratchNotation? = (scratchType == .babyScratch) ? ScratchNotation.babyScratch : nil
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Target notation")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Text("Target: \(scratchType.title)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+            }
+            Group {
+                if let notation {
+                    ScratchPhraseChartView(
+                        source: .target(notation),
+                        bpm: Double(routineSessionSetup.bpmValue ?? 90)
+                    )
+                    .frame(height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
+                    Text("Target notation unavailable for this scratch type.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
+                        .padding(12)
+                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+            Text("Reference pattern for the selected target. Stays visible even when captured notation is missing.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewCapturedNotationStageCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Captured evidence")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Text(reviewCapturedSourceLabel)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(reviewCapturedSourceColor)
+            }
+            if let snapshot = currentRoutineNotationSnapshot,
+               snapshot.hasDetectedEvents {
+                CapturedNotationDisplayView(snapshot: snapshot)
+                    .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 520)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else if hasReviewNotationPreview {
+                miniNotationTimeline
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No captured notation yet")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(reviewNotationAvailabilityMessage)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewSummaryFooterCard: some View {
+        let scratchType = routineSessionSetup.scratchType ?? .babyScratch
+        let detectedLabel: String = {
+            if let label = currentRoutineArtifactStatus?.detectedLabel, !label.isEmpty {
+                return label
+            }
+            if let label = captureEngine.lastScratchDetection?.scratchName, !label.isEmpty {
+                return label
+            }
+            return "Pattern not confirmed"
+        }()
+        let confidence: String = reviewConfidenceLabel
+        let source: String = reviewCapturedSourceLabel
+        let exportReady: Bool = currentRoutineArtifactStatus?.readiness == .ready
+        return HStack(alignment: .top, spacing: 12) {
+            reviewFooterMetric(title: "Target", value: scratchType.title, color: .white)
+            reviewFooterMetric(title: "Detected", value: detectedLabel, color: detectedLabel == "Pattern not confirmed" ? .secondary : .green)
+            reviewFooterMetric(title: "Confidence", value: confidence, color: reviewConfidenceColor)
+            reviewFooterMetric(title: "Source", value: source, color: reviewCapturedSourceColor)
+            reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", color: exportReady ? .green : .secondary)
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func reviewFooterMetric(title: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+            Text(value)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(color)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var reviewCapturedSourceLabel: String {
+        guard let snapshot = currentRoutineNotationSnapshot else { return "None" }
+        if !snapshot.recordMovementEvents.isEmpty {
+            return snapshot.notationSource == "detected" ? "Video movement" : "Movement recorded"
+        }
+        if !snapshot.faderEvents.isEmpty { return "Fader" }
+        if !snapshot.audioEvents.isEmpty { return "Audio inferred" }
+        if !snapshot.mixerMidiEvents.isEmpty { return "Raw MIDI unmapped" }
+        return "None"
+    }
+
+    private var reviewCapturedSourceColor: Color {
+        guard let snapshot = currentRoutineNotationSnapshot else { return .secondary }
+        if !snapshot.recordMovementEvents.isEmpty {
+            return snapshot.notationSource == "detected" ? .green : Color(red: 1.0, green: 0.72, blue: 0.10)
+        }
+        if !snapshot.faderEvents.isEmpty { return .green }
+        if !snapshot.audioEvents.isEmpty { return Color(red: 1.0, green: 0.72, blue: 0.10) }
+        return .secondary
     }
 
     private var practiceHeaderCard: some View {
@@ -3303,7 +3638,7 @@ struct MacAnalyzerView: View {
                 }
             }
 
-            Label(captureEngine.routineRecordingStatus, systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
+            Label(Self.friendlyStatusMessage(captureEngine.routineRecordingStatus), systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3327,11 +3662,11 @@ struct MacAnalyzerView: View {
             }
 
             if let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL {
-                Text(lastRoutineRecordingURL.lastPathComponent)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                Text(Self.friendlyTakeLabel(from: lastRoutineRecordingURL))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
 
                 Button("Show Last Recording in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([lastRoutineRecordingURL])
@@ -3525,8 +3860,8 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let latestCapture = relayedWatchCaptureStore.importedSessions.first {
-                    Text("Latest capture: \(latestCapture.fileURL.lastPathComponent)")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    Text("Latest capture: \(Self.friendlyTakeLabel(from: latestCapture.fileURL))")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -4726,24 +5061,62 @@ struct MacAnalyzerView: View {
 private struct RoutineSessionRow: View {
     let title: String
     let subtitle: String
-    let detail: String
+    /// Optional sub-detail (e.g. friendly date or status). Pass `nil` to omit.
+    /// Raw UUIDs/filenames must NEVER be passed here — use `copyableID` instead.
+    let detail: String?
+    /// When non-nil, a small "Copy ID" affordance is rendered. The full ID is
+    /// only ever placed on the clipboard; it is not displayed.
+    let copyableID: String?
     let isSelected: Bool
 
+    init(title: String, subtitle: String, detail: String? = nil, copyableID: String? = nil, isSelected: Bool) {
+        self.title = title
+        self.subtitle = subtitle
+        self.detail = detail
+        self.copyableID = copyableID
+        self.isSelected = isSelected
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isSelected ? .white : .primary)
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? .white : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-            Text(subtitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isSelected ? .white.opacity(0.84) : .secondary)
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isSelected ? .white.opacity(0.84) : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-            Text(detail)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(isSelected ? .white.opacity(0.72) : .secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+                if let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isSelected ? .white.opacity(0.72) : .secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let copyableID, !copyableID.isEmpty {
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(copyableID, forType: .string)
+                } label: {
+                    Label("Copy ID", systemImage: "doc.on.doc")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isSelected ? .white.opacity(0.85) : .secondary)
+                .help("Copy session ID")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -5808,5 +6181,75 @@ private final class SeratoWindowMover: ObservableObject {
             return nil
         }
         return unsafeBitCast(value, to: AXValue.self)
+    }
+}
+
+// MARK: - Shared button hierarchy
+
+/// Three sizes for the macOS workspace, designed so primary/secondary/tertiary
+/// roles are visually obvious at App-Store screenshot scale. Apply via the
+/// `.scratchLabPrimaryButton()` / `.scratchLabSecondaryButton()` /
+/// `.scratchLabTertiaryButton()` view modifiers below.
+private enum ScratchLabButtonRole {
+    case primary
+    case secondary
+    case tertiary
+    case destructive
+}
+
+private struct ScratchLabButtonStyle: ViewModifier {
+    let role: ScratchLabButtonRole
+    let fillsWidth: Bool
+
+    func body(content: Content) -> some View {
+        switch role {
+        case .primary:
+            content
+                .font(.system(size: 14, weight: .semibold))
+                .frame(minHeight: 36)
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+        case .secondary:
+            content
+                .font(.system(size: 13, weight: .semibold))
+                .frame(minHeight: 30)
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+        case .tertiary:
+            content
+                .font(.system(size: 12, weight: .medium))
+                .frame(minHeight: 26)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .foregroundStyle(.secondary)
+        case .destructive:
+            content
+                .font(.system(size: 12, weight: .medium))
+                .frame(minHeight: 26)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .foregroundStyle(Color(nsColor: .systemRed))
+        }
+    }
+}
+
+extension View {
+    /// One-per-section dominant action.
+    func scratchLabPrimaryButton(fillsWidth: Bool = false) -> some View {
+        modifier(ScratchLabButtonStyle(role: .primary, fillsWidth: fillsWidth))
+    }
+    /// Bordered medium-weight action.
+    func scratchLabSecondaryButton(fillsWidth: Bool = false) -> some View {
+        modifier(ScratchLabButtonStyle(role: .secondary, fillsWidth: fillsWidth))
+    }
+    /// Borderless subtle utility action.
+    func scratchLabTertiaryButton() -> some View {
+        modifier(ScratchLabButtonStyle(role: .tertiary, fillsWidth: false))
+    }
+    /// Subtle destructive action (Discard, Reset).
+    func scratchLabDestructiveButton() -> some View {
+        modifier(ScratchLabButtonStyle(role: .destructive, fillsWidth: false))
     }
 }
