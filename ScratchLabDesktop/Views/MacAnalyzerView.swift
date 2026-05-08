@@ -3098,41 +3098,26 @@ struct MacAnalyzerView: View {
                         .foregroundStyle(practiceBeatStore.isBeatEnabled ? Color(nsColor: .systemGreen) : .secondary)
                 }
 
+                // No Beat / Beat On toggle uses the shared chip selection
+                // style. Selected = accent (not yellow / green — those are
+                // reserved for warning / health roles in the design system).
                 HStack(spacing: 10) {
-                    Button {
-                        practiceBeatStore.setBeatEnabled(false)
-                    } label: {
+                    Chip(
+                        isSelected: !practiceBeatStore.isBeatEnabled,
+                        action: { practiceBeatStore.setBeatEnabled(false) }
+                    ) {
                         Text("No Beat")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(!practiceBeatStore.isBeatEnabled ? Color.black : Color.primary)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(
-                                !practiceBeatStore.isBeatEnabled
-                                    ? Color(nsColor: .systemYellow)
-                                    : Color(nsColor: .controlBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
                     }
-                    .buttonStyle(.plain)
                     .accessibilityIdentifier("practice-beat-no-beat-button")
 
-                    Button {
-                        practiceBeatStore.setBeatEnabled(true)
-                    } label: {
+                    Chip(
+                        isSelected: practiceBeatStore.isBeatEnabled,
+                        action: { practiceBeatStore.setBeatEnabled(true) }
+                    ) {
                         Text("Beat On")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(practiceBeatStore.isBeatEnabled ? Color.black : Color.primary)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(
-                                practiceBeatStore.isBeatEnabled
-                                    ? Color(nsColor: .systemGreen)
-                                    : Color(nsColor: .controlBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
                     }
-                    .buttonStyle(.plain)
                     .accessibilityIdentifier("practice-beat-on-button")
                 }
 
@@ -3142,35 +3127,20 @@ struct MacAnalyzerView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.secondary)
 
+                        // Beat-style picker uses the shared chip selection
+                        // style. Selected = accent fill + accent border;
+                        // checkmark glyph removed (selection is signified by
+                        // the accent border alone, per design system).
                         LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
                             ForEach(practiceBeatStore.availableBeatModes) { mode in
-                                Button {
-                                    practiceBeatStore.selectBeatMode(mode)
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Text(mode.title)
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundStyle(practiceBeatStore.selectedBeatMode == mode ? Color.black : Color.primary)
-                                            .multilineTextAlignment(.leading)
-
-                                        Spacer(minLength: 0)
-
-                                        if practiceBeatStore.selectedBeatMode == mode {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(Color.black.opacity(0.78))
-                                        }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        practiceBeatStore.selectedBeatMode == mode
-                                            ? Color(nsColor: .systemYellow)
-                                            : Color(nsColor: .controlBackgroundColor),
-                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    )
+                                Chip(
+                                    isSelected: practiceBeatStore.selectedBeatMode == mode,
+                                    action: { practiceBeatStore.selectBeatMode(mode) }
+                                ) {
+                                    Text(mode.title)
+                                        .multilineTextAlignment(.leading)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .buttonStyle(.plain)
                                 .accessibilityIdentifier("practice-beat-mode-\(mode.rawValue)")
                             }
                         }
@@ -3226,22 +3196,14 @@ struct MacAnalyzerView: View {
 
                     HStack(spacing: 8) {
                         ForEach(practiceBeatStore.allowedBPMList, id: \.self) { bpm in
-                            Button {
-                                practiceBeatStore.setBPM(bpm)
-                            } label: {
+                            Chip(
+                                isSelected: practiceBeatStore.bpmValue == bpm,
+                                isNumeric: true,
+                                action: { practiceBeatStore.setBPM(bpm) }
+                            ) {
                                 Text("\(bpm)")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(practiceBeatStore.bpmValue == bpm ? Color.black : Color.primary)
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        practiceBeatStore.bpmValue == bpm
-                                            ? Color(nsColor: .systemYellow)
-                                            : Color(nsColor: .controlBackgroundColor),
-                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    )
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -3391,18 +3353,35 @@ struct MacAnalyzerView: View {
     }
 
     private func headerStatusPill(title: String, value: String, color: Color) -> some View {
+        // Strip the title prefix from the value so we never render
+        // "Audio · Audio Ready" — the design system requires "TITLE · STATE".
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            Text(value)
+            Text(Self.dedupedStatusValue(title: title, value: value))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(color)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// Drop the title token from the value when it appears as a prefix or
+    /// echoes the title verbatim. Shared by every status pill / tile so the
+    /// "Audio · Audio Ready" pattern can never reach the UI.
+    static func dedupedStatusValue(title: String, value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "—" }
+        let lowerTitle = title.lowercased()
+        let lowerValue = trimmed.lowercased()
+        if lowerValue == lowerTitle { return "—" }
+        if lowerValue.hasPrefix(lowerTitle + " ") {
+            return String(trimmed.dropFirst(title.count)).trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
     }
 
     private var stageModeCard: some View {
@@ -3907,22 +3886,12 @@ struct MacAnalyzerView: View {
 
                 HStack(spacing: 8) {
                     ForEach(presetBPMs, id: \.self) { bpm in
-                        Button {
-                            bpmText = String(bpm)
-                        } label: {
-                            Text("\(bpm)")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(Int(bpmText) == bpm ? Color.black : Color.primary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(
-                                    Int(bpmText) == bpm
-                                        ? Color(nsColor: .systemGreen)
-                                        : Color(nsColor: .controlBackgroundColor),
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                )
-                        }
-                        .buttonStyle(.plain)
+                        Chip(
+                            "\(bpm)",
+                            isSelected: Int(bpmText) == bpm,
+                            isNumeric: true,
+                            action: { bpmText = String(bpm) }
+                        )
                     }
                 }
 
@@ -4843,7 +4812,17 @@ struct MacAnalyzerView: View {
     }
 
     private func captureInputStatusTile(title: String, value: String, detail: String? = nil, systemImage: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        // Same TITLE · STATE deduplication rule as headerStatusPill.
+        let cleanedValue = Self.dedupedStatusValue(title: title, value: value)
+        let cleanedDetail: String? = {
+            guard let detail else { return nil }
+            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Drop the detail line entirely if it is the same as the value
+            // (after dedup) — the row was reading like "Audio Ready / Audio
+            // Ready — Virtual audio device — No signal".
+            return trimmed.isEmpty || trimmed.localizedCaseInsensitiveContains(cleanedValue) ? nil : trimmed
+        }()
+        return HStack(alignment: .top, spacing: 10) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(color)
@@ -4854,15 +4833,17 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                Text(value)
+                Text(cleanedValue)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(color)
 
-                if let detail, !detail.isEmpty {
-                    Text(detail)
+                if let cleanedDetail, !cleanedDetail.isEmpty {
+                    Text(cleanedDetail)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                 }
             }
 
