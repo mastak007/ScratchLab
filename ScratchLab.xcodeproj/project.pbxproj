@@ -23,6 +23,7 @@
 		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
 		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
 		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
+		SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
 		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
 		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
 		AA200002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA200001 /* PrivacyInfo.xcprivacy */; };
@@ -258,6 +259,7 @@
 		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
 		SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabBrandMark.swift; sourceTree = "<group>"; };
 		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
+		SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPhraseChartView.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
 		NST0000000NST001NST00001 /* NotationSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationSheetTests.swift; sourceTree = "<group>"; };
@@ -519,6 +521,7 @@
 				NV00000001NV0001NV000001 /* NotationVisualizerView.swift */,
 				SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */,
 				SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */,
+				SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -729,6 +732,7 @@
 				NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */,
 				SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */,
 				SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */,
+				SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */,
 				SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E5 /* CaptureCore.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,

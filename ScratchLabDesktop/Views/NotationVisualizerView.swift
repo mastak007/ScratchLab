@@ -943,6 +943,8 @@ struct CapturedNotationDisplayView: View {
                         beatGridRuler(width: geo.size.width)
                         if hasMovementEvents {
                             movementLane(width: geo.size.width)
+                        } else if hasAudioEvents {
+                            audioInferredNotationLane(width: geo.size.width)
                         } else {
                             partialMovementPlaceholder
                         }
@@ -962,16 +964,34 @@ struct CapturedNotationDisplayView: View {
     // MARK: Summary header
 
     private var summaryHeader: some View {
-        let isDetected = snapshot.notationSource == "detected"
-        let isPartial  = snapshot.notationSource == "partial"
-        let sourceLabel  = isDetected ? "Detected notation" : isAudioOnlyPartial ? "Audio-only notation" : isPartial ? "Partial notation" : "Unavailable"
-        let sourceColor: Color = isDetected ? forwardColor : isPartial ? cutColor : labelColor
-        let sourceIcon   = isDetected ? "checkmark.seal.fill" : isPartial ? "waveform.path.badge.plus" : "waveform.path.ecg"
+        let isDetected     = snapshot.notationSource == "detected"
+        let isPartial      = snapshot.notationSource == "partial"
+        let hasMovementOnly  = !isDetected && !isPartial && hasMovementEvents
+        let hasAudioOnly     = !isDetected && !isPartial && !hasMovementEvents && hasAudioEvents
+        let sourceLabel: String = {
+            if isDetected            { return "Detected notation" }
+            if isAudioOnlyPartial    { return "Audio-only notation" }
+            if isPartial             { return "Partial notation" }
+            if hasMovementOnly       { return "Movement recorded" }
+            if hasAudioOnly          { return "Audio-inferred" }
+            return "Unavailable"
+        }()
+        let sourceColor: Color = isDetected ? forwardColor
+            : (isPartial || hasMovementOnly) ? cutColor
+            : hasAudioOnly ? Color(red: 1.00, green: 0.72, blue: 0.10)
+            : labelColor
+        let sourceIcon: String = {
+            if isDetected         { return "checkmark.seal.fill" }
+            if isPartial          { return "waveform.path.badge.plus" }
+            if hasMovementOnly    { return "figure.wave" }
+            if hasAudioOnly       { return "ear.and.waveform" }
+            return "waveform.path.ecg"
+        }()
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
                 Label(sourceLabel, systemImage: sourceIcon)
-                    .font(.system(size: isAudioOnlyPartial ? 15 : 13, weight: .bold, design: .monospaced))
+                    .font(.system(size: (isAudioOnlyPartial || hasAudioOnly) ? 15 : 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(sourceColor)
 
                 Spacer(minLength: 0)
@@ -996,6 +1016,15 @@ struct CapturedNotationDisplayView: View {
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(labelColor)
                 }
+            } else if hasAudioOnly {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Audio activity detected — direction could not be confirmed.")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Audio inferred · direction not confirmed visually")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(labelColor)
+                }
             }
 
             HStack(spacing: 8) {
@@ -1006,7 +1035,7 @@ struct CapturedNotationDisplayView: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, isAudioOnlyPartial ? 16 : 11)
+        .padding(.vertical, (isAudioOnlyPartial || hasAudioOnly) ? 16 : 11)
         .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding(.bottom, 8)
     }
@@ -1121,6 +1150,67 @@ struct CapturedNotationDisplayView: View {
                         .foregroundStyle(backColor.opacity(0.55)),
                     at: CGPoint(x: 4, y: mid + size.height * 0.30),
                     anchor: .leading
+                )
+            }
+            .frame(height: laneH)
+        }
+        .background(Color(white: 0.108))
+        .padding(.bottom, 1)
+    }
+
+    // MARK: Audio-inferred notation lane
+    // Shown when audioEvents exist but no movementEvents are available.
+    // Renders onset markers (amber ticks) — does NOT assign F/B direction.
+    // Clearly labelled as estimated/audio-inferred, not ground-truth movement.
+
+    private func audioInferredNotationLane(width: CGFloat) -> some View {
+        let laneWidth = max(width - 56, 200.0)
+        let duration = totalDuration
+        let scale = CGFloat(laneWidth) / CGFloat(duration)
+        let laneH: CGFloat = 88
+        let inferredColor = Color(red: 1.00, green: 0.72, blue: 0.10)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            laneHeader("AUDIO INFERRED", icon: "ear.and.waveform")
+            Canvas { ctx, size in
+                let labelX: CGFloat = 56
+                let mid = size.height / 2
+
+                drawSharedGrid(ctx: ctx, size: size, duration: duration, scale: scale, labelX: labelX)
+
+                // Baseline
+                var baseline = Path()
+                baseline.move(to: CGPoint(x: labelX, y: mid))
+                baseline.addLine(to: CGPoint(x: size.width, y: mid))
+                ctx.stroke(baseline, with: .color(Color(white: 0.22)), lineWidth: 0.5)
+
+                // Onset tick marks — amber vertical bars, height scaled by confidence
+                for event in snapshot.audioEvents {
+                    let x = labelX + CGFloat(event.startTime) * scale
+                    let barH = size.height * 0.38 * CGFloat(0.5 + event.confidence * 0.5)
+                    let top    = mid - barH
+                    let bottom = mid + barH
+
+                    var bar = Path()
+                    bar.move(to: CGPoint(x: x, y: top))
+                    bar.addLine(to: CGPoint(x: x, y: bottom))
+                    ctx.stroke(bar,
+                               with: .color(inferredColor.opacity(0.55 + event.confidence * 0.35)),
+                               style: StrokeStyle(lineWidth: 3, dash: [4, 3]))
+
+                    // Dot at peak
+                    let r: CGFloat = 3.5
+                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: top - r, width: r * 2, height: r * 2)),
+                             with: .color(inferredColor.opacity(0.75)))
+                }
+
+                // Disclaimer label at right
+                ctx.draw(
+                    Text("estimated · not confirmed")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(inferredColor.opacity(0.45)),
+                    at: CGPoint(x: size.width - 4, y: size.height - 4),
+                    anchor: .bottomTrailing
                 )
             }
             .frame(height: laneH)
@@ -1324,13 +1414,14 @@ struct CapturedNotationDisplayView: View {
     // MARK: Legend
 
     private var notationLegend: some View {
-        HStack(spacing: 18) {
-            legendItem(color: forwardColor, label: "Forward")
-            legendItem(color: backColor,    label: "Back")
-            legendItem(color: audioColor,   label: "Scratch burst")
-            legendItem(color: cutColor,     label: "Drag / Cut")
-            legendItem(color: faderColor,   label: "Fader")
-            legendItem(color: gapColor,     label: "Silence")
+        HStack(spacing: 14) {
+            legendItem(color: forwardColor,                            label: "Forward")
+            legendItem(color: backColor,                               label: "Back")
+            legendItem(color: Color(red: 1.00, green: 0.72, blue: 0.10), label: "Audio inferred")
+            legendItem(color: audioColor,                              label: "Scratch burst")
+            legendItem(color: cutColor,                                label: "Drag / Cut")
+            legendItem(color: faderColor,                              label: "Fader")
+            legendItem(color: gapColor,                                label: "Silence")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)

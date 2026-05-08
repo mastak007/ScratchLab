@@ -1,7 +1,105 @@
 import SwiftUI
 
+struct CaptureGuideEditModel {
+    static let normalizedBounds = CGRect(x: 0.01, y: 0.02, width: 0.98, height: 0.96)
+
+    static func isEditable(
+        showRigGuides: Bool,
+        calibrationLocked: Bool,
+        isUsingManualRigGuide: Bool
+    ) -> Bool {
+        showRigGuides && (!calibrationLocked || isUsingManualRigGuide)
+    }
+
+    static func movedAdjustment(
+        from snapshot: MacCaptureEngine.ZoneAdjustment,
+        translation: CGSize,
+        boundingBox: CGRect,
+        canvasSize: CGSize,
+        offsetRange: ClosedRange<Double>,
+        scaleRange: ClosedRange<Double>
+    ) -> MacCaptureEngine.ZoneAdjustment {
+        let deltaX = Double(translation.width / max(canvasSize.width, 1))
+        let deltaY = Double(-translation.height / max(canvasSize.height, 1))
+        let proposed = MacCaptureEngine.ZoneAdjustment(
+            offsetX: snapshot.offsetX + deltaX,
+            offsetY: snapshot.offsetY + deltaY,
+            widthScale: snapshot.widthScale,
+            heightScale: snapshot.heightScale
+        )
+        return clampedAdjustment(
+            proposed,
+            boundingBox: boundingBox,
+            offsetRange: offsetRange,
+            scaleRange: scaleRange
+        )
+    }
+
+    static func resizedAdjustment(
+        from snapshot: ZoneResizeSnapshot,
+        translation: CGSize,
+        canvasSize: CGSize,
+        offsetRange: ClosedRange<Double>,
+        scaleRange: ClosedRange<Double>
+    ) -> MacCaptureEngine.ZoneAdjustment {
+        let deltaWidth = Double(translation.width / max(canvasSize.width, 1))
+        let deltaHeight = Double(translation.height / max(canvasSize.height, 1))
+        let currentWidth = max(Double(snapshot.boundingBox.width), 0.08)
+        let currentHeight = max(Double(snapshot.boundingBox.height), 0.08)
+        let targetWidth = max(currentWidth + deltaWidth, 0.18)
+        let targetHeight = max(currentHeight + deltaHeight, 0.18)
+
+        let proposed = MacCaptureEngine.ZoneAdjustment(
+            offsetX: snapshot.adjustment.offsetX + (deltaWidth / 2),
+            offsetY: snapshot.adjustment.offsetY - (deltaHeight / 2),
+            widthScale: snapshot.adjustment.widthScale * (targetWidth / currentWidth),
+            heightScale: snapshot.adjustment.heightScale * (targetHeight / currentHeight)
+        )
+        return clampedAdjustment(
+            proposed,
+            boundingBox: snapshot.boundingBox,
+            offsetRange: offsetRange,
+            scaleRange: scaleRange
+        )
+    }
+
+    private static func clampedAdjustment(
+        _ adjustment: MacCaptureEngine.ZoneAdjustment,
+        boundingBox: CGRect,
+        offsetRange: ClosedRange<Double>,
+        scaleRange: ClosedRange<Double>
+    ) -> MacCaptureEngine.ZoneAdjustment {
+        let widthScale = clamp(adjustment.widthScale, within: scaleRange)
+        let heightScale = clamp(adjustment.heightScale, within: scaleRange)
+        let scaledWidth = min(max(Double(boundingBox.width) * widthScale, 0.05), Double(normalizedBounds.width))
+        let scaledHeight = min(max(Double(boundingBox.height) * heightScale, 0.05), Double(normalizedBounds.height))
+
+        let unclampedCenterX = Double(boundingBox.midX) + adjustment.offsetX
+        let unclampedCenterY = Double(boundingBox.midY) + adjustment.offsetY
+        let minCenterX = Double(normalizedBounds.minX) + (scaledWidth / 2)
+        let maxCenterX = Double(normalizedBounds.maxX) - (scaledWidth / 2)
+        let minCenterY = Double(normalizedBounds.minY) + (scaledHeight / 2)
+        let maxCenterY = Double(normalizedBounds.maxY) - (scaledHeight / 2)
+
+        let clampedCenterX = min(max(unclampedCenterX, minCenterX), maxCenterX)
+        let clampedCenterY = min(max(unclampedCenterY, minCenterY), maxCenterY)
+
+        return MacCaptureEngine.ZoneAdjustment(
+            offsetX: clamp(clampedCenterX - Double(boundingBox.midX), within: offsetRange),
+            offsetY: clamp(clampedCenterY - Double(boundingBox.midY), within: offsetRange),
+            widthScale: widthScale,
+            heightScale: heightScale
+        )
+    }
+
+    private static func clamp(_ value: Double, within range: ClosedRange<Double>) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
+    }
+}
+
 struct DeckGamificationOverlay: View {
     @ObservedObject var detector: MacCaptureEngine
+    let isCalibrationEditMode: Bool = false
     @State private var zoneMoveSnapshots: [DJRigZone.Role: MacCaptureEngine.ZoneAdjustment] = [:]
     @State private var zoneResizeSnapshots: [DJRigZone.Role: ZoneResizeSnapshot] = [:]
     @State private var activeZoneInteraction: ZoneInteraction?
@@ -30,19 +128,16 @@ struct DeckGamificationOverlay: View {
                 topHud
                     .padding(20)
                     .allowsHitTesting(false)
-
-                if detector.showRigGuides {
-                    rigStatusCard
-                        .padding(20)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                        .allowsHitTesting(false)
-                }
             }
         }
     }
 
     private var isInteractiveCalibrationVisible: Bool {
-        detector.showRigGuides && !detector.calibrationLocked
+        CaptureGuideEditModel.isEditable(
+            showRigGuides: detector.showRigGuides,
+            calibrationLocked: detector.calibrationLocked,
+            isUsingManualRigGuide: detector.isUsingManualRigGuide
+        )
     }
 
     private func overlayContent(layout: DJRigLayout, size: CGSize) -> some View {
@@ -53,59 +148,43 @@ struct DeckGamificationOverlay: View {
                     let isHighlighted = detector.highlightedZoneRole == zone.role
 
                     if detector.showRigGuides {
+                        let editMode = isInteractiveCalibrationVisible
                         RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(zoneColor(for: zone.role), lineWidth: isHighlighted ? 5 : 3)
+                            .stroke(zoneColor(for: zone.role), lineWidth: isHighlighted ? 4 : (editMode ? 2.5 : 1.2))
                             .background(
                                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(zoneColor(for: zone.role).opacity(isHighlighted ? 0.18 : 0.08))
+                                    .fill(zoneColor(for: zone.role).opacity(isHighlighted ? 0.16 : (editMode ? 0.08 : 0.03)))
                             )
                             .frame(width: rect.width, height: rect.height)
                             .position(x: rect.midX, y: rect.midY)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(zone.role.title)
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white)
+                        if editMode {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(zone.role.title)
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(.white)
 
-                            Text(zoneHint(for: zone.role))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.75))
+                                Text(zoneHint(for: zone.role))
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .position(x: rect.midX, y: max(rect.minY + 28, 32))
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .position(x: rect.midX, y: max(rect.minY + 28, 32))
                     }
 
-                    if isHighlighted {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 11, weight: .bold))
-                            Text(detector.showRigGuides ? "Next scratch target" : "Target")
-                                .font(.system(size: 11, weight: .bold))
-                        }
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(Color(nsColor: .systemGreen), in: Capsule())
-                        .shadow(color: Color.black.opacity(0.22), radius: 8, x: 0, y: 4)
-                        .position(x: rect.midX, y: min(rect.maxY - 24, size.height - 24))
-                    }
-                }
-
-                if let walkerPoint = characterPoint(in: layout, size: size) {
-                    Image(systemName: "figure.walk.circle.fill")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundStyle(Color(nsColor: .systemGreen))
-                        .shadow(color: Color.black.opacity(0.35), radius: 8, x: 0, y: 3)
-                        .position(walkerPoint)
-                        .animation(.spring(response: 0.35, dampingFraction: 0.78), value: detector.highlightedZoneRole)
                 }
             }
             .allowsHitTesting(false)
+            .opacity(isCalibrationEditMode ? 1 : 0)
+            .allowsHitTesting(isCalibrationEditMode)
 
             if isInteractiveCalibrationVisible {
                 interactiveZoneCalibrationLayer(layout: layout, size: size)
+                    .opacity(isCalibrationEditMode ? 1 : 0)
+                    .allowsHitTesting(isCalibrationEditMode)
             }
         }
     }
@@ -118,6 +197,7 @@ struct DeckGamificationOverlay: View {
                     .allowsHitTesting(false)
             }
         }
+        .zIndex(2)
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .contentShape(Rectangle())
         .gesture(interactiveCalibrationGesture(layout: layout, size: size))
@@ -141,29 +221,6 @@ struct DeckGamificationOverlay: View {
         .padding(.vertical, 10)
         .background(Color.black.opacity(0.7), in: Capsule())
         .animation(.spring(response: 0.28, dampingFraction: 0.82), value: detector.sessionStars)
-    }
-
-    private var rigStatusCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(detector.rigStatusTitle)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-
-            Text(detector.rigStatusDetail)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.78))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: 320, alignment: .leading)
-        .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func characterPoint(in layout: DJRigLayout, size: CGSize) -> CGPoint? {
-        guard let zone = layout.zone(for: detector.highlightedZoneRole) else { return nil }
-        let rect = convert(zone.boundingBox, in: size)
-        return CGPoint(x: rect.midX, y: min(rect.maxY - 18, size.height - 24))
     }
 
     private func convert(_ normalizedRect: CGRect, in size: CGSize) -> CGRect {
@@ -290,15 +347,19 @@ struct DeckGamificationOverlay: View {
     }
 
     private func applyZoneMoveDrag(_ value: DragGesture.Value, role: DJRigZone.Role, size: CGSize) {
+        guard let zone = detector.rigLayout?.zone(for: role) else { return }
         let snapshot = zoneMoveSnapshots[role] ?? detector.zoneAdjustment(for: role)
         zoneMoveSnapshots[role] = snapshot
 
-        let deltaX = Double(value.translation.width / max(size.width, 1))
-        let deltaY = Double(-value.translation.height / max(size.height, 1))
-
         detector.updateZoneAdjustment(for: role) { adjustment in
-            adjustment.offsetX = clamp(snapshot.offsetX + deltaX, within: detector.calibrationOffsetRange)
-            adjustment.offsetY = clamp(snapshot.offsetY + deltaY, within: detector.calibrationOffsetRange)
+            adjustment = CaptureGuideEditModel.movedAdjustment(
+                from: snapshot,
+                translation: value.translation,
+                boundingBox: zone.boundingBox,
+                canvasSize: size,
+                offsetRange: detector.calibrationOffsetRange,
+                scaleRange: detector.calibrationScaleRange
+            )
         }
     }
 
@@ -309,39 +370,19 @@ struct DeckGamificationOverlay: View {
         )
         zoneResizeSnapshots[zone.role] = snapshot
 
-        let deltaWidth = Double(value.translation.width / max(size.width, 1))
-        let deltaHeight = Double(value.translation.height / max(size.height, 1))
-        let currentWidth = max(Double(snapshot.boundingBox.width), 0.08)
-        let currentHeight = max(Double(snapshot.boundingBox.height), 0.08)
-        let targetWidth = max(currentWidth + deltaWidth, 0.18)
-        let targetHeight = max(currentHeight + deltaHeight, 0.18)
-
         detector.updateZoneAdjustment(for: zone.role) { adjustment in
-            adjustment.widthScale = clamp(
-                snapshot.adjustment.widthScale * (targetWidth / currentWidth),
-                within: detector.calibrationScaleRange
-            )
-            adjustment.heightScale = clamp(
-                snapshot.adjustment.heightScale * (targetHeight / currentHeight),
-                within: detector.calibrationScaleRange
-            )
-            adjustment.offsetX = clamp(
-                snapshot.adjustment.offsetX + (deltaWidth / 2),
-                within: detector.calibrationOffsetRange
-            )
-            adjustment.offsetY = clamp(
-                snapshot.adjustment.offsetY - (deltaHeight / 2),
-                within: detector.calibrationOffsetRange
+            adjustment = CaptureGuideEditModel.resizedAdjustment(
+                from: snapshot,
+                translation: value.translation,
+                canvasSize: size,
+                offsetRange: detector.calibrationOffsetRange,
+                scaleRange: detector.calibrationScaleRange
             )
         }
     }
-
-    private func clamp(_ value: Double, within range: ClosedRange<Double>) -> Double {
-        min(max(value, range.lowerBound), range.upperBound)
-    }
 }
 
-private struct ZoneResizeSnapshot {
+struct ZoneResizeSnapshot {
     let adjustment: MacCaptureEngine.ZoneAdjustment
     let boundingBox: CGRect
 }

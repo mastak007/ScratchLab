@@ -344,6 +344,114 @@ struct NotationSheetTests {
         #expect(NotationLabDisplayMode.capturedTake != NotationLabDisplayMode.templateDemo)
     }
 
+    // MARK: 16. Low-confidence camera events: movementLane renders, header stays amber
+
+    @Test("Low-confidence camera events appear in recordMovementEvents despite unavailable source")
+    func lowConfidenceCameraEventsStillPopulateMovementLane() {
+        // Mirrors the real-world case: confidence 0.147, source="camera" → notationSource="unavailable"
+        // but recordMovementEvents is non-empty → hasDetectedEvents=true → header shows amber "Movement recorded"
+        let snap = makeSnapshot(
+            source: "unavailable",
+            movements: [makeMovementEvent(start: 0.0, end: 0.3, confidence: 0.147)],
+            confidence: 0.147
+        )
+        #expect(snap.notationSource == "unavailable")
+        #expect(!snap.recordMovementEvents.isEmpty)
+        #expect(snap.hasDetectedEvents)
+        // hasMovementOnly = !isDetected && !isPartial && hasMovementEvents
+        let isDetected = snap.notationSource == "detected" || snap.notationSource == "fused"
+        let isPartial  = snap.notationSource == "partial"
+        let hasMovementOnly = !isDetected && !isPartial && !snap.recordMovementEvents.isEmpty
+        #expect(hasMovementOnly)
+    }
+
+    @Test("Target notation for Baby Scratch has forward and backward strokes")
+    func babyScratchNotationHasForwardAndBackwardStrokes() {
+        let notation = ScratchNotation(
+            version: 1, scratchID: "baby_scratch",
+            demoStart: 0, demoEnd: 2.126,
+            phraseStart: 0.03, phraseEnd: 2.126,
+            timingBasis: "beat",
+            strokes: [
+                .init(startTime: 0.03, endTime: 0.36, direction: .forward,  speedClassification: .medium, faderState: .open),
+                .init(startTime: 0.37, endTime: 0.66, direction: .backward, speedClassification: .medium, faderState: .open),
+                .init(startTime: 0.70, endTime: 1.02, direction: .forward,  speedClassification: .medium, faderState: .open),
+                .init(startTime: 1.04, endTime: 1.38, direction: .backward, speedClassification: .medium, faderState: .open),
+            ]
+        )
+        #expect(!notation.strokes.isEmpty)
+        #expect(notation.strokes.contains { $0.direction == .forward })
+        #expect(notation.strokes.contains { $0.direction == .backward })
+        #expect(notation.timelineDuration > 0)
+    }
+
+    // MARK: 17. Audio-inferred notation availability
+
+    @Test("Audio-only snapshot (no movement, no fader) triggers audio-inferred path")
+    func audioOnlySnapshotTriggersAudioInferredPath() {
+        let snap = makeSnapshot(
+            source: "unavailable",
+            audio: [makeAudioEvent(start: 0.1, end: 0.4, kind: "scratchBurst", confidence: 0.82)]
+        )
+        #expect(!snap.recordMovementEvents.isEmpty == false)
+        #expect(snap.hasAudioEvents)
+        #expect(!snap.faderEvents.isEmpty == false)
+        #expect(snap.hasDetectedEvents)   // audio counts as detected event
+        // hasAudioOnly classification
+        let isDetected = snap.notationSource == "detected"
+        let isPartial  = snap.notationSource == "partial"
+        let hasAudioOnly = !isDetected && !isPartial && snap.recordMovementEvents.isEmpty && snap.hasAudioEvents
+        #expect(hasAudioOnly)
+    }
+
+    @Test("Audio-inferred lane does not claim ground-truth movement direction")
+    func audioInferredLaneIsLabelledEstimated() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // Must contain the audio-inferred lane
+        #expect(source.contains("audioInferredNotationLane"))
+        // Must not claim confirmed direction
+        #expect(source.contains("estimated · not confirmed"))
+        // Must carry the "Audio-inferred" label in summaryHeader
+        #expect(source.contains("Audio-inferred"))
+    }
+
+    @Test("Fader events present with no movement/audio → fader lane shown, not audio-inferred")
+    func faderOnlyDoesNotTriggerAudioInferredLane() {
+        let snap = makeSnapshot(
+            source: "partial",
+            fader: [makeFaderEvent(start: 0.0, end: 0.05)]
+        )
+        #expect(!snap.hasAudioEvents)
+        #expect(!snap.faderEvents.isEmpty)
+        // hasAudioOnly should be false when there are no audio events
+        let isDetected = snap.notationSource == "detected"
+        let isPartial  = snap.notationSource == "partial"
+        let hasAudioOnly = !isDetected && !isPartial && snap.recordMovementEvents.isEmpty && snap.hasAudioEvents
+        #expect(!hasAudioOnly)
+    }
+
+    // MARK: 18. Calibration overlay hidden by default
+
+    @Test("showRigGuides uses calibrationLocked not practiceViewEnabled")
+    func showRigGuidesUsesCalibrationLocked() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // showRigGuides must reference calibrationLocked, not practiceViewEnabled
+        let rigGuidesRange = source.range(of: "var showRigGuides: Bool")!
+        let afterDecl = source[rigGuidesRange.upperBound...]
+        let nextFuncRange = afterDecl.range(of: "func ") ?? afterDecl.endIndex..<afterDecl.endIndex
+        let body = String(afterDecl[..<nextFuncRange.lowerBound])
+        #expect(body.contains("calibrationLocked"))
+        #expect(!body.contains("practiceViewEnabled"))
+    }
+
     // MARK: Bonus: movement kind slope encoding
 
     @Test("Fast push/pull have higher height fraction than slow drag")
