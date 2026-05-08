@@ -47,3 +47,6 @@ __pycache__/
 # Signing/private certs
 *.p12
 prompts/
+
+# Local Claude workspace
+.claude/
