@@ -267,16 +267,16 @@ struct NotationSheetTests {
         #expect(snap.notationSource == "partial")
     }
 
-    @Test("Audio-only captured take source includes Audio-only notation and Record movement not detected copy")
+    @Test("Audio-only captured take source includes Audio-only take and No record movement detected. copy")
     func audioOnlyCapturedSourceIncludesRequiredCopy() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        #expect(source.contains("Audio-only notation"))
-        #expect(source.contains("Movement direction was not detected for this take."))
-        #expect(source.contains("Record movement not detected"))
+        #expect(source.contains("Audio-only take"))
+        #expect(source.contains("Hand motion wasn't detected — review timing only."))
+        #expect(source.contains("No record movement detected."))
         #expect(source.contains("No fader data"))
     }
 
@@ -414,7 +414,7 @@ struct NotationSheetTests {
         // Must contain the audio-inferred lane
         #expect(source.contains("audioInferredNotationLane"))
         // Must not claim confirmed direction
-        #expect(source.contains("estimated · not confirmed"))
+        #expect(source.contains("estimated"))
         // Must carry the "Audio-inferred" label in summaryHeader
         #expect(source.contains("Audio-inferred"))
     }

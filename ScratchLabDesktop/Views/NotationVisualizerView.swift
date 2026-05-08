@@ -985,7 +985,7 @@ struct CapturedNotationDisplayView: View {
         let hasAudioOnly     = !isDetected && !isPartial && !hasMovementEvents && hasAudioEvents
         let sourceLabel: String = {
             if isDetected            { return "Detected notation" }
-            if isAudioOnlyPartial    { return "Audio-only notation" }
+            if isAudioOnlyPartial    { return "Audio-only take" }
             if isPartial             { return "Partial notation" }
             if hasMovementOnly       { return "Movement recorded" }
             if hasAudioOnly          { return "Audio-inferred" }
@@ -1024,10 +1024,10 @@ struct CapturedNotationDisplayView: View {
 
             if isAudioOnlyPartial {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Movement direction was not detected for this take.")
+                    Text("Hand motion wasn't detected — review timing only.")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("Record movement not detected")
+                    Text("No record movement detected.")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(labelColor)
                 }
@@ -1221,7 +1221,7 @@ struct CapturedNotationDisplayView: View {
 
                 // Disclaimer label at right
                 ctx.draw(
-                    Text("estimated · not confirmed")
+                    Text("estimated")
                         .font(.system(size: 8, weight: .medium, design: .monospaced))
                         .foregroundStyle(inferredColor.opacity(0.45)),
                     at: CGPoint(x: size.width - 4, y: size.height - 4),
@@ -1254,13 +1254,13 @@ struct CapturedNotationDisplayView: View {
                 .foregroundStyle(audioColor)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Audio-only notation")
+                Text("Audio-only take")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("Record movement not detected")
+                Text("No record movement detected.")
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(audioColor)
-                Text("Movement direction was not detected for this take.")
+                Text("Hand motion wasn't detected — review timing only.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(labelColor)
             }

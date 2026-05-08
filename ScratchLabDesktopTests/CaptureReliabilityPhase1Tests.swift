@@ -5833,9 +5833,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false"))
         XCTAssertTrue(source.contains("hasPartialReviewNotation"))
-        XCTAssertTrue(source.contains("Audio-only notation"))
-        XCTAssertTrue(source.contains("Movement direction was not detected for this take."))
-        XCTAssertTrue(source.contains("Record movement not detected"))
+        XCTAssertTrue(source.contains("Audio-only take"))
+        XCTAssertTrue(source.contains("Hand motion wasn't detected — review timing only."))
+        XCTAssertTrue(source.contains("No record movement detected."))
         XCTAssertTrue(source.contains("ScratchNotation.detectedPreview("))
         XCTAssertTrue(source.contains("Notation unavailable for this take."))
         XCTAssertFalse(source.contains("hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)"))
@@ -5901,9 +5901,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Stroke count",
             "Fader event count",
             "Captured Notation",
-            "Audio-only notation",
-            "Record movement not detected",
-            "Movement direction was not detected for this take.",
+            "Audio-only take",
+            "No record movement detected.",
+            "Hand motion wasn't detected — review timing only.",
             "No take ready for review",
             "Record a take in Capture to see detected notation, confidence, and label options.",
             "Accept",
@@ -6105,8 +6105,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testPracticeSourceKeepsDemoPathAppReviewSafe() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        XCTAssertTrue(source.contains("Use Try Demo, Listen, and Replay for the App Review path."))
-        XCTAssertTrue(source.contains("No hardware needed for demo"))
+        XCTAssertTrue(source.contains("Try the Baby Scratch demo, listen to the coach, and start a practice run."))
+        XCTAssertTrue(source.contains("No hardware needed"))
         XCTAssertFalse(source.contains("dataset details"))
     }
 
@@ -6121,8 +6121,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(macSource.contains("true (Live Input)"))
         XCTAssertTrue(macSource.contains("live preview"))
         XCTAssertTrue(notationSource.contains("Baby Scratch Template"))
-        XCTAssertTrue(notationSource.contains("Audio-only notation"))
-        XCTAssertTrue(notationSource.contains("Record movement not detected"))
+        XCTAssertTrue(notationSource.contains("Audio-only take"))
+        XCTAssertTrue(notationSource.contains("No record movement detected."))
         XCTAssertFalse(notationSource.contains("Notation detected from audio — direction pending."))
         XCTAssertTrue(coreSource.contains("func markNotationIdle()"))
         XCTAssertTrue(notationSource.contains("ScratchLabRuntimeDiagnostics.shared.markNotationIdle()"))

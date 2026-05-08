@@ -1355,7 +1355,7 @@ struct MacAnalyzerView: View {
             return "Review label: \(decision.rawValue)"
         }
         if hasPartialReviewNotation {
-            return "Audio-only notation · Record movement not detected"
+            return "Audio-only take · No record movement detected."
         }
         return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
     }
@@ -1419,7 +1419,7 @@ struct MacAnalyzerView: View {
 
     private var reviewNotationAvailabilityMessage: String {
         if hasPartialReviewNotation {
-            return "Audio-only notation. Movement direction was not detected for this take. Record movement not detected."
+            return "Audio-only take. Hand motion wasn't detected — review timing only."
         }
         return "Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved."
     }
@@ -4907,13 +4907,13 @@ struct MacAnalyzerView: View {
             } else if hasTake {
                 VStack(alignment: .leading, spacing: 6) {
                     if hasPartialReviewNotation {
-                        Text("Audio-only notation")
+                        Text("Audio-only take")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.primary)
-                        Text("Record movement not detected")
+                        Text("No record movement detected.")
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.secondary)
-                        Text("Movement direction was not detected for this take.")
+                        Text("Hand motion wasn't detected — review timing only.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     } else {
