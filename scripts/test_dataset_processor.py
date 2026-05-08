@@ -32,6 +32,43 @@ def load_module(name: str, path: Path):
 
 
 INGEST_MEDIA_MODULE = load_module("ingest_media_scratch_test_module", INGEST_MEDIA_SCRIPT)
+PROCESS_DATASET_MODULE = load_module("process_dataset_test_module", PROCESSOR_SCRIPT)
+
+
+class ScratchTypeAliasTests(unittest.TestCase):
+    """Pure unit tests for the scratch-type normalizer in process_dataset.py.
+
+    These tests guard the dataset-side alias table against accidental
+    regressions when new aliases are added. They only exercise
+    `normalize_scratch_type` and never touch the filesystem.
+    """
+
+    def test_reverse_cutting_aliases_normalize_to_backward_scratch(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("reversecutting"), "backward_scratch")
+        self.assertEqual(normalize("reverse_cutting"), "backward_scratch")
+        self.assertEqual(normalize("reverse cutting"), "backward_scratch")
+
+    def test_reverse_cutting_aliases_are_case_insensitive(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("ReverseCutting"), "backward_scratch")
+        self.assertEqual(normalize("REVERSE CUTTING"), "backward_scratch")
+
+    def test_existing_backward_scratch_aliases_still_normalize(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("backward_scratch"), "backward_scratch")
+        self.assertEqual(normalize("backward scratch"), "backward_scratch")
+
+    def test_unrelated_baseline_canonicals_unchanged(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertEqual(normalize("baby"), "baby")
+        self.assertEqual(normalize("forward_scratch"), "forward_scratch")
+        self.assertEqual(normalize("flare_1click"), "flare_1click")
+
+    def test_unrelated_unknown_input_still_returns_none(self) -> None:
+        normalize = PROCESS_DATASET_MODULE.normalize_scratch_type
+        self.assertIsNone(normalize("not_a_scratch"))
+        self.assertIsNone(normalize(""))
 
 
 class DatasetProcessorTests(unittest.TestCase):

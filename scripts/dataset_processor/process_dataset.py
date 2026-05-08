@@ -32,7 +32,13 @@ MEDIA_SUFFIXES = AUDIO_SUFFIXES | VIDEO_SUFFIXES
 SCRATCH_TYPE_ALIASES: dict[str, set[str]] = {
     "baby": {"baby", "baby_scratch", "baby scratch"},
     "forward_scratch": {"forward_scratch", "forward scratch"},
-    "backward_scratch": {"backward_scratch", "backward scratch"},
+    "backward_scratch": {
+        "backward_scratch",
+        "backward scratch",
+        "reverse_cutting",
+        "reverse cutting",
+        "reversecutting",
+    },
     "release_scratch": {"release_scratch", "release scratch"},
     "tear": {"tear"},
     "chirp": {"chirp"},
