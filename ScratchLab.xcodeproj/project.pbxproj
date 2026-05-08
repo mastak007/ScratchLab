@@ -16,18 +16,6 @@
 		1F43B56CDA679F906F8F1F25 /* ScratchLabWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */; };
 		1F4E7DB75A0F6832D44313AA /* Archive+ReadingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */; };
 		2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */; };
-		7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */; };
-		7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */; };
-		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
-		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
-		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
-		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
-		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
-		SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
-		SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */; };
-		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
-		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
-		AA200002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA200001 /* PrivacyInfo.xcprivacy */; };
 		203015F013837B25E7DAB626 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC2FA5C155AEA197428B94F6 /* Foundation.framework */; };
 		210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* MacCameraPreviewView.swift */; };
 		219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
@@ -71,6 +59,8 @@
 		71E112E02A4D2F238A0A8154 /* Archive+Writing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B0FC101729EC232E4DCDC86 /* Archive+Writing.swift */; };
 		74CF392A178E07F56FE80DBA /* URL+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */; };
 		772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B2000010 /* AppIcon.icns */; };
+		7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */; };
+		7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */; };
 		86B4C659CD7D512697B5F324 /* FileManager+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */; };
 		894649E8285210A15FA709AD /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
 		8A689B811423AC79DCD5A667 /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
@@ -100,6 +90,8 @@
 		A1000030 /* ScratchCoachViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000033 /* ScratchCoachViews.swift */; };
 		A1000031 /* ScratchMotionAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000034 /* ScratchMotionAnalysis.swift */; };
 		A60078D9753742B268C05075 /* Archive+WritingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */; };
+		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
+		AA200002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA200001 /* PrivacyInfo.xcprivacy */; };
 		AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */; };
 		B0EB2B9C16A1ABE80872091D /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
 		B177BD601DFAC77063AACF21 /* Archive+Progress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472ED49B7202325C8D3C8887 /* Archive+Progress.swift */; };
@@ -130,6 +122,8 @@
 		C71F1203A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71F1201A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift */; };
 		C7818BFED9A95C5EF1069EA5 /* Data+Compression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1783A90FC878E8D656330AFD /* Data+Compression.swift */; };
 		C9A445A1CEC870F63F5DD579 /* Archive+Progress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472ED49B7202325C8D3C8887 /* Archive+Progress.swift */; };
+		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
+		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
 		D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
@@ -149,6 +143,14 @@
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
+		NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NST0000000NST001NST00001 /* NotationSheetTests.swift */; };
+		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
+		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
+		SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */; };
+		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
+		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
+		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
+		SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -169,6 +171,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		517A55FE2FAE1C02009EC734 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolder = None;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
 		A6000010 /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
@@ -195,6 +205,7 @@
 		472ED49B7202325C8D3C8887 /* Archive+Progress.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Progress.swift"; sourceTree = "<group>"; };
 		4AC26632A6C58E1F015123CC /* Date+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Date+ZIP.swift"; sourceTree = "<group>"; };
 		514AF3882F535649000B597C /* ScratchLab.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = ScratchLab.xctestplan; sourceTree = "<group>"; };
+		517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ScratchLabDatasetBuilder; sourceTree = BUILT_PRODUCTS_DIR; };
 		518282CE2F5DD2800077484A /* ScratchLab 2.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ScratchLab 2.xctestplan"; sourceTree = "<group>"; };
 		51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachPreviewView.swift; sourceTree = "<group>"; };
 		51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Coach/Coach.usdz; sourceTree = "<group>"; };
@@ -203,6 +214,8 @@
 		6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+Serialization.swift"; sourceTree = "<group>"; };
 		764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Data+Serialization.swift"; sourceTree = "<group>"; };
 		7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLabWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTracker.swift; sourceTree = "<group>"; };
+		7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTrackerTests.swift; sourceTree = "<group>"; };
 		814A24D8C57AEC800882D641 /* Entry+InfoZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+InfoZIP.swift"; sourceTree = "<group>"; };
 		822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchMotionCaptureStore.swift; sourceTree = "<group>"; };
 		822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StagedCaptureRecovery.swift; sourceTree = "<group>"; };
@@ -223,8 +236,6 @@
 		A2000011 /* ProgressManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressManager.swift; sourceTree = "<group>"; };
 		A2000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		AA100001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		AA200001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A2000014 /* AIBattleModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBattleModeView.swift; sourceTree = "<group>"; };
 		A2000015 /* ScratchAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzer.swift; sourceTree = "<group>"; };
 		A2000019 /* ScratchFormulaAST.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaAST.swift; sourceTree = "<group>"; };
@@ -239,11 +250,13 @@
 		A2000030 /* StagingInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagingInspectorView.swift; sourceTree = "<group>"; };
 		A2000031 /* Resources/CoachInstructions */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachInstructions; sourceTree = "<group>"; };
 		A2000032 /* Resources/CoachDemoAudio */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoAudio; sourceTree = "<group>"; };
-		A2000035 /* Resources/CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
-		A2000036 /* Resources/Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
 		A2000033 /* ScratchCoachViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCoachViews.swift; sourceTree = "<group>"; };
 		A2000034 /* ScratchMotionAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionAnalysis.swift; sourceTree = "<group>"; };
+		A2000035 /* Resources/CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
+		A2000036 /* Resources/Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
 		A3000001 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA100001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		AA200001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Helpers.swift"; sourceTree = "<group>"; };
 		AC2FA5C155AEA197428B94F6 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		AC927BE2AC20BBF592338F0B /* Entry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
@@ -253,20 +266,6 @@
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
 		B2000006 /* MacScratchDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacScratchDetector.swift; sourceTree = "<group>"; };
-		7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTracker.swift; sourceTree = "<group>"; };
-		7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTrackerTests.swift; sourceTree = "<group>"; };
-		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
-		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
-		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
-		SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabBrandMark.swift; sourceTree = "<group>"; };
-		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
-		SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPhraseChartView.swift; sourceTree = "<group>"; };
-		SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignTokens.swift; sourceTree = "<group>"; };
-		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
-		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
-		NST0000000NST001NST00001 /* NotationSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationSheetTests.swift; sourceTree = "<group>"; };
-		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
-		NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NST0000000NST001NST00001 /* NotationSheetTests.swift */; };
 		B2000007 /* CompanionCameraReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraReceiver.swift; sourceTree = "<group>"; };
 		B2000008 /* DJRigLayoutDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJRigLayoutDetector.swift; sourceTree = "<group>"; };
 		B2000009 /* DeckGamificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckGamificationOverlay.swift; sourceTree = "<group>"; };
@@ -278,6 +277,8 @@
 		C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchCaptureHubView.swift; sourceTree = "<group>"; };
 		C71F1101A1B2C3D4E5F60711 /* ClickTrackEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClickTrackEngine.swift; sourceTree = "<group>"; };
 		C71F1201A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchLabBeatEngine.swift; sourceTree = "<group>"; };
+		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
+		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
 		D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureCore.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
@@ -288,9 +289,30 @@
 		F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionUploadManager.swift; sourceTree = "<group>"; };
 		F5340BA4F19B19302EC6A347 /* Archive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Archive.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		NST0000000NST001NST00001 /* NotationSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationSheetTests.swift; sourceTree = "<group>"; };
+		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
+		SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabBrandMark.swift; sourceTree = "<group>"; };
+		SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignTokens.swift; sourceTree = "<group>"; };
+		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
+		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
+		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
+		SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPhraseChartView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		517A56012FAE1C02009EC734 /* ScratchLabDatasetBuilder */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ScratchLabDatasetBuilder;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		517A55FD2FAE1C02009EC734 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
 		548DD9007DD05722C16321C7 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -383,6 +405,7 @@
 				A5000002 /* ScratchLab */,
 				B5000001 /* ScratchLabDesktop */,
 				2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */,
+				517A56012FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
 				A5000003 /* Products */,
 				FB288688DC48955CE5657F19 /* ScratchLabWatch */,
 				98A7C409AB8C745E93415314 /* Frameworks */,
@@ -419,6 +442,7 @@
 				402318FE35178B49FF365798 /* ScratchLab.app */,
 				7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */,
 				F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */,
+				517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -629,6 +653,24 @@
 			productReference = 7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
+		517A55FF2FAE1C02009EC734 /* ScratchLabDatasetBuilder */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 517A56062FAE1C02009EC734 /* Build configuration list for PBXNativeTarget "ScratchLabDatasetBuilder" */;
+			buildPhases = (
+				517A55FC2FAE1C02009EC734 /* Sources */,
+				517A55FD2FAE1C02009EC734 /* Frameworks */,
+				517A55FE2FAE1C02009EC734 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				517A56012FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
+			);
+			name = ScratchLabDatasetBuilder;
+			productName = ScratchLabDatasetBuilder;
+			productReference = 517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */;
+			productType = "com.apple.product-type.tool";
+		};
 		A6000001 /* ScratchLab */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A7000003 /* Build configuration list for PBXNativeTarget "ScratchLab" */;
@@ -658,6 +700,9 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					517A55FF2FAE1C02009EC734 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 					A6000001 = {
 						CreatedOnToolsVersion = 14.3;
 					};
@@ -680,6 +725,7 @@
 				14AA15152CB136619CDCFA95 /* ScratchLabDesktop */,
 				2010EE0010EE0010EE0010EE /* ScratchLabDesktopTests */,
 				443AC31519C59E49D255E05C /* ScratchLabWatch */,
+				517A55FF2FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
 			);
 		};
 /* End PBXProject section */
@@ -780,6 +826,11 @@
 				E629FE9BA4457C9CDA41CC02 /* FileManager+ZIP.swift in Sources */,
 				35DA6000CD04C2BEC8171E53 /* FileManager+ZIPDeprecated.swift in Sources */,
 				74CF392A178E07F56FE80DBA /* URL+ZIP.swift in Sources */,
+			);
+		};
+		517A55FC2FAE1C02009EC734 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
 			);
 		};
 		A6000002 /* Sources */ = {
@@ -910,6 +961,41 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
+		};
+		517A56042FAE1C02009EC734 /* Debug configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2DDKGL33BU;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		517A56052FAE1C02009EC734 /* Release configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2DDKGL33BU;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.4;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
 		};
 		603A142E5314F88632102AC2 /* Release configuration for PBXNativeTarget "ScratchLabWatch" */ = {
 			isa = XCBuildConfiguration;
@@ -1229,6 +1315,14 @@
 			buildConfigurations = (
 				603A142E5314F88632102AC2 /* Release configuration for PBXNativeTarget "ScratchLabWatch" */,
 				D45E6C1B1D8B6CA44CC6D5C0 /* Debug configuration for PBXNativeTarget "ScratchLabWatch" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		517A56062FAE1C02009EC734 /* Build configuration list for PBXNativeTarget "ScratchLabDatasetBuilder" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				517A56042FAE1C02009EC734 /* Debug configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */,
+				517A56052FAE1C02009EC734 /* Release configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */,
 			);
 			defaultConfigurationName = Release;
 		};
