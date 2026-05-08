@@ -43,8 +43,12 @@ xcuserdata/
 # Python cache
 __pycache__/
 *.pyc
-
 # Signing/private certs
+# Swift Package Manager (used by Tools/* dev packages)
+.build/
+.swiftpm/
+Package.resolved
+# Signing assets and local secrets
 *.p12
 prompts/
 
