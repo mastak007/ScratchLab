@@ -160,9 +160,17 @@ extension SoundClassifierTrainer {
         )
         let modelURL = config.outputDirectory.appendingPathComponent("\(config.modelFilename).mlmodel")
 
-        // Empty metadata — no author, license, version, or any provenance info
-        // is written into the .mlmodel.
-        let metadata = MLModelMetadata()
+        // Override every metadata field with non-personal values. CreateML
+        // defaults the author to NSFullUserName() when an empty string is
+        // provided — passing the project name explicitly prevents the local
+        // user's name from being baked into the .mlmodel.
+        let metadata = MLModelMetadata(
+            author: "ScratchLab",
+            shortDescription: "ScratchLab scratch technique sound classifier",
+            license: nil,
+            version: "1.0",
+            additional: [:]
+        )
         do {
             try classifier.write(to: modelURL, metadata: metadata)
         } catch {
