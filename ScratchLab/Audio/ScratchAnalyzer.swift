@@ -114,13 +114,38 @@ struct ScratchComparisonResult {
     }
 }
 
+// MARK: - Reference Folder Mapping
+
+/// Describes one bundled reference-audio folder. The `folderName` matches
+/// the on-disk directory layout under `ScratchLab/Resources/`. The list of
+/// expected folders is exposed on `ScratchAnalyzer` as a single source of
+/// truth so tests can verify loader / disk alignment without re-asserting
+/// literals.
+struct ReferenceFolderDescriptor: Equatable {
+    let folderName: String
+    let tier: ReferenceSample.SkillTier
+    let source: String
+}
+
 // MARK: - Scratch Analyzer
 
 @MainActor
 class ScratchAnalyzer: ObservableObject {
-    
+
+    // MARK: - Reference Folder Layout
+
+    /// The bundled reference-audio folders this analyzer expects to find at
+    /// runtime. Folder names match the on-disk layout under
+    /// `ScratchLab/Resources/`. Update this list whenever a folder is
+    /// renamed or added so the loader and the tests stay in lock-step.
+    static let bundledReferenceFolders: [ReferenceFolderDescriptor] = [
+        .init(folderName: "reference_pro", tier: .professional, source: "Reference Set A"),
+        .init(folderName: "reference_champ", tier: .advanced, source: "Reference Set B"),
+        .init(folderName: "reference_beginner", tier: .learner, source: "Reference Set C"),
+    ]
+
     // MARK: - Configuration
-    
+
     private let sampleRate: Double = 44100
     private let fftSize: Int = 2048
     private let hopSize: Int = 512
@@ -164,42 +189,45 @@ class ScratchAnalyzer: ObservableObject {
         }
         
         let basePath = URL(fileURLWithPath: bundlePath)
-        let referencePaths: [(String, ReferenceSample.SkillTier, String)] = [
-            ("pro_reference", .professional, "Reference Set A"),
-            ("advanced_reference", .advanced, "Reference Set B"),
-            ("learner_reference", .learner, "Reference Set C")
-        ]
-        
+        let descriptors = Self.bundledReferenceFolders
+
         var allSamples: [ReferenceSample] = []
         var foundReferenceFolder = false
         var processed = 0
-        let totalExpected = 31 // Known count from dataset
-        
-        for (folder, tier, source) in referencePaths {
-            let folderURL = basePath.appendingPathComponent(folder)
-            
+        // Total reference WAV count across all bundled reference folders.
+        // Update if the on-disk count changes.
+        let totalExpected = 29
+
+        for descriptor in descriptors {
+            let folderURL = basePath.appendingPathComponent(descriptor.folderName)
+
             guard FileManager.default.fileExists(atPath: folderURL.path) else {
-                print("Warning: Reference folder not found: \(folder)")
+                print("Warning: Reference folder not found: \(descriptor.folderName)")
                 continue
             }
 
             foundReferenceFolder = true
-            
+
             let contents = try FileManager.default.contentsOfDirectory(
                 at: folderURL,
                 includingPropertiesForKeys: nil
             )
-            
+
             for url in contents where url.pathExtension == "wav" {
                 let id = url.deletingPathExtension().lastPathComponent
-                var sample = ReferenceSample(id: id, url: url, tier: tier, source: source)
-                
+                var sample = ReferenceSample(
+                    id: id,
+                    url: url,
+                    tier: descriptor.tier,
+                    source: descriptor.source
+                )
+
                 // Extract features
                 if let features = try? await extractFeatures(from: url) {
                     sample.features = features
                     allSamples.append(sample)
                 }
-                
+
                 processed += 1
                 loadingProgress = Float(processed) / Float(totalExpected)
             }
