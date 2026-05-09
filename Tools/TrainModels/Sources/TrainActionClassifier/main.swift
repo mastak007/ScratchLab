@@ -2,9 +2,9 @@
 //  main.swift
 //  TrainActionClassifier (CLI)
 //
-//  Phase 2 Slices A and B. The CLI runs in one of four mutually-exclusive
-//  modes; the existing extract / validate-only flows from Slice A continue
-//  to work unchanged.
+//  Phase 2 Slices A, B, and C. The CLI runs in one of five mutually-
+//  exclusive modes; the existing extract / validate-only / audit /
+//  build-windows flows continue to work unchanged.
 //
 //      Slice A — extract (default):
 //          --dataset <dir> --features-cache <dir> [--fps N] [...]
@@ -24,10 +24,17 @@
 //          [--window-frames 60] [--stride-frames 30]
 //          [--force-inside-repo]
 //
-//  Does NOT train a model. Does NOT produce .mlmodel / .mlmodelc files.
-//  Does NOT touch the iOS or macOS app target, the Xcode project, signing,
-//  bundle IDs, entitlements, Info.plist, PrivacyInfo.xcprivacy, or any
-//  Copy Bundle Resources phase.
+//      Slice C — train action classifier (macOS only):
+//          --train-action-classifier <windows-dir>
+//          --model-out <dir-OUTSIDE-the-repo>
+//          [--validation-fraction 0.2] [--seed 1337]
+//          [--max-iterations 50] [--prediction-window-size 60]
+//          [--balance-classes] [--force-inside-repo]
+//
+//  Does NOT touch the iOS / macOS / watchOS app target, the Xcode
+//  project, signing, bundle IDs, entitlements, Info.plist,
+//  PrivacyInfo.xcprivacy, Copy Bundle Resources, or app resources.
+//  Generated .mlmodel files are written outside the repo.
 //
 
 import Foundation
@@ -61,6 +68,15 @@ struct CLIArguments {
     var windowFrames: Int = 60
     var strideFrames: Int = 30
     var forceInsideRepo: Bool = false
+
+    // Slice C — train mode
+    var trainWindowsPath: String?
+    var modelOutPath: String?
+    var validationFraction: Double = 0.2
+    var seed: UInt64 = 1337
+    var maxIterations: Int = 50
+    var predictionWindowSize: Int = 60
+    var balanceClasses: Bool = false
 }
 
 enum CLIParseOutcome {
@@ -148,6 +164,40 @@ func parseArguments(_ argv: [String]) -> CLIParseOutcome {
             args.strideFrames = n
         case "--force-inside-repo":
             args.forceInsideRepo = true
+        case "--train-action-classifier":
+            i += 1
+            guard i < argv.count else { return .error("--train-action-classifier needs a value") }
+            args.trainWindowsPath = argv[i]
+        case "--model-out":
+            i += 1
+            guard i < argv.count else { return .error("--model-out needs a value") }
+            args.modelOutPath = argv[i]
+        case "--validation-fraction":
+            i += 1
+            guard i < argv.count, let v = Double(argv[i]), v >= 0, v <= 0.5 else {
+                return .error("--validation-fraction needs a value in [0.0, 0.5]")
+            }
+            args.validationFraction = v
+        case "--seed":
+            i += 1
+            guard i < argv.count, let n = UInt64(argv[i]) else {
+                return .error("--seed needs a non-negative integer")
+            }
+            args.seed = n
+        case "--max-iterations":
+            i += 1
+            guard i < argv.count, let n = Int(argv[i]), n > 0 else {
+                return .error("--max-iterations needs a positive integer")
+            }
+            args.maxIterations = n
+        case "--prediction-window-size":
+            i += 1
+            guard i < argv.count, let n = Int(argv[i]), n > 0 else {
+                return .error("--prediction-window-size needs a positive integer")
+            }
+            args.predictionWindowSize = n
+        case "--balance-classes":
+            args.balanceClasses = true
         case "-h", "--help":
             return .error(usage())
         default:
@@ -186,6 +236,16 @@ func usage() -> String {
                                   the repo unless --force-inside-repo is
                                   also set.
 
+      --train-action-classifier <windows-dir> --model-out <dir>
+                                  (macOS only.) Train an MLActivityClassifier
+                                  from the windows-dir produced by
+                                  --build-windows and write
+                                  ScratchActionClassifier.mlmodel plus
+                                  ScratchActionClassifier.training-report.json
+                                  into model-out. The output directory must
+                                  be outside the repo unless
+                                  --force-inside-repo is set.
+
     Common options:
       --fps <number>              Frame sample rate for extraction. Default 30.
       --limit-per-class <int>     Extract at most N clips per class (sorted
@@ -205,9 +265,24 @@ func usage() -> String {
       --window-frames <n>         Frames per window. Default 60 (≈ 2s @ 30fps).
       --stride-frames <n>         Stride between windows. Default 30 (≈ 50%
                                   overlap @ 30fps).
-      --force-inside-repo         Allow writing windows under the current
-                                  git working tree. Off by default to avoid
-                                  accidental commits of generated artefacts.
+      --force-inside-repo         Allow writing windows / models under the
+                                  current git working tree. Off by default
+                                  to avoid accidental commits of generated
+                                  artefacts.
+
+    Train options:
+      --validation-fraction <f>      Fraction of clips per class held out
+                                     for validation. Default 0.2; range
+                                     [0.0, 0.5].
+      --seed <int>                   Seed for the deterministic train/val
+                                     split. Default 1337.
+      --max-iterations <int>         CreateML iteration cap. Default 50.
+      --prediction-window-size <int> MLActivityClassifier prediction window
+                                     in frames. Default 60.
+      --balance-classes              Deterministically downsample training
+                                     clips per class to the smallest class
+                                     count. Off by default — imbalance is
+                                     reported instead.
 
       -h, --help                  Show this help.
 
@@ -485,6 +560,144 @@ func runWindowBuildMode(cachePath: String, args: CLIArguments) -> Never {
     exit(0)
 }
 
+// MARK: - Train mode (Slice C, macOS only)
+
+func runTrainMode(windowsPath: String, args: CLIArguments) -> Never {
+    let windowsURL = URL(fileURLWithPath: windowsPath, isDirectory: true)
+    guard let modelOutPath = args.modelOutPath else {
+        writeStderr("error: --model-out is required with --train-action-classifier\n")
+        exit(2)
+    }
+    let modelOutURL = URL(fileURLWithPath: modelOutPath, isDirectory: true)
+
+    // Refuse to write the .mlmodel inside the working tree unless
+    // explicitly forced. Generated artefacts are large and the safety
+    // boundary is the same as for the windows builder.
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    if let gitRoot = findGitRoot(from: cwd),
+       pathIsInside(modelOutURL, of: gitRoot),
+       !args.forceInsideRepo {
+        writeStderr(
+            "error: --model-out is inside the git working tree (\(gitRoot.path)).\n"
+            + "       Pass --force-inside-repo to override, or pick an external path.\n"
+        )
+        exit(2)
+    }
+
+    // Up-front load + split (always available — pure Foundation) so we
+    // can print the dataset summary even if the platform can't train.
+    let dataset: ActionWindowDataset
+    do {
+        dataset = try ActionWindowDatasetLoader().load(
+            windowsDir: windowsURL,
+            validationFraction: args.validationFraction,
+            seed: args.seed,
+            balanceTrainingClasses: args.balanceClasses
+        )
+    } catch {
+        writeStderr("dataset load failed: \(error)\n")
+        exit(1)
+    }
+
+    print("Windows directory: \(windowsURL.path)")
+    print("Model output:      \(modelOutURL.path)")
+    print("Windows loaded:    \(dataset.allWindows.count)")
+    print("Classes detected:  \(dataset.perClassTotal.keys.count)")
+    print("Train/Val clips:   \(dataset.trainingClipCount) / \(dataset.validationClipCount)")
+    print("Train/Val windows: \(dataset.trainingWindows.count) / \(dataset.validationWindows.count)")
+    print("Validation frac:   \(args.validationFraction)   seed: \(args.seed)")
+    let imbalanceFmt = String(format: "%.2f", dataset.imbalanceRatio)
+    print("Imbalance ratio:   \(imbalanceFmt) (max-class / min-class training windows)")
+    if dataset.balancedTrainingApplied {
+        print("Balancing:         applied — training downsampled to smallest class")
+    } else if args.balanceClasses {
+        print("Balancing:         requested but already balanced; no change")
+    } else {
+        print("Balancing:         off (imbalance reported, not corrected)")
+    }
+    print("")
+    print("Per-class train / validation:")
+    for cls in dataset.perClassTotal.keys.sorted() {
+        let tr = dataset.perClassTraining[cls] ?? 0
+        let va = dataset.perClassValidation[cls] ?? 0
+        let pad = String(repeating: " ", count: max(0, 22 - cls.count))
+        print("  \(cls)\(pad) train=\(tr)  val=\(va)")
+    }
+    print("")
+
+    #if os(macOS)
+    print("Trainer:           MLBoostedTreeClassifier"
+        + " (per-window summary features,"
+        + " maxIterations=\(args.maxIterations))")
+    print("Training… (this can take several minutes)")
+    let config = ScratchActionClassifierTrainer.TrainingConfiguration(
+        windowsDirectory: windowsURL,
+        outputDirectory: modelOutURL,
+        modelFilename: "ScratchActionClassifier",
+        validationFraction: args.validationFraction,
+        seed: args.seed,
+        balanceTrainingClasses: args.balanceClasses,
+        maximumIterations: args.maxIterations,
+        predictionWindowSize: args.predictionWindowSize
+    )
+    let artifacts: ScratchActionClassifierTrainingArtifacts
+    do {
+        artifacts = try ScratchActionClassifierTrainer().train(config)
+    } catch {
+        writeStderr("training failed: \(error)\n")
+        exit(1)
+    }
+
+    let report = artifacts.report
+    let pct = { (v: Double?) -> String in
+        guard let v = v else { return "n/a" }
+        return String(format: "%.2f%%", 100 * v)
+    }
+    print("")
+    print("Model written:     \(artifacts.modelURL.path)")
+    print("Report written:    \(artifacts.reportURL.path)")
+    print("Training accuracy: \(pct(report.trainingAccuracy))")
+    print("Validation acc.:   \(pct(report.validationAccuracy))")
+    print("Training duration: "
+        + String(format: "%.1f s", report.trainingDurationSeconds))
+
+    if let perClass = report.perClassValidationAccuracy, !perClass.isEmpty {
+        print("")
+        print("Per-class validation accuracy:")
+        for cls in perClass.keys.sorted() {
+            let v = perClass[cls] ?? 0
+            let pad = String(repeating: " ", count: max(0, 22 - cls.count))
+            print("  \(cls)\(pad) \(pct(v))")
+        }
+    }
+    if !report.weakestClasses.isEmpty {
+        print("")
+        let weakList = report.weakestClasses.joined(separator: ", ")
+        let thresholdStr = pct(report.weakClassThreshold)
+        print("Weakest classes (validation accuracy < \(thresholdStr)): \(weakList)")
+    }
+    if let confusion = report.confusion, !confusion.isEmpty {
+        print("")
+        print("Confusion matrix (top mis-predictions):")
+        let misPredictions = confusion
+            .filter { $0.actual != $0.predicted && $0.count > 0 }
+            .sorted { $0.count > $1.count }
+            .prefix(15)
+        if misPredictions.isEmpty {
+            print("  (none — every prediction matched its label)")
+        } else {
+            for cell in misPredictions {
+                print("  \(cell.actual) → \(cell.predicted): \(cell.count)")
+            }
+        }
+    }
+    exit(0)
+    #else
+    writeStderr("error: training is only available on macOS\n")
+    exit(1)
+    #endif
+}
+
 // MARK: - Mode dispatch
 
 let parsedArgs: CLIArguments
@@ -496,16 +709,17 @@ case .error(let message):
 }
 
 // Mutual exclusion: at most one of --audit-cache, --build-windows,
-// --validate-only may be set.
+// --train-action-classifier, --validate-only may be set.
 let modeFlagsSet = [
     parsedArgs.auditCachePath != nil,
     parsedArgs.buildWindowsCachePath != nil,
+    parsedArgs.trainWindowsPath != nil,
     parsedArgs.validateOnly,
 ].filter { $0 }.count
 if modeFlagsSet > 1 {
     writeStderr(
-        "error: --audit-cache, --build-windows, and --validate-only are"
-        + " mutually exclusive — pick one.\n"
+        "error: --audit-cache, --build-windows, --train-action-classifier,"
+        + " and --validate-only are mutually exclusive — pick one.\n"
     )
     exit(2)
 }
@@ -515,6 +729,9 @@ if let auditPath = parsedArgs.auditCachePath {
 }
 if let buildPath = parsedArgs.buildWindowsCachePath {
     runWindowBuildMode(cachePath: buildPath, args: parsedArgs)
+}
+if let trainWindowsPath = parsedArgs.trainWindowsPath {
+    runTrainMode(windowsPath: trainWindowsPath, args: parsedArgs)
 }
 
 guard let datasetPath = parsedArgs.datasetPath else {

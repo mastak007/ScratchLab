@@ -6,15 +6,16 @@
 //     identical files; the package exists to host unit tests on macOS.
 //   * SoundTrainer — CreateML-driven training logic (macOS only) plus a
 //     synchronous file-classification helper used by the smoke-test CLI.
-//   * MotionTrainer — Vision-driven offline motion-feature extraction +
-//     dataset validation for the Phase 2 action classifier. No CreateML
-//     in this slice; this just produces JSONL feature caches.
+//   * MotionTrainer — Vision-driven offline motion-feature extraction,
+//     cache audit, motion-window builder, and (macOS-only, behind
+//     `#if os(macOS)`) the CreateML-backed ScratchActionClassifier
+//     trainer for Phase 2 Slice C.
 //   * train-sound-classifier — thin CLI that wraps SoundTrainer.
 //   * test-sound-classifier — dev-only CLI that runs predictions over a
 //     dataset folder to validate a trained .mlmodel before bundling.
-//   * train-action-classifier — Phase 2 CLI that validates an action
-//     dataset and (optionally) extracts motion features to a JSONL cache.
-//     Does NOT train a model in this slice.
+//   * train-action-classifier — Phase 2 CLI: dataset validation, motion
+//     feature extraction, cache audit, motion-window build, and
+//     (macOS-only) action-classifier training.
 //
 // This package is NOT a dependency of the iOS app. Bundling: no dataset, no
 // training audio/video, no provenance metadata in any artefact.
