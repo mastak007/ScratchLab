@@ -22,6 +22,12 @@ import Foundation
 import MotionTrainer
 import ScratchLabML
 
+// Long-running CLIs need line-buffered stdout so progress lines flow through
+// `tee` / pipes immediately. Without this Swift's stdout switches to block
+// buffering when stdout is not a TTY and the user can't see what clip is
+// in flight when the extractor is processing — making hangs hard to spot.
+setlinebuf(stdout)
+
 struct CLIArguments {
     var datasetPath: String?
     var featuresCachePath: String?
@@ -180,35 +186,73 @@ var totalSkipped = 0
 var totalExtracted = 0
 var totalFailed = 0
 
+// Build the full work list up-front so per-clip progress can show "i/total"
+// against the global plan. Cache-skip is decided inside the loop so the
+// counter still increments through cached entries.
+struct PendingClip {
+    let label: ScratchClassLabel
+    let url: URL
+    let outputURL: URL
+}
+var pending: [PendingClip] = []
 for label in validation.labels {
     let classFolder = datasetURL.appendingPathComponent(label.rawValue, isDirectory: true)
     var clips = validator.clips(in: classFolder)
     if let cap = parsedArgs.limitPerClass {
         clips = Array(clips.prefix(cap))
     }
-    let outputClassDir = featuresCacheURL.appendingPathComponent(label.rawValue, isDirectory: true)
+    let outputClassDir = featuresCacheURL
+        .appendingPathComponent(label.rawValue, isDirectory: true)
     do {
-        try FileManager.default.createDirectory(at: outputClassDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: outputClassDir,
+            withIntermediateDirectories: true
+        )
     } catch {
         FileHandle.standardError.write(Data(
             "error: could not create class output dir \(outputClassDir.path): \(error)\n".utf8
         ))
         exit(1)
     }
-
-    print("[\(label.rawValue)] \(clips.count) clip(s)")
     for clipURL in clips {
-        totalClips += 1
         let stem = clipURL.deletingPathExtension().lastPathComponent
-        let outputURL = outputClassDir.appendingPathComponent("\(stem).jsonl")
+        pending.append(PendingClip(
+            label: label,
+            url: clipURL,
+            outputURL: outputClassDir.appendingPathComponent("\(stem).jsonl")
+        ))
+    }
+}
 
-        if FileManager.default.fileExists(atPath: outputURL.path) && !parsedArgs.force {
+let total = pending.count
+print("\(total) clip(s) queued.")
+
+for (idx, p) in pending.enumerated() {
+    let progressTag = "[\(idx + 1)/\(total)]"
+    let stem = p.url.deletingPathExtension().lastPathComponent
+    let sourceTag = "\(p.label.rawValue)/\(stem).mp4"
+    let destTag   = "\(p.label.rawValue)/\(stem).jsonl"
+
+    // Per-clip autoreleasepool keeps CGImage / CVPixelBuffer / VNRequest
+    // results from accumulating across clips. Without this the extractor
+    // builds up retained Vision/AVFoundation resources over a long run
+    // and eventually starves the dispatch callback paths, which is the
+    // hang signature seen in the field.
+    autoreleasepool {
+        totalClips += 1
+
+        if FileManager.default.fileExists(atPath: p.outputURL.path) && !parsedArgs.force {
             totalSkipped += 1
-            continue
+            print("\(progressTag) skip   \(destTag) (cached)")
+            return
         }
 
+        // Print the start line BEFORE we call into AVFoundation/Vision so
+        // the log identifies the in-flight clip even if extraction hangs.
+        print("\(progressTag) start  \(sourceTag) -> \(destTag)")
+
         do {
-            let frames = try extractor.extract(clipURL: clipURL)
+            let frames = try extractor.extract(clipURL: p.url)
             var lines = ""
             lines.reserveCapacity(frames.count * 256)
             for frame in frames {
@@ -218,13 +262,16 @@ for label in validation.labels {
                     lines.append("\n")
                 }
             }
-            try lines.write(to: outputURL, atomically: true, encoding: .utf8)
+            // Atomic write — readers never see a half-written JSONL, and
+            // a kill mid-write leaves no file at all (the skip-cache logic
+            // will retry it on the next run).
+            try lines.write(to: p.outputURL, atomically: true, encoding: .utf8)
             totalExtracted += 1
-            print("  + \(stem).jsonl  (\(frames.count) frames)")
+            print("\(progressTag) ok     \(destTag) (\(frames.count) frames)")
         } catch {
             totalFailed += 1
             FileHandle.standardError.write(Data(
-                "  ! \(stem): \(error)\n".utf8
+                "\(progressTag) FAIL   \(destTag): \(error)\n".utf8
             ))
         }
     }

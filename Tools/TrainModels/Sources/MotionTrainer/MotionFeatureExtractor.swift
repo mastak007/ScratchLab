@@ -38,15 +38,24 @@ public struct MotionFeatureExtractor: Sendable {
         /// Tolerance (seconds) handed to AVAssetImageGenerator. A small value
         /// gives us frame-accurate sampling at the cost of more decode work.
         public var sampleToleranceSeconds: Double
+        /// Hard cap on the time spent decoding frames or loading metadata for
+        /// a single clip. AVAssetImageGenerator can occasionally drop one of
+        /// its per-time completion callbacks under sustained load; without a
+        /// timeout the dispatch group waits forever and the whole dataset
+        /// extraction hangs. On timeout we cancel the generator, surface a
+        /// clear error, and let the caller skip the clip.
+        public var perClipTimeoutSeconds: Double
 
         public init(
             fps: Double = 30,
             maximumHandCount: Int = 2,
-            sampleToleranceSeconds: Double = 0.005
+            sampleToleranceSeconds: Double = 0.005,
+            perClipTimeoutSeconds: Double = 60
         ) {
             self.fps = fps
             self.maximumHandCount = maximumHandCount
             self.sampleToleranceSeconds = sampleToleranceSeconds
+            self.perClipTimeoutSeconds = perClipTimeoutSeconds
         }
     }
 
@@ -96,7 +105,11 @@ public struct MotionFeatureExtractor: Sendable {
             preferredTimescale: timescale
         )
 
-        let images = collectImages(generator: generator, times: times)
+        let images = try collectImages(
+            generator: generator,
+            times: times,
+            clipURL: clipURL
+        )
         guard !images.isEmpty else {
             throw MotionTrainerError.extractionFailed(
                 path: clipURL.lastPathComponent,
@@ -118,26 +131,66 @@ public struct MotionFeatureExtractor: Sendable {
         let image: CGImage
     }
 
+    /// Drive `AVAssetImageGenerator.generateCGImagesAsynchronously` and
+    /// gather the decoded frames. The completion handler is invoked once per
+    /// requested time (success, failure, cancelled, or nil-image — every
+    /// path runs the bookkeeping that signals "all callbacks received"
+    /// exactly once). If the generator misses a callback the wait would
+    /// otherwise block forever; we time out, cancel further work, and throw
+    /// `extractionFailed` so the caller can move on.
     private func collectImages(
         generator: AVAssetImageGenerator,
-        times: [NSValue]
-    ) -> [DecodedSample] {
+        times: [NSValue],
+        clipURL: URL
+    ) throws -> [DecodedSample] {
+        let expected = times.count
         var collected: [DecodedSample] = []
+        var receivedCount = 0
+        var doneSignaled = false
         let lock = NSLock()
-        let group = DispatchGroup()
-        for _ in times { group.enter() }
+        let allDone = DispatchSemaphore(value: 0)
 
         generator.generateCGImagesAsynchronously(forTimes: times) { requested, image, _, result, _ in
-            defer { group.leave() }
-            guard result == .succeeded, let image = image else { return }
+            // Update bookkeeping on EVERY callback path — succeeded,
+            // failed, cancelled, or nil image. The `isLast` decision is
+            // made inside the lock so two simultaneous "last" callbacks
+            // can't both signal the semaphore.
+            var shouldSignal = false
             lock.lock()
-            collected.append(DecodedSample(
-                requestedSeconds: requested.seconds,
-                image: image
-            ))
+            receivedCount += 1
+            if result == .succeeded, let image = image {
+                collected.append(DecodedSample(
+                    requestedSeconds: requested.seconds,
+                    image: image
+                ))
+            }
+            if receivedCount >= expected && !doneSignaled {
+                doneSignaled = true
+                shouldSignal = true
+            }
             lock.unlock()
+            if shouldSignal {
+                allDone.signal()
+            }
         }
-        group.wait()
+
+        let timeoutMillis = Int(configuration.perClipTimeoutSeconds * 1000)
+        let deadline: DispatchTime = .now() + .milliseconds(timeoutMillis)
+        if allDone.wait(timeout: deadline) == .timedOut {
+            // Cancel outstanding decode work so late callbacks don't churn
+            // CPU after we've given up. Late callbacks are still safe to
+            // run — they only mutate locked locals that nobody is reading.
+            generator.cancelAllCGImageGeneration()
+            lock.lock()
+            let received = receivedCount
+            lock.unlock()
+            throw MotionTrainerError.extractionFailed(
+                path: clipURL.lastPathComponent,
+                underlying: "image generator timed out after"
+                    + " \(Int(configuration.perClipTimeoutSeconds))s"
+                    + " (\(received)/\(expected) callbacks)"
+            )
+        }
         return collected
     }
 
@@ -231,7 +284,18 @@ public struct MotionFeatureExtractor: Sendable {
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        let timeoutMillis = Int(configuration.perClipTimeoutSeconds * 1000)
+        let deadline: DispatchTime = .now() + .milliseconds(timeoutMillis)
+        if semaphore.wait(timeout: deadline) == .timedOut {
+            throw NSError(
+                domain: "MotionTrainer.MotionFeatureExtractor",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "duration load timed out after"
+                        + " \(Int(configuration.perClipTimeoutSeconds))s"
+                ]
+            )
+        }
         if let caught { throw caught }
         return loaded ?? 0
     }
