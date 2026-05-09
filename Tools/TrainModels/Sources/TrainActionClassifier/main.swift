@@ -2,20 +2,32 @@
 //  main.swift
 //  TrainActionClassifier (CLI)
 //
-//  Phase 2 Slice A. Validates an action-classifier dataset and (optionally)
-//  extracts Vision-derived motion features into a JSONL cache. Does NOT
-//  train a model; does NOT bundle anything; does NOT touch the iOS app.
+//  Phase 2 Slices A and B. The CLI runs in one of four mutually-exclusive
+//  modes; the existing extract / validate-only flows from Slice A continue
+//  to work unchanged.
 //
-//  Usage:
-//      swift run train-action-classifier \
-//          --dataset       <path-to-coreml_ready/action_classifier> \
-//          --features-cache <path-to-features-cache-OUTSIDE-the-repo> \
-//          [--validate-only] \
-//          [--fps 30] [--limit-per-class N] [--force]
+//      Slice A — extract (default):
+//          --dataset <dir> --features-cache <dir> [--fps N] [...]
 //
-//  No paths are baked into the binary. The features-cache directory must be
-//  passed in by the caller — there is no default — so we never accidentally
-//  write extracted features inside the repo.
+//      Slice A — dataset validate only:
+//          --dataset <dir> --validate-only
+//
+//      Slice B — feature-cache audit:
+//          --audit-cache <cache-dir>
+//              [--audit-expected-files N]
+//              [--audit-min-hand-coverage 0..1]
+//              [--audit-min-wrist-coverage 0..1]
+//
+//      Slice B — motion-window build:
+//          --build-windows <cache-dir>
+//          --windows-out <dir-OUTSIDE-the-repo>
+//          [--window-frames 60] [--stride-frames 30]
+//          [--force-inside-repo]
+//
+//  Does NOT train a model. Does NOT produce .mlmodel / .mlmodelc files.
+//  Does NOT touch the iOS or macOS app target, the Xcode project, signing,
+//  bundle IDs, entitlements, Info.plist, PrivacyInfo.xcprivacy, or any
+//  Copy Bundle Resources phase.
 //
 
 import Foundation
@@ -36,6 +48,19 @@ struct CLIArguments {
     var limitPerClass: Int?
     var force: Bool = false
     var minimumSamplesPerClass: Int = 12
+
+    // Slice B — audit mode
+    var auditCachePath: String?
+    var auditExpectedFiles: Int?
+    var auditMinHandCoverage: Double = 0.5
+    var auditMinWristCoverage: Double = 0.5
+
+    // Slice B — window-build mode
+    var buildWindowsCachePath: String?
+    var windowsOutPath: String?
+    var windowFrames: Int = 60
+    var strideFrames: Int = 30
+    var forceInsideRepo: Bool = false
 }
 
 enum CLIParseOutcome {
@@ -79,6 +104,50 @@ func parseArguments(_ argv: [String]) -> CLIParseOutcome {
             args.minimumSamplesPerClass = n
         case "--force":
             args.force = true
+        case "--audit-cache":
+            i += 1
+            guard i < argv.count else { return .error("--audit-cache needs a value") }
+            args.auditCachePath = argv[i]
+        case "--audit-expected-files":
+            i += 1
+            guard i < argv.count, let n = Int(argv[i]), n > 0 else {
+                return .error("--audit-expected-files needs a positive integer")
+            }
+            args.auditExpectedFiles = n
+        case "--audit-min-hand-coverage":
+            i += 1
+            guard i < argv.count, let v = Double(argv[i]), v >= 0, v <= 1 else {
+                return .error("--audit-min-hand-coverage needs a value in [0, 1]")
+            }
+            args.auditMinHandCoverage = v
+        case "--audit-min-wrist-coverage":
+            i += 1
+            guard i < argv.count, let v = Double(argv[i]), v >= 0, v <= 1 else {
+                return .error("--audit-min-wrist-coverage needs a value in [0, 1]")
+            }
+            args.auditMinWristCoverage = v
+        case "--build-windows":
+            i += 1
+            guard i < argv.count else { return .error("--build-windows needs a value") }
+            args.buildWindowsCachePath = argv[i]
+        case "--windows-out":
+            i += 1
+            guard i < argv.count else { return .error("--windows-out needs a value") }
+            args.windowsOutPath = argv[i]
+        case "--window-frames":
+            i += 1
+            guard i < argv.count, let n = Int(argv[i]), n > 0 else {
+                return .error("--window-frames needs a positive integer")
+            }
+            args.windowFrames = n
+        case "--stride-frames":
+            i += 1
+            guard i < argv.count, let n = Int(argv[i]), n > 0 else {
+                return .error("--stride-frames needs a positive integer")
+            }
+            args.strideFrames = n
+        case "--force-inside-repo":
+            args.forceInsideRepo = true
         case "-h", "--help":
             return .error(usage())
         default:
@@ -91,44 +160,365 @@ func parseArguments(_ argv: [String]) -> CLIParseOutcome {
 
 func usage() -> String {
     return """
-    Usage: train-action-classifier --dataset <dir> [--features-cache <dir>] [options]
+    Usage: train-action-classifier <mode> [options]
 
-    Options:
-      --dataset <dir>             Path to coreml_ready/action_classifier
-                                  (one subfolder per ScratchClassLabel).
-      --features-cache <dir>      Output directory for per-clip JSONL feature
-                                  files. Required unless --validate-only.
-                                  Must be supplied by the caller; there is no
-                                  default and the path should be OUTSIDE the
-                                  repo.
-      --validate-only             Validate the dataset and exit. No extraction.
-      --fps <number>              Frame sample rate. Default: 30.
-      --limit-per-class <int>     Process at most N clips per class (sorted by
-                                  filename). Useful for smoke tests.
-      --min-per-class <int>       Minimum clips per class for validation.
-                                  Default: 12.
-      --force                     Re-extract even if a cached JSONL exists.
+    Modes (mutually exclusive — pick one):
+
+      --dataset <dir> --features-cache <dir>
+                                  Extract features from every mp4 under the
+                                  dataset into the cache. Skips JSONLs that
+                                  already exist unless --force is also set.
+
+      --dataset <dir> --validate-only
+                                  Validate the dataset's class folders only.
+                                  No extraction, no cache write.
+
+      --audit-cache <cache-dir>   Audit a feature cache produced by Slice A.
+                                  Reports file counts, frame counts, hand
+                                  detection coverage, out-of-range
+                                  coordinates, and any structural problems.
+
+      --build-windows <cache-dir> --windows-out <dir>
+                                  Slice JSONL feature streams into fixed-
+                                  length windows for training. Output is one
+                                  JSONL of MotionFeatureWindow per source
+                                  clip. The output directory must be outside
+                                  the repo unless --force-inside-repo is
+                                  also set.
+
+    Common options:
+      --fps <number>              Frame sample rate for extraction. Default 30.
+      --limit-per-class <int>     Extract at most N clips per class (sorted
+                                  by filename). Useful for smoke tests.
+      --min-per-class <int>       Minimum clips per class for dataset
+                                  validation. Default 12.
+      --force                     Re-extract / re-build even when an output
+                                  file already exists.
+
+    Audit options:
+      --audit-expected-files <n>      Compare against an expected file count.
+      --audit-min-hand-coverage 0..1  Minimum dominantHand coverage. Default 0.5.
+      --audit-min-wrist-coverage 0..1 Minimum dominantHandWrist coverage.
+                                      Default 0.5.
+
+    Window options:
+      --window-frames <n>         Frames per window. Default 60 (≈ 2s @ 30fps).
+      --stride-frames <n>         Stride between windows. Default 30 (≈ 50%
+                                  overlap @ 30fps).
+      --force-inside-repo         Allow writing windows under the current
+                                  git working tree. Off by default to avoid
+                                  accidental commits of generated artefacts.
+
       -h, --help                  Show this help.
 
     Behaviour:
       * No model is trained.
-      * No .mlmodel / .mlmodelc files are produced.
-      * Source-clip absolute paths are NOT written into the JSONL output.
-      * Each cached file is one JSON object per line, the encoded form of
-        ScratchMotionFrame.
+      * No .mlmodel / .mlmodelc / .mlpackage files are produced.
+      * Source-clip absolute paths are NOT written into any JSONL output.
+      * Each cached frame and each window is one JSON object per line.
     """
 }
+
+// MARK: - Helpers
+
+/// Walk up from `start` looking for a `.git` directory. Used to detect when
+/// the user has pointed `--windows-out` at a path inside the current
+/// working tree, so we can refuse to write generated artefacts there
+/// unless `--force-inside-repo` is set.
+func findGitRoot(from start: URL) -> URL? {
+    var current = start.standardizedFileURL
+    while current.path != "/" {
+        let candidate = current.appendingPathComponent(".git")
+        if FileManager.default.fileExists(atPath: candidate.path) {
+            return current
+        }
+        let parent = current.deletingLastPathComponent()
+        if parent.path == current.path { return nil }
+        current = parent
+    }
+    return nil
+}
+
+func pathIsInside(_ child: URL, of parent: URL) -> Bool {
+    let childPath = child.standardizedFileURL.resolvingSymlinksInPath().path
+    let parentPath = parent.standardizedFileURL.resolvingSymlinksInPath().path
+    if childPath == parentPath { return true }
+    let parentSlash = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
+    return childPath.hasPrefix(parentSlash)
+}
+
+func writeStderr(_ message: String) {
+    FileHandle.standardError.write(Data(message.utf8))
+}
+
+// MARK: - Audit mode
+
+func runAuditMode(cachePath: String, args: CLIArguments) -> Never {
+    let cacheURL = URL(fileURLWithPath: cachePath, isDirectory: true)
+    let validator = FeatureCacheValidator()
+    let config = FeatureCacheValidator.Configuration(
+        expectedFileCount: args.auditExpectedFiles,
+        minimumDominantHandCoverage: args.auditMinHandCoverage,
+        minimumDominantHandWristCoverage: args.auditMinWristCoverage
+    )
+    let report: FeatureCacheAuditReport
+    do {
+        report = try validator.audit(at: cacheURL, configuration: config)
+    } catch {
+        writeStderr("audit failed: \(error)\n")
+        exit(1)
+    }
+
+    print("Cache: \(cacheURL.path)")
+    print("Files: \(report.totalFiles)   Frames: \(report.totalFrames)")
+    let pct = { (v: Double) in String(format: "%.2f%%", 100 * v) }
+    print("Coverage — dominantHand:        \(pct(report.dominantHandCoverage))")
+    print("Coverage — dominantHandWrist:   \(pct(report.dominantHandWristCoverage))")
+    print("Coverage — secondaryHandWrist:  \(pct(report.secondaryHandWristCoverage))")
+    print("Out-of-range frames: \(report.outOfRangeFrameCount)"
+        + " (\(pct(report.outOfRangeFraction)))")
+    print("")
+    print("Per-class:")
+    for cls in report.perClassFiles.keys.sorted() {
+        let files = report.perClassFiles[cls] ?? 0
+        let frames = report.perClassFrames[cls] ?? 0
+        let dom = report.perClassDominantHandCoverage[cls] ?? 0
+        let wrist = report.perClassDominantHandWristCoverage[cls] ?? 0
+        let sec = report.perClassSecondaryHandWristCoverage[cls] ?? 0
+        let pad = String(repeating: " ", count: max(0, 22 - cls.count))
+        let filesStr = String(format: "%4d", files)
+        let framesStr = String(format: "%7d", frames)
+        print("  \(cls)\(pad) files=\(filesStr) frames=\(framesStr)"
+            + " dom=\(pct(dom)) wrist=\(pct(wrist)) sec=\(pct(sec))")
+    }
+
+    print("")
+    if let mismatch = report.unexpectedFileCount {
+        print("FILE-COUNT MISMATCH: expected \(mismatch.expected),"
+            + " observed \(mismatch.observed)")
+    }
+    if !report.emptyFiles.isEmpty {
+        print("Empty files (\(report.emptyFiles.count)):")
+        for f in report.emptyFiles { print("  \(f)") }
+    }
+    if !report.malformedFiles.isEmpty {
+        print("Malformed files (\(report.malformedFiles.count)):")
+        for f in report.malformedFiles { print("  \(f)") }
+    }
+    if !report.nonMonotonicFiles.isEmpty {
+        print("Non-monotonic timestamp files (\(report.nonMonotonicFiles.count)):")
+        for f in report.nonMonotonicFiles { print("  \(f)") }
+    }
+    if !report.unknownClassFolders.isEmpty {
+        print("Unknown class folders (\(report.unknownClassFolders.count)):")
+        for f in report.unknownClassFolders { print("  \(f)") }
+    }
+    if !report.coverageBelowThresholdClasses.isEmpty {
+        print("Below dominantHand coverage threshold:"
+            + " \(report.coverageBelowThresholdClasses)")
+    }
+    if !report.wristCoverageBelowThresholdClasses.isEmpty {
+        print("Below dominantHandWrist coverage threshold:"
+            + " \(report.wristCoverageBelowThresholdClasses)")
+    }
+
+    print("")
+    print("structurallyClean: \(report.isStructurallyClean)")
+    print("meetsAllThresholds: \(report.meetsAllThresholds)")
+    exit(report.meetsAllThresholds ? 0 : 1)
+}
+
+// MARK: - Window-build mode
+
+func runWindowBuildMode(cachePath: String, args: CLIArguments) -> Never {
+    let cacheURL = URL(fileURLWithPath: cachePath, isDirectory: true)
+    guard let outPath = args.windowsOutPath else {
+        writeStderr("error: --windows-out is required with --build-windows\n")
+        exit(2)
+    }
+    let outURL = URL(fileURLWithPath: outPath, isDirectory: true)
+
+    // Refuse to write generated windows inside the git working tree unless
+    // explicitly forced. Users typically point this at an external scratch
+    // disk; an accidental in-repo path would otherwise produce hundreds of
+    // MB of churn under git status.
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    if let gitRoot = findGitRoot(from: cwd),
+       pathIsInside(outURL, of: gitRoot),
+       !args.forceInsideRepo {
+        writeStderr(
+            "error: --windows-out is inside the git working tree (\(gitRoot.path)).\n"
+            + "       Pass --force-inside-repo to override, or pick an external path.\n"
+        )
+        exit(2)
+    }
+
+    do {
+        try FileManager.default.createDirectory(
+            at: outURL,
+            withIntermediateDirectories: true
+        )
+    } catch {
+        writeStderr("error: could not create --windows-out directory: \(error)\n")
+        exit(1)
+    }
+
+    // Inspect the cache directory layout first so we can iterate clips
+    // deterministically.
+    let cacheValidator = FeatureCacheValidator()
+    let auditReport: FeatureCacheAuditReport
+    do {
+        auditReport = try cacheValidator.audit(at: cacheURL)
+    } catch {
+        writeStderr("error: could not read cache directory: \(error)\n")
+        exit(1)
+    }
+    if !auditReport.isStructurallyClean {
+        writeStderr(
+            "warning: cache has structural problems (empty/malformed/unknown);"
+            + " continuing but those clips will be skipped silently.\n"
+        )
+    }
+
+    let builder = MotionWindowBuilder(
+        configuration: MotionWindowBuilder.Configuration(
+            windowFrames: args.windowFrames,
+            strideFrames: args.strideFrames
+        )
+    )
+
+    var totalWindows = 0
+    var totalClipsWithWindows = 0
+    var totalClipsSkipped = 0
+    var perClassWindowCounts: [String: Int] = [:]
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = []
+
+    let classes = Array(auditReport.perClassFiles.keys.sorted())
+    let totalClips = auditReport.totalFiles
+    var clipIndex = 0
+
+    print("\(totalClips) clip(s) queued."
+        + " window=\(args.windowFrames) stride=\(args.strideFrames)")
+
+    for cls in classes {
+        let classCacheDir = cacheURL.appendingPathComponent(cls, isDirectory: true)
+        let classOutDir = outURL.appendingPathComponent(cls, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: classOutDir,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            writeStderr("error: could not create class output dir \(classOutDir.path): \(error)\n")
+            exit(1)
+        }
+
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: classCacheDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        let jsonlFiles = files
+            .filter { $0.pathExtension.lowercased() == "jsonl" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        for clipURL in jsonlFiles {
+            clipIndex += 1
+            let progressTag = "[\(clipIndex)/\(totalClips)]"
+            let stem = clipURL.deletingPathExtension().lastPathComponent
+            let outFileURL = classOutDir.appendingPathComponent("\(stem).windows.jsonl")
+            let destTag = "\(cls)/\(stem).windows.jsonl"
+
+            // Per-clip autoreleasepool keeps decoded frame arrays from
+            // accumulating across the whole run.
+            autoreleasepool {
+                if FileManager.default.fileExists(atPath: outFileURL.path) && !args.force {
+                    totalClipsSkipped += 1
+                    print("\(progressTag) skip   \(destTag) (cached)")
+                    return
+                }
+                do {
+                    let windows = try builder.windows(
+                        forClipAt: clipURL,
+                        classLabel: cls
+                    )
+                    if windows.isEmpty {
+                        totalClipsSkipped += 1
+                        print("\(progressTag) skip   \(destTag) (no windows fit)")
+                        return
+                    }
+                    var lines = ""
+                    lines.reserveCapacity(windows.count * 4096)
+                    for window in windows {
+                        let data = try encoder.encode(window)
+                        if let line = String(data: data, encoding: .utf8) {
+                            lines.append(line)
+                            lines.append("\n")
+                        }
+                    }
+                    try lines.write(to: outFileURL, atomically: true, encoding: .utf8)
+                    totalWindows += windows.count
+                    totalClipsWithWindows += 1
+                    perClassWindowCounts[cls, default: 0] += windows.count
+                    print("\(progressTag) ok     \(destTag) (\(windows.count) windows)")
+                } catch {
+                    writeStderr("\(progressTag) FAIL   \(destTag): \(error)\n")
+                }
+            }
+        }
+    }
+
+    print("")
+    print("Summary:")
+    print("  clips with windows:  \(totalClipsWithWindows)")
+    print("  clips skipped:       \(totalClipsSkipped)")
+    print("  total windows:       \(totalWindows)")
+    print("  output:              \(outURL.path)")
+    if !perClassWindowCounts.isEmpty {
+        print("")
+        print("  per-class windows:")
+        for cls in perClassWindowCounts.keys.sorted() {
+            print("    \(cls): \(perClassWindowCounts[cls] ?? 0)")
+        }
+    }
+    exit(0)
+}
+
+// MARK: - Mode dispatch
 
 let parsedArgs: CLIArguments
 switch parseArguments(CommandLine.arguments) {
 case .ok(let a): parsedArgs = a
 case .error(let message):
-    FileHandle.standardError.write(Data((message + "\n").utf8))
+    writeStderr(message + "\n")
     exit(2)
 }
 
+// Mutual exclusion: at most one of --audit-cache, --build-windows,
+// --validate-only may be set.
+let modeFlagsSet = [
+    parsedArgs.auditCachePath != nil,
+    parsedArgs.buildWindowsCachePath != nil,
+    parsedArgs.validateOnly,
+].filter { $0 }.count
+if modeFlagsSet > 1 {
+    writeStderr(
+        "error: --audit-cache, --build-windows, and --validate-only are"
+        + " mutually exclusive — pick one.\n"
+    )
+    exit(2)
+}
+
+if let auditPath = parsedArgs.auditCachePath {
+    runAuditMode(cachePath: auditPath, args: parsedArgs)
+}
+if let buildPath = parsedArgs.buildWindowsCachePath {
+    runWindowBuildMode(cachePath: buildPath, args: parsedArgs)
+}
+
 guard let datasetPath = parsedArgs.datasetPath else {
-    FileHandle.standardError.write(Data("error: --dataset is required\n\(usage())\n".utf8))
+    writeStderr("error: --dataset is required\n\(usage())\n")
     exit(2)
 }
 
