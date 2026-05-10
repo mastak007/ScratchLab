@@ -3093,11 +3093,19 @@ struct MacAnalyzerView: View {
                     .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity)
             } else {
+                let emptyPreview = ReviewAudioOnsetPreview.compute(
+                    capturedHasEvents: false,
+                    summary: runtimeDiagnostics.audioOnsetSummary
+                )
+                let emptyCopy = ReviewCapturedEmptyStateCopy.compute(
+                    previewWillRender: emptyPreview.shouldRender,
+                    defaultSubtitle: reviewNotationAvailabilityMessage
+                )
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("No captured notation yet")
+                    Text(emptyCopy.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text(reviewNotationAvailabilityMessage)
+                    Text(emptyCopy.subtitle)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .fixedSize(horizontal: false, vertical: true)

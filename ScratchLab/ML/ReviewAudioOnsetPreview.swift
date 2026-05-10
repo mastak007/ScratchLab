@@ -170,3 +170,44 @@ public struct ReviewAudioOnsetPreview: Equatable, Sendable {
         summary: .empty
     )
 }
+
+/// Slice Q — copy bundle for the Review "captured notation empty" pane.
+/// Pure function over (`previewWillRender`, current default subtitle) so
+/// the wording rule is unit-testable and the Review view stays
+/// dumb-renderer code.
+///
+/// Behaviour matrix the wording must satisfy:
+///   * captured empty + onset preview WILL render → subtitle must point
+///     the user at the preview below AND say it's diagnostics-only and
+///     not exported.
+///   * captured empty + onset preview won't render → subtitle is the
+///     existing copy the view already computes (no change).
+///   * captured-present and preview-present cases never reach this
+///     helper — those branches aren't the empty pane.
+public struct ReviewCapturedEmptyStateCopy: Equatable, Sendable {
+    public let title: String
+    public let subtitle: String
+
+    /// Set when `subtitle` was overridden to reference the audio-onset
+    /// preview below. Lets tests assert the user is actually pointed at
+    /// the preview without coupling to the exact wording.
+    public let referencesPreview: Bool
+
+    public static func compute(
+        previewWillRender: Bool,
+        defaultSubtitle: String
+    ) -> ReviewCapturedEmptyStateCopy {
+        if previewWillRender {
+            return ReviewCapturedEmptyStateCopy(
+                title: "No captured notation yet",
+                subtitle: "No saved notation was created for this take. An audio timing preview is available below — diagnostics only, uncertain identity, not part of exported notation.",
+                referencesPreview: true
+            )
+        }
+        return ReviewCapturedEmptyStateCopy(
+            title: "No captured notation yet",
+            subtitle: defaultSubtitle,
+            referencesPreview: false
+        )
+    }
+}

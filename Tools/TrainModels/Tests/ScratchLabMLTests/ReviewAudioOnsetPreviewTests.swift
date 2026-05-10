@@ -193,6 +193,74 @@ final class ReviewAudioOnsetPreviewTests: XCTestCase {
 
     // MARK: Snapshot schema isolation
 
+    // MARK: Slice Q — empty-state copy
+
+    func testEmptyStateCopyReferencesPreviewWhenPreviewWillRender() {
+        let copy = ReviewCapturedEmptyStateCopy.compute(
+            previewWillRender: true,
+            defaultSubtitle: "Notation unavailable for this take."
+        )
+        XCTAssertEqual(copy.title, "No captured notation yet")
+        XCTAssertTrue(copy.referencesPreview,
+                      "when preview will render the subtitle must reference it")
+        // Subtitle must explicitly say: (a) nothing was saved/created
+        // for this take, (b) the preview is below, (c) it's diagnostics
+        // / not exported.
+        let lower = copy.subtitle.lowercased()
+        XCTAssertTrue(lower.contains("no saved notation") || lower.contains("not saved"),
+                      "subtitle must tell the user no saved notation was created")
+        XCTAssertTrue(lower.contains("preview") && lower.contains("below"),
+                      "subtitle must point at the preview below")
+        XCTAssertTrue(lower.contains("not part of exported") || lower.contains("not exported"),
+                      "subtitle must clarify the preview is not exported")
+        XCTAssertTrue(lower.contains("diagnostic") || lower.contains("uncertain"),
+                      "subtitle must convey the preview is uncertain / diagnostic")
+    }
+
+    func testEmptyStateCopyFallsBackToDefaultSubtitleWhenNoPreview() {
+        let defaultMsg = "Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved."
+        let copy = ReviewCapturedEmptyStateCopy.compute(
+            previewWillRender: false,
+            defaultSubtitle: defaultMsg
+        )
+        XCTAssertEqual(copy.title, "No captured notation yet",
+                       "title is stable — only the subtitle ever changes")
+        XCTAssertEqual(copy.subtitle, defaultMsg,
+                       "no-preview branch must pass the existing default subtitle through unchanged")
+        XCTAssertFalse(copy.referencesPreview)
+    }
+
+    func testEmptyStateCopyTitleIsStableAcrossBranches() {
+        // The user is supposed to read the title and immediately know
+        // "I have no captured take". The branching is purely in the
+        // subtitle — title must not drift between modes.
+        let a = ReviewCapturedEmptyStateCopy.compute(
+            previewWillRender: true,
+            defaultSubtitle: "A"
+        )
+        let b = ReviewCapturedEmptyStateCopy.compute(
+            previewWillRender: false,
+            defaultSubtitle: "B"
+        )
+        XCTAssertEqual(a.title, b.title)
+    }
+
+    /// Slice Q must not modify any other Review branch. We can't compile
+    /// a SwiftUI tree from a SwiftPM test, but we CAN assert that the
+    /// helper exposes only the strings it claims to expose — anyone
+    /// extending it to start gating captured-present rendering would
+    /// have to add a new field, which a brittle reflection test catches.
+    func testEmptyStateCopyHasNoCapturedPresentSurface() {
+        let copy = ReviewCapturedEmptyStateCopy.compute(
+            previewWillRender: false,
+            defaultSubtitle: "anything"
+        )
+        let m = Mirror(reflecting: copy)
+        let names = Set(m.children.compactMap(\.label))
+        XCTAssertEqual(names, ["title", "subtitle", "referencesPreview"],
+                       "if a captured-present field shows up here, Slice Q has overreached")
+    }
+
     func testPreviewDoesNotReferenceAnyDetectedNotationSnapshotShape() throws {
         // Slice P contract: this preview type must not depend on
         // `CaptureCore.DetectedNotationSnapshot` so that changing the
