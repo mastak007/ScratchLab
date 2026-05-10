@@ -77,6 +77,15 @@ struct CLIArguments {
     var maxIterations: Int = 50
     var predictionWindowSize: Int = 60
     var balanceClasses: Bool = false
+
+    // Slice D — evaluate mode
+    var evaluateWindowsPath: String?
+    var modelPath: String?
+    var trainingReportPath: String?
+    var evaluationOutPath: String?
+    var weakClassThreshold: Double = 0.7
+    var topConfusions: Int = 20
+    var lowConfidenceThreshold: Double = 0.5
 }
 
 enum CLIParseOutcome {
@@ -198,6 +207,40 @@ func parseArguments(_ argv: [String]) -> CLIParseOutcome {
             args.predictionWindowSize = n
         case "--balance-classes":
             args.balanceClasses = true
+        case "--evaluate-action-classifier":
+            i += 1
+            guard i < argv.count else { return .error("--evaluate-action-classifier needs a value") }
+            args.evaluateWindowsPath = argv[i]
+        case "--model":
+            i += 1
+            guard i < argv.count else { return .error("--model needs a value") }
+            args.modelPath = argv[i]
+        case "--training-report":
+            i += 1
+            guard i < argv.count else { return .error("--training-report needs a value") }
+            args.trainingReportPath = argv[i]
+        case "--evaluation-out":
+            i += 1
+            guard i < argv.count else { return .error("--evaluation-out needs a value") }
+            args.evaluationOutPath = argv[i]
+        case "--weak-class-threshold":
+            i += 1
+            guard i < argv.count, let v = Double(argv[i]), v >= 0, v <= 1 else {
+                return .error("--weak-class-threshold needs a value in [0.0, 1.0]")
+            }
+            args.weakClassThreshold = v
+        case "--top-confusions":
+            i += 1
+            guard i < argv.count, let n = Int(argv[i]), n >= 0 else {
+                return .error("--top-confusions needs a non-negative integer")
+            }
+            args.topConfusions = n
+        case "--low-confidence-threshold":
+            i += 1
+            guard i < argv.count, let v = Double(argv[i]), v >= 0, v <= 1 else {
+                return .error("--low-confidence-threshold needs a value in [0.0, 1.0]")
+            }
+            args.lowConfidenceThreshold = v
         case "-h", "--help":
             return .error(usage())
         default:
@@ -246,6 +289,16 @@ func usage() -> String {
                                   be outside the repo unless
                                   --force-inside-repo is set.
 
+      --evaluate-action-classifier <windows-dir>
+        --model <path-to-.mlmodel> --evaluation-out <dir>
+                                  (macOS only.) Run the trained model over
+                                  every window in <windows-dir> and write
+                                  ScratchActionClassifier.evaluation-report.json
+                                  plus ScratchActionClassifier.confusion-
+                                  matrix.csv into the evaluation-out
+                                  directory. Output dir must be outside the
+                                  repo unless --force-inside-repo is set.
+
     Common options:
       --fps <number>              Frame sample rate for extraction. Default 30.
       --limit-per-class <int>     Extract at most N clips per class (sorted
@@ -283,6 +336,20 @@ func usage() -> String {
                                      clips per class to the smallest class
                                      count. Off by default — imbalance is
                                      reported instead.
+
+    Evaluate options:
+      --training-report <path>       Path to ScratchActionClassifier.training-
+                                     report.json. When provided, the
+                                     evaluator reproduces the train/val
+                                     split (deterministic, same seed) and
+                                     reports leakage status.
+      --weak-class-threshold <f>     Per-class F1 threshold below which a
+                                     class is flagged as weak. Default 0.7.
+      --top-confusions <n>           How many top mis-prediction pairs to
+                                     surface. Default 20.
+      --low-confidence-threshold <f> Predictions whose probability is below
+                                     this are flagged in the report.
+                                     Default 0.5.
 
       -h, --help                  Show this help.
 
@@ -698,6 +765,155 @@ func runTrainMode(windowsPath: String, args: CLIArguments) -> Never {
     #endif
 }
 
+// MARK: - Evaluate mode (Slice D, macOS only)
+
+func runEvaluateMode(windowsPath: String, args: CLIArguments) -> Never {
+    let windowsURL = URL(fileURLWithPath: windowsPath, isDirectory: true)
+    guard let modelPath = args.modelPath else {
+        writeStderr("error: --model is required with --evaluate-action-classifier\n")
+        exit(2)
+    }
+    guard let evalOutPath = args.evaluationOutPath else {
+        writeStderr("error: --evaluation-out is required with --evaluate-action-classifier\n")
+        exit(2)
+    }
+    let modelURL = URL(fileURLWithPath: modelPath)
+    let outURL = URL(fileURLWithPath: evalOutPath, isDirectory: true)
+
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    if let gitRoot = findGitRoot(from: cwd),
+       pathIsInside(outURL, of: gitRoot),
+       !args.forceInsideRepo {
+        writeStderr(
+            "error: --evaluation-out is inside the git working tree (\(gitRoot.path)).\n"
+            + "       Pass --force-inside-repo to override, or pick an external path.\n"
+        )
+        exit(2)
+    }
+
+    let trainingReportURL = args.trainingReportPath.map { URL(fileURLWithPath: $0) }
+
+    print("Model:             \(modelURL.path)")
+    print("Windows:           \(windowsURL.path)")
+    print("Output:            \(outURL.path)")
+    if let url = trainingReportURL {
+        print("Training report:   \(url.path)")
+    } else {
+        print("Training report:   (not provided — leakage check skipped)")
+    }
+    print("Weak threshold:    \(args.weakClassThreshold)")
+    print("Top confusions:    \(args.topConfusions)")
+    print("")
+
+    #if os(macOS)
+    let config = ScratchActionClassifierEvaluator.Configuration(
+        modelURL: modelURL,
+        windowsDirectory: windowsURL,
+        outputDirectory: outURL,
+        trainingReportURL: trainingReportURL,
+        weakClassThreshold: args.weakClassThreshold,
+        topConfusions: args.topConfusions,
+        lowConfidenceThreshold: args.lowConfidenceThreshold,
+        modelFilename: "ScratchActionClassifier"
+    )
+
+    print("Evaluating… (loading model and running predictions)")
+    let artifacts: ScratchActionClassifierEvaluator.Artifacts
+    do {
+        artifacts = try ScratchActionClassifierEvaluator().evaluate(config)
+    } catch {
+        writeStderr("evaluation failed: \(error)\n")
+        exit(1)
+    }
+    let report = artifacts.report
+
+    print("")
+    print("Report written:    \(artifacts.reportURL.path)")
+    print("Confusion CSV:     \(artifacts.confusionMatrixCsvURL.path)")
+    print("Total windows:     \(report.totalWindowsEvaluated)")
+    print(String(format: "Overall accuracy:  %.2f%%", report.overallAccuracy * 100))
+    print("Evaluation mode:   \(report.evaluationMode.rawValue)")
+    if let train = report.trainOverlapClipCount,
+       let val = report.validationOverlapClipCount {
+        print("Train clips seen:  \(train)   Val clips seen: \(val)")
+    }
+    print("Duration:          " + String(format: "%.2f s", report.evaluationDurationSeconds))
+
+    print("")
+    print("Per-class precision / recall / F1 / support:")
+    let pct = { (v: Double) -> String in String(format: "%.2f%%", 100 * v) }
+    for cls in report.perClassMetrics.keys.sorted() {
+        guard let m = report.perClassMetrics[cls] else { continue }
+        let pad = String(repeating: " ", count: max(0, 22 - cls.count))
+        print("  \(cls)\(pad) p=\(pct(m.precision))  r=\(pct(m.recall))"
+            + "  f1=\(pct(m.f1))  n=\(m.support)")
+    }
+
+    if !report.weakClasses.isEmpty {
+        print("")
+        let thresholdStr = pct(report.weakClassThreshold)
+        print("Weak classes (F1 < \(thresholdStr)): "
+            + report.weakClasses.joined(separator: ", "))
+    } else {
+        print("")
+        print("Weak classes: none below F1 threshold "
+            + pct(report.weakClassThreshold))
+    }
+
+    if !report.topConfusions.isEmpty {
+        print("")
+        print("Top confusions:")
+        for cell in report.topConfusions {
+            print("  \(cell.actual) → \(cell.predicted): \(cell.count)")
+        }
+    }
+
+    if let lowConf = report.lowConfidencePredictions, !lowConf.isEmpty {
+        print("")
+        let pct = pct(report.lowConfidenceThreshold)
+        print("Low-confidence predictions (probability < \(pct)): "
+            + "\(lowConf.count) (top 5 shown)")
+        for p in lowConf.prefix(5) {
+            print("  \(p.sourceFile)#\(p.windowIndex) actual=\(p.actual)"
+                + " predicted=\(p.predicted)"
+                + " conf=" + String(format: "%.2f", p.confidence))
+        }
+    } else if report.lowConfidencePredictions != nil {
+        print("")
+        print("Low-confidence predictions: none below threshold "
+            + pct(report.lowConfidenceThreshold))
+    }
+
+    if !report.leakageWarnings.isEmpty {
+        print("")
+        print("Leakage / quality warnings (\(report.leakageWarnings.count)):")
+        for w in report.leakageWarnings {
+            print("  ! \(w)")
+        }
+    }
+
+    print("")
+    print("Recommendation:")
+    print("  readyForRuntimeExperiment: \(report.recommendation.readyForRuntimeExperiment)")
+    print("  readyForAppBundle:         \(report.recommendation.readyForAppBundle)")
+    print("  reasons:")
+    for r in report.recommendation.reasons {
+        print("    - \(r)")
+    }
+    if !report.recommendation.suggestedNextActions.isEmpty {
+        print("  suggested next actions:")
+        for a in report.recommendation.suggestedNextActions {
+            print("    - \(a)")
+        }
+    }
+
+    exit(0)
+    #else
+    writeStderr("error: evaluation is only available on macOS\n")
+    exit(1)
+    #endif
+}
+
 // MARK: - Mode dispatch
 
 let parsedArgs: CLIArguments
@@ -709,17 +925,20 @@ case .error(let message):
 }
 
 // Mutual exclusion: at most one of --audit-cache, --build-windows,
-// --train-action-classifier, --validate-only may be set.
+// --train-action-classifier, --evaluate-action-classifier, --validate-only
+// may be set.
 let modeFlagsSet = [
     parsedArgs.auditCachePath != nil,
     parsedArgs.buildWindowsCachePath != nil,
     parsedArgs.trainWindowsPath != nil,
+    parsedArgs.evaluateWindowsPath != nil,
     parsedArgs.validateOnly,
 ].filter { $0 }.count
 if modeFlagsSet > 1 {
     writeStderr(
         "error: --audit-cache, --build-windows, --train-action-classifier,"
-        + " and --validate-only are mutually exclusive — pick one.\n"
+        + " --evaluate-action-classifier, and --validate-only are mutually"
+        + " exclusive — pick one.\n"
     )
     exit(2)
 }
@@ -732,6 +951,9 @@ if let buildPath = parsedArgs.buildWindowsCachePath {
 }
 if let trainWindowsPath = parsedArgs.trainWindowsPath {
     runTrainMode(windowsPath: trainWindowsPath, args: parsedArgs)
+}
+if let evalWindowsPath = parsedArgs.evaluateWindowsPath {
+    runEvaluateMode(windowsPath: evalWindowsPath, args: parsedArgs)
 }
 
 guard let datasetPath = parsedArgs.datasetPath else {
