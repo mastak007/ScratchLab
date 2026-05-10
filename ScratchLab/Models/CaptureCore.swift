@@ -87,8 +87,22 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
     @Published private(set) var notationTickRateHz: Double = 0
     @Published private(set) var coachLastUpdateDurationMS: Double = 0
 
+    /// Slice O — diagnostics-only summary of audio-onset notation
+    /// candidates produced by `AudioOnsetDetector` against the recent
+    /// audio stream. Read-only from outside; never gates Practice,
+    /// Review, scoring, export, or notation rendering.
+    @Published private(set) var audioOnsetSummary: NotationCandidateDiagnosticsSummary = .empty
+
     private var notationTickWindowStartedAt: CFTimeInterval = 0
     private var notationTickCount = 0
+
+    private let audioOnsetAccumulator = NotationCandidateAccumulator()
+    private let audioOnsetQueue = DispatchQueue(
+        label: "com.machelpnz.scratchlab.diagnostics.audioOnset",
+        qos: .utility
+    )
+    private let audioOnsetSummaryInterval: TimeInterval = 0.20  // 5 Hz max
+    private var audioOnsetLastSummaryAt: CFTimeInterval = 0
 
     private init() {}
 
@@ -117,6 +131,40 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
         notationTickRateHz = 0
         notationTickWindowStartedAt = 0
         notationTickCount = 0
+    }
+
+    /// Slice O — feed audio samples into the diagnostic accumulator.
+    /// Throttles published summary updates to `audioOnsetSummaryInterval`
+    /// so the @Published property doesn't churn at audio-packet rate.
+    /// Safe to call from any thread.
+    func recordAudioSamplesForOnsetDiagnostics(_ samples: [Float], sampleRate: Double) {
+        guard !samples.isEmpty, sampleRate > 0 else { return }
+        audioOnsetQueue.async { [weak self] in
+            guard let self else { return }
+            self.audioOnsetAccumulator.pushSamples(samples, sampleRate: sampleRate)
+            let now = CACurrentMediaTime()
+            if now - self.audioOnsetLastSummaryAt < self.audioOnsetSummaryInterval {
+                return
+            }
+            self.audioOnsetLastSummaryAt = now
+            let summary = self.audioOnsetAccumulator.currentSummary()
+            DispatchQueue.main.async { [weak self] in
+                self?.audioOnsetSummary = summary
+            }
+        }
+    }
+
+    /// Slice O — clear the accumulator and reset the published summary.
+    /// Safe to call from any thread.
+    func resetAudioOnsetDiagnostics() {
+        audioOnsetQueue.async { [weak self] in
+            guard let self else { return }
+            self.audioOnsetAccumulator.reset()
+            self.audioOnsetLastSummaryAt = 0
+            DispatchQueue.main.async { [weak self] in
+                self?.audioOnsetSummary = .empty
+            }
+        }
     }
 }
 

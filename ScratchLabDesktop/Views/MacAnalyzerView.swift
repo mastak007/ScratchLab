@@ -834,6 +834,7 @@ struct MacAnalyzerView: View {
                 seratoScreenCard
                     .disabled(captureEngine.isRoutineRecording)
                 scratchCard
+                audioOnsetDiagnosticsCard
             }
         case .cameraDeck:
             VStack(alignment: .leading, spacing: 22) {
@@ -4762,6 +4763,90 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// Slice O — diagnostics-only readout. Displays the latest summary of
+    /// notation candidates produced from the live audio envelope by
+    /// AudioOnsetDetector. Read-only: nothing here gates Practice,
+    /// Review, scoring, export, or notation rendering.
+    private var audioOnsetDiagnosticsCard: some View {
+        let summary = runtimeDiagnostics.audioOnsetSummary
+        let identityLabel = summary.isClassified ? "classified" : "not classified"
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Audio Onset Candidates")
+                    .font(.headline)
+                Spacer()
+                Button("Reset") {
+                    runtimeDiagnostics.resetAudioOnsetDiagnostics()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                onsetDiagnosticRow(
+                    "Candidates",
+                    String(summary.candidateCount)
+                )
+                onsetDiagnosticRow(
+                    "First",
+                    summary.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                )
+                onsetDiagnosticRow(
+                    "Last",
+                    summary.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                )
+                onsetDiagnosticRow(
+                    "Strongest",
+                    summary.strongestStrength > 0
+                        ? String(format: "%.2f", summary.strongestStrength)
+                        : "—"
+                )
+                onsetDiagnosticRow(
+                    "Mean strength",
+                    summary.meanStrength > 0
+                        ? String(format: "%.2f", summary.meanStrength)
+                        : "—"
+                )
+                onsetDiagnosticRow(
+                    "Silence gaps",
+                    String(summary.silenceGapCount)
+                )
+                onsetDiagnosticRow(
+                    "Uncertain",
+                    String(summary.uncertainCount)
+                )
+                onsetDiagnosticRow(
+                    "Identity",
+                    identityLabel
+                )
+                onsetDiagnosticRow(
+                    "Envelope",
+                    String(format: "%d frames · %.1fs",
+                           summary.envelopeFrameCount,
+                           summary.envelopeDurationSeconds)
+                )
+            }
+
+            Text("Diagnostics-only. Audio-onset timing is independent of the scratch classifier; low classifier confidence does not delete candidates.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func onsetDiagnosticRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        }
     }
 
     private var companionCard: some View {
