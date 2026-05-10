@@ -169,6 +169,8 @@
 		A5000073 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
 		A5000074 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
 		A5000075 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
+		A5000066 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
+		A5000076 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -328,6 +330,7 @@
 		A5000053 /* AudioOnsetDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOnsetDetector.swift; sourceTree = "<group>"; };
 		A5000054 /* NotationCandidateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateBuilder.swift; sourceTree = "<group>"; };
 		A5000055 /* NotationCandidateDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateDiagnostics.swift; sourceTree = "<group>"; };
+		A5000056 /* ReviewAudioOnsetPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewAudioOnsetPreview.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -542,6 +545,7 @@
 				A5000053 /* AudioOnsetDetector.swift */,
 				A5000054 /* NotationCandidateBuilder.swift */,
 				A5000055 /* NotationCandidateDiagnostics.swift */,
+				A5000056 /* ReviewAudioOnsetPreview.swift */,
 			);
 			path = ML;
 			sourceTree = "<group>";
@@ -888,6 +892,7 @@
 				A5000063 /* AudioOnsetDetector.swift in Sources */,
 				A5000064 /* NotationCandidateBuilder.swift in Sources */,
 				A5000065 /* NotationCandidateDiagnostics.swift in Sources */,
+				A5000066 /* ReviewAudioOnsetPreview.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
@@ -959,6 +964,7 @@
 				A5000073 /* AudioOnsetDetector.swift in Sources */,
 				A5000074 /* NotationCandidateBuilder.swift in Sources */,
 				A5000075 /* NotationCandidateDiagnostics.swift in Sources */,
+				A5000076 /* ReviewAudioOnsetPreview.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {

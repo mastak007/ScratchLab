@@ -2942,12 +2942,89 @@ struct MacAnalyzerView: View {
 
                 reviewTargetNotationStageCard
                 reviewCapturedNotationStageCard
+                reviewAudioOnsetPreviewStageCard
                 reviewSummaryFooterCard
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Color.black)
+    }
+
+    /// Slice P — Review-only audio-onset preview card. Diagnostic surface
+    /// only: never overwrites captured notation, never participates in
+    /// scoring or export. Hides itself when there's nothing useful to
+    /// show (`preview.shouldRender == false`).
+    @ViewBuilder
+    private var reviewAudioOnsetPreviewStageCard: some View {
+        let preview = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: currentRoutineNotationSnapshot?.hasDetectedEvents ?? false,
+            summary: runtimeDiagnostics.audioOnsetSummary
+        )
+        if preview.shouldRender {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(preview.headerText)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 0)
+                    Text("Preview")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
+                            in: Capsule()
+                        )
+                }
+                Text(preview.subtitleText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.66))
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    reviewAudioOnsetPreviewRow(
+                        "Timing candidates",
+                        String(preview.timingCandidateCount)
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "First",
+                        preview.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Last",
+                        preview.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Uncertain",
+                        String(preview.uncertainCount)
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Identity",
+                        preview.identityLabel
+                    )
+                }
+                Text(preview.footerDisclaimer)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    private func reviewAudioOnsetPreviewRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.66))
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+        }
     }
 
     private var reviewTargetNotationStageCard: some View {
