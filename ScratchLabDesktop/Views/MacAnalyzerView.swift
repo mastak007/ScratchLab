@@ -647,7 +647,7 @@ struct MacAnalyzerView: View {
                     Text("Demo")
                         .font(.system(size: 24, weight: .semibold))
 
-                    Text("Hear the Baby Scratch reference and watch the coach react in real time.")
+                    Text("Hear the Baby Scratch reference and watch the coach demonstrate the move.")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -4748,7 +4748,7 @@ struct MacAnalyzerView: View {
                     Text("Last match: \(detection.scratchName)")
                         .font(.system(size: 12, weight: .semibold))
 
-                    Text("Accuracy \(Int(detection.accuracy))%  |  Confidence \(Int(detection.confidence))%")
+                    Text("Estimated accuracy \(Int(detection.accuracy))%  |  Estimated confidence \(Int(detection.confidence))%")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
 
@@ -4975,7 +4975,7 @@ struct MacAnalyzerView: View {
                     color: captureEngine.handMotionState.color
                 )
                 testLabMetricBadge(
-                    title: "Conf",
+                    title: "Est. Conf",
                     value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
                     color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
                 )
@@ -5179,7 +5179,7 @@ struct MacAnalyzerView: View {
                     color: captureEngine.visibleStarCount == 0 ? .secondary : .green
                 )
                 testLabMetricBadge(
-                    title: "Conf",
+                    title: "Est. Conf",
                     value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
                     color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
                 )
@@ -5212,7 +5212,7 @@ struct MacAnalyzerView: View {
 
             if let detection = captureEngine.lastScratchDetection {
                 Label(
-                    "Latest read: \(detection.scratchName) at \(Int(detection.accuracy))% accuracy and \(Int(detection.confidence))% confidence.",
+                    "Latest read: \(detection.scratchName) at \(Int(detection.accuracy))% estimated accuracy and \(Int(detection.confidence))% estimated confidence.",
                     systemImage: "checkmark.seal.fill"
                 )
                 .font(.system(size: 12, weight: .semibold))
