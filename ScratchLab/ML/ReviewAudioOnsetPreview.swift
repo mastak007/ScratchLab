@@ -299,7 +299,7 @@ public enum ReviewAudioOnsetSource: String, Codable, Equatable, Sendable {
     public var label: String {
         switch self {
         case .selectedTakeSavedEvents:
-            return "selected take saved audio events"
+            return "selected take audio"
         case .liveDiagnostics:
             return "live diagnostics"
         case .unavailable:

@@ -494,6 +494,14 @@ final class ReviewAudioOnsetPreviewTests: XCTestCase {
             ReviewAudioOnsetSource.liveDiagnostics.label,
             ReviewAudioOnsetSource.unavailable.label,
         ]
+        XCTAssertEqual(
+            labels,
+            [
+                "selected take audio",
+                "live diagnostics",
+                "no take audio available",
+            ]
+        )
         XCTAssertEqual(Set(labels).count, labels.count, "source labels must be distinct")
         for l in labels {
             XCTAssertFalse(l.isEmpty)
