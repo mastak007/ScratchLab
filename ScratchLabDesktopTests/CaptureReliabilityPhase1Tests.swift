@@ -9525,6 +9525,24 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         )
     }
 
+    // Slice V.3 - the user-visible export folder name must use a
+    // ScratchLab-branded path, not the internal "CXL_Dataset" label.
+    // Internal Swift type/symbol names that contain "CXL" are intentionally
+    // left unchanged because they are not surfaced to end users on disk.
+    func testNotationExportFolderUsesScratchLabBrandedName() throws {
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/CXLNotationCapture.swift")
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            captureSource.contains("\"CXL_Dataset\""),
+            "Exported notation folder must not be named 'CXL_Dataset' on disk"
+        )
+        XCTAssertTrue(
+            captureSource.contains("\"ScratchLab_Notation_Capture\""),
+            "Exported notation folder must be named 'ScratchLab_Notation_Capture' on disk"
+        )
+    }
+
     // Slice V.2 - user-facing copy must not promise real-time AI behaviour
     // for the scripted coach demo, and Practice metrics must qualify
     // accuracy/confidence as estimated. Internal identifiers and comments
