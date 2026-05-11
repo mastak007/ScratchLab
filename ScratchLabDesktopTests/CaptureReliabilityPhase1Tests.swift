@@ -9525,6 +9525,32 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         )
     }
 
+    // Slice V.2 - user-facing copy must not promise real-time AI behaviour
+    // for the scripted coach demo, and Practice metrics must qualify
+    // accuracy/confidence as estimated. Internal identifiers and comments
+    // are not user-facing and are not guarded here.
+    func testPracticeCopyAvoidsRealTimeCoachClaimAndQualifiesEstimates() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let macSource = try String(contentsOf: macURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            macSource.contains("react in real time"),
+            "Practice/Demo copy must not claim the coach reacts in real time"
+        )
+        XCTAssertTrue(
+            macSource.contains("estimated accuracy"),
+            "Practice metric copy must qualify accuracy as estimated"
+        )
+        XCTAssertTrue(
+            macSource.contains("estimated confidence"),
+            "Practice metric copy must qualify confidence as estimated"
+        )
+        XCTAssertTrue(
+            macSource.contains("\"Est. Conf\""),
+            "Practice confidence badge must use the estimated qualifier"
+        )
+    }
+
     // Slice U.2 - internal dev/handoff/planning docs must not be bundled.
     // Scans the PBXResourcesBuildPhase section of project.pbxproj and fails
     // if any forbidden file or directory appears as a resource entry. The
