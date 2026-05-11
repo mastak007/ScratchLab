@@ -1429,6 +1429,87 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.mixerMidiEvents.count ?? 0
     }
 
+    /// Slice S — bundles the source-resolved preview state needed by
+    /// both the Audio Onset Preview card and the captured-empty pane's
+    /// "preview-will-render" decision. Computed each render — the cost
+    /// is negligible (small array map + cap).
+    private struct ReviewAudioOnsetCardData {
+        let preview: ReviewAudioOnsetPreview
+        let marks: [TimeInterval]
+        let rawDisclosureCount: Int
+        let rawDisclosureLabel: String
+    }
+
+    /// Slice S — pick the take-scoped pipeline when a take is selected
+    /// with saved audio events, otherwise fall back to live diagnostics
+    /// (no take selected) or hide the preview (selected take but no
+    /// audio events). Never feeds live data into a take-scoped view.
+    private var reviewAudioOnsetCardData: ReviewAudioOnsetCardData {
+        let snapshot = currentRoutineNotationSnapshot
+        let capturedHasEvents = snapshot?.hasDetectedEvents ?? false
+        let hasSelectedTake = currentRoutineArtifactStatus != nil
+
+        let takeEvents = (snapshot?.audioEvents ?? []).map {
+            ReviewAudioOnsetTakeEvent(
+                startTime: $0.startTime,
+                peakLevel: $0.peakLevel
+            )
+        }
+
+        let liveReviewSummary = runtimeDiagnostics.audioOnsetReviewSummary
+        let liveRawSummary = runtimeDiagnostics.audioOnsetSummary
+        let liveTiming = liveReviewSummary.onsetCount + liveReviewSummary.strokeCount
+            + liveReviewSummary.uncertainCount + liveReviewSummary.cutCount
+        let liveRawTiming = liveRawSummary.onsetCount + liveRawSummary.strokeCount
+            + liveRawSummary.uncertainCount + liveRawSummary.cutCount
+
+        let source = ReviewAudioOnsetSourceResolver.resolve(
+            hasSelectedTake: hasSelectedTake,
+            takeAudioEventCount: takeEvents.count,
+            liveTimingCandidateCount: liveTiming
+        )
+
+        switch source {
+        case .selectedTakeSavedEvents:
+            let takeSummary = ReviewAudioOnsetMarksBuilder.summarizeTakeEvents(takeEvents)
+            let preview = ReviewAudioOnsetPreview.compute(
+                capturedHasEvents: capturedHasEvents,
+                takeSummary: takeSummary
+            )
+            let marks = ReviewAudioOnsetMarksBuilder.buildFromTakeEvents(takeEvents)
+            return ReviewAudioOnsetCardData(
+                preview: preview,
+                marks: marks,
+                rawDisclosureCount: takeSummary.rawEventCount,
+                rawDisclosureLabel: "Raw (saved)"
+            )
+        case .liveDiagnostics:
+            let preview = ReviewAudioOnsetPreview.compute(
+                capturedHasEvents: capturedHasEvents,
+                summary: liveReviewSummary,
+                source: .liveDiagnostics
+            )
+            return ReviewAudioOnsetCardData(
+                preview: preview,
+                marks: runtimeDiagnostics.audioOnsetReviewMarks,
+                rawDisclosureCount: liveRawTiming,
+                rawDisclosureLabel: "Raw (Advanced)"
+            )
+        case .unavailable:
+            let preview = ReviewAudioOnsetPreview.compute(
+                capturedHasEvents: capturedHasEvents,
+                summary: .empty,
+                source: .unavailable
+            )
+            return ReviewAudioOnsetCardData(
+                preview: preview,
+                marks: [],
+                rawDisclosureCount: 0,
+                rawDisclosureLabel: "Raw"
+            )
+        }
+    }
+
     private var reviewArtifactStatusSummary: String {
         guard let status = currentRoutineArtifactStatus else {
             return "No take to review yet"
@@ -2957,19 +3038,14 @@ struct MacAnalyzerView: View {
     /// show (`preview.shouldRender == false`).
     @ViewBuilder
     private var reviewAudioOnsetPreviewStageCard: some View {
-        // Slice R0 — Review uses the filtered review summary. The raw
-        // summary (Advanced surface) is surfaced as a small disclosure
-        // row inside this card so reviewers can see how aggressive the
-        // gate was without leaving Review.
-        let reviewSummary = runtimeDiagnostics.audioOnsetReviewSummary
-        let rawSummary = runtimeDiagnostics.audioOnsetSummary
-        let rawTimingCount = rawSummary.onsetCount + rawSummary.strokeCount
-            + rawSummary.uncertainCount + rawSummary.cutCount
-        let preview = ReviewAudioOnsetPreview.compute(
-            capturedHasEvents: currentRoutineNotationSnapshot?.hasDetectedEvents ?? false,
-            summary: reviewSummary
-        )
-        let reviewMarks = runtimeDiagnostics.audioOnsetReviewMarks
+        // Slice S — input source is resolved upstream in
+        // `reviewAudioOnsetCardData`. When a take is selected with
+        // saved audio events the preview is take-scoped; otherwise it
+        // falls back to live diagnostics (no take) or hides
+        // (selected take with no audio events).
+        let cardData = reviewAudioOnsetCardData
+        let preview = cardData.preview
+        let marks = cardData.marks
         if preview.shouldRender {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
@@ -2993,13 +3069,17 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 4) {
                     reviewAudioOnsetPreviewRow(
+                        "Source",
+                        preview.source.label
+                    )
+                    reviewAudioOnsetPreviewRow(
                         "Timing candidates",
                         String(preview.timingCandidateCount)
                     )
-                    if rawTimingCount > preview.timingCandidateCount {
+                    if cardData.rawDisclosureCount > preview.timingCandidateCount {
                         reviewAudioOnsetPreviewRow(
-                            "Raw (Advanced)",
-                            "\(rawTimingCount) onsets · filtered for Review"
+                            cardData.rawDisclosureLabel,
+                            "\(cardData.rawDisclosureCount) onsets · filtered for Review"
                         )
                     }
                     reviewAudioOnsetPreviewRow(
@@ -3019,9 +3099,9 @@ struct MacAnalyzerView: View {
                         preview.identityLabel
                     )
                 }
-                if preview.shouldRenderTimelineStrip(marksCount: reviewMarks.count) {
+                if preview.shouldRenderTimelineStrip(marksCount: marks.count) {
                     reviewAudioOnsetTimelineStrip(
-                        marks: reviewMarks,
+                        marks: marks,
                         firstTimestamp: preview.firstTimestamp,
                         lastTimestamp: preview.lastTimestamp
                     )
@@ -3176,10 +3256,11 @@ struct MacAnalyzerView: View {
                     .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity)
             } else {
-                let emptyPreview = ReviewAudioOnsetPreview.compute(
-                    capturedHasEvents: false,
-                    summary: runtimeDiagnostics.audioOnsetReviewSummary
-                )
+                // Slice S — share the same source-resolved preview so
+                // the "preview below" subtitle and the actual card stay
+                // in sync (e.g. captured-empty + take-selected + no
+                // audio events → both decide the preview won't render).
+                let emptyPreview = reviewAudioOnsetCardData.preview
                 let emptyCopy = ReviewCapturedEmptyStateCopy.compute(
                     previewWillRender: emptyPreview.shouldRender,
                     defaultSubtitle: reviewNotationAvailabilityMessage

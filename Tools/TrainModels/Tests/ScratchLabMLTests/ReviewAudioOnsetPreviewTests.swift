@@ -185,7 +185,8 @@ final class ReviewAudioOnsetPreviewTests: XCTestCase {
                 uncertainCount: 0, cutCount: 0, silenceGapCount: 0,
                 firstTimestamp: nil, lastTimestamp: nil,
                 isClassified: false, identityLabel: "not classified",
-                headerText: "", subtitleText: "", footerDisclaimer: ""
+                headerText: "", subtitleText: "", footerDisclaimer: "",
+                source: .liveDiagnostics
             )
             XCTAssertEqual(p.shouldRender, expected, "mode \(mode) -> shouldRender \(expected)")
         }
@@ -348,8 +349,8 @@ final class ReviewAudioOnsetPreviewTests: XCTestCase {
 
     func testTimelineStripPredicateOnlyDependsOnModeAndMarksCount() {
         // The predicate signature takes only marksCount; verify that
-        // changing other summary fields under a fixed mode doesn't
-        // change the answer.
+        // changing other summary fields under a fixed mode (and same
+        // source) doesn't change the answer.
         let modeA = ReviewAudioOnsetPreview.compute(
             capturedHasEvents: false,
             summary: summary(onset: 3, first: 0.1, last: 1.0)
@@ -359,9 +360,148 @@ final class ReviewAudioOnsetPreviewTests: XCTestCase {
             summary: summary(uncertain: 3, first: 5.0, last: 9.0, isClassified: true)
         )
         XCTAssertEqual(modeA.mode, modeB.mode)
+        XCTAssertEqual(modeA.source, modeB.source)
         XCTAssertEqual(modeA.shouldRenderTimelineStrip(marksCount: 3),
                        modeB.shouldRenderTimelineStrip(marksCount: 3))
         XCTAssertEqual(modeA.shouldRenderTimelineStrip(marksCount: 0),
                        modeB.shouldRenderTimelineStrip(marksCount: 0))
+    }
+
+    // MARK: Slice S — source field, take-events compute, source-aware strip
+
+    private func takeSummary(
+        timing: Int,
+        raw: Int? = nil,
+        first: TimeInterval? = nil,
+        last: TimeInterval? = nil
+    ) -> ReviewAudioOnsetTakeSummary {
+        ReviewAudioOnsetTakeSummary(
+            timingCandidateCount: timing,
+            rawEventCount: raw ?? timing,
+            firstTimestamp: first,
+            lastTimestamp: last
+        )
+    }
+
+    func testLiveSummaryComputeDefaultsToLiveDiagnosticsSource() {
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: summary(onset: 4, first: 0.2, last: 1.5)
+        )
+        XCTAssertEqual(p.source, .liveDiagnostics,
+                       "legacy compute(capturedHasEvents:summary:) must default source to liveDiagnostics")
+    }
+
+    func testLiveSummaryComputeAcceptsExplicitUnavailableSource() {
+        // Used by the SwiftUI shell when a take is selected but has no
+        // saved events — caller still wants an empty preview surface.
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: .empty,
+            source: .unavailable
+        )
+        XCTAssertEqual(p.source, .unavailable)
+        XCTAssertEqual(p.mode, .empty)
+        XCTAssertFalse(p.shouldRender)
+    }
+
+    func testTakeSummaryComputeUsesSelectedTakeSavedEventsSource() {
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            takeSummary: takeSummary(timing: 12, raw: 30, first: 0.20, last: 4.50)
+        )
+        XCTAssertEqual(p.source, .selectedTakeSavedEvents)
+        XCTAssertEqual(p.timingCandidateCount, 12)
+        XCTAssertEqual(p.firstTimestamp, 0.20)
+        XCTAssertEqual(p.lastTimestamp, 4.50)
+        XCTAssertEqual(p.mode, .previewWhenCapturedEmpty)
+        XCTAssertTrue(p.shouldRender)
+    }
+
+    func testTakeSummaryComputeNeverPromotesEventsToClassified() {
+        // Saved audio events carry an eventKind string. The preview
+        // must NOT treat that as classifier truth — identity stays
+        // "not classified".
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            takeSummary: takeSummary(timing: 5, first: 0.1, last: 1.0)
+        )
+        XCTAssertFalse(p.isClassified)
+        XCTAssertEqual(p.identityLabel, "not classified")
+    }
+
+    func testTakeSummaryComputeAllZeroProducesEmptyMode() {
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            takeSummary: .empty
+        )
+        XCTAssertEqual(p.mode, .empty)
+        XCTAssertFalse(p.shouldRender)
+        XCTAssertEqual(p.source, .selectedTakeSavedEvents,
+                       "source field is set by the constructor regardless of mode")
+    }
+
+    func testTakeSummaryComputeWithCapturedEventsIsSupplemental() {
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true,
+            takeSummary: takeSummary(timing: 5, first: 0.2, last: 1.0)
+        )
+        XCTAssertEqual(p.mode, .capturedWithSupplementalPreview)
+        XCTAssertTrue(p.shouldRender)
+    }
+
+    func testTimelineStripAllowsSupplementalForSelectedTakeSource() {
+        // Slice S relaxation: the strip can render in supplemental mode
+        // when the source IS the saved take data (no risk of parallel-
+        // truth confusion).
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true,
+            takeSummary: takeSummary(timing: 8, first: 0.2, last: 4.5)
+        )
+        XCTAssertEqual(p.mode, .capturedWithSupplementalPreview)
+        XCTAssertEqual(p.source, .selectedTakeSavedEvents)
+        XCTAssertTrue(p.shouldRenderTimelineStrip(marksCount: 8),
+                      "strip must render for selected-take saved events even in supplemental mode")
+    }
+
+    func testTimelineStripStillHiddenInSupplementalForLiveSource() {
+        // Slice R1 invariant is preserved for the live source.
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true,
+            summary: summary(onset: 8, first: 0.2, last: 4.5)
+        )
+        XCTAssertEqual(p.mode, .capturedWithSupplementalPreview)
+        XCTAssertEqual(p.source, .liveDiagnostics)
+        XCTAssertFalse(p.shouldRenderTimelineStrip(marksCount: 8),
+                       "Slice R1 rule must still apply to liveDiagnostics source")
+    }
+
+    func testTimelineStripIsAlwaysHiddenForUnavailableSource() {
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: .empty,
+            source: .unavailable
+        )
+        XCTAssertFalse(p.shouldRenderTimelineStrip(marksCount: 80))
+        XCTAssertFalse(p.shouldRenderTimelineStrip(marksCount: 1))
+    }
+
+    func testSourceLabelStringsAreUserFacingAndDistinct() {
+        // Cheap copy lock so a future relabel can't silently produce
+        // duplicates or empty strings.
+        let labels = [
+            ReviewAudioOnsetSource.selectedTakeSavedEvents.label,
+            ReviewAudioOnsetSource.liveDiagnostics.label,
+            ReviewAudioOnsetSource.unavailable.label,
+        ]
+        XCTAssertEqual(Set(labels).count, labels.count, "source labels must be distinct")
+        for l in labels {
+            XCTAssertFalse(l.isEmpty)
+        }
+    }
+
+    func testEmptyConstantIsUnavailableSource() {
+        XCTAssertEqual(ReviewAudioOnsetPreview.empty.source, .unavailable)
+        XCTAssertEqual(ReviewAudioOnsetPreview.empty.mode, .empty)
     }
 }

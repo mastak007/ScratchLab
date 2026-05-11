@@ -74,6 +74,12 @@ public struct ReviewAudioOnsetPreview: Equatable, Sendable {
     public let subtitleText: String
     public let footerDisclaimer: String
 
+    /// Slice S — which input pipeline produced the numbers in this
+    /// preview. Drives the user-facing "Source: …" label so reviewers
+    /// can tell whether they're looking at the selected take's saved
+    /// audio events, live diagnostics, or no source at all.
+    public let source: ReviewAudioOnsetSource
+
     /// Convenience for SwiftUI — `true` when the Review surface should
     /// render the preview card at all.
     public var shouldRender: Bool {
@@ -95,35 +101,55 @@ public struct ReviewAudioOnsetPreview: Equatable, Sendable {
         true
     }
 
-    /// Slice R1 — whether the Review preview card should render a visual
-    /// timing-mark strip alongside the numeric rows.
+    /// Slice R1 / S — whether the Review preview card should render a
+    /// visual timing-mark strip alongside the numeric rows.
     ///
-    /// Rule: the strip renders only in the `.previewWhenCapturedEmpty`
-    /// mode, and only when at least one mark exists. When captured
-    /// notation has events, the strip is suppressed even though numeric
-    /// rows still appear; this is the deliberately conservative choice
-    /// — captured notation is the source of truth and lives in its own
-    /// rendering, and overlaying a parallel uncertain-strip in the same
-    /// glance invites the reviewer to read it as an alternative truth.
-    /// The numeric rows (`Timing candidates`, `Raw (Advanced)`, …) carry
-    /// the preview's information in supplemental mode without visual
-    /// equivalence to saved data.
+    /// Live-diagnostics rule (R1): the strip renders only in the
+    /// `.previewWhenCapturedEmpty` mode, and only when at least one mark
+    /// exists. When captured notation has events, the strip is
+    /// suppressed even though numeric rows still appear — captured
+    /// notation is the source of truth and lives in its own rendering,
+    /// and overlaying a parallel uncertain-strip in the same glance
+    /// invites the reviewer to read live diagnostics as an alternative
+    /// truth.
+    ///
+    /// Selected-take rule (S): when the strip is visualising the
+    /// selected take's saved audio events (not live), it is no longer a
+    /// parallel signal — it IS a view of saved data. The strip is
+    /// allowed in supplemental mode too, since there's no risk of
+    /// confusion with a different "truth."
+    ///
+    /// Unavailable: always hidden.
     public func shouldRenderTimelineStrip(marksCount: Int) -> Bool {
         guard marksCount > 0 else { return false }
-        return mode == .previewWhenCapturedEmpty
+        switch source {
+        case .liveDiagnostics:
+            return mode == .previewWhenCapturedEmpty
+        case .selectedTakeSavedEvents:
+            return mode == .previewWhenCapturedEmpty
+                || mode == .capturedWithSupplementalPreview
+        case .unavailable:
+            return false
+        }
     }
 
-    /// Compute the preview state from inputs. Pure function; no state.
+    /// Compute the preview state from a live diagnostics summary. Pure
+    /// function; no state.
     ///
     /// - Parameters:
     ///   - capturedHasEvents: result of `DetectedNotationSnapshot
     ///     .hasDetectedEvents` on the current captured snapshot, or
     ///     `false` when no snapshot exists.
     ///   - summary: latest `NotationCandidateDiagnosticsSummary` from
-    ///     `ScratchLabRuntimeDiagnostics.audioOnsetSummary`.
+    ///     `ScratchLabRuntimeDiagnostics.audioOnsetReviewSummary`.
+    ///   - source: which pipeline produced this summary. Defaults to
+    ///     `.liveDiagnostics`; callers that build preview shells from a
+    ///     selected take but happen to pass an empty `summary` (i.e. an
+    ///     "unavailable" state) should pass `.unavailable`.
     public static func compute(
         capturedHasEvents: Bool,
-        summary: NotationCandidateDiagnosticsSummary
+        summary: NotationCandidateDiagnosticsSummary,
+        source: ReviewAudioOnsetSource = .liveDiagnostics
     ) -> ReviewAudioOnsetPreview {
         let strokeLike =
             summary.onsetCount
@@ -131,18 +157,77 @@ public struct ReviewAudioOnsetPreview: Equatable, Sendable {
             + summary.uncertainCount
             + summary.cutCount
 
+        return buildPreview(
+            capturedHasEvents: capturedHasEvents,
+            timingCandidateCount: strokeLike,
+            onsetCount: summary.onsetCount,
+            strokeCount: summary.strokeCount,
+            uncertainCount: summary.uncertainCount,
+            cutCount: summary.cutCount,
+            silenceGapCount: summary.silenceGapCount,
+            firstTimestamp: summary.firstTimestamp,
+            lastTimestamp: summary.lastTimestamp,
+            isClassified: summary.isClassified,
+            source: source
+        )
+    }
+
+    /// Slice S — compute the preview state from a selected take's saved
+    /// audio events. Pure function; no state. Source is fixed to
+    /// `.selectedTakeSavedEvents`. The take summary already reflects any
+    /// strength-based cap applied by `ReviewAudioOnsetMarksBuilder`, so
+    /// `timingCandidateCount` here is the capped count, not the raw
+    /// saved-event count.
+    public static func compute(
+        capturedHasEvents: Bool,
+        takeSummary: ReviewAudioOnsetTakeSummary
+    ) -> ReviewAudioOnsetPreview {
+        return buildPreview(
+            capturedHasEvents: capturedHasEvents,
+            timingCandidateCount: takeSummary.timingCandidateCount,
+            // Saved-event candidates are treated as plain onsets — there
+            // is no per-event stroke/uncertain/cut breakdown at this
+            // layer. Reviewers see one consolidated count.
+            onsetCount: takeSummary.timingCandidateCount,
+            strokeCount: 0,
+            uncertainCount: 0,
+            cutCount: 0,
+            silenceGapCount: 0,
+            firstTimestamp: takeSummary.firstTimestamp,
+            lastTimestamp: takeSummary.lastTimestamp,
+            // Saved audio events carry an `eventKind` string but we
+            // deliberately don't promote that to a "classified" label —
+            // the preview must not imply classifier truth.
+            isClassified: false,
+            source: .selectedTakeSavedEvents
+        )
+    }
+
+    private static func buildPreview(
+        capturedHasEvents: Bool,
+        timingCandidateCount: Int,
+        onsetCount: Int,
+        strokeCount: Int,
+        uncertainCount: Int,
+        cutCount: Int,
+        silenceGapCount: Int,
+        firstTimestamp: TimeInterval?,
+        lastTimestamp: TimeInterval?,
+        isClassified: Bool,
+        source: ReviewAudioOnsetSource
+    ) -> ReviewAudioOnsetPreview {
         let mode: DisplayMode
-        if capturedHasEvents && strokeLike > 0 {
+        if capturedHasEvents && timingCandidateCount > 0 {
             mode = .capturedWithSupplementalPreview
         } else if capturedHasEvents {
             mode = .capturedOnly
-        } else if strokeLike > 0 {
+        } else if timingCandidateCount > 0 {
             mode = .previewWhenCapturedEmpty
         } else {
             mode = .empty
         }
 
-        let identity = summary.isClassified ? "classified" : "not classified"
+        let identity = isClassified ? "classified" : "not classified"
         let header: String
         let subtitle: String
         switch mode {
@@ -164,29 +249,184 @@ public struct ReviewAudioOnsetPreview: Equatable, Sendable {
 
         return ReviewAudioOnsetPreview(
             mode: mode,
-            timingCandidateCount: strokeLike,
-            onsetCount: summary.onsetCount,
-            strokeCount: summary.strokeCount,
-            uncertainCount: summary.uncertainCount,
-            cutCount: summary.cutCount,
-            silenceGapCount: summary.silenceGapCount,
-            firstTimestamp: summary.firstTimestamp,
-            lastTimestamp: summary.lastTimestamp,
-            isClassified: summary.isClassified,
+            timingCandidateCount: timingCandidateCount,
+            onsetCount: onsetCount,
+            strokeCount: strokeCount,
+            uncertainCount: uncertainCount,
+            cutCount: cutCount,
+            silenceGapCount: silenceGapCount,
+            firstTimestamp: firstTimestamp,
+            lastTimestamp: lastTimestamp,
+            isClassified: isClassified,
             identityLabel: identity,
             headerText: header,
             subtitleText: subtitle,
-            footerDisclaimer: disclaimer
+            footerDisclaimer: disclaimer,
+            source: source
         )
     }
 
     /// Empty / no-input default. Equivalent to `compute(capturedHasEvents:
-    /// false, summary: .empty)` but spelled out for the SwiftUI initial
-    /// state.
+    /// false, summary: .empty, source: .unavailable)` but spelled out
+    /// for the SwiftUI initial state.
     public static let empty = ReviewAudioOnsetPreview.compute(
         capturedHasEvents: false,
-        summary: .empty
+        summary: .empty,
+        source: .unavailable
     )
+}
+
+/// Slice S — which pipeline produced the numbers behind a Review audio-
+/// onset preview. Drives the user-facing "Source: …" label and a few
+/// behaviour switches (e.g. when the timeline strip is allowed to
+/// render).
+public enum ReviewAudioOnsetSource: String, Codable, Equatable, Sendable {
+    /// The selected take's saved `audioEvents`. Take-scoped; the source
+    /// of truth for the take's audio timing. Never live.
+    case selectedTakeSavedEvents
+
+    /// The live `ScratchLabRuntimeDiagnostics` audio-onset accumulator.
+    /// Only used when there is no selected take to scope to — otherwise
+    /// it leaks unrelated audio activity into Review.
+    case liveDiagnostics
+
+    /// No usable source. Either a take is selected but has no saved
+    /// audio events, or no take is selected and live has no activity.
+    /// The preview card hides.
+    case unavailable
+
+    /// User-facing label for the card's "Source:" row.
+    public var label: String {
+        switch self {
+        case .selectedTakeSavedEvents:
+            return "selected take saved audio events"
+        case .liveDiagnostics:
+            return "live diagnostics"
+        case .unavailable:
+            return "no take audio available"
+        }
+    }
+}
+
+/// Slice S — a minimal, library-portable audio event for the Review
+/// onset preview. Mirrors the fields of `CaptureCore
+/// .DetectedNotationAudioEvent` that the preview needs (start time and
+/// a strength proxy) without forcing the ML library to import
+/// CaptureCore's snapshot types.
+public struct ReviewAudioOnsetTakeEvent: Equatable, Sendable {
+    public let startTime: TimeInterval
+    public let peakLevel: Double
+
+    public init(startTime: TimeInterval, peakLevel: Double) {
+        self.startTime = startTime
+        self.peakLevel = peakLevel
+    }
+}
+
+/// Slice S — summary stats derived from a selected take's audio events
+/// after capping. Matches the shape `ReviewAudioOnsetPreview.compute`
+/// needs without leaking the underlying event list.
+public struct ReviewAudioOnsetTakeSummary: Equatable, Sendable {
+    /// Capped count — what the card's "Timing candidates" row shows.
+    public let timingCandidateCount: Int
+    /// Total saved-event count before the cap. Use this for the
+    /// "Raw (saved)" disclosure row when it exceeds `timingCandidateCount`.
+    public let rawEventCount: Int
+    public let firstTimestamp: TimeInterval?
+    public let lastTimestamp: TimeInterval?
+
+    public init(
+        timingCandidateCount: Int,
+        rawEventCount: Int,
+        firstTimestamp: TimeInterval?,
+        lastTimestamp: TimeInterval?
+    ) {
+        self.timingCandidateCount = timingCandidateCount
+        self.rawEventCount = rawEventCount
+        self.firstTimestamp = firstTimestamp
+        self.lastTimestamp = lastTimestamp
+    }
+
+    public static let empty = ReviewAudioOnsetTakeSummary(
+        timingCandidateCount: 0,
+        rawEventCount: 0,
+        firstTimestamp: nil,
+        lastTimestamp: nil
+    )
+}
+
+/// Slice S — picks which input pipeline the Review preview should pull
+/// from. Pure function; the caller is expected to translate the
+/// returned source into the appropriate `ReviewAudioOnsetPreview
+/// .compute(…)` overload.
+public struct ReviewAudioOnsetSourceResolver {
+    /// - Parameters:
+    ///   - hasSelectedTake: true when a take artifact is present (i.e.
+    ///     the reviewer is inspecting a recorded take, not a fresh
+    ///     diagnostic session).
+    ///   - takeAudioEventCount: number of saved audio events on the
+    ///     selected take. Zero when no take or no audio detection.
+    ///   - liveTimingCandidateCount: stroke-like count from the live
+    ///     accumulator (onset + stroke + uncertain + cut).
+    public static func resolve(
+        hasSelectedTake: Bool,
+        takeAudioEventCount: Int,
+        liveTimingCandidateCount: Int
+    ) -> ReviewAudioOnsetSource {
+        if hasSelectedTake {
+            // Take-scoped: never reach for live, even if the take has
+            // no saved audio events. Live diagnostics from a different
+            // session would be misleading here.
+            return takeAudioEventCount > 0
+                ? .selectedTakeSavedEvents
+                : .unavailable
+        }
+        // No take: live is the only signal that can populate the card.
+        return liveTimingCandidateCount > 0 ? .liveDiagnostics : .unavailable
+    }
+}
+
+/// Slice S — builds visual timing marks (and a matching summary) from a
+/// selected take's saved audio events. Mirrors the live pipeline's
+/// behaviour: cap by strength to `maxMarks`, then re-sort by timestamp
+/// so first/last semantics hold.
+public struct ReviewAudioOnsetMarksBuilder {
+    /// Same default as `NotationCandidateAccumulator.currentReviewMarks`'
+    /// cap so live and take-scoped previews can never disagree on what
+    /// "Timing candidates" means at a glance.
+    public static let defaultMaxMarks: Int = 80
+
+    /// Returns mark timestamps in ascending order, after taking the
+    /// `maxMarks` strongest events (by `peakLevel`). Returns `[]` for
+    /// empty input or `maxMarks <= 0`.
+    public static func buildFromTakeEvents(
+        _ events: [ReviewAudioOnsetTakeEvent],
+        maxMarks: Int = defaultMaxMarks
+    ) -> [TimeInterval] {
+        guard maxMarks > 0, !events.isEmpty else { return [] }
+        if events.count <= maxMarks {
+            return events.map(\.startTime).sorted()
+        }
+        let topN = events
+            .sorted { $0.peakLevel > $1.peakLevel }
+            .prefix(maxMarks)
+        return topN.map(\.startTime).sorted()
+    }
+
+    /// Build the summary stats the preview card needs — capped count,
+    /// raw count, first/last timestamps of the capped set.
+    public static func summarizeTakeEvents(
+        _ events: [ReviewAudioOnsetTakeEvent],
+        maxMarks: Int = defaultMaxMarks
+    ) -> ReviewAudioOnsetTakeSummary {
+        let marks = buildFromTakeEvents(events, maxMarks: maxMarks)
+        return ReviewAudioOnsetTakeSummary(
+            timingCandidateCount: marks.count,
+            rawEventCount: events.count,
+            firstTimestamp: marks.first,
+            lastTimestamp: marks.last
+        )
+    }
 }
 
 /// Slice Q — copy bundle for the Review "captured notation empty" pane.
