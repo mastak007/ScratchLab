@@ -9525,6 +9525,59 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         )
     }
 
+    // Slice U.2 - internal dev/handoff/planning docs must not be bundled.
+    // Scans the PBXResourcesBuildPhase section of project.pbxproj and fails
+    // if any forbidden file or directory appears as a resource entry. The
+    // test only inspects entries inside Copy Bundle Resources phases; the
+    // files may exist in the repo, they simply must not ship.
+    func testShippingTargetsDoNotBundleInternalDevDocs() throws {
+        let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
+        let source = try String(contentsOf: projectURL, encoding: .utf8)
+
+        let beginMarker = "/* Begin PBXResourcesBuildPhase section */"
+        let endMarker = "/* End PBXResourcesBuildPhase section */"
+        guard
+            let beginRange = source.range(of: beginMarker),
+            let endRange = source.range(of: endMarker, range: beginRange.upperBound..<source.endIndex)
+        else {
+            XCTFail("Could not locate PBXResourcesBuildPhase section in project.pbxproj")
+            return
+        }
+        let resourcesSection = source[beginRange.upperBound..<endRange.lowerBound]
+
+        let forbiddenNames: [String] = [
+            "TASKS.md",
+            "DEV_LOG.md",
+            "AI_HANDOFF.md",
+            "AI_HANDOFF",
+            "SOUL.md",
+            "PROFILE.md",
+            "CLAUDE.md",
+            "docs/training_dataset_plan.md",
+            "AI_CONTEXT.md",
+        ]
+
+        let inResourcesSuffix = " in Resources */"
+        let openComment = "/* "
+
+        for line in resourcesSection.split(separator: "\n") {
+            guard let suffixRange = line.range(of: inResourcesSuffix) else { continue }
+            guard let openRange = line.range(of: openComment, range: line.startIndex..<suffixRange.lowerBound) else { continue }
+            let path = String(line[openRange.upperBound..<suffixRange.lowerBound])
+
+            for forbidden in forbiddenNames {
+                let exactMatch = path == forbidden
+                let folderChild = path.hasPrefix(forbidden + "/")
+                let fileSuffix = path.hasSuffix("/" + forbidden)
+                if exactMatch || folderChild || fileSuffix {
+                    XCTFail(
+                        "Forbidden internal doc '\(forbidden)' must not appear in any Copy Bundle Resources phase. Found resource entry path '\(path)'."
+                    )
+                }
+            }
+        }
+    }
+
     // MARK: - Notation canvas
 
     func testScratchNotationCanvasViewEmptyModel() {
