@@ -159,6 +159,18 @@
 		SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */; };
 		STT0001000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */; };
 		SARF0001000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */; };
+		A5000061 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
+		A5000062 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
+		A5000063 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
+		A5000064 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
+		A5000065 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
+		A5000071 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
+		A5000072 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
+		A5000073 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
+		A5000074 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
+		A5000075 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
+		A5000066 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
+		A5000076 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -313,6 +325,12 @@
 		SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifierRegistryTests.swift; sourceTree = "<group>"; };
 		STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTypeMetadataSafetyTests.swift; sourceTree = "<group>"; };
 		SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzerReferenceFoldersTests.swift; sourceTree = "<group>"; };
+		A5000051 /* ScratchClassLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassLabel.swift; sourceTree = "<group>"; };
+		A5000052 /* NotationCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidate.swift; sourceTree = "<group>"; };
+		A5000053 /* AudioOnsetDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOnsetDetector.swift; sourceTree = "<group>"; };
+		A5000054 /* NotationCandidateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateBuilder.swift; sourceTree = "<group>"; };
+		A5000055 /* NotationCandidateDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateDiagnostics.swift; sourceTree = "<group>"; };
+		A5000056 /* ReviewAudioOnsetPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewAudioOnsetPreview.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -440,6 +458,7 @@
 				A5000009 /* Formula */,
 				A5000006 /* Audio */,
 				A5000007 /* Detection */,
+				A5000050 /* ML */,
 				A5000008 /* Services */,
 				A2000012 /* Assets.xcassets */,
 				51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */,
@@ -516,6 +535,19 @@
 				A2000010 /* EquipmentDetector.swift */,
 			);
 			path = Detection;
+			sourceTree = "<group>";
+		};
+		A5000050 /* ML */ = {
+			isa = PBXGroup;
+			children = (
+				A5000051 /* ScratchClassLabel.swift */,
+				A5000052 /* NotationCandidate.swift */,
+				A5000053 /* AudioOnsetDetector.swift */,
+				A5000054 /* NotationCandidateBuilder.swift */,
+				A5000055 /* NotationCandidateDiagnostics.swift */,
+				A5000056 /* ReviewAudioOnsetPreview.swift */,
+			);
+			path = ML;
 			sourceTree = "<group>";
 		};
 		A5000008 /* Services */ = {
@@ -855,6 +887,12 @@
 				E629FE9BA4457C9CDA41CC02 /* FileManager+ZIP.swift in Sources */,
 				35DA6000CD04C2BEC8171E53 /* FileManager+ZIPDeprecated.swift in Sources */,
 				74CF392A178E07F56FE80DBA /* URL+ZIP.swift in Sources */,
+				A5000061 /* ScratchClassLabel.swift in Sources */,
+				A5000062 /* NotationCandidate.swift in Sources */,
+				A5000063 /* AudioOnsetDetector.swift in Sources */,
+				A5000064 /* NotationCandidateBuilder.swift in Sources */,
+				A5000065 /* NotationCandidateDiagnostics.swift in Sources */,
+				A5000066 /* ReviewAudioOnsetPreview.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
@@ -921,6 +959,12 @@
 				86B4C659CD7D512697B5F324 /* FileManager+ZIP.swift in Sources */,
 				E683712604E8409CBC7FFE46 /* FileManager+ZIPDeprecated.swift in Sources */,
 				37FCA3B16EABFCA2E9AB4817 /* URL+ZIP.swift in Sources */,
+				A5000071 /* ScratchClassLabel.swift in Sources */,
+				A5000072 /* NotationCandidate.swift in Sources */,
+				A5000073 /* AudioOnsetDetector.swift in Sources */,
+				A5000074 /* NotationCandidateBuilder.swift in Sources */,
+				A5000075 /* NotationCandidateDiagnostics.swift in Sources */,
+				A5000076 /* ReviewAudioOnsetPreview.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {

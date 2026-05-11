@@ -3290,6 +3290,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let measuredLevel = Self.level(from: audioPacket.samples)
         let hasFiniteMeasuredLevel = measuredLevel.isFinite
         let sanitizedLevel = hasFiniteMeasuredLevel ? min(max(measuredLevel, 0), 1) : 0
+        // Slice O — diagnostics-only feed; does not affect scratch
+        // detection, notation, scoring, or export. Throttled internally
+        // so the @Published summary updates at most ~5 Hz.
+        ScratchLabRuntimeDiagnostics.shared.recordAudioSamplesForOnsetDiagnostics(
+            audioPacket.samples,
+            sampleRate: audioPacket.sampleRate
+        )
         let detection = scratchDetector.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
         if detection != nil {
             ScratchLabPerformanceSignpost.event("AudioOnsetDetected")

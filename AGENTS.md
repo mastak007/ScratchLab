@@ -4,6 +4,56 @@ You are working in the ScratchLab repository.
 
 ---
 
+## AI Workflow (Codex, Claude Code, ChatGPT)
+
+This repository is worked on by multiple AI assistants with distinct roles:
+
+- **Codex** reads `AGENTS.md` (this file) as its entry point.
+- **Claude Code** reads `CLAUDE.md` as its entry point.
+- **ChatGPT** acts as architect and reviewer.
+- **Codex and Claude Code** are the executors that read, edit, and run.
+
+ChatGPT may hand a plan to an executor inside a delimited block:
+
+```text
+<<<PLAN
+...
+PLAN>>>
+```
+
+Treat that block as architecture and review guidance from ChatGPT. Read the full plan before editing anything.
+
+Before any project work, every executor must:
+
+1. Read `SOUL.md` (executor rules shared by Codex and Claude Code).
+2. Read `PROFILE.md` (product, ML, review, and App Store safety profile).
+3. Inspect `git status --short --branch`.
+4. Also read the project context files listed under "Read First" below.
+
+Executor rules (apply to both Codex and Claude Code):
+
+- Check the current branch or worktree before editing.
+- Identify pre-existing dirty files before making changes.
+- Preserve unrelated dirty files.
+- Use small, reviewable diffs.
+- Do not commit without explicit approval.
+- Do not push without explicit approval.
+- Do not add `Co-Authored-By` trailers to any commit.
+- Before stopping mid-task or when context is high (compaction imminent), write or update:
+  - `AI_HANDOFF.md` (current handoff record).
+  - `AI_HANDOFF/next_prompt.md` (continuation prompt for the next session).
+
+Shared workflow files:
+
+- `SOUL.md`: executor rules shared by Codex and Claude Code.
+- `PROFILE.md`: product, ML, review, and App Store safety profile.
+- `CLAUDE.md`: Claude Code entry point.
+- `AGENTS.md`: this file. Codex entry point and shared rules.
+- `AI_HANDOFF.md`: current handoff record.
+- `AI_HANDOFF/next_prompt.md`: continuation prompt template.
+
+---
+
 ## Read First
 Always read these files before making changes:
 1. `AI_CONTEXT.md`
@@ -100,7 +150,7 @@ These MUST flow through full pipeline:
 - device metadata
 - timestamps / session IDs
 
-If UI shows it → it MUST be persisted and exported
+If UI shows it -> it MUST be persisted and exported
 
 ---
 

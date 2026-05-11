@@ -87,8 +87,40 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
     @Published private(set) var notationTickRateHz: Double = 0
     @Published private(set) var coachLastUpdateDurationMS: Double = 0
 
+    /// Slice O — diagnostics-only summary of audio-onset notation
+    /// candidates produced by `AudioOnsetDetector` against the recent
+    /// audio stream. Read-only from outside; never gates Practice,
+    /// Review, scoring, export, or notation rendering.
+    @Published private(set) var audioOnsetSummary: NotationCandidateDiagnosticsSummary = .empty
+
+    /// Slice R0 — Review-curated summary derived from the same envelope
+    /// as `audioOnsetSummary` but with the stricter `reviewPreview`
+    /// detector config + a strength-ranked candidate cap. Used by the
+    /// Review onset preview card so the count stays in a useful range
+    /// (a few dozen) rather than the inclusive Advanced view (which can
+    /// easily run into the hundreds on a long noisy take). Raw
+    /// diagnostics surface in Advanced via `audioOnsetSummary` —
+    /// untouched.
+    @Published private(set) var audioOnsetReviewSummary: NotationCandidateDiagnosticsSummary = .empty
+
+    /// Slice R1 — timestamps of the filtered Review candidates, in
+    /// ascending order, capped to the same `maxCandidates` budget as
+    /// `audioOnsetReviewSummary`. Drives the Review preview's visual
+    /// timing-mark strip. Diagnostics-only; never reaches captured
+    /// notation, scoring, or export. Empty when no audio activity has
+    /// been accumulated.
+    @Published private(set) var audioOnsetReviewMarks: [TimeInterval] = []
+
     private var notationTickWindowStartedAt: CFTimeInterval = 0
     private var notationTickCount = 0
+
+    private let audioOnsetAccumulator = NotationCandidateAccumulator()
+    private let audioOnsetQueue = DispatchQueue(
+        label: "com.machelpnz.scratchlab.diagnostics.audioOnset",
+        qos: .utility
+    )
+    private let audioOnsetSummaryInterval: TimeInterval = 0.20  // 5 Hz max
+    private var audioOnsetLastSummaryAt: CFTimeInterval = 0
 
     private init() {}
 
@@ -117,6 +149,46 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
         notationTickRateHz = 0
         notationTickWindowStartedAt = 0
         notationTickCount = 0
+    }
+
+    /// Slice O — feed audio samples into the diagnostic accumulator.
+    /// Throttles published summary updates to `audioOnsetSummaryInterval`
+    /// so the @Published property doesn't churn at audio-packet rate.
+    /// Safe to call from any thread.
+    func recordAudioSamplesForOnsetDiagnostics(_ samples: [Float], sampleRate: Double) {
+        guard !samples.isEmpty, sampleRate > 0 else { return }
+        audioOnsetQueue.async { [weak self] in
+            guard let self else { return }
+            self.audioOnsetAccumulator.pushSamples(samples, sampleRate: sampleRate)
+            let now = CACurrentMediaTime()
+            if now - self.audioOnsetLastSummaryAt < self.audioOnsetSummaryInterval {
+                return
+            }
+            self.audioOnsetLastSummaryAt = now
+            let summary = self.audioOnsetAccumulator.currentSummary()
+            let reviewSummary = self.audioOnsetAccumulator.currentReviewSummary()
+            let reviewMarks = self.audioOnsetAccumulator.currentReviewMarks()
+            DispatchQueue.main.async { [weak self] in
+                self?.audioOnsetSummary = summary
+                self?.audioOnsetReviewSummary = reviewSummary
+                self?.audioOnsetReviewMarks = reviewMarks
+            }
+        }
+    }
+
+    /// Slice O — clear the accumulator and reset the published summary.
+    /// Safe to call from any thread.
+    func resetAudioOnsetDiagnostics() {
+        audioOnsetQueue.async { [weak self] in
+            guard let self else { return }
+            self.audioOnsetAccumulator.reset()
+            self.audioOnsetLastSummaryAt = 0
+            DispatchQueue.main.async { [weak self] in
+                self?.audioOnsetSummary = .empty
+                self?.audioOnsetReviewSummary = .empty
+                self?.audioOnsetReviewMarks = []
+            }
+        }
     }
 }
 
