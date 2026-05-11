@@ -93,6 +93,16 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
     /// Review, scoring, export, or notation rendering.
     @Published private(set) var audioOnsetSummary: NotationCandidateDiagnosticsSummary = .empty
 
+    /// Slice R0 — Review-curated summary derived from the same envelope
+    /// as `audioOnsetSummary` but with the stricter `reviewPreview`
+    /// detector config + a strength-ranked candidate cap. Used by the
+    /// Review onset preview card so the count stays in a useful range
+    /// (a few dozen) rather than the inclusive Advanced view (which can
+    /// easily run into the hundreds on a long noisy take). Raw
+    /// diagnostics surface in Advanced via `audioOnsetSummary` —
+    /// untouched.
+    @Published private(set) var audioOnsetReviewSummary: NotationCandidateDiagnosticsSummary = .empty
+
     private var notationTickWindowStartedAt: CFTimeInterval = 0
     private var notationTickCount = 0
 
@@ -148,8 +158,10 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
             }
             self.audioOnsetLastSummaryAt = now
             let summary = self.audioOnsetAccumulator.currentSummary()
+            let reviewSummary = self.audioOnsetAccumulator.currentReviewSummary()
             DispatchQueue.main.async { [weak self] in
                 self?.audioOnsetSummary = summary
+                self?.audioOnsetReviewSummary = reviewSummary
             }
         }
     }
@@ -163,6 +175,7 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
             self.audioOnsetLastSummaryAt = 0
             DispatchQueue.main.async { [weak self] in
                 self?.audioOnsetSummary = .empty
+                self?.audioOnsetReviewSummary = .empty
             }
         }
     }

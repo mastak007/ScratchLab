@@ -89,6 +89,27 @@ public struct AudioOnsetDetectorConfig: Equatable, Sendable {
     }
 
     public static let `default` = AudioOnsetDetectorConfig()
+
+    /// Slice R0 — stricter preset for the Review preview surface.
+    /// The default config is tuned for an inclusive diagnostic stream
+    /// (Advanced → Audio), which means it surfaces hundreds of noisy
+    /// onsets when fed a long take of ambient/room audio. The Review
+    /// preview is supposed to communicate "approximate timing of real
+    /// strokes", so this preset tightens the three knobs that matter:
+    ///   * `silenceFloorDB` raised from −45 to −40 — quiet ambient
+    ///     fluctuations stop being treated as content.
+    ///   * `thresholdMultiplier` 2.5 → 4.0 — a peak must rise much
+    ///     further above its local median MAD baseline to count.
+    ///   * `minOnsetSpacingSeconds` 60 ms → 200 ms — no runs of
+    ///     near-duplicate peaks; at most ~5 onsets per second.
+    /// Silence-gap reporting is also turned off — gaps are an Advanced
+    /// signal, not a Review surface one.
+    public static let reviewPreview = AudioOnsetDetectorConfig(
+        silenceFloorDB: -40.0,
+        thresholdMultiplier: 4.0,
+        minOnsetSpacingSeconds: 0.20,
+        detectSilenceGaps: false
+    )
 }
 
 public struct AudioOnsetDetector: Sendable {

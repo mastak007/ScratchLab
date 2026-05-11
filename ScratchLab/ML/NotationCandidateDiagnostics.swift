@@ -223,6 +223,62 @@ public final class NotationCandidateAccumulator {
         )
     }
 
+    /// Slice R0 — same envelope, stricter detector pass, capped output.
+    /// Used to feed the Review preview surface so reviewers see a few
+    /// dozen meaningful timing candidates instead of hundreds of noisy
+    /// transients. Defaults to `AudioOnsetDetectorConfig.reviewPreview`
+    /// for the detector pass and an 80-candidate cap as a fail-safe; if
+    /// the stricter config already produces fewer than `maxCandidates`
+    /// the cap is a no-op (verified by tests). Caller may override
+    /// either knob; raw / Advanced reporting continues to use
+    /// `currentSummary()` unchanged.
+    public func currentReviewSummary(
+        detectorConfig: AudioOnsetDetectorConfig = .reviewPreview,
+        maxCandidates: Int = 80
+    ) -> NotationCandidateDiagnosticsSummary {
+        guard !envelope.isEmpty, frameDuration > 0 else { return .empty }
+        var cfg = detectorConfig
+        if let observed = observedSampleRate {
+            cfg.sampleRate = observed
+        }
+        let reviewDetector = AudioOnsetDetector(config: cfg)
+        let raw = reviewDetector.detect(
+            envelopeDB: envelope,
+            frameDurationSeconds: frameDuration
+        )
+        let capped = NotationCandidateAccumulator.capCandidatesByStrength(
+            raw,
+            maxCount: maxCandidates
+        )
+        let duration = Double(envelope.count) * frameDuration
+        return .summarize(
+            candidates: capped,
+            envelopeFrameCount: envelope.count,
+            envelopeDurationSeconds: duration
+        )
+    }
+
+    /// If `candidates.count <= maxCount` returns the input unchanged.
+    /// Otherwise keeps the `maxCount` strongest candidates (by
+    /// `strength`) and returns them re-sorted by `timestamp` so the
+    /// summary's `firstTimestamp` / `lastTimestamp` semantics still
+    /// hold. Silence gaps are kept verbatim — they don't compete for
+    /// the strength-ranked slot.
+    static func capCandidatesByStrength(
+        _ candidates: [NotationCandidate],
+        maxCount: Int
+    ) -> [NotationCandidate] {
+        guard maxCount > 0 else { return [] }
+        let gaps = candidates.filter { $0.kind == .silenceGap }
+        let strokeLike = candidates.filter { $0.kind != .silenceGap }
+        if strokeLike.count <= maxCount { return candidates }
+        let topN = strokeLike
+            .sorted { $0.strength > $1.strength }
+            .prefix(maxCount)
+        let combined = Array(topN) + gaps
+        return combined.sorted { $0.timestamp < $1.timestamp }
+    }
+
     /// Drop all buffered samples and envelope frames. The next push
     /// re-locks to the supplied sample rate.
     public func reset() {

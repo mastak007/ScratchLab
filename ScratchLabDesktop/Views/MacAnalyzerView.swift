@@ -2957,9 +2957,17 @@ struct MacAnalyzerView: View {
     /// show (`preview.shouldRender == false`).
     @ViewBuilder
     private var reviewAudioOnsetPreviewStageCard: some View {
+        // Slice R0 — Review uses the filtered review summary. The raw
+        // summary (Advanced surface) is surfaced as a small disclosure
+        // row inside this card so reviewers can see how aggressive the
+        // gate was without leaving Review.
+        let reviewSummary = runtimeDiagnostics.audioOnsetReviewSummary
+        let rawSummary = runtimeDiagnostics.audioOnsetSummary
+        let rawTimingCount = rawSummary.onsetCount + rawSummary.strokeCount
+            + rawSummary.uncertainCount + rawSummary.cutCount
         let preview = ReviewAudioOnsetPreview.compute(
             capturedHasEvents: currentRoutineNotationSnapshot?.hasDetectedEvents ?? false,
-            summary: runtimeDiagnostics.audioOnsetSummary
+            summary: reviewSummary
         )
         if preview.shouldRender {
             VStack(alignment: .leading, spacing: 10) {
@@ -2987,6 +2995,12 @@ struct MacAnalyzerView: View {
                         "Timing candidates",
                         String(preview.timingCandidateCount)
                     )
+                    if rawTimingCount > preview.timingCandidateCount {
+                        reviewAudioOnsetPreviewRow(
+                            "Raw (Advanced)",
+                            "\(rawTimingCount) onsets · filtered for Review"
+                        )
+                    }
                     reviewAudioOnsetPreviewRow(
                         "First",
                         preview.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
@@ -3095,7 +3109,7 @@ struct MacAnalyzerView: View {
             } else {
                 let emptyPreview = ReviewAudioOnsetPreview.compute(
                     capturedHasEvents: false,
-                    summary: runtimeDiagnostics.audioOnsetSummary
+                    summary: runtimeDiagnostics.audioOnsetReviewSummary
                 )
                 let emptyCopy = ReviewCapturedEmptyStateCopy.compute(
                     previewWillRender: emptyPreview.shouldRender,
