@@ -12,7 +12,7 @@ handoff_only_dirty() {
   fi
 
   while IFS= read -r line; do
-    local path_part="${line[3,-1]}"
+    local path_part="${line[4,-1]}"
 
     case "$path_part" in
       AI_HANDOFF.md|AI_HANDOFF/*)
