@@ -236,7 +236,44 @@ public final class NotationCandidateAccumulator {
         detectorConfig: AudioOnsetDetectorConfig = .reviewPreview,
         maxCandidates: Int = 80
     ) -> NotationCandidateDiagnosticsSummary {
-        guard !envelope.isEmpty, frameDuration > 0 else { return .empty }
+        guard let capped = computeReviewCandidates(
+            detectorConfig: detectorConfig,
+            maxCandidates: maxCandidates
+        ) else { return .empty }
+        let duration = Double(envelope.count) * frameDuration
+        return .summarize(
+            candidates: capped,
+            envelopeFrameCount: envelope.count,
+            envelopeDurationSeconds: duration
+        )
+    }
+
+    /// Slice R1 — timestamps of the stroke-like candidates that feed the
+    /// Review preview, after the same stricter detector pass + cap that
+    /// `currentReviewSummary` uses. Returned in ascending timestamp order.
+    /// Silence-gap candidates are excluded — they aren't strokes and have
+    /// no place on a timing-mark strip. This is the only API meant to
+    /// drive Review visual timing marks; raw `currentSummary()` output
+    /// must not be used for Review marks because it over-emits and is
+    /// uncapped.
+    public func currentReviewMarks(
+        detectorConfig: AudioOnsetDetectorConfig = .reviewPreview,
+        maxCandidates: Int = 80
+    ) -> [TimeInterval] {
+        guard let capped = computeReviewCandidates(
+            detectorConfig: detectorConfig,
+            maxCandidates: maxCandidates
+        ) else { return [] }
+        return capped
+            .filter { $0.kind != .silenceGap }
+            .map(\.timestamp)
+    }
+
+    private func computeReviewCandidates(
+        detectorConfig: AudioOnsetDetectorConfig,
+        maxCandidates: Int
+    ) -> [NotationCandidate]? {
+        guard !envelope.isEmpty, frameDuration > 0 else { return nil }
         var cfg = detectorConfig
         if let observed = observedSampleRate {
             cfg.sampleRate = observed
@@ -246,15 +283,9 @@ public final class NotationCandidateAccumulator {
             envelopeDB: envelope,
             frameDurationSeconds: frameDuration
         )
-        let capped = NotationCandidateAccumulator.capCandidatesByStrength(
+        return NotationCandidateAccumulator.capCandidatesByStrength(
             raw,
             maxCount: maxCandidates
-        )
-        let duration = Double(envelope.count) * frameDuration
-        return .summarize(
-            candidates: capped,
-            envelopeFrameCount: envelope.count,
-            envelopeDurationSeconds: duration
         )
     }
 

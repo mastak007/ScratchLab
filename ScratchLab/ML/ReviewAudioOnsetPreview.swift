@@ -95,6 +95,24 @@ public struct ReviewAudioOnsetPreview: Equatable, Sendable {
         true
     }
 
+    /// Slice R1 — whether the Review preview card should render a visual
+    /// timing-mark strip alongside the numeric rows.
+    ///
+    /// Rule: the strip renders only in the `.previewWhenCapturedEmpty`
+    /// mode, and only when at least one mark exists. When captured
+    /// notation has events, the strip is suppressed even though numeric
+    /// rows still appear; this is the deliberately conservative choice
+    /// — captured notation is the source of truth and lives in its own
+    /// rendering, and overlaying a parallel uncertain-strip in the same
+    /// glance invites the reviewer to read it as an alternative truth.
+    /// The numeric rows (`Timing candidates`, `Raw (Advanced)`, …) carry
+    /// the preview's information in supplemental mode without visual
+    /// equivalence to saved data.
+    public func shouldRenderTimelineStrip(marksCount: Int) -> Bool {
+        guard marksCount > 0 else { return false }
+        return mode == .previewWhenCapturedEmpty
+    }
+
     /// Compute the preview state from inputs. Pure function; no state.
     ///
     /// - Parameters:

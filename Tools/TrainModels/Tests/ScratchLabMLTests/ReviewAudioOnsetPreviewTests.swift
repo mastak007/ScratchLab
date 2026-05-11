@@ -278,4 +278,90 @@ final class ReviewAudioOnsetPreviewTests: XCTestCase {
                            "preview must not embed mixer-event types — found \(typeName)")
         }
     }
+
+    // MARK: Slice R1 — timeline-strip render predicate
+
+    func testTimelineStripHidesWhenNoMarksRegardlessOfMode() {
+        // Empty mode.
+        let empty = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false, summary: .empty
+        )
+        XCTAssertFalse(empty.shouldRenderTimelineStrip(marksCount: 0))
+
+        // capturedOnly.
+        let capturedOnly = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true, summary: .empty
+        )
+        XCTAssertFalse(capturedOnly.shouldRenderTimelineStrip(marksCount: 0))
+
+        // capturedWithSupplementalPreview but zero marks (unreachable
+        // in practice, but the guard still has to hold).
+        let supplementalZero = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true,
+            summary: summary(onset: 4, first: 0.1, last: 1.0)
+        )
+        XCTAssertFalse(supplementalZero.shouldRenderTimelineStrip(marksCount: 0))
+
+        // previewWhenCapturedEmpty + zero marks.
+        let previewZero = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: summary(onset: 4, first: 0.1, last: 1.0)
+        )
+        XCTAssertFalse(previewZero.shouldRenderTimelineStrip(marksCount: 0))
+    }
+
+    func testTimelineStripShowsOnlyWhenCapturedIsEmptyAndPreviewHasMarks() {
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: summary(onset: 8, first: 0.20, last: 4.50)
+        )
+        XCTAssertEqual(p.mode, .previewWhenCapturedEmpty,
+                       "sanity: this combination must produce the preview-when-empty mode")
+        XCTAssertTrue(p.shouldRenderTimelineStrip(marksCount: 8))
+        XCTAssertTrue(p.shouldRenderTimelineStrip(marksCount: 1))
+    }
+
+    func testTimelineStripHidesInSupplementalModeEvenWhenMarksExist() {
+        // Captured exists AND onsets exist → supplemental mode. By
+        // design, the visual strip stays hidden so reviewers don't read
+        // it as an alternative truth alongside saved captured notation.
+        // Numeric rows still render.
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true,
+            summary: summary(onset: 8, first: 0.20, last: 4.50)
+        )
+        XCTAssertEqual(p.mode, .capturedWithSupplementalPreview)
+        XCTAssertFalse(p.shouldRenderTimelineStrip(marksCount: 8),
+                       "strip must not render when captured notation exists, even if preview has marks")
+        XCTAssertFalse(p.shouldRenderTimelineStrip(marksCount: 80))
+    }
+
+    func testTimelineStripHidesInCapturedOnlyMode() {
+        // Captured exists, preview is empty — preview card already
+        // hides; the strip must also be off (defence in depth).
+        let p = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: true, summary: .empty
+        )
+        XCTAssertEqual(p.mode, .capturedOnly)
+        XCTAssertFalse(p.shouldRenderTimelineStrip(marksCount: 8))
+    }
+
+    func testTimelineStripPredicateOnlyDependsOnModeAndMarksCount() {
+        // The predicate signature takes only marksCount; verify that
+        // changing other summary fields under a fixed mode doesn't
+        // change the answer.
+        let modeA = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: summary(onset: 3, first: 0.1, last: 1.0)
+        )
+        let modeB = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: false,
+            summary: summary(uncertain: 3, first: 5.0, last: 9.0, isClassified: true)
+        )
+        XCTAssertEqual(modeA.mode, modeB.mode)
+        XCTAssertEqual(modeA.shouldRenderTimelineStrip(marksCount: 3),
+                       modeB.shouldRenderTimelineStrip(marksCount: 3))
+        XCTAssertEqual(modeA.shouldRenderTimelineStrip(marksCount: 0),
+                       modeB.shouldRenderTimelineStrip(marksCount: 0))
+    }
 }

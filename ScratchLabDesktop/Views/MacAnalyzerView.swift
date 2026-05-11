@@ -2969,6 +2969,7 @@ struct MacAnalyzerView: View {
             capturedHasEvents: currentRoutineNotationSnapshot?.hasDetectedEvents ?? false,
             summary: reviewSummary
         )
+        let reviewMarks = runtimeDiagnostics.audioOnsetReviewMarks
         if preview.shouldRender {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
@@ -3018,6 +3019,13 @@ struct MacAnalyzerView: View {
                         preview.identityLabel
                     )
                 }
+                if preview.shouldRenderTimelineStrip(marksCount: reviewMarks.count) {
+                    reviewAudioOnsetTimelineStrip(
+                        marks: reviewMarks,
+                        firstTimestamp: preview.firstTimestamp,
+                        lastTimestamp: preview.lastTimestamp
+                    )
+                }
                 Text(preview.footerDisclaimer)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
@@ -3026,6 +3034,67 @@ struct MacAnalyzerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
             .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    /// Slice R1 — compact, neutral timing-mark strip for the Review
+    /// preview card. Renders one thin vertical tick per filtered Review
+    /// candidate at its position within the [first, last] timestamp
+    /// range. Visual language is deliberately undifferentiated (no per-
+    /// stroke color, no identity, no chart axes) so it can never be
+    /// mistaken for the saved captured-notation rendering. Caller has
+    /// already gated on `shouldRenderTimelineStrip(marksCount:)`.
+    private func reviewAudioOnsetTimelineStrip(
+        marks: [TimeInterval],
+        firstTimestamp: TimeInterval?,
+        lastTimestamp: TimeInterval?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Uncertain timing marks")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.66))
+                Text("· preview only · not exported")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Canvas { context, size in
+                guard
+                    let first = firstTimestamp,
+                    let last = lastTimestamp,
+                    last >= first
+                else { return }
+                let span = last - first
+                for t in marks {
+                    let x: CGFloat
+                    if span > 0 {
+                        let frac = (t - first) / span
+                        x = max(0, min(size.width, CGFloat(frac) * size.width))
+                    } else {
+                        x = size.width / 2
+                    }
+                    let rect = CGRect(
+                        x: x - 0.75, y: 0, width: 1.5, height: size.height
+                    )
+                    context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                }
+            }
+            .frame(height: 14)
+            .background(
+                Color.white.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+            )
+            if let first = firstTimestamp,
+               let last = lastTimestamp,
+               last >= first {
+                HStack {
+                    Text(String(format: "%.2fs", first))
+                    Spacer(minLength: 0)
+                    Text(String(format: "%.2fs", last))
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+            }
         }
     }
 

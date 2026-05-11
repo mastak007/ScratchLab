@@ -103,6 +103,14 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
     /// untouched.
     @Published private(set) var audioOnsetReviewSummary: NotationCandidateDiagnosticsSummary = .empty
 
+    /// Slice R1 — timestamps of the filtered Review candidates, in
+    /// ascending order, capped to the same `maxCandidates` budget as
+    /// `audioOnsetReviewSummary`. Drives the Review preview's visual
+    /// timing-mark strip. Diagnostics-only; never reaches captured
+    /// notation, scoring, or export. Empty when no audio activity has
+    /// been accumulated.
+    @Published private(set) var audioOnsetReviewMarks: [TimeInterval] = []
+
     private var notationTickWindowStartedAt: CFTimeInterval = 0
     private var notationTickCount = 0
 
@@ -159,9 +167,11 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
             self.audioOnsetLastSummaryAt = now
             let summary = self.audioOnsetAccumulator.currentSummary()
             let reviewSummary = self.audioOnsetAccumulator.currentReviewSummary()
+            let reviewMarks = self.audioOnsetAccumulator.currentReviewMarks()
             DispatchQueue.main.async { [weak self] in
                 self?.audioOnsetSummary = summary
                 self?.audioOnsetReviewSummary = reviewSummary
+                self?.audioOnsetReviewMarks = reviewMarks
             }
         }
     }
@@ -176,6 +186,7 @@ final class ScratchLabRuntimeDiagnostics: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 self?.audioOnsetSummary = .empty
                 self?.audioOnsetReviewSummary = .empty
+                self?.audioOnsetReviewMarks = []
             }
         }
     }
