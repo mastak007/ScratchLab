@@ -2,11 +2,11 @@
 
 ## Current task
 
-Slice U — export / ASC safety audit for beta readiness (audit-only).
+Slice U - export / ASC safety audit for beta readiness (audit-only).
 
 ## Branch / worktree
 
-`/Users/karlwatson/Downloads/ScratchLab-merged-check` — detached HEAD at PR #2 merge.
+`/Users/karlwatson/Downloads/ScratchLab-merged-check` - detached HEAD at PR #2 merge.
 
 ## Base commit
 
@@ -19,7 +19,7 @@ Report whether the merged tree is safe to ship for beta along three axes:
 2. No model or sensitive-resource leakage in the repo or app bundle.
 3. User-facing copy contains no overclaiming ML language or banned brand strings.
 
-No fixes implemented — Slice U is audit-only by spec.
+No fixes implemented - Slice U is audit-only by spec.
 
 ## Files changed
 
@@ -29,30 +29,30 @@ None. Audit-only slice. Working tree is clean.
 
 Nothing in the codebase. Findings only:
 
-### Audit 1 — Review onset preview safety (clean)
+### Audit 1 - Review onset preview safety (clean)
 
 - `ScratchLab/ML/ReviewAudioOnsetPreview.swift:248` carries an explicit user-facing footer disclaimer: `"Diagnostics-only preview. Not part of saved or exported notation."`
-- `ScratchLab/Models/CaptureCore.swift:104,112` declare `audioOnsetReviewSummary` and `audioOnsetReviewMarks` as `@Published private(set)` on the runtime diagnostics object. They are populated only by `recordAudioSamplesForOnsetDiagnostics` (lines 158–177) and read only by `ScratchLabDesktop/Views/MacAnalyzerView.swift:1459,1494` for display.
-- `ScratchLab/Models/CaptureCore.swift:4702–4762` define `DetectedNotationSnapshot`; its fields are `recordMovementEvents`, `audioEvents`, `faderEvents`, `mixerMidiEvents`. None of them are populated from `audioOnsetReviewMarks` / `audioOnsetReviewSummary` / `ReviewAudioOnsetPreview` (confirmed via repo-wide grep).
+- `ScratchLab/Models/CaptureCore.swift:104,112` declare `audioOnsetReviewSummary` and `audioOnsetReviewMarks` as `@Published private(set)` on the runtime diagnostics object. They are populated only by `recordAudioSamplesForOnsetDiagnostics` (lines 158-177) and read only by `ScratchLabDesktop/Views/MacAnalyzerView.swift:1459,1494` for display.
+- `ScratchLab/Models/CaptureCore.swift:4702-4762` define `DetectedNotationSnapshot`; its fields are `recordMovementEvents`, `audioEvents`, `faderEvents`, `mixerMidiEvents`. None of them are populated from `audioOnsetReviewMarks` / `audioOnsetReviewSummary` / `ReviewAudioOnsetPreview` (confirmed via repo-wide grep).
 - `ScratchLab/Services/SessionExportCoordinator.swift` contains zero references to `audioOnsetReview*`, `ReviewAudioOnsetPreview`, `ReviewAudioOnsetMarksBuilder`, `ReviewAudioOnsetSource`, `reviewMarks`, `timing_marks`, `onsetPreview`, `preview_marks`, or `review_preview`. Export schema version `scratchlab_session_export_v4` is unchanged.
-- Captured `DetectedNotationSnapshot.audioEvents` remain the source of truth; preview only re-summarises them via `ReviewAudioOnsetMarksBuilder.summarizeTakeEvents` (`ReviewAudioOnsetPreview.swift:393–429`).
-- Source label: `ReviewAudioOnsetPreview.swift:299–308` maps `.selectedTakeSavedEvents` → `"selected take audio"`. The old wording `"selected take saved audio events"` does not appear anywhere user-facing (verified via grep — remaining occurrences are in code comments and test docstrings only).
+- Captured `DetectedNotationSnapshot.audioEvents` remain the source of truth; preview only re-summarises them via `ReviewAudioOnsetMarksBuilder.summarizeTakeEvents` (`ReviewAudioOnsetPreview.swift:393-429`).
+- Source label: `ReviewAudioOnsetPreview.swift:299-308` maps `.selectedTakeSavedEvents` -> `"selected take audio"`. The old wording `"selected take saved audio events"` does not appear anywhere user-facing (verified via grep - remaining occurrences are in code comments and test docstrings only).
 
-### Audit 2 — Model / resource leakage (clean)
+### Audit 2 - Model / resource leakage (clean)
 
 - No `.mlmodel`, `.mlmodelc`, `.mlpackage` files anywhere under the repo.
 - No `.jsonl` cache files; no `action_windows*` or `action_features_cache*` directories.
 - `ScratchLab.xcodeproj/project.pbxproj` contains zero `.mlmodel*` references, no `TASKS.md` / `DEV_LOG.md` / `SOUL.md` / `PROFILE.md` / `AI_HANDOFF*` membership.
 - `ScratchLab/Resources/` and `ScratchLabDesktop/Resources/` contain only: Coach USDZ rigs, CoachInstructions JSON, CoachDemoMotion JSON, CoachDemoAudio WAV (`baby_noBeat.wav`, `chirpflare_noBeat.wav`), `Notation/baby_scratch.json`, `reference_beginner/*.wav`, `reference_champ/*.wav`, `reference_pro/*.wav`. No banned strings in bundled JSON (grep negative for `youtube|ortofon|makemkv|sourceMKV|QBERT|SXRATCH|/Users/`).
-- The only shipped Swift mention of `/Users/`, `MakeMKV`, `QBERT`, `SXRATCH`, `processed_makemkv`, `sourceMKV` is the banned-token guard list in `ScratchLabDesktop/Services/ScratchTypeMetadataSafety.swift:13–23`. These are guard tokens compared against incoming metadata, never surfaced.
+- The only shipped Swift mention of `/Users/`, `MakeMKV`, `QBERT`, `SXRATCH`, `processed_makemkv`, `sourceMKV` is the banned-token guard list in `ScratchLabDesktop/Services/ScratchTypeMetadataSafety.swift:13-23`. These are guard tokens compared against incoming metadata, never surfaced.
 - `TASKS.md` and `DEV_LOG.md` reference paths under `/Users/karlwatson/Movies/CXL DATASET/processed_makemkv/...` but are repo-root docs, NOT bundle-membership files. They cannot ship in the app.
 
-### Audit 3 — ASC / user-facing wording
+### Audit 3 - ASC / user-facing wording
 
 - No occurrences of `machine learning`, `neural network`, `deep learning`, `detects exactly`, `real-time AI` in shipped Swift (`ScratchLab/`, `ScratchLabDesktop/`, excluding `*Tests*`).
 - No user-facing occurrences of `YouTube`, `Ortofon`, `QBERT`, `SXRATCH`. `QBERT` / `SXRATCH` exist only in the banned-token guard list and in tests as negative-fixture inputs.
-- `CXL` appears only as a Swift type-name prefix (`CXLDirection`, `CXLTimingClassification`, `CXLNotationCaptureRecorder`, `captureEngine.cxlIsRecording`, etc.) — no `Text(...)` / `Label(...)` / `navigationTitle` / alert with a literal `"CXL"` user string found.
-- ⚠ `ScratchLab/Views/AIBattleModeView.swift:25,29` ships user-facing `Text("AI BATTLE")` and `Text("Challenge an AI opponent")`. `ScratchLab/Models/GameState.swift:12` ships `case aiChallenge = "AI Challenge"`. These are a scripted game opponent (rookie/flash/cipher/nova/legend scripted characters, no ML inference), but the literal word "AI" can attract App Store / ASC review scrutiny under current AI-disclosure expectations.
+- `CXL` appears only as a Swift type-name prefix (`CXLDirection`, `CXLTimingClassification`, `CXLNotationCaptureRecorder`, `captureEngine.cxlIsRecording`, etc.) - no `Text(...)` / `Label(...)` / `navigationTitle` / alert with a literal `"CXL"` user string found.
+- WARNING `ScratchLab/Views/AIBattleModeView.swift:25,29` ships user-facing `Text("AI BATTLE")` and `Text("Challenge an AI opponent")`. `ScratchLab/Models/GameState.swift:12` ships `case aiChallenge = "AI Challenge"`. These are a scripted game opponent (rookie/flash/cipher/nova/legend scripted characters, no ML inference), but the literal word "AI" can attract App Store / ASC review scrutiny under current AI-disclosure expectations.
 
 ## Findings grouped by severity
 
@@ -62,7 +62,7 @@ None.
 
 ### Should fix before beta
 
-- **`AIBattleModeView.swift:25,29` + `GameState.swift:12`** — user-facing "AI BATTLE" / "Challenge an AI opponent" / "AI Challenge" copy. The feature is a scripted opponent, not ML, but ASC has been tightening copy review around any "AI" usage. Recommended: rename user-visible strings to neutral wording like `BATTLE`, `Rival Challenge`, or `Opponent Challenge`. The internal enum case (`aiChallenge`) and type names (`AICharacter`) can stay because they are not user-visible. Per PROFILE.md, "avoid `AI detects exactly`, `real-time AI coach`, `deep learning` in user-facing copy" — this is adjacent to that guidance and prudent to clear before TestFlight.
+- **`AIBattleModeView.swift:25,29` + `GameState.swift:12`** - user-facing "AI BATTLE" / "Challenge an AI opponent" / "AI Challenge" copy. The feature is a scripted opponent, not ML, but ASC has been tightening copy review around any "AI" usage. Recommended: rename user-visible strings to neutral wording like `BATTLE`, `Rival Challenge`, or `Opponent Challenge`. The internal enum case (`aiChallenge`) and type names (`AICharacter`) can stay because they are not user-visible. Per PROFILE.md, "avoid `AI detects exactly`, `real-time AI coach`, `deep learning` in user-facing copy" - this is adjacent to that guidance and prudent to clear before TestFlight.
 
 ### Nice to fix
 
@@ -80,13 +80,13 @@ None.
 
 ## Tests / builds run
 
-- `cd Tools/TrainModels && swift test` — **200 tests passed, 0 failures** (including ReviewAudioOnsetPreviewTests, ReviewAudioOnsetMarksBuilderTests, ReviewAudioOnsetSourceResolverTests, NotationCandidateDiagnosticsTests, sound trainer + ML library suites).
-- `xcodebuild -scheme ScratchLabDesktop -destination 'platform=macOS' build` — **BUILD SUCCEEDED**.
-- `xcodebuild -scheme ScratchLab -destination 'generic/platform=iOS' build` — **BUILD SUCCEEDED**.
+- `cd Tools/TrainModels && swift test` - **200 tests passed, 0 failures** (including ReviewAudioOnsetPreviewTests, ReviewAudioOnsetMarksBuilderTests, ReviewAudioOnsetSourceResolverTests, NotationCandidateDiagnosticsTests, sound trainer + ML library suites).
+- `xcodebuild -scheme ScratchLabDesktop -destination 'platform=macOS' build` - **BUILD SUCCEEDED**.
+- `xcodebuild -scheme ScratchLab -destination 'generic/platform=iOS' build` - **BUILD SUCCEEDED**.
 
 ## Tests / builds still needed
 
-- Full `ScratchLabDesktop` XCTest plan (`./scripts/build.sh`) was not re-run in this slice — Slice U is audit-only and the executors already pre-merge ran the full suite per PR #2 history. Re-run on demand if any text-rename fix is later attempted.
+- Full `ScratchLabDesktop` XCTest plan (`./scripts/build.sh`) was not re-run in this slice - Slice U is audit-only and the executors already pre-merge ran the full suite per PR #2 history. Re-run on demand if any text-rename fix is later attempted.
 
 ## Git status
 
@@ -99,7 +99,7 @@ Working tree clean. No staged or unstaged changes.
 ## Risks / warnings
 
 - The "AI Battle" copy is the only audit finding that warrants action before TestFlight. It is small and local (3 string literals across 2 files) but renaming will likely cascade into screenshots and feature copy on the ASC listing.
-- The dirty checkout at `/Users/karlwatson/Downloads/ScratchLab` was NOT touched — confirmed by working only in `ScratchLab-merged-check`.
+- The dirty checkout at `/Users/karlwatson/Downloads/ScratchLab` was NOT touched - confirmed by working only in `ScratchLab-merged-check`.
 
 ## Exact decision needed from ChatGPT
 
@@ -118,18 +118,18 @@ Approved by Karl:
 
 This sub-section restates the scope, impact, risks, and constraints attached to
 Karl's approvals for Slices U.1 and U.2. No code, test, project, resource, or
-export changes were made in the current Slice U pass — this is an audit-and-
+export changes were made in the current Slice U pass - this is an audit-and-
 documentation update only. Slices U.1 and U.2 remain future, separately gated
 work and MUST NOT be started in this slice.
 
-### (a) Slice U.1 — "AI BATTLE" / "AI Challenge" user-facing copy neutralization (Karl-approved)
+### (a) Slice U.1 - "AI BATTLE" / "AI Challenge" user-facing copy neutralization (Karl-approved)
 
 - **Approval status**: Approved by Karl for execution as a separate future
   slice. Approval covers user-facing string literals only.
 - **Scope of impact (in-scope for U.1, NOT touched here)**:
-  - `ScratchLab/Views/AIBattleModeView.swift:25` — `Text("AI BATTLE")`
-  - `ScratchLab/Views/AIBattleModeView.swift:29` — `Text("Challenge an AI opponent")`
-  - `ScratchLab/Models/GameState.swift:12` — `case aiChallenge = "AI Challenge"`
+  - `ScratchLab/Views/AIBattleModeView.swift:25` - `Text("AI BATTLE")`
+  - `ScratchLab/Views/AIBattleModeView.swift:29` - `Text("Challenge an AI opponent")`
+  - `ScratchLab/Models/GameState.swift:12` - `case aiChallenge = "AI Challenge"`
     (only the **raw String value** is user-visible; the enum case name
     `aiChallenge` is internal and stays).
   - Any additional adjacent user-visible literal containing the standalone
@@ -150,7 +150,7 @@ work and MUST NOT be started in this slice.
     "AI Battle" / "AI Challenge" will need to be updated in lockstep, or
     they will diverge from in-app wording.
   - The `GameState.aiChallenge` enum's raw String value is a serialization
-    surface — any persisted state (UserDefaults, snapshots, saved sessions,
+    surface - any persisted state (UserDefaults, snapshots, saved sessions,
     JSON exports) keyed by that raw value would break if the raw value is
     changed without a migration. U.1 must verify the raw value is NOT
     persisted, or must add a migration; this verification is itself part of
@@ -165,10 +165,10 @@ work and MUST NOT be started in this slice.
   / export / Info.plist / PrivacyInfo / signing / Copy Bundle Resources
   surface.
 
-### (b) Slice U.2 — Audit-only Copy Bundle Resources negative-assertion test (Karl-approved)
+### (b) Slice U.2 - Audit-only Copy Bundle Resources negative-assertion test (Karl-approved)
 
 - **Approval status**: Approved by Karl for execution as a separate future
-  slice. Test is audit-only — it inspects `project.pbxproj`, it does not
+  slice. Test is audit-only - it inspects `project.pbxproj`, it does not
   modify the project, the bundle, or any resource.
 - **Files / patterns the test will check (in-scope for U.2, NOT executed here)**:
   - `TASKS.md`
@@ -202,7 +202,7 @@ work and MUST NOT be started in this slice.
   (verified against `project.pbxproj` in this audit), but a future
   accidental "Add Files to Target" action would silently leak them.
 - **Risks of adding the test (when Slice U.2 is later executed, not now)**:
-  - Brittle parsing — naive substring matching against `project.pbxproj`
+  - Brittle parsing - naive substring matching against `project.pbxproj`
     could false-positive on path fragments. The test must scope matches to
     full file references inside `PBXResourcesBuildPhase` blocks for the
     shipping app targets only, not script-phase or test-target references.
@@ -211,7 +211,7 @@ work and MUST NOT be started in this slice.
     is the point, but it must be triaged as "remove the resource membership"
     and **never** as "weaken the test".
 
-### (c) Slice U is audit-only — bundle / project / export surfaces are off-limits
+### (c) Slice U is audit-only - bundle / project / export surfaces are off-limits
 
 - No changes to the app bundle, `ScratchLab.xcodeproj/project.pbxproj`,
   Copy Bundle Resources phases, Info.plist, PrivacyInfo.xcprivacy, signing,
@@ -220,7 +220,7 @@ work and MUST NOT be started in this slice.
 - Any such change requires an explicitly approved future slice (e.g. U.1
   for the copy rename, U.2 for the project-file inspection test) and must
   carry its own approval from Karl before execution.
-- Slice U.2's test is itself read-only against the project file — even
+- Slice U.2's test is itself read-only against the project file - even
   when U.2 ships, it does not mutate any bundle resource.
 
 ### (d) No changes were made in this Slice U pass
@@ -274,7 +274,7 @@ Slice U.2: Add an XCTest case in ScratchLabDesktopTests that scans
 ScratchLab.xcodeproj/project.pbxproj for forbidden file references in any
 PBXResourcesBuildPhase: TASKS.md, DEV_LOG.md, AI_HANDOFF.md, AI_HANDOFF/,
 SOUL.md, PROFILE.md, docs/training_dataset_plan.md. Fail if any are found
-inside a Copy Bundle Resources phase. Audit-only — do not modify the project.
+inside a Copy Bundle Resources phase. Audit-only - do not modify the project.
 ```
 
 ## Constraints still active

@@ -1,4 +1,4 @@
-# Claude ↔ GPT Loop
+# Claude <-> GPT Loop
 
 ChatGPT web cannot automatically read local Mac files. This workflow uses the OpenAI API as the GPT reviewer for local `AI_HANDOFF.md` content.
 
@@ -28,7 +28,7 @@ scripts/ai/claude_gpt_loop.zsh 3
 When to stop:
 - `HUMAN_DECISION_REQUIRED`
 - `COMMIT_APPROVAL_REQUIRED`
-- `TASK_COMPLETE` — GPT reports no further Claude action is needed; the loop exits cleanly without invoking Claude.
+- `TASK_COMPLETE` - GPT reports no further Claude action is needed; the loop exits cleanly without invoking Claude.
 - dirty git state
 - build/test failure
 - risky file changes
