@@ -9,7 +9,7 @@ import Combine
 // MARK: - Game Mode
 enum GameMode: String, CaseIterable {
     case practice = "Practice"
-    case aiChallenge = "AI Challenge"
+    case aiChallenge = "Rival Challenge"
     case onlineBattle = "Online Battle"
     case tutorial = "Tutorial"
 }

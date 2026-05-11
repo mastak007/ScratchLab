@@ -22,11 +22,11 @@ struct AIBattleSetupView: View {
                 VStack(spacing: 32) {
                     // Header
                     VStack(spacing: 8) {
-                        Text("AI BATTLE")
+                        Text("BATTLE")
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(.white)
-                        
-                        Text("Challenge an AI opponent")
+
+                        Text("Challenge a rival opponent")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                     }
