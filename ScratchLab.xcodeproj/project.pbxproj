@@ -22,9 +22,6 @@
 		219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
 		219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
 		219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
-		AA400001 /* Resources/reference_beginner in Resources */ = {isa = PBXBuildFile; fileRef = A2000040 /* Resources/reference_beginner */; };
-		AA400002 /* Resources/reference_champ in Resources */ = {isa = PBXBuildFile; fileRef = A2000041 /* Resources/reference_champ */; };
-		AA400003 /* Resources/reference_pro in Resources */ = {isa = PBXBuildFile; fileRef = A2000042 /* Resources/reference_pro */; };
 		283607B7B4D70607A9ECD49F /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
 		2C64569FCF5593D3CB171D25 /* WatchMotionCaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */; };
 		2C64569FCF5593D3CB171D26 /* StagedCaptureRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */; };
@@ -807,9 +804,6 @@
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
 				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
 				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
-				AA400001 /* Resources/reference_beginner in Resources */,
-				AA400002 /* Resources/reference_champ in Resources */,
-				AA400003 /* Resources/reference_pro in Resources */,
 				A1000012 /* Assets.xcassets in Resources */,
 				AA100002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
