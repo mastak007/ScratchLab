@@ -99,7 +99,20 @@ struct CaptureGuideEditModel {
 
 struct DeckGamificationOverlay: View {
     @ObservedObject var detector: MacCaptureEngine
-    let isCalibrationEditMode: Bool = false
+    // Slice X.1.1: this used to be a hardcoded `false`, which collapsed
+    // every overlay box to opacity 0 and disabled hit-testing — meaning
+    // the deck/mixer calibration boxes were INVISIBLE everywhere even
+    // when calibration was unlocked, making no-watch capture
+    // unconfigurable. Restore the original intent by deriving edit mode
+    // from the same `CaptureGuideEditModel.isEditable` helper that gates
+    // the interactive layer.
+    private var isCalibrationEditMode: Bool {
+        CaptureGuideEditModel.isEditable(
+            showRigGuides: detector.showRigGuides,
+            calibrationLocked: detector.calibrationLocked,
+            isUsingManualRigGuide: detector.isUsingManualRigGuide
+        )
+    }
     @State private var zoneMoveSnapshots: [DJRigZone.Role: MacCaptureEngine.ZoneAdjustment] = [:]
     @State private var zoneResizeSnapshots: [DJRigZone.Role: ZoneResizeSnapshot] = [:]
     @State private var activeZoneInteraction: ZoneInteraction?
