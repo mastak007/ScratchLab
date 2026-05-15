@@ -5824,6 +5824,122 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("static func resolved(from storedValue: String)"))
     }
 
+    // Slice X.1: the Capture tab Inputs grid must include a Hand chip
+    // (so the user knows whether the Vision pipeline is actually
+    // tracking a hand) and a discoverable "Camera deck setup" affordance
+    // that unlocks calibration and switches the user to Advanced ->
+    // Camera Deck. The accompanying explainer copy must NOT imply that
+    // a green "Camera Ready" chip is enough to capture notation.
+    func testMacCaptureInputsExposeHandMotionAndCalibrationSetup() throws {
+        let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macSourceURL, encoding: .utf8)
+        let inputsSlice = try sourceSlice(
+            in: source,
+            from: "private var captureInputStatusCard:",
+            through: "private var midiMonitorCard:"
+        )
+
+        // Hand chip exists in the Capture Inputs grid and is wired to
+        // the Vision-derived handMotionState (not just the camera device).
+        XCTAssertTrue(
+            inputsSlice.contains("title: \"Hand\""),
+            "Capture Inputs grid must include a Hand chip so users see whether motion is being tracked"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("captureHandMotionStatusValue"),
+            "Hand chip must derive its value from the live handMotionState helper"
+        )
+        XCTAssertTrue(
+            source.contains("captureEngine.handMotionState"),
+            "Hand chip helper must read MacCaptureEngine.handMotionState"
+        )
+
+        // Slice X.1.1: calibration affordance routes the user to PRACTICE
+        // (where the live camera preview lives) with live input enabled
+        // AND calibration unlocked, so the deck/mixer overlay is drawn
+        // directly on the preview and is draggable. Advanced -> Camera
+        // Deck has no preview to overlay onto, so routing there left
+        // Karl looking at controls without boxes.
+        XCTAssertTrue(
+            inputsSlice.contains("\"Camera deck setup\""),
+            "Capture Inputs card must include a 'Camera deck setup' button so calibration is discoverable"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("captureEngine.calibrationLocked = false"),
+            "Camera deck setup must unlock the deck calibration overlay"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("liveInputEnabled = true"),
+            "Camera deck setup must enable live input so the camera preview becomes visible"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("workspaceTab = .practice"),
+            "Camera deck setup must switch to the Practice tab where the live preview mounts the rig overlay"
+        )
+        // Paired Lock affordance so the user can freeze the layout
+        // before recording without leaving the Capture tab.
+        XCTAssertTrue(
+            inputsSlice.contains("\"Lock calibration\""),
+            "Capture Inputs card must include a 'Lock calibration' button (visible while unlocked)"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("captureEngine.calibrationLocked = true"),
+            "Lock calibration must re-lock the overlay"
+        )
+
+        // Explainer copy must not falsely imply Camera-Ready is enough,
+        // and must explicitly say record movement requires the deck/hand
+        // to be visible (Karl's "still possible to get audio-only" point).
+        XCTAssertTrue(
+            inputsSlice.contains("Camera Ready") && inputsSlice.contains("alone is not enough"),
+            "Calibration affordance must include copy that disambiguates Camera Ready from hand-motion-being-captured"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("Record movement requires the deck and hand to be visible"),
+            "Calibration explainer must state that record movement requires deck+hand visibility"
+        )
+
+        // Hand chip copy must not claim 'notation ready'. It reports
+        // hand visibility / direction only; the user is responsible for
+        // pointing the camera at the deck.
+        XCTAssertTrue(
+            source.contains("\"Hand visible\""),
+            "Hand chip steady value must be 'Hand visible', not 'Hand steady' (avoids implying notation-ready)"
+        )
+        XCTAssertFalse(
+            source.contains("\"Hand steady\""),
+            "Hand chip must not use 'Hand steady' wording"
+        )
+        XCTAssertTrue(
+            source.contains("Vision sees a hand"),
+            "Hand chip detail must clarify Vision sees a hand, not that capture is configured"
+        )
+    }
+
+    // Slice X.1.1: the deck/mixer calibration boxes used to be hidden
+    // behind a hardcoded `let isCalibrationEditMode: Bool = false` in
+    // DeckGamificationOverlay, which collapsed them to opacity 0
+    // everywhere. Guard against that regression: the field must derive
+    // from CaptureGuideEditModel.isEditable so unlocking calibration
+    // actually shows the boxes on the live preview.
+    func testDeckGamificationOverlayCalibrationEditModeIsReactive() throws {
+        let overlayURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/DeckGamificationOverlay.swift")
+        let source = try String(contentsOf: overlayURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("let isCalibrationEditMode: Bool = false"),
+            "isCalibrationEditMode must NOT be hardcoded false (that hides every calibration box)"
+        )
+        XCTAssertTrue(
+            source.contains("private var isCalibrationEditMode: Bool"),
+            "isCalibrationEditMode must be a computed property derived from the live calibration state"
+        )
+        XCTAssertTrue(
+            source.contains("CaptureGuideEditModel.isEditable("),
+            "isCalibrationEditMode must use CaptureGuideEditModel.isEditable so it reacts to showRigGuides / calibrationLocked"
+        )
+    }
+
     func testMacCaptureScreenContainsSimpleDatasetWorkflowLabels() throws {
         let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: macSourceURL, encoding: .utf8)

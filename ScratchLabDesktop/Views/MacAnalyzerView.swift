@@ -1176,6 +1176,51 @@ struct MacAnalyzerView: View {
         relayedWatchCaptureStore.importedSessions.isEmpty ? "Not connected" : "Motion data available"
     }
 
+    // Slice X.1: Hand chip on the Capture tab. Reads the existing
+    // captureEngine.handMotionState (already published by MacCaptureEngine
+    // from the Vision hand-pose pipeline). No new engine state.
+    private var captureHandMotionStatusValue: String {
+        guard !captureEngine.selectedVideoDeviceUniqueID.isEmpty else { return "Camera off" }
+        guard captureEngine.isCameraActive else { return "Camera idle" }
+        // Slice X.1.1: copy must NOT claim notation-ready merely from
+        // Vision seeing a hand. The chip reports what the detector is
+        // tracking; whether that lands in the deck calibration zone is
+        // the user's setup responsibility.
+        switch captureEngine.handMotionState {
+        case .searching:   return "No hand visible"
+        case .steady:      return "Hand visible"
+        case .movingRight: return "Hand → forward"
+        case .movingLeft:  return "Hand ← back"
+        }
+    }
+
+    private var captureHandMotionStatusDetail: String {
+        switch captureEngine.handMotionState {
+        case .searching:
+            return captureEngine.isCameraActive
+                ? "Point the camera at your deck / hand"
+                : "Open Camera deck setup to verify the live preview"
+        case .steady, .movingRight, .movingLeft:
+            return "Vision sees a hand — confirm it is at the deck"
+        }
+    }
+
+    private var captureHandMotionStatusSystemImage: String {
+        switch captureEngine.handMotionState {
+        case .searching:   return "hand.raised.slash"
+        case .steady:      return "hand.raised"
+        case .movingRight: return "arrow.right"
+        case .movingLeft:  return "arrow.left"
+        }
+    }
+
+    private var captureHandMotionStatusColor: Color {
+        switch captureEngine.handMotionState {
+        case .searching:   return .secondary
+        case .steady, .movingRight, .movingLeft: return .green
+        }
+    }
+
     private var diagnosticsCameraValue: String {
         guard captureEngine.isCameraActive else { return "false" }
         if captureEngine.isRoutineRecording || captureEngine.cxlIsRecording {
@@ -2646,6 +2691,17 @@ struct MacAnalyzerView: View {
                     systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "circle.dashed" : "video",
                     color: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .secondary : .green
                 )
+                // Slice X.1: dedicated Hand chip so the user knows whether the
+                // Vision pipeline is actually tracking a hand. "Camera Ready"
+                // alone means a device is selected; it does NOT mean motion
+                // is reaching the notation builder.
+                captureInputStatusTile(
+                    title: "Hand",
+                    value: captureHandMotionStatusValue,
+                    detail: captureHandMotionStatusDetail,
+                    systemImage: captureHandMotionStatusSystemImage,
+                    color: captureHandMotionStatusColor
+                )
                 captureInputStatusTile(
                     title: "Mixer MIDI",
                     value: mixerStatusValue,
@@ -2660,6 +2716,46 @@ struct MacAnalyzerView: View {
                     systemImage: "applewatch",
                     color: relayedWatchCaptureStore.importedSessions.isEmpty ? .secondary : .green
                 )
+            }
+
+            // Slice X.1.1: discoverable calibration entry point. The deck
+            // calibration overlay lives over the live camera preview on the
+            // Practice tab (Advanced -> Camera Deck only has the controls,
+            // not a preview). To make the overlay actually visible AND
+            // editable in one click, we unlock calibration AND enable live
+            // input AND switch to Practice — the user lands on the live
+            // preview with the deck/mixer boxes drawn on top, ready to
+            // drag. A paired Lock button (only shown while unlocked) puts
+            // the user back here with calibration frozen for recording.
+            HStack(alignment: .top, spacing: 10) {
+                if captureEngine.calibrationLocked {
+                    Button {
+                        captureEngine.calibrationLocked = false
+                        liveInputEnabled = true
+                        workspaceTab = .practice
+                    } label: {
+                        Label("Camera deck setup", systemImage: "viewfinder")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.isRoutineRecording)
+                } else {
+                    Button {
+                        captureEngine.calibrationLocked = true
+                    } label: {
+                        Label("Lock calibration", systemImage: "lock.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.isRoutineRecording)
+                }
+
+                Text("Point the camera at your deck and hand. Drag the deck and mixer boxes on the live preview, then Lock calibration. Record movement requires the deck and hand to be visible to the camera — \"Camera Ready\" alone is not enough.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // MIDI source picker + Learn crossfader / Clear mapping live
