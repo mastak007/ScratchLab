@@ -3544,7 +3544,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains(".sheet(isPresented: $showingCoachPreview)"))
         XCTAssertTrue(source.contains("CoachPreviewView()"))
         XCTAssertTrue(source.contains("title: \"3D Coach Demo\""))
-        XCTAssertTrue(source.contains("subtitle: \"Preview the coach model reacting to your input\""))
+        XCTAssertTrue(source.contains("subtitle: \"Preview the 3D coach model animation\""))
         XCTAssertTrue(source.contains("action: { showingCoachPreview = true }"))
         XCTAssertFalse(source.contains("Debug only"))
     }

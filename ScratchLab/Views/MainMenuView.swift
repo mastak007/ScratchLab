@@ -240,7 +240,7 @@ struct MainMenuView: View {
             #if DEBUG && canImport(RealityKit)
             MenuButton(
                 title: "3D Coach Demo",
-                subtitle: "Preview the coach model reacting to your input",
+                subtitle: "Preview the 3D coach model animation",
                 icon: "cube.transparent",
                 accent: Color(hex: "8B5CF6"),
                 action: { showingCoachPreview = true }
@@ -680,7 +680,6 @@ struct MenuButton: View {
                     Text(subtitle)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.68))
-                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 
