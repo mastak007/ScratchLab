@@ -44,6 +44,16 @@ final class PreviewView: NSView {
 
     override func layout() {
         super.layout()
+        // Slice X.Perf.1: AVCaptureVideoPreviewLayer is a CALayer, so a
+        // bare `frame = bounds` assignment runs through Core Animation's
+        // default 0.25 s easeInOut implicit transition. During a live
+        // window resize that produces a visible "preview chases the
+        // window edge" lag. Wrapping the assignment in a CATransaction
+        // with actions disabled snaps the layer to the new bounds in
+        // the same render cycle as the host view.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         previewLayer.frame = bounds
+        CATransaction.commit()
     }
 }
