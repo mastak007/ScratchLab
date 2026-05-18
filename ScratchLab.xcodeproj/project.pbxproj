@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
+		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
+		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
+		VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */; };
 		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
 		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
 		10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000008 /* DJRigLayoutDetector.swift */; };
@@ -199,6 +203,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
+		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
+		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
 		0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ReadingDeprecated.swift"; sourceTree = "<group>"; };
 		148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+WritingDeprecated.swift"; sourceTree = "<group>"; };
 		176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionSharePresenter.swift; sourceTree = "<group>"; };
@@ -365,6 +372,7 @@
 				SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */,
 				STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */,
 				SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */,
+				VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -482,6 +490,7 @@
 				A2000030 /* StagingInspectorView.swift */,
 				A2000033 /* ScratchCoachViews.swift */,
 				C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */,
+				VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -495,6 +504,7 @@
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
 				8EDD250716FA81582843E833 /* WatchMotionCapture.swift */,
+				VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -827,6 +837,7 @@
 				B5AA0007A1B2C3D4E5F60709 /* ScratchFormulaRenderer.swift in Sources */,
 				B5AA0008A1B2C3D4E5F60709 /* ScratchCoachViews.swift in Sources */,
 				B5AA0009A1B2C3D4E5F60709 /* ScratchMotionAnalysis.swift in Sources */,
+				VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */,
 				C71F1103A1B2C3D4E5F60711 /* ClickTrackEngine.swift in Sources */,
 				C71F1203A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */,
 				C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */,
@@ -878,6 +889,8 @@
 				D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
+				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
+				VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */,
 				A1000018 /* ScratchFormulaAST.swift in Sources */,
 				A1000019 /* ScratchFormulaCatalog.swift in Sources */,
 				A1000020 /* ScratchFormulaParser.swift in Sources */,
@@ -945,6 +958,7 @@
 				SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */,
 				STT0001000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift in Sources */,
 				SARF0001000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift in Sources */,
+				VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

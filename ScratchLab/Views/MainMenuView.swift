@@ -18,6 +18,9 @@ struct MainMenuView: View {
     @State private var showingPerformerMonitor = false
     @State private var showingCoachPreview = false
     @State private var showingDemoMode = false
+    #if DEBUG
+    @State private var showingVirtualPlatterPrototype = false
+    #endif
 
     private var isIOSAppOnMac: Bool {
         ProcessInfo.processInfo.isiOSAppOnMac
@@ -65,6 +68,11 @@ struct MainMenuView: View {
         .navigationDestination(isPresented: $showingDemoMode) {
             DemoModeView()
         }
+        #if DEBUG
+        .navigationDestination(isPresented: $showingVirtualPlatterPrototype) {
+            VirtualPlatterPrototypeView()
+        }
+        #endif
         .navigationDestination(isPresented: $showingCompanionCam) {
             if isIOSAppOnMac {
                 UnsupportedCompanionCameraView()
@@ -244,6 +252,16 @@ struct MainMenuView: View {
                 icon: "cube.transparent",
                 accent: Color(hex: "8B5CF6"),
                 action: { showingCoachPreview = true }
+            )
+            #endif
+
+            #if DEBUG
+            MenuButton(
+                title: "Virtual Platter Prototype",
+                subtitle: "Developer-only scratch-on-glass slice (no capture/ML)",
+                icon: "circle.circle",
+                accent: Color(hex: "F59E0B"),
+                action: { showingVirtualPlatterPrototype = true }
             )
             #endif
         }
