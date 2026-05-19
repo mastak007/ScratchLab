@@ -11,11 +11,14 @@
 // the `#if DEBUG` "Virtual Platter Prototype" entry in MainMenuView.swift.
 
 import SwiftUI
+import AVFoundation
+import os
 
 struct VirtualPlatterPrototypeView: View {
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var platter = VirtualPlatter()
+    @StateObject private var audio = VirtualPlatterAudio()
     @State private var mode: Mode = .freeSpin
 
     // Stage state
@@ -25,6 +28,36 @@ struct VirtualPlatterPrototypeView: View {
                                                         requiredCoverage: 0.45)
     @State private var assessment = LockAssessment(phase: .waiting, progress: 0)
     @State private var showSuccessFlare = false
+
+    /// Motor transport. While on, the virtual record spins clockwise at a
+    /// constant speed (advances record phase + the marker). Hand-scratch
+    /// works whether this is on or off. Identical model in both modes.
+    @State private var isPlaying = false
+
+    /// THE single source of truth (record turns, 0.0 = 12 o'clock). The
+    /// View owns and advances it; it drives the marker directly and is the
+    /// target the audio engine chases. Finger owns it while gripped; the
+    /// motor advances it only when finger is up and Play is on.
+    @State private var recordPhase: Double = 0
+    /// Last platter angle consumed, to derive per-update finger deltas.
+    @State private var lastPlatterAngle: CGFloat = 0
+    /// True while the clean one-shot `ahhh` is armed (record phase is still
+    /// in the silent prep zone before the cue this turn).
+    @State private var sampleArmed = true
+
+    /// Gray ghost arc = the FULL scratch movement zone (turns of the
+    /// record), drawn from 12 o'clock clockwise. The cue is the MIDDLE of
+    /// the arc; before it is silent prep, after it record movement reads the
+    /// bundled sample at the matching position.
+    private static var ghostFraction: CGFloat { CGFloat(VirtualPlatterSampleMapper.ghostSpan) }
+    private static var cueFractionOfGhost: CGFloat { CGFloat(VirtualPlatterSampleMapper.cueFraction) }
+
+    /// Record phase (turns) of the cue = middle of the gray arc.
+    private var cuePhase: Double { VirtualPlatterSampleMapper.cuePhase }
+
+    /// One full virtual rotation every N seconds under the motor.
+    private let motorRotationSeconds: Double = 3.0
+    private var motorTurnsPerTick: Double { (1.0 / motorRotationSeconds) / 60.0 }
 
     // Short, snappy target: a ~1.8s window that opens quickly. With the
     // tuned speed normalization, 0.18 normalized ≈ a real (not feather)
@@ -70,6 +103,8 @@ struct VirtualPlatterPrototypeView: View {
         .onChange(of: mode) { _, _ in
             resetStage()
         }
+        .onAppear { audio.start() }
+        .onDisappear { audio.stop() }
     }
 
     // MARK: - Header
@@ -128,12 +163,14 @@ struct VirtualPlatterPrototypeView: View {
                                 isActive: platter.isDragging)
 
                     if mode == .stage {
-                        GhostTargetArc(stroke: Self.defaultStroke)
+                        GhostTargetArc(stroke: Self.defaultStroke,
+                                       fraction: Self.ghostFraction,
+                                       cueFraction: Self.cueFractionOfGhost)
                             .frame(width: side * 0.82, height: side * 0.82)
                     }
 
                     LiveRibbon(
-                        markerAngle: platter.angle,
+                        markerAngle: CGFloat(recordPhase * 2 * .pi),
                         direction: platter.direction,
                         normalizedSpeed: platter.normalizedSpeed
                     )
@@ -142,7 +179,9 @@ struct VirtualPlatterPrototypeView: View {
                     PlatterMarker(normalizedSpeed: platter.normalizedSpeed,
                                   isActive: platter.isDragging)
                         .frame(width: side, height: side)
-                        .rotationEffect(.radians(Double(platter.angle)))
+                        // The single source of truth: marker IS the record
+                        // phase (turns → radians) that the audio chases.
+                        .rotationEffect(.radians(recordPhase * 2 * .pi))
 
                     centerLabel
 
@@ -172,18 +211,37 @@ struct VirtualPlatterPrototypeView: View {
                             platter.updateDrag(to: value.location,
                                                center: center,
                                                timestamp: now)
+                            // Finger owns the record now — advance phase
+                            // immediately (no motor) for low latency.
+                            advanceRecord(allowMotor: false)
                         }
                         .onEnded { _ in
                             platter.endDrag()
+                            // Consume the final finger delta; finger is up
+                            // so the motor takes over on the next tick.
+                            advanceRecord(allowMotor: false)
                         }
                 )
             }
             .aspectRatio(1, contentMode: .fit)
             .frame(maxWidth: 340)
 
+            Button(action: togglePlay) {
+                HStack(spacing: 8) {
+                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                    Text(isPlaying ? "Stop" : "Play")
+                }
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(isPlaying ? Color(hex: "EF4444") : Color(hex: "22C55E"),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
             Text(mode == .stage
-                 ? "Spin the record to match the dim ghost target during its window."
-                 : "Drag clockwise for forward, counter-clockwise for back.")
+                 ? "Press Play, then spin the record to match the ghost. The ahhh is fixed to the record: hold to stop, push/pull to move through it."
+                 : "Press Play: the ahhh follows the record. Hold to stop, push forward to advance, pull back to reverse.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.62))
                 .multilineTextAlignment(.center)
@@ -339,13 +397,90 @@ struct VirtualPlatterPrototypeView: View {
 
     // MARK: - Stage logic
 
+    /// Re-cue: record phase 0 = 12 o'clock, marker reset, sample re-armed
+    /// and stopped (clean slate for the next cue crossing).
+    private func cueRecord() {
+        platter.reset()
+        recordPhase = 0
+        lastPlatterAngle = platter.angle      // == 0 after reset
+        sampleArmed = true
+        audio.resetSample()
+    }
+
+    /// The ONE place record phase moves. Finger (when gripped & actually
+    /// moving) owns it; otherwise the motor advances it when Play is on and
+    /// the finger is up. Holding the record still freezes the phase.
+    ///
+    /// Audio (clean baseline): crossing the cue fires the unmodified `ahhh`
+    /// from the top via `AVAudioPlayer`; from then on the sample is *gated by
+    /// record motion* — it plays only while the record is actually advancing
+    /// and `pause()`s the instant the record is held still or the finger
+    /// lifts. Pulling back before the cue stops + re-arms it. `pause/resume`
+    /// keep the read position so it stays bit-exact and glitch-free.
+    ///
+    /// TODO: true record-owned playback (sample position driven directly by
+    /// record delta) is still the goal but is PARKED. A position-following
+    /// `AVAudioSourceNode` was tried and degraded the sample (audible
+    /// wobble), so it was rolled back — clean audio quality is the priority.
+    /// Any future attempt must NOT regress the clean `ahhh`; do not attempt
+    /// reverse or sample-progress-by-delta until a glitch-free approach is
+    /// proven. The pure `VirtualPlatterSampleMapper.normalizedSamplePosition`
+    /// (already unit-tested) is the intended math when that day comes.
+    private func advanceRecord(allowMotor: Bool) {
+        let delta = Double(platter.angle - lastPlatterAngle) / (2 * .pi)
+        lastPlatterAngle = platter.angle
+
+        // Is the record phase actually advancing right now? Reuse the exact
+        // condition that gates the phase update below: finger gripped and not
+        // held still, OR the motor driving it with the finger up. Held still
+        // / finger up with the motor off ⇒ not moving ⇒ the audio freezes.
+        let fingerMoving = platter.isDragging && platter.direction != .idle
+        let motorMoving = !platter.isDragging && allowMotor && isPlaying
+        let recordIsMoving = fingerMoving || motorMoving
+
+        if platter.isDragging {
+            // Finger owns the record; the tuned idle/hysteresis in the
+            // platter model decides "actually scratching" vs "held still".
+            if platter.direction != .idle {
+                recordPhase += delta
+            }
+            // else: gripped but still → HOLD (no phase change), motor off.
+        } else if allowMotor && isPlaying {
+            recordPhase += motorTurnsPerTick
+        }
+        // else: finger up, motor off → frozen.
+
+        // Motion-gated one-shot cue logic on the wrapped phase.
+        let fr = recordPhase - floor(recordPhase)
+        if fr < cuePhase {
+            if !sampleArmed {
+                audio.resetSample()   // pulled back before cue → reset + re-arm
+                sampleArmed = true
+            }
+        } else if sampleArmed {
+            audio.triggerOnce()       // first crossing this turn → clean ahhh
+            sampleArmed = false
+        } else if recordIsMoving {
+            audio.resume()            // record still moving → keep playing
+        } else {
+            audio.pause()             // held still / finger lifted → freeze now
+        }
+    }
+
+    private func togglePlay() {
+        isPlaying.toggle()
+        if isPlaying { cueRecord() }
+    }
+
     private func startStage() {
         evaluator.reset()
-        platter.reset()
         stageClock = 0
         assessment = LockAssessment(phase: .waiting, progress: 0)
         showSuccessFlare = false
         stageRunning = true
+        // Same record model — re-cue so sample start sits at the ghost
+        // start (12 o'clock). Audio is NOT gated by the drill.
+        cueRecord()
     }
 
     private func resetStage() {
@@ -354,13 +489,16 @@ struct VirtualPlatterPrototypeView: View {
         evaluator.reset()
         assessment = LockAssessment(phase: .waiting, progress: 0)
         withAnimation { showSuccessFlare = false }
+        cueRecord()
     }
 
     private func tick() {
-        // Run every frame in every mode so a finger held still on the
-        // record decays to "Still" and the ribbon shrinks, instead of
-        // freezing on a stale reading like a slider thumb.
+        // Keep the platter model's tuned idle/hysteresis fresh so a held
+        // finger reads as ".idle" and the record holds.
         platter.settle(at: ProcessInfo.processInfo.systemUptime)
+
+        // The single place the record phase advances (finger or motor).
+        advanceRecord(allowMotor: true)
 
         guard mode == .stage, stageRunning else { return }
         stageClock += 1.0 / 60.0
@@ -486,24 +624,37 @@ private struct PlatterMarker: View {
 
 private struct GhostTargetArc: View {
     let stroke: ScratchTargetStroke
+    /// Full scratch zone as a fraction of the ring (from 12 o'clock).
+    let fraction: CGFloat
+    /// Cue position as a fraction of the gray arc (~0.25 in from the start).
+    let cueFraction: CGFloat
 
     var body: some View {
-        // Dim, static target. ~30% of the ring; arrow conveys direction.
+        // Gray arc = the FULL required scratch movement (pull-back + push).
+        // It starts at 12 o'clock. The bright tick is the cue/sample start,
+        // sitting ~25% in — so the first part of the arc is silent prep.
         ZStack {
             Circle()
-                .trim(from: 0, to: 0.30)
+                .trim(from: 0, to: fraction)
                 .stroke(
-                    Color.white.opacity(0.22),
+                    Color.white.opacity(0.20),
                     style: StrokeStyle(lineWidth: 14, lineCap: .round)
                 )
-                .rotationEffect(.degrees(-15))
+                .rotationEffect(.degrees(-90))
+
+            // Bright cue tick INSIDE the gray arc = where ahhh starts.
+            Circle()
+                .trim(from: fraction * cueFraction,
+                      to: fraction * cueFraction + 0.013)
+                .stroke(
+                    Color(hex: "00D4FF"),
+                    style: StrokeStyle(lineWidth: 18, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+
             Image(systemName: stroke.direction == .forward ? "arrow.clockwise" : "arrow.counterclockwise")
                 .font(.system(size: 16, weight: .black))
                 .foregroundColor(.white.opacity(0.35))
-                .offset(x: 0, y: -1)
-                .position(x: 0, y: 0)
-                .offset(x: 0, y: 0)
-                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 }
@@ -572,6 +723,121 @@ private struct SuccessFlare: View {
                 pop = true
             }
         }
+    }
+}
+
+// MARK: - Record audio (DEBUG prototype only)
+
+/// Clean baseline + motion gating. Built on the dead-simple `AVAudioPlayer`
+/// path that was audible and clean on device: the bundled `ahhh` played
+/// forward at its original speed/pitch (`enableRate = false`, bit-exact).
+/// The View starts it from the top when the record phase crosses the cue,
+/// then `pause()`s / `resume()`s it as the record stops / moves so the sample
+/// is record-gated instead of an autonomous one-shot. `pause()` keeps the
+/// read position, so resuming continues seamlessly — no restart, no glitch.
+///
+/// Deliberately NOT a scrubber/chunk-scheduler/resampler and NOT reverse —
+/// those produced silence / mangled "boohooing" audio.
+///
+/// TODO: record-owned playback (sample position driven directly by record
+/// delta) is still wanted but PARKED. Two approaches have now regressed the
+/// audio on device and were rolled back: (1) per-tick
+/// `AVAudioPlayerNode.scheduleBuffer(...[.interrupts])` chunking → silence /
+/// "boohoo"; (2) a position-following `AVAudioSourceNode` (linear-interpolated
+/// glide to a record-driven read position) → audible wobble. Clean sample
+/// quality is the priority over delta-accurate scrubbing. Do NOT reattempt
+/// reverse or sample-progress-by-delta until a genuinely glitch-free read is
+/// proven offline first. The pure, unit-tested
+/// `VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase:)` holds
+/// the intended math for that future work.
+///
+/// No capture/export/ML/dataset. iOS-only, DEBUG-gated; delete with prototype.
+final class VirtualPlatterAudio: NSObject, ObservableObject, AVAudioPlayerDelegate {
+
+    private var player: AVAudioPlayer?
+
+    /// True once the one-shot has played all the way through this turn. While
+    /// set, `resume()` refuses to restart it: the sample only plays again
+    /// after a pull-back before the cue re-arms it (`resetSample`). This is
+    /// what stops it running autonomously after the finger lifts.
+    private var playbackFinished = false
+
+    override init() {
+        super.init()
+        guard
+            let url = Bundle.main.url(forResource: "ahhh",
+                                      withExtension: "wav",
+                                      subdirectory: "VirtualPlatter"),
+            let player = try? AVAudioPlayer(contentsOf: url)
+        else {
+            return
+        }
+        player.enableRate = false      // no pitch/time warp — original ahhh
+        player.numberOfLoops = 0       // one-shot
+        player.delegate = self         // detect natural end of the one-shot
+        player.prepareToPlay()
+        self.player = player
+    }
+
+    func start() {
+        #if canImport(UIKit)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, options: [.mixWithOthers])
+        try? session.setActive(true)
+        #endif
+        player?.prepareToPlay()
+    }
+
+    func stop() {
+        player?.stop()
+        #if canImport(UIKit)
+        try? AVAudioSession.sharedInstance().setActive(false,
+            options: [.notifyOthersOnDeactivation])
+        #endif
+    }
+
+    /// Start the unmodified `ahhh` from the top — the record just crossed the
+    /// cue this turn.
+    func triggerOnce() {
+        guard let player else { return }
+        player.stop()
+        player.currentTime = 0
+        playbackFinished = false
+        player.play()
+    }
+
+    /// Resume from the paused position while the record keeps moving forward
+    /// past the cue. No-op if already playing, or if the one-shot has already
+    /// finished this turn — it never auto-replays on its own.
+    func resume() {
+        guard let player, !player.isPlaying, !playbackFinished else { return }
+        player.play()
+    }
+
+    /// Freeze the sample exactly where it is (record held still / finger
+    /// lifted). `pause()` keeps the read position so a later `resume()`
+    /// continues seamlessly — no restart, no glitch, sample stays clean.
+    func pause() {
+        guard let player, player.isPlaying else { return }
+        player.pause()
+    }
+
+    /// Stop + rewind so the next cue crossing plays cleanly from the top.
+    func resetSample() {
+        guard let player else { return }
+        player.stop()
+        player.currentTime = 0
+        playbackFinished = false
+    }
+
+    /// One-shot reached its natural end: latch it so motion can't re-trigger
+    /// it until a pull-back before the cue re-arms the sample.
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        playbackFinished = true
+    }
+
+    deinit {
+        player?.stop()
     }
 }
 

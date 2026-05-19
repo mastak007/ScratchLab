@@ -26,6 +26,7 @@
 		219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
 		219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
 		219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
+		VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
 		AA400001 /* Resources/reference_beginner in Resources */ = {isa = PBXBuildFile; fileRef = A2000040 /* Resources/reference_beginner */; };
 		AA400002 /* Resources/reference_champ in Resources */ = {isa = PBXBuildFile; fileRef = A2000041 /* Resources/reference_champ */; };
 		AA400003 /* Resources/reference_pro in Resources */ = {isa = PBXBuildFile; fileRef = A2000042 /* Resources/reference_pro */; };
@@ -269,6 +270,7 @@
 		A2000034 /* ScratchMotionAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionAnalysis.swift; sourceTree = "<group>"; };
 		A2000035 /* Resources/CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
 		A2000036 /* Resources/Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
+		VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
 		A2000040 /* Resources/reference_beginner */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_beginner; sourceTree = "<group>"; };
 		A2000041 /* Resources/reference_champ */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_champ; sourceTree = "<group>"; };
 		A2000042 /* Resources/reference_pro */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_pro; sourceTree = "<group>"; };
@@ -455,6 +457,7 @@
 				A2000032 /* Resources/CoachDemoAudio */,
 				A2000035 /* Resources/CoachDemoMotion */,
 				A2000036 /* Resources/Notation */,
+				VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */,
 				A2000040 /* Resources/reference_beginner */,
 				A2000041 /* Resources/reference_champ */,
 				A2000042 /* Resources/reference_pro */,
@@ -785,6 +788,7 @@
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
 				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
 				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
+				VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */,
 				AA400001 /* Resources/reference_beginner in Resources */,
 				AA400002 /* Resources/reference_champ in Resources */,
 				AA400003 /* Resources/reference_pro in Resources */,

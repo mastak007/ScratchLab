@@ -66,6 +66,36 @@ enum PlatterGeometry {
     }
 }
 
+// MARK: - Record phase to sample position
+
+/// Maps the virtual record phase to the sample position that should be heard.
+///
+/// The sample start is a fixed cue point inside the visible drill zone. The
+/// mapping is intentionally pure so audio playback can be driven by record
+/// motion without letting the player run as an autonomous one-shot.
+enum VirtualPlatterSampleMapper {
+    static let ghostSpan = 0.45
+    static let cueFraction = 0.5
+
+    static var cuePhase: Double { ghostSpan * cueFraction }
+
+    /// Returns a normalized sample position for the current record phase.
+    ///
+    /// `nil` means the marker is in the silent prep zone before the cue for
+    /// this turn. After the cue, the remaining turn is mapped linearly across
+    /// the whole sample, so moving the record backward moves back through the
+    /// same sample positions.
+    static func normalizedSamplePosition(recordPhase: Double) -> Double? {
+        guard recordPhase.isFinite else { return nil }
+
+        let fraction = recordPhase - floor(recordPhase)
+        guard fraction >= cuePhase else { return nil }
+
+        let audibleSpan = max(1.0 - cuePhase, 0.0001)
+        return min(max((fraction - cuePhase) / audibleSpan, 0), 1)
+    }
+}
+
 // MARK: - Virtual platter
 
 /// Tracks the virtual record position driven by a finger drag and derives

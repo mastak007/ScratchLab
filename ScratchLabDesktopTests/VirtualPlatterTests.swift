@@ -53,6 +53,40 @@ final class VirtualPlatterTests: XCTestCase {
         XCTAssertEqual(down, .pi / 2, accuracy: 0.0001)
     }
 
+    // MARK: - Sample position mapping
+
+    func testSamplePositionIsSilentBeforeFixedCue() {
+        let beforeCue = VirtualPlatterSampleMapper.cuePhase - 0.001
+        XCTAssertNil(VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase: beforeCue))
+    }
+
+    func testSamplePositionStartsAtFixedCueAndAdvancesWithRecordPhase() {
+        let cue = VirtualPlatterSampleMapper.cuePhase
+        let cuePosition = VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase: cue)
+        XCTAssertNotNil(cuePosition)
+        XCTAssertEqual(cuePosition ?? -1, 0, accuracy: 0.0001)
+
+        let later = VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase: cue + 0.25)
+        XCTAssertNotNil(later)
+        XCTAssertGreaterThan(later ?? 0, 0)
+
+        let farther = VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase: cue + 0.5)
+        XCTAssertNotNil(farther)
+        XCTAssertGreaterThan(farther ?? 0, later ?? 0,
+                             "Forward record movement must advance sample position")
+    }
+
+    func testSamplePositionMovesBackwardWhenRecordPhaseMovesBackward() {
+        let cue = VirtualPlatterSampleMapper.cuePhase
+        let forwardPosition = VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase: cue + 0.5)
+        let pulledBackPosition = VirtualPlatterSampleMapper.normalizedSamplePosition(recordPhase: cue + 0.2)
+
+        XCTAssertNotNil(forwardPosition)
+        XCTAssertNotNil(pulledBackPosition)
+        XCTAssertLessThan(pulledBackPosition ?? 1, forwardPosition ?? 0,
+                          "Backward record movement must move backward through the sample")
+    }
+
     // MARK: - Direction detection
 
     func testClockwiseDragIsForward() {
