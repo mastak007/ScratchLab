@@ -1235,8 +1235,13 @@ struct MacAnalyzerView: View {
         return captureEngine.isRoutineRecording ? "Stop Recording" : "Start Recording"
     }
 
+    /// Record availability is driven by REAL capture readiness, not status
+    /// copy: you can only start a take when the selected audio input is
+    /// actually present (in the engine's discovered devices). While a take
+    /// is recording the button is the Stop control and must stay enabled.
     private var routineStartDisabled: Bool {
-        false
+        if captureEngine.isRoutineRecording { return false }
+        return !captureEngine.isSelectedAudioInputAvailable
     }
 
     private var routineMetadataStatusMessage: String? {
@@ -2160,11 +2165,17 @@ struct MacAnalyzerView: View {
                     color: captureEngine.isCameraActive ? .green : .secondary,
                     systemImage: captureEngine.isCameraActive ? "video" : "circle.dashed"
                 )
+                // Truthful: green + real name only when the selected input
+                // is actually present. A selected-but-missing device reads
+                // "Unavailable" (amber) instead of falsely showing a name.
+                let audioReady = hasAudioDevice && captureEngine.isSelectedAudioInputAvailable
                 headerStatusPill(
                     title: "Audio",
-                    value: hasAudioDevice ? captureEngine.selectedAudioDeviceName : "No input",
-                    color: hasAudioDevice ? .green : .secondary,
-                    systemImage: hasAudioDevice ? "waveform" : "circle.dashed"
+                    value: audioReady
+                        ? captureEngine.selectedAudioDeviceName
+                        : (hasAudioDevice ? "Unavailable" : "No input"),
+                    color: audioReady ? .green : (hasAudioDevice ? .orange : .secondary),
+                    systemImage: audioReady ? "waveform" : "circle.dashed"
                 )
                 headerStatusPill(
                     title: "Signal",
@@ -2496,7 +2507,7 @@ struct MacAnalyzerView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : Color(nsColor: .systemGreen))
-                .disabled(routineCountInBeat != nil)
+                .disabled(routineCountInBeat != nil || routineStartDisabled)
 
                 // After a take exists, Review this take is the dominant
                 // next step. Save take / Record another demote to bordered
@@ -4267,6 +4278,13 @@ struct MacAnalyzerView: View {
                 Text(captureEngine.selectedAudioDeviceStatusLine)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
+
+                // Advanced-only: the input the running session actually
+                // attached vs. what is selected. Names only, no UUIDs.
+                Text(captureEngine.captureAudioDiagnosticsLine)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
 
                 Text("ScratchLab works best when your deck audio is routed here.")
                     .font(.system(size: 12, weight: .medium))

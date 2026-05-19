@@ -1221,6 +1221,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
     @Published var audioLevel: Float = 0
     @Published private(set) var hasPublishedAudioLevel = false
+    /// The audio device uniqueID actually attached to the running capture
+    /// session by `configureCaptureSession` ("" when none). The UI and
+    /// diagnostics read this so what is shown == what is captured/recorded,
+    /// instead of trusting the requested selection alone.
+    @Published private(set) var activeCaptureAudioDeviceUniqueID: String = ""
     @Published var handDetected = false
     @Published var handPosition: CGPoint?
     @Published var handMotionState: HandMotionState = .searching
@@ -1329,6 +1334,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     var selectedAudioDeviceStatusLine: String {
         let selectedName = isSelectedAudioInputAvailable ? selectedAudioDeviceName : "No input found"
         return "\(audioReadinessText) — \(selectedName)\(isSelectedAudioInputAvailable ? " — \(audioSignalStatusText)" : "")"
+    }
+
+    /// Compact Advanced-only audio diagnostics. Device NAMES only — never
+    /// UUIDs or file paths — so it stays safe even if surfaced. States
+    /// exactly which input the running session attached vs. what is
+    /// selected, so a silent mismatch is visible instead of guessed.
+    var captureAudioDiagnosticsLine: String {
+        let selectedName = isSelectedAudioInputAvailable ? selectedAudioDeviceName : "none"
+        guard !activeCaptureAudioDeviceUniqueID.isEmpty else {
+            return "Capture input: not attached · Selected: \(selectedName)"
+        }
+        let activeRaw = availableAudioDevices
+            .first(where: { $0.uniqueID == activeCaptureAudioDeviceUniqueID })?
+            .localizedName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let activeDisplay = (activeRaw?.isEmpty == false)
+            ? displayAudioDeviceName(activeRaw!)
+            : "attached input"
+        if activeCaptureAudioDeviceUniqueID != selectedAudioDeviceUniqueID {
+            return "Capturing: \(activeDisplay) ⚠︎ selected “\(selectedName)” is not the attached input"
+        }
+        return "Capturing: \(activeDisplay) · \(audioSignalStatusText)"
     }
 
     var hasSeratoCaptureAudioDeviceAvailable: Bool {
@@ -1857,6 +1884,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func stop() {
         isRunning = false
         isCameraActive = false
+        activeCaptureAudioDeviceUniqueID = ""
         scratchDetector.reset()
         rigLayoutDetector.reset()
         handDirectionTracker.reset()
@@ -2079,7 +2107,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
 
-        selectedAudioDeviceUniqueID = directCaptureDeviceUID
+        // The user pressed "use direct Serato capture": this is an explicit
+        // choice and must be tracked as such (it previously bypassed origin
+        // tracking, so a later automatic refresh treated it as non-explicit
+        // and could override it).
+        setSelectedAudioDeviceUniqueID(directCaptureDeviceUID, origin: .explicitUserChoice)
         directCaptureStatus = "\(seratoDirectCaptureDeviceName) is selected and feeding the analyzer."
     }
 
@@ -2472,9 +2504,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
 
+        // Carry the user's explicit choice into the priority chain. When the
+        // explicitly-selected device is still present, the chain returns it
+        // (above Serato/default), so an automatic refresh (Serato launch,
+        // tab/scene change, init) can no longer silently replace it. Only
+        // when that device is genuinely gone does the fallback run. This is
+        // the single source of the "input keeps switching" instability.
+        let explicitSelectionID = (hasExplicitUserAudioSelection && !currentSelection.isEmpty)
+            ? currentSelection
+            : nil
         let decision = Self.preferredCaptureAudioDevice(
             from: availableChoices,
-            explicitSelectionUniqueID: nil,
+            explicitSelectionUniqueID: explicitSelectionID,
             previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
             systemDefaultUniqueID: defaultSystemAudioInputUniqueID()
         )
@@ -2701,6 +2742,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         audioDevices: [AVCaptureDevice],
         videoDevices: [AVCaptureDevice]
     ) {
+        // Never tear the session down mid-take. `configureCaptureSession`
+        // removes every input/output and rebuilds; doing that while
+        // `movieOutput` is recording silently drops the take's audio. The
+        // only caller that runs before recording (startRoutineRecording)
+        // does so with movieOutput NOT recording, so this guard is safe and
+        // protects against any reconfigure (device-change/refresh) landing
+        // during an active recording. Runs on sessionQueue, same queue that
+        // starts/stops movieOutput, so this read is consistent.
+        if movieOutput.isRecording {
+            NSLog("[MacCaptureEngine] Skipped capture-session reconfigure: a take is recording (audio device change deferred until the take ends).")
+            return
+        }
+
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .high
 
@@ -2718,10 +2772,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureSession.addInput(videoInput)
         }
 
+        var attachedAudioUniqueID = ""
         if let audioDevice = audioDevices.first(where: { $0.uniqueID == selectedAudioID }),
            let audioInput = try? AVCaptureDeviceInput(device: audioDevice),
            captureSession.canAddInput(audioInput) {
             captureSession.addInput(audioInput)
+            attachedAudioUniqueID = audioDevice.uniqueID
+        }
+        if attachedAudioUniqueID != selectedAudioID {
+            NSLog("[MacCaptureEngine] Requested audio input was not attached to the capture session (requested=\(selectedAudioID.isEmpty ? "<none>" : "set") attached=\(attachedAudioUniqueID.isEmpty ? "<none>" : "set")). Recording/detection will reflect the attached input.")
         }
 
         if captureSession.canAddOutput(videoOutput) {
@@ -2749,6 +2808,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
         Task { @MainActor in
             self.isCameraActive = self.captureSession.isRunning
+            self.activeCaptureAudioDeviceUniqueID = attachedAudioUniqueID
         }
     }
 
