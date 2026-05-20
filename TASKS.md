@@ -1057,3 +1057,19 @@ Keep working top-to-bottom from here once the checked items above are complete.
     - Add/update tests.
     - Run build/test/capture pipeline/git diff check.
   - Completed: renamed the Review stage card to `Captured Notation`, changed captured partial copy to `Audio-only notation`, `Movement direction was not detected for this take.`, and `Record movement not detected`, kept full detected mode on real `recordMovementEvents`, filtered captured detection-source display so captured mode does not surface demo/template labels, enlarged the partial captured card with a stronger time grid plus a 108 px audio lane and larger rounded audio blocks, kept `No fader data` explicit when fader events are absent, updated notation/review source regressions for the new wording and captured/template separation, and verified with `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' build`, a clean rerun of `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' test` using an isolated derived-data path, `python3 scripts/test_capture_pipeline.py`, full `./scripts/build.sh`, and `git diff --check`.
+
+---
+
+## Deprioritized / out-of-scope (planning amendment)
+
+Companion to the planning amendment landed in `AI_CONTEXT.md`, `docs/current_architecture_reality.md`, `docs/capture_spec_v1.md`, and `docs/product_roadmap.md`. Items below are not on any consumer milestone and should not pick up implementation effort without an explicit roadmap revision.
+
+| Existing plan | Status after amendment | Notes |
+|---|---|---|
+| "Full virtual platter" framing wherever it appears | **Revise** | Replace with "teaching platter" framing. Make clear the platter alone teaches baby-scratch-class techniques. |
+| Any "DJ rig in the app" / "perform in ScratchLab" marketing copy | **Revise** | Reposition as coaching. `AI_CONTEXT.md` → *What ScratchLab is — and is not* is the canonical positioning. |
+| Generic "audio engine" tasks not tied to capture, notation playback, or coaching feedback | **Deprioritize** | Move to research bucket; not part of consumer milestones. |
+| "Realtime live mixing" / "perform-out" features | **Deprioritize** | Pair with real DJ apps via Performer Monitor + Direct Capture instead. |
+| Free-form audio synthesis from motion | **Move to experimental** | R&D bucket only. |
+| Any plan that would require schema/format changes to support new techniques | **Block** | Techniques ride on target patterns, not new event types. Schema discipline preserved. |
+| Practice-mode complexity beyond the four-mode crossfader picker | **Defer** | Don't add a fifth mode until the four ship and we have user data. |

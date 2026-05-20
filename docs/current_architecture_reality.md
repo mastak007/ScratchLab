@@ -58,3 +58,22 @@
 - The transaction journal is explicit and reconstructable, but still file-based rather than database-backed.
 - Ambiguous quarantine cases remain intentionally unresolved until an operator can prove ownership safely.
 - Automated integration coverage is deterministic and targeted, not exhaustive for every device/network/power-loss timing edge.
+
+## Scope Guards (what we explicitly will not build)
+
+These are explicit non-goals as of the current planning amendment. They can be revisited only by a roadmap change, not by drift. See `AI_CONTEXT.md` for product framing and `docs/product_roadmap.md` for the track split.
+
+| Non-goal | Reason | What we do instead |
+|---|---|---|
+| Full audio-engine simulation (deck emulation, time-stretch, vinyl emulation) | Out of scope for a coaching platform; would balloon implementation and review surface. | Notation-driven scoring + camera + audio capture. Real DJ audio comes from the user's real hardware. |
+| Ultra-low-latency DJ audio architecture | Requires CoreAudio specialization and platform-specific tuning we don't currently need. The coaching loop is deterministic-notation-driven, not realtime-audio-driven. | Deterministic notation tick + post-hoc audio analysis. Latency budget tuned for coach feedback, not for live performance routing. |
+| Replacing Serato / rekordbox / Traktor / VDJ | Not the product. | Pair with them — Direct Capture, virtual audio routing, performer monitor. |
+| Free-form audio synthesis from scratch motion | Cool, but research. | Treat as optional R&D under "Studio / experimental"; never on the consumer critical path. |
+| Server-side training-data ingestion in v1 | Capture is local-first by design. | The pipeline already round-trips through local validation; cloud is optional. |
+
+### Architecture priorities (positive form)
+
+1. **Deterministic notation generation and scoring.** The chart is the contract.
+2. **Coaching / analysis / visualization correctness.** Beats raw audio realism every time.
+3. **Honest data capture.** Schema discipline, watch-sync semantics, fail-closed export gates.
+4. **Optional R&D layer** for audio synthesis, AR overlay, generative coach feedback — sandboxed away from the consumer build.

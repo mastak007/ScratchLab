@@ -310,3 +310,18 @@ Mark the take as invalid or retake it if any of these happen:
 - `docs/naming_convention.md`
 - `docs/metadata_schema.md`
 - `docs/staging_operations_runbook.md`
+
+---
+
+## Appendix: Notation extensions
+
+The notation file format does not need to change to support new technique families. The following capabilities ride on top of existing event types as target-side patterns and renderer behaviour — they do **not** introduce new fields, new schemas, or new validation rules.
+
+- **Crossfader state.** Already partly modeled. Continuous lane (open / closed) plus discrete events (cut on, cut off, transformer pulse) reuse the existing fader-event type.
+- **Cut timing.** Scored against target notation, but stored using the existing fader-event timing fields. Score is computed at review time; no on-disk score field is added.
+- **Technique families (chirp, transform, flare, etc.).** Defined as *target patterns* — sequences of stroke direction + fader-cut events expressed using the existing event types. Live in target/reference data, not in captured-take data.
+- **Overlay visualization.** Notation rendered as a transparent overlay on top of the camera feed in Practice and Performer Monitor. Purely a render concern; no schema impact.
+
+**Gate.** Anything that would require a schema change to support a new technique goes through the same review gate as any export-format change. The default answer is "express it as a target pattern over existing event types".
+
+See `AI_CONTEXT.md` → *Notation Extensions* for the strategic framing.
