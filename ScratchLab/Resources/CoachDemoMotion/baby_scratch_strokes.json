@@ -1,16 +1,16 @@
 {
   "demoEnd": 42.866625,
   "demoStart": 0.0,
-  "phraseEnd": 5.743,
+  "phraseEnd": 42.4,
   "phraseStart": 0.27,
   "scratchID": "baby",
   "strokes": [
     {
-      "direction": "forward",
-      "endProgress": 1.0,
+      "direction": "backward",
+      "endProgress": 0.0,
       "endTime": 0.778,
       "holdAfter": 0.292,
-      "startProgress": 0.0,
+      "startProgress": 1.0,
       "startTime": 0.27
     },
     {
@@ -22,11 +22,11 @@
       "startTime": 1.07
     },
     {
-      "direction": "forward",
-      "endProgress": 1.0,
+      "direction": "backward",
+      "endProgress": 0.0,
       "endTime": 1.763,
       "holdAfter": 0.077,
-      "startProgress": 0.0,
+      "startProgress": 1.0,
       "startTime": 1.46
     },
     {
@@ -38,35 +38,35 @@
       "startTime": 1.84
     },
     {
-      "direction": "forward",
-      "endProgress": 1.0,
+      "direction": "backward",
+      "endProgress": 0.0,
       "endTime": 2.913,
       "holdAfter": 0.077,
-      "startProgress": 0.0,
+      "startProgress": 1.0,
       "startTime": 2.605
     },
     {
-      "direction": "backward",
-      "endProgress": 0.0,
+      "direction": "forward",
+      "endProgress": 1.0,
       "endTime": 3.278,
       "holdAfter": 0.082,
-      "startProgress": 1.0,
+      "startProgress": 0.0,
       "startTime": 2.99
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 3.928,
+      "holdAfter": 0.202,
+      "startProgress": 1.0,
+      "startTime": 3.36
     },
     {
       "direction": "forward",
       "endProgress": 1.0,
-      "endTime": 3.928,
-      "holdAfter": 0.202,
-      "startProgress": 0.0,
-      "startTime": 3.36
-    },
-    {
-      "direction": "backward",
-      "endProgress": 0.0,
       "endTime": 4.453,
       "holdAfter": 0.067,
-      "startProgress": 1.0,
+      "startProgress": 0.0,
       "startTime": 4.13
     },
     {
@@ -84,9 +84,305 @@
       "holdAfter": 0.0,
       "startProgress": 1.0,
       "startTime": 4.895
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 6.5,
+      "holdAfter": 5.0,
+      "startProgress": 0.0,
+      "startTime": 5.743
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 12.0,
+      "holdAfter": 0.37,
+      "startProgress": 1.0,
+      "startTime": 11.5
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 12.878,
+      "holdAfter": 0.292,
+      "startProgress": 0.0,
+      "startTime": 12.37
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 13.478,
+      "holdAfter": 0.082,
+      "startProgress": 1.0,
+      "startTime": 13.17
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 13.863,
+      "holdAfter": 0.077,
+      "startProgress": 0.0,
+      "startTime": 13.56
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 14.468,
+      "holdAfter": 0.237,
+      "startProgress": 1.0,
+      "startTime": 13.94
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 15.013,
+      "holdAfter": 0.077,
+      "startProgress": 0.0,
+      "startTime": 14.705
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 15.378,
+      "holdAfter": 0.082,
+      "startProgress": 1.0,
+      "startTime": 15.09
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 16.028,
+      "holdAfter": 0.202,
+      "startProgress": 0.0,
+      "startTime": 15.46
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 16.553,
+      "holdAfter": 0.067,
+      "startProgress": 1.0,
+      "startTime": 16.23
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 16.903,
+      "holdAfter": 0.092,
+      "startProgress": 0.0,
+      "startTime": 16.62
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 17.843,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 16.995
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 18.6,
+      "holdAfter": 5.1,
+      "startProgress": 0.0,
+      "startTime": 17.843
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 24.1,
+      "holdAfter": 0.12,
+      "startProgress": 1.0,
+      "startTime": 23.7
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 24.728,
+      "holdAfter": 0.292,
+      "startProgress": 0.0,
+      "startTime": 24.22
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 25.328,
+      "holdAfter": 0.082,
+      "startProgress": 1.0,
+      "startTime": 25.02
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 25.713,
+      "holdAfter": 0.077,
+      "startProgress": 0.0,
+      "startTime": 25.41
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 26.318,
+      "holdAfter": 0.237,
+      "startProgress": 1.0,
+      "startTime": 25.79
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 26.863,
+      "holdAfter": 0.077,
+      "startProgress": 0.0,
+      "startTime": 26.555
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 27.228,
+      "holdAfter": 0.082,
+      "startProgress": 1.0,
+      "startTime": 26.94
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 27.878,
+      "holdAfter": 0.202,
+      "startProgress": 0.0,
+      "startTime": 27.31
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 28.403,
+      "holdAfter": 0.067,
+      "startProgress": 1.0,
+      "startTime": 28.08
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 28.753,
+      "holdAfter": 0.092,
+      "startProgress": 0.0,
+      "startTime": 28.47
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 29.693,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 28.845
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 30.45,
+      "holdAfter": 5.25,
+      "startProgress": 0.0,
+      "startTime": 29.693
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 36.05,
+      "holdAfter": 0.12,
+      "startProgress": 1.0,
+      "startTime": 35.7
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 36.678,
+      "holdAfter": 0.292,
+      "startProgress": 0.0,
+      "startTime": 36.17
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 37.278,
+      "holdAfter": 0.082,
+      "startProgress": 1.0,
+      "startTime": 36.97
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 37.663,
+      "holdAfter": 0.077,
+      "startProgress": 0.0,
+      "startTime": 37.36
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 38.268,
+      "holdAfter": 0.237,
+      "startProgress": 1.0,
+      "startTime": 37.74
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 38.813,
+      "holdAfter": 0.077,
+      "startProgress": 0.0,
+      "startTime": 38.505
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 39.178,
+      "holdAfter": 0.082,
+      "startProgress": 1.0,
+      "startTime": 38.89
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 39.828,
+      "holdAfter": 0.202,
+      "startProgress": 0.0,
+      "startTime": 39.26
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 40.353,
+      "holdAfter": 0.067,
+      "startProgress": 1.0,
+      "startTime": 40.03
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 40.703,
+      "holdAfter": 0.092,
+      "startProgress": 0.0,
+      "startTime": 40.42
+    },
+    {
+      "direction": "backward",
+      "endProgress": 0.0,
+      "endTime": 41.643,
+      "holdAfter": 0.0,
+      "startProgress": 1.0,
+      "startTime": 40.795
+    },
+    {
+      "direction": "forward",
+      "endProgress": 1.0,
+      "endTime": 42.4,
+      "holdAfter": 0.4666,
+      "startProgress": 0.0,
+      "startTime": 41.643
     }
   ],
-  "timelineDuration": 5.743,
-  "timingSource": "wav_transient_extraction",
+  "timelineDuration": 42.4,
+  "timingSource": "wav_transient_extraction_video_direction",
   "version": 1
 }

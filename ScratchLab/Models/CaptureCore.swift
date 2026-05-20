@@ -2245,20 +2245,24 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     static let demoStart: TimeInterval = 0
     static let demoEnd: TimeInterval = 42.866625
     static let phaseOffset: TimeInterval = 0
-    static let demoAudioPhraseCycleCount = 4
+    // The clean-demo timeline encodes all phrases explicitly (no looping),
+    // so the audio plays through one full cycle of the multi-phrase notation.
+    static let demoAudioPhraseCycleCount = 1
     private static let fallbackPhraseDuration: TimeInterval = 1.0
     private static let notationResource = ScratchNotation.loadBabyScratchFromBundle()
     private static let extractedStrokeResource = BabyScratchExtractedStrokeResource.loadFromBundle()
-    static let usesNotationResource = notationResource != nil
-    static let usesExtractedStrokeResource = notationResource == nil && extractedStrokeResource != nil
+    // Coach motion takes precedence so the visual rig can render extra
+    // release/reset segments between phrases without polluting the notation.
+    static let usesExtractedStrokeResource = extractedStrokeResource != nil
+    static let usesNotationResource = !usesExtractedStrokeResource && notationResource != nil
     static let phraseStart: TimeInterval =
-        notationResource?.phraseStart
-        ?? extractedStrokeResource?.phraseStart
+        extractedStrokeResource?.phraseStart
+        ?? notationResource?.phraseStart
         ?? 0
     static let phraseEnd: TimeInterval = max(
         phraseStart,
-        notationResource?.phraseEnd
-            ?? extractedStrokeResource?.phraseEnd
+        extractedStrokeResource?.phraseEnd
+            ?? notationResource?.phraseEnd
             ?? fallbackPhraseDuration
     )
     static let phraseDuration: TimeInterval = phraseEnd
@@ -2274,8 +2278,8 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     }
 
     static let strokeSegments: [ScratchLabBabyScratchStrokeSegment] =
-        notationResource?.strokeSegments
-        ?? extractedStrokeResource?.strokeSegments
+        extractedStrokeResource?.strokeSegments
+        ?? notationResource?.strokeSegments
         ?? fallbackStrokeSegments
 
     private static let fallbackStrokeSegments: [ScratchLabBabyScratchStrokeSegment] = [
@@ -2525,7 +2529,7 @@ struct BabyScratchCoachTimingProbe: Equatable, Sendable {
 }
 
 extension BabyScratchReferenceMotionTimeline {
-    static let debugProbePlaybackTimes: [TimeInterval] = [0.27, 0.778, 2.368, 1.46, 5.85, 5.997]
+    static let debugProbePlaybackTimes: [TimeInterval] = [0.27, 0.778, 2.368, 1.46, 5.85, 8.5, 12.45, 42.654]
 
     static func debugTimingProbe(
         at playbackTime: TimeInterval,
