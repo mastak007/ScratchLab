@@ -2678,22 +2678,26 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testDemoModeBabyScratchPatternIncludesHoldPhases() {
-        // First forward hold: stroke 0 ends at 0.778, holdAfter=0.292 → hold runs 0.778..1.07.
-        let forwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
+        // Extracted-stroke ground truth: stroke 0 is backward (0.27..0.778) with
+        // holdAfter=0.292 → backward hold runs 0.778..1.07. The hold returns the
+        // backward endProgress (0), which produces animationState == .neutral.
+        let backwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
             playbackTime: 0.85,
             activityLevel: 1
         )
-        let forwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
+        let backwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
             playbackTime: 1.00,
             activityLevel: 1
         )
-        // First backward hold: stroke 1 ends at 1.378, holdAfter=0.082 → hold runs 1.378..1.46.
-        let backwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.40,
+        // Stroke 5 is forward (2.99..3.278) with holdAfter=0.082 → forward hold
+        // runs 3.278..3.36. The hold returns the forward endProgress (1), so the
+        // animationState is non-neutral with recordPosition == 1.
+        let forwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: 3.30,
             activityLevel: 1
         )
-        let backwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.42,
+        let forwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: 3.32,
             activityLevel: 1
         )
 
@@ -2728,7 +2732,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(notation.scratchID, "baby")
         XCTAssertEqual(notation.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
         XCTAssertEqual(notation.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
-        XCTAssertEqual(notation.strokes.count, 10)
+        // The 42 s coach demo encodes four repetitions of the 10-stroke phrase
+        // explicitly (no looping at playback time), so the notation now ships
+        // 40 strokes spanning the full ~42 s recording.
+        XCTAssertEqual(notation.strokes.count, 40)
         XCTAssertEqual(notation.strokes.count, notation.strokeSegments.count)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.faderState == .open })
         let phraseStart = try XCTUnwrap(notation.phraseStart)
@@ -2737,7 +2744,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let lastStroke = try XCTUnwrap(notation.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
-        XCTAssertLessThan(phraseEnd, 6.5)
+        XCTAssertGreaterThan(phraseEnd, 40)
+        XCTAssertLessThan(phraseEnd, 42)
         XCTAssertEqual(notation.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
         let slowToFastGap = notation.strokes[2].startTime - notation.strokes[1].endTime
@@ -2770,9 +2778,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(slowDurations.count, 3)
         XCTAssertGreaterThanOrEqual(fastDurations.count, 3)
         XCTAssertGreaterThan(slowAverage, fastAverage)
+        // The 42 s coach demo encodes the 10-stroke speed pattern four times
+        // back-to-back, so the duration array repeats the original pattern.
+        let phraseDurationPattern = [5080, 3080, 3030, 5280, 3080, 2880, 5680, 3230, 2830, 8480]
         XCTAssertEqual(
             roundedDurationsByTenThousand,
-            [5080, 3080, 3030, 5280, 3080, 2880, 5680, 3230, 2830, 8480]
+            Array(repeating: phraseDurationPattern, count: 4).flatMap { $0 }
         )
     }
 
@@ -2783,17 +2794,26 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let resource = try decodedBabyScratchStrokeResource()
 
         XCTAssertEqual(resource.scratchID, "baby")
-        XCTAssertEqual(resource.timingSource, "wav_transient_extraction")
+        // The 42 s extension adds explicit forward release / backward reset
+        // segments between each repetition, so the timing source label now
+        // records that direction provenance lives alongside the WAV transient
+        // extraction.
+        XCTAssertEqual(resource.timingSource, "wav_transient_extraction_video_direction")
         XCTAssertEqual(resource.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
         XCTAssertEqual(resource.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
-        XCTAssertEqual(resource.strokes.count, 10)
+        // 10 strokes per phrase repeat × 4 + 7 inter-phrase release/reset
+        // segments = 47 segments across the full 42 s demo.
+        XCTAssertEqual(resource.strokes.count, 47)
         XCTAssertEqual(resource.strokes.count, resource.strokeSegments.count)
         let phraseStart = try XCTUnwrap(resource.phraseStart)
         let phraseEnd = try XCTUnwrap(resource.phraseEnd)
         let firstStroke = try XCTUnwrap(resource.strokes.first)
         let lastStroke = try XCTUnwrap(resource.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
+        // The last stroke ends at the timeline's phrase end (42.4 s); the
+        // remaining ~0.47 s of audio is a tail hold before sourceDuration.
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
+        XCTAssertGreaterThan(phraseEnd, 42)
         XCTAssertEqual(resource.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(resource.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
         XCTAssertLessThan(resource.strokes[2].startTime - resource.strokes[1].endTime, 0.20)
@@ -2822,7 +2842,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testBabyScratchReferenceMotionTimelineUsesChapterOffsetAndNonUniformSegments() throws {
-        let resource = try decodedBabyScratchNotation()
+        // The 42 s coach demo prefers the extracted-stroke resource because it
+        // adds explicit forward release / backward reset segments between phrase
+        // repeats that the visual rig needs but the notation must not see.
+        let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let keyframes = BabyScratchReferenceMotionTimeline.keyframes
         let durations = timeline.map(\.duration)
@@ -2832,8 +2855,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let audioFile = try AVAudioFile(forReading: audioURL)
         let bundledDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
 
-        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesNotationResource)
-        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
+        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesNotationResource)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
         XCTAssertEqual(timeline.count, resource.strokes.count)
         XCTAssertGreaterThan(keyframes.count, timeline.count)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoStart, 0, accuracy: 0.0001)
@@ -2845,12 +2868,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 1.46), 1.46, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseStart, 0.27, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 5.743, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 5.473, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 4)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 42.4, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 42.13, accuracy: 0.0001)
+        // The clean-demo timeline plays through once (no playback-time looping),
+        // so one audio cycle covers the full source duration.
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 1)
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration,
-            BabyScratchReferenceMotionTimeline.sourceDuration / 4,
+            BabyScratchReferenceMotionTimeline.sourceDuration,
             accuracy: 0.0001
         )
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseDuration, resource.timelineDuration, accuracy: 0.0001)
@@ -2859,14 +2884,22 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(timeline[0].direction, resource.strokes[0].motionDirection)
         XCTAssertEqual(timeline[0].holdAfter, resource.strokeSegments[0].holdAfter, accuracy: 0.0001)
         XCTAssertGreaterThan(roundedDurations.count, 1)
-        XCTAssertGreaterThanOrEqual(timeline.count, 10)
-        XCTAssertLessThanOrEqual(timeline.count, 20)
+        // Four phrase repeats (10 strokes) plus inter-phrase release/reset
+        // segments → 47 segments. The lower bound preserves "more than a single
+        // phrase"; the upper bound still rules out runaway segment generation.
+        XCTAssertGreaterThanOrEqual(timeline.count, 40)
+        XCTAssertLessThanOrEqual(timeline.count, 60)
         XCTAssertEqual(keyframes[0].sourceTime, BabyScratchReferenceMotionTimeline.demoStart + timeline[0].startTime, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[0].handViewerHour, 3, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[0].stickerViewerHour, 6, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].handViewerHour, 5, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].stickerViewerHour, 8, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].recordRotationDegrees, 60, accuracy: 0.0001)
+        // Stroke 0 of the extracted timeline is backward (scratchProgress
+        // 1 → 0), so the keyframe at the stroke start sits at hand hour 5 /
+        // sticker hour 8 / 60° rotation, and the keyframe at the stroke end
+        // returns to hand hour 3 / sticker hour 6 / 0° rotation.
+        XCTAssertEqual(keyframes[0].handViewerHour, 5, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].stickerViewerHour, 8, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].recordRotationDegrees, 60, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].handViewerHour, 3, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].stickerViewerHour, 6, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].recordRotationDegrees, 0, accuracy: 0.0001)
         XCTAssertEqual(
             ScratchLabBabyScratchDemoMotionPattern.babyScratchStrokeTimelineDuration,
             resource.timelineDuration,
@@ -2892,21 +2925,34 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testBabyScratchCoachTimingLoadsNotationAtAudioPlaybackTime() throws {
-        let resource = try decodedBabyScratchNotation()
+        // The 42 s coach demo loads the extracted-stroke resource. The third
+        // stroke (index 2) still starts at 1.46 s, but the audio-derived
+        // ground truth reports it as part of an opening run of backward
+        // strokes; the first forward stroke arrives later at stroke 5.
+        let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        let firstForwardAfterPair = try XCTUnwrap(timeline.dropFirst(2).first)
+        let thirdStroke = try XCTUnwrap(timeline.dropFirst(2).first)
+        let firstForwardStroke = try XCTUnwrap(timeline.first { $0.direction == .forward })
 
-        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesNotationResource)
-        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
-        XCTAssertEqual(resource.strokes.count, 10)
-        XCTAssertEqual(timeline.count, 10)
-        XCTAssertEqual(firstForwardAfterPair.direction, .forward)
-        XCTAssertEqual(firstForwardAfterPair.startTime, 1.46, accuracy: 0.0001)
+        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesNotationResource)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
+        XCTAssertEqual(resource.strokes.count, 47)
+        XCTAssertEqual(timeline.count, 47)
+        XCTAssertEqual(thirdStroke.direction, .backward)
+        XCTAssertEqual(thirdStroke.startTime, 1.46, accuracy: 0.0001)
         XCTAssertEqual(resource.strokes[2].startTime, 1.46, accuracy: 0.0001)
 
+        // At a backward stroke start, scratchProgress sits at startProgress = 1.
         let poseAtThirdStrokeStart = BabyScratchReferenceMotionTimeline.pose(at: 1.46)
-        XCTAssertEqual(poseAtThirdStrokeStart.direction, .forward)
-        XCTAssertEqual(poseAtThirdStrokeStart.scratchProgress, 0, accuracy: 0.0001)
+        XCTAssertEqual(poseAtThirdStrokeStart.direction, .backward)
+        XCTAssertEqual(poseAtThirdStrokeStart.scratchProgress, 1, accuracy: 0.0001)
+
+        // The first forward stroke samples cleanly inside the segment.
+        let forwardMid = firstForwardStroke.startTime + firstForwardStroke.duration / 2
+        let forwardPose = BabyScratchReferenceMotionTimeline.pose(at: forwardMid)
+        XCTAssertEqual(forwardPose.direction, .forward)
+        XCTAssertGreaterThan(forwardPose.scratchProgress, 0.3)
+        XCTAssertLessThan(forwardPose.scratchProgress, 0.7)
 
         let pastEndPose = BabyScratchReferenceMotionTimeline.pose(
             at: BabyScratchReferenceMotionTimeline.sourceDuration + 1.0
@@ -2917,12 +2963,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     func testBabyScratchCoachTimingUsesFullAudioCycleAndPhraseLoopMode() throws {
         let firstStroke = try XCTUnwrap(BabyScratchReferenceMotionTimeline.strokeSegments.first)
-        let postPhraseSilenceTime: TimeInterval = 5.85
+        // The full 42 s demo plays through a single audio cycle, so the "post
+        // phrase silence" zone now sits between phraseEnd (≈42.4 s) and the
+        // bundled audio duration (≈42.87 s).
+        let postPhraseSilenceTime: TimeInterval = BabyScratchReferenceMotionTimeline.phraseEnd + 0.5
         let postPhraseSilencePose = BabyScratchReferenceMotionTimeline.pose(at: postPhraseSilenceTime)
-        // Probe inside stroke 0 of cycle 2 (small offset past the boundary to avoid FP drift).
-        let secondAudioCycleProbe = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
-            + BabyScratchReferenceMotionTimeline.phraseStart + 0.10
-        let secondAudioCyclePose = BabyScratchReferenceMotionTimeline.pose(at: secondAudioCycleProbe)
+        // A probe deep inside the timeline (well past the first 10-stroke
+        // repeat) confirms the full audio cycle drives a real moving stroke.
+        let midPhraseProbe: TimeInterval = 12.45
+        let midPhrasePose = BabyScratchReferenceMotionTimeline.pose(at: midPhraseProbe)
+        // Phrase-loop mode wraps once playback crosses phraseEnd. Sampling at
+        // phraseEnd + 0.254 wraps back to phraseStart + 0.254 = 0.524, which
+        // lands at the midpoint of stroke 0 (backward, 0.27..0.778).
         let notationPhraseLoopTime = BabyScratchReferenceMotionTimeline.phraseEnd + 0.254
         let notationPhraseLoopPose = BabyScratchReferenceMotionTimeline.pose(
             at: notationPhraseLoopTime,
@@ -2935,11 +2987,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertFalse(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: postPhraseSilenceTime))
         XCTAssertEqual(postPhraseSilencePose.direction, .neutral)
-        XCTAssertEqual(postPhraseSilencePose.scratchProgress, 0, accuracy: 0.0001)
-        XCTAssertEqual(secondAudioCyclePose.direction, firstStroke.direction)
-        XCTAssertGreaterThan(secondAudioCyclePose.scratchProgress, 0)
-        XCTAssertLessThan(secondAudioCyclePose.scratchProgress, 0.5)
-        XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: secondAudioCycleProbe))
+        XCTAssertTrue(postPhraseSilencePose.isHold)
+        XCTAssertNotEqual(midPhrasePose.direction, .neutral)
+        XCTAssertGreaterThan(midPhrasePose.scratchProgress, 0)
+        XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: midPhraseProbe))
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.timelineTime(
                 forPlaybackTime: notationPhraseLoopTime,
@@ -2948,7 +2999,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             0.524,
             accuracy: 0.001
         )
-        XCTAssertEqual(notationPhraseLoopPose.direction, .forward)
+        XCTAssertEqual(notationPhraseLoopPose.direction, firstStroke.direction)
         XCTAssertGreaterThan(notationPhraseLoopPose.scratchProgress, 0.45)
         XCTAssertLessThan(notationPhraseLoopPose.scratchProgress, 0.55)
         XCTAssertEqual(disabledLoopPose.direction, .neutral)
@@ -2957,64 +3008,116 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     #if DEBUG
     func testBabyScratchCoachTimingDebugProbeReportsStrokeProgress() {
+        // Probe coverage now spans the full 42 s phrase: stroke starts/ends,
+        // the inter-repeat release/reset hold band, a second-repeat probe, and
+        // the post-phrase tail. The extracted-stroke ground truth reports
+        // stroke 0 as backward (scratchProgress 1 → 0), so the start-of-stroke
+        // probes assert that direction explicitly.
         let firstScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.27)
         let firstScratchEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.778)
         let slowBackwardEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.368)
-        let firstFastForwardStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 1.46)
-        let postPhraseSilence = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 5.85)
-        let postPhrasePhraseLoop = BabyScratchReferenceMotionTimeline.debugTimingProbe(
-            at: 5.997,
+        let thirdStrokeStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 1.46)
+        let releaseStrokeActive = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 5.85)
+        let interPhraseHold = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 8.5)
+        let secondRepeatForward = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 12.45)
+        let postPhraseTail = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 42.654)
+        let phraseLoopWrap = BabyScratchReferenceMotionTimeline.debugTimingProbe(
+            at: 42.654,
             loopMode: .notationPhrase
         )
 
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.debugProbePlaybackTimes, [0.27, 0.778, 2.368, 1.46, 5.85, 5.997])
+        XCTAssertEqual(
+            BabyScratchReferenceMotionTimeline.debugProbePlaybackTimes,
+            [0.27, 0.778, 2.368, 1.46, 5.85, 8.5, 12.45, 42.654]
+        )
         XCTAssertEqual(firstScratchStart.strokeIndex, 0)
-        XCTAssertEqual(firstScratchStart.direction, .forward)
+        XCTAssertEqual(firstScratchStart.direction, .backward)
         XCTAssertFalse(firstScratchStart.isHold)
-        XCTAssertEqual(firstScratchStart.progress, 0, accuracy: 0.0001)
+        XCTAssertEqual(firstScratchStart.progress, 1, accuracy: 0.0001)
         XCTAssertEqual(firstScratchEnd.strokeIndex, 0)
         XCTAssertEqual(firstScratchEnd.direction, .neutral)
         XCTAssertTrue(firstScratchEnd.isHold)
-        XCTAssertEqual(firstScratchEnd.progress, 1, accuracy: 0.0001)
+        XCTAssertEqual(firstScratchEnd.progress, 0, accuracy: 0.0001)
         XCTAssertEqual(slowBackwardEnd.strokeIndex, 3)
         XCTAssertEqual(slowBackwardEnd.direction, .neutral)
         XCTAssertTrue(slowBackwardEnd.isHold)
         XCTAssertEqual(slowBackwardEnd.progress, 0, accuracy: 0.0001)
-        XCTAssertEqual(slowBackwardEnd.timingSource, "Notation/baby_scratch.json")
+        XCTAssertEqual(slowBackwardEnd.timingSource, "CoachDemoMotion/baby_scratch_strokes.json")
 
-        XCTAssertEqual(firstFastForwardStart.strokeIndex, 2)
-        XCTAssertEqual(firstFastForwardStart.direction, .forward)
-        XCTAssertFalse(firstFastForwardStart.isHold)
-        XCTAssertEqual(firstFastForwardStart.timelineTime, 1.46, accuracy: 0.0001)
-        XCTAssertEqual(firstFastForwardStart.progress, 0, accuracy: 0.0001)
+        XCTAssertEqual(thirdStrokeStart.strokeIndex, 2)
+        XCTAssertEqual(thirdStrokeStart.direction, .backward)
+        XCTAssertFalse(thirdStrokeStart.isHold)
+        XCTAssertEqual(thirdStrokeStart.timelineTime, 1.46, accuracy: 0.0001)
+        XCTAssertEqual(thirdStrokeStart.progress, 1, accuracy: 0.0001)
 
-        XCTAssertNil(postPhraseSilence.strokeIndex)
-        XCTAssertEqual(postPhraseSilence.direction, .neutral)
-        XCTAssertTrue(postPhraseSilence.isHold)
-        XCTAssertEqual(postPhrasePhraseLoop.strokeIndex, 0)
-        XCTAssertEqual(postPhrasePhraseLoop.direction, .forward)
-        XCTAssertFalse(postPhrasePhraseLoop.isHold)
-        XCTAssertEqual(postPhrasePhraseLoop.timelineTime, 0.524, accuracy: 0.001)
-        XCTAssertEqual(postPhrasePhraseLoop.progress, 0.5, accuracy: 0.001)
+        // 5.85 s lands inside the forward release segment (5.743..6.5) that
+        // bridges from the end of repeat 1 toward the next repeat.
+        XCTAssertEqual(releaseStrokeActive.strokeIndex, 10)
+        XCTAssertEqual(releaseStrokeActive.direction, .forward)
+        XCTAssertFalse(releaseStrokeActive.isHold)
+        XCTAssertGreaterThan(releaseStrokeActive.progress, 0)
+        XCTAssertLessThan(releaseStrokeActive.progress, 0.5)
+
+        // 8.5 s is inside the long inter-phrase hold band after the release
+        // segment, before the next backward reset stroke begins.
+        XCTAssertEqual(interPhraseHold.strokeIndex, 10)
+        XCTAssertEqual(interPhraseHold.direction, .neutral)
+        XCTAssertTrue(interPhraseHold.isHold)
+
+        // 12.45 s lands inside the first stroke of the second phrase repeat.
+        XCTAssertNotNil(secondRepeatForward.strokeIndex)
+        XCTAssertFalse(secondRepeatForward.isHold)
+        XCTAssertNotEqual(secondRepeatForward.direction, .neutral)
+        XCTAssertGreaterThan(secondRepeatForward.progress, 0)
+
+        // 42.654 s is past the last stroke's endTime (42.4) but still within
+        // sourceDuration. In fullDemoAudio mode it sits in the tail hold of
+        // the final stroke; in notationPhrase mode it wraps back to 0.524 s
+        // (mid-stroke 0, backward, scratchProgress ≈ 0.5).
+        XCTAssertEqual(postPhraseTail.direction, .neutral)
+        XCTAssertTrue(postPhraseTail.isHold)
+        XCTAssertEqual(phraseLoopWrap.strokeIndex, 0)
+        XCTAssertEqual(phraseLoopWrap.direction, .backward)
+        XCTAssertFalse(phraseLoopWrap.isHold)
+        XCTAssertEqual(phraseLoopWrap.timelineTime, 0.524, accuracy: 0.001)
+        XCTAssertEqual(phraseLoopWrap.progress, 0.5, accuracy: 0.001)
         XCTAssertTrue(BabyScratchReferenceMotionTimeline.debugTimingReport(at: 1.46).contains("stroke=2"))
     }
     #endif
 
     func testBabyScratchReferenceMotionTimelineDoesNotSkipAlternatingStrokes() throws {
+        // Timeline strokes come from the extracted-stroke resource (47 segments
+        // covering four phrase repeats plus inter-phrase release/reset moves).
+        // The audio-derived ground truth does not strictly alternate
+        // forward/backward by index, so the meaningful invariants now are:
+        // counts match the resource, the segment list is sorted, both
+        // directions are present, multiple direction changes occur within
+        // each phrase repeat, and successive segments hand off scratchProgress.
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        let resource = try decodedBabyScratchNotation()
+        let resource = try decodedBabyScratchStrokeResource()
 
         XCTAssertEqual(timeline.count, resource.strokes.count)
-        XCTAssertGreaterThanOrEqual(timeline.count, 10)
-        XCTAssertLessThanOrEqual(timeline.count, 20)
+        XCTAssertGreaterThanOrEqual(timeline.count, 40)
+        XCTAssertLessThanOrEqual(timeline.count, 60)
         XCTAssertEqual(timeline.map(\.direction), resource.strokeSegments.map(\.direction))
-        for index in 0..<timeline.count {
-            let expectedDirection: ScratchMotionDirection = index.isMultiple(of: 2) ? .forward : .backward
-            XCTAssertEqual(timeline[index].direction, expectedDirection)
-        }
-        XCTAssertEqual(timeline[0].startProgress, 0, accuracy: 0.0001)
-        for index in 0..<(timeline.count - 1) {
-            XCTAssertEqual(timeline[index].endProgress, timeline[index + 1].startProgress, accuracy: 0.0001)
+
+        let directions = timeline.map(\.direction)
+        XCTAssertTrue(directions.contains(.forward), "Timeline must contain forward strokes")
+        XCTAssertTrue(directions.contains(.backward), "Timeline must contain backward strokes")
+        let directionChanges = zip(directions, directions.dropFirst()).filter { $0 != $1 }.count
+        XCTAssertGreaterThanOrEqual(directionChanges, 4, "Phrase must include several direction changes")
+
+        // The first stroke is backward (extracted-stroke ground truth), so
+        // scratchProgress starts at 1 and unwinds to 0 across the segment.
+        // The previous strict-alternation chain (endProgress == next
+        // startProgress) no longer holds because the audio-derived timeline
+        // includes runs of same-direction strokes.
+        XCTAssertEqual(timeline[0].startProgress, 1, accuracy: 0.0001)
+        for segment in timeline {
+            let expectedStart: Double = segment.direction == .forward ? 0 : 1
+            let expectedEnd: Double = segment.direction == .forward ? 1 : 0
+            XCTAssertEqual(segment.startProgress, expectedStart, accuracy: 0.0001)
+            XCTAssertEqual(segment.endProgress, expectedEnd, accuracy: 0.0001)
         }
 
         let sortedByStartTime = timeline.sorted { $0.startTime < $1.startTime }
@@ -3027,16 +3130,21 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testBabyScratchReferenceMotionTimelineUsesNotationWithoutGeometryChanges() throws {
-        let resource = try decodedBabyScratchNotation()
+        // The timeline now uses the extracted-stroke resource by default (it
+        // carries the inter-phrase release/reset segments the visual rig
+        // needs), and the notation JSON remains the secondary source. The
+        // hand/sticker/rotation geometry is unchanged.
+        let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let coreSource = try String(
             contentsOf: projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift"),
             encoding: .utf8
         )
 
-        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesNotationResource)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
+        XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesNotationResource)
         XCTAssertTrue(coreSource.contains("ScratchNotation.loadBabyScratchFromBundle()"))
-        XCTAssertTrue(coreSource.contains("?? extractedStrokeResource?.strokeSegments"))
+        XCTAssertTrue(coreSource.contains("?? notationResource?.strokeSegments"))
         XCTAssertEqual(timeline.count, resource.strokes.count)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseDuration, resource.timelineDuration, accuracy: 0.0001)
         XCTAssertFalse(coreSource.contains("0.9208"))
@@ -6807,48 +6915,58 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         let cycleDuration = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
 
-        // Audio must be substantially longer than a single notation phrase.
-        XCTAssertGreaterThan(audioDuration, phraseEnd * 2)
-        // Each audio cycle must be longer than the notation phrase (silence gap must exist).
-        XCTAssertGreaterThan(cycleDuration, phraseEnd)
-        // Audio must contain at least 4 complete phrase cycles.
-        XCTAssertGreaterThanOrEqual(Int(audioDuration / cycleDuration), 4)
+        // The 42 s coach demo plays as a single, multi-phrase recording — no
+        // playback-time looping — so the audio covers a single cycle that
+        // equals (and is bounded by) sourceDuration. The phrase still ends
+        // strictly before audio so a short silence/hold tail exists at the
+        // end of the recording.
+        XCTAssertGreaterThan(audioDuration, 40)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 1)
+        XCTAssertEqual(cycleDuration, audioDuration, accuracy: 0.05)
+        XCTAssertGreaterThan(audioDuration, phraseEnd)
+        XCTAssertGreaterThan(audioDuration - phraseEnd, 0.1)
     }
 
     func testBabyScratchPhraseTimeHoldsAtPhraseEndDuringSilence() {
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
-        let cycleDuration = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
-        // A time midway through the silence gap within the first cycle.
-        let silenceTime = phraseEnd + (cycleDuration - phraseEnd) / 2
+        let sourceDuration = BabyScratchReferenceMotionTimeline.sourceDuration
+        // After the last notated stroke ends (~42.4 s) the audio plays for
+        // another ~0.47 s of trailing silence/hold before sourceDuration. A
+        // probe midway through that tail must hold neutral. A probe past
+        // sourceDuration must also report neutral (no looping).
+        let silenceTime = phraseEnd + (sourceDuration - phraseEnd) / 2
         let silencePose = BabyScratchReferenceMotionTimeline.pose(at: silenceTime)
-        // A time slightly inside the first stroke of the second cycle.
-        // Querying exactly at `cycleDuration + phraseStart` is fragile: when
-        // phraseStart is non-zero (the bundled baby_scratch.json uses
-        // phraseStart = 0.27), `truncatingRemainder` can land 1 ULP below
-        // phraseStart and `pose(at:)` then falls into the no-segment-matched
-        // neutral branch. The intent of this assertion is "the next cycle
-        // restarts the phrase", so we add a small epsilon to land robustly
-        // inside the first stroke.
-        let secondCycleFirstStrokeProbe = cycleDuration + BabyScratchReferenceMotionTimeline.phraseStart + 0.001
-        let secondCycleStartPose = BabyScratchReferenceMotionTimeline.pose(at: secondCycleFirstStrokeProbe)
-        let firstStroke = BabyScratchReferenceMotionTimeline.strokeSegments.first
+        let pastEndPose = BabyScratchReferenceMotionTimeline.pose(at: sourceDuration + 0.5)
+        let lateMidPhraseProbe: TimeInterval = 12.45
+        let lateMidPhrasePose = BabyScratchReferenceMotionTimeline.pose(at: lateMidPhraseProbe)
 
-        // During silence the coach must hold neutral, not continue scratching.
         XCTAssertFalse(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: silenceTime))
         XCTAssertEqual(silencePose.direction, .neutral)
-        XCTAssertEqual(silencePose.isHold, true)
-        // On the next cycle the first stroke should restart correctly.
-        XCTAssertEqual(secondCycleStartPose.direction, firstStroke?.direction)
+        XCTAssertTrue(silencePose.isHold)
+        XCTAssertEqual(pastEndPose.direction, .neutral)
+        XCTAssertTrue(pastEndPose.isHold)
+
+        // Deep inside the 42 s phrase the coach is still actively scratching;
+        // we never short-circuit to a hold just because we are past the first
+        // phrase repeat.
+        XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: lateMidPhraseProbe))
+        XCTAssertNotEqual(lateMidPhrasePose.direction, .neutral)
     }
 
     func testBabyScratchNotationStrokesAlternateForwardBackInsidePhrase() throws {
+        // The 42 s phrase is audio-derived: some strokes legitimately repeat
+        // direction (e.g. opening backward run, multi-stroke release/reset
+        // bridges), so strict index%2 alternation no longer applies. The
+        // invariants we keep: both directions are present, several direction
+        // changes happen inside the phrase, and every stroke ends at or
+        // before phraseEnd.
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        XCTAssertGreaterThanOrEqual(timeline.count, 2)
-        for index in 0..<timeline.count {
-            let expected: ScratchMotionDirection = index.isMultiple(of: 2) ? .forward : .backward
-            XCTAssertEqual(timeline[index].direction, expected, "Stroke \(index) direction mismatch")
-        }
-        // All strokes must end at or before phraseEnd.
+        XCTAssertGreaterThanOrEqual(timeline.count, 40)
+        let directions = timeline.map(\.direction)
+        XCTAssertTrue(directions.contains(.forward))
+        XCTAssertTrue(directions.contains(.backward))
+        let directionChanges = zip(directions, directions.dropFirst()).filter { $0 != $1 }.count
+        XCTAssertGreaterThanOrEqual(directionChanges, 8, "Phrase must include several direction changes")
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         XCTAssertTrue(timeline.allSatisfy { $0.endTime <= phraseEnd + 0.001 })
     }
@@ -6903,7 +7021,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     func testBabyScratchDemoPlaybackCoordinatorCoachPoseFollowsNotation() {
         let phraseEnd = BabyScratchDemoPlaybackCoordinator.phraseDuration
-        let cycleDur = BabyScratchDemoPlaybackCoordinator.phraseCycleDuration
+        let audioDuration = BabyScratchDemoPlaybackCoordinator.audioDuration
 
         // During an active stroke window, the pose is not neutral/hold.
         let firstStroke = BabyScratchReferenceMotionTimeline.strokeSegments.first
@@ -6917,14 +7035,19 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             XCTAssertNotEqual(startPose.scratchProgress, activePose.scratchProgress)
         }
 
-        // During silence, the coach holds neutral.
-        let silenceTime = phraseEnd + (cycleDur - phraseEnd) / 2
+        // After phraseEnd, the coach holds neutral whether the probe sits in
+        // the trailing audio (between phraseEnd and sourceDuration) or past
+        // sourceDuration entirely. The 42 s demo does not loop, so we just
+        // require neutral + isHold at both probes rather than identical
+        // progress (the last-stroke hold band carries a non-zero endProgress
+        // while the past-sourceDuration fallback clamps progress to 0).
+        let silenceTime = phraseEnd + (audioDuration - phraseEnd) / 2
         let silencePose = BabyScratchDemoPlaybackCoordinator.coachPose(for: silenceTime)
-        let laterSilencePose = BabyScratchDemoPlaybackCoordinator.coachPose(for: silenceTime + 0.25)
+        let pastEndPose = BabyScratchDemoPlaybackCoordinator.coachPose(for: audioDuration + 0.5)
         XCTAssertEqual(silencePose.direction, .neutral)
-        XCTAssertEqual(silencePose.isHold, true)
-        XCTAssertEqual(laterSilencePose.direction, .neutral)
-        XCTAssertEqual(laterSilencePose.scratchProgress, silencePose.scratchProgress, accuracy: 0.0001)
+        XCTAssertTrue(silencePose.isHold)
+        XCTAssertEqual(pastEndPose.direction, .neutral)
+        XCTAssertTrue(pastEndPose.isHold)
     }
 
     func testBabyScratchDemoPlaybackCoordinatorSharesPlayerBetweenViewsAtSourceLevel() throws {
