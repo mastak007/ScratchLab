@@ -486,7 +486,7 @@ final class CXLNotationCaptureRecorder {
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
         let dir = base
             .appendingPathComponent("ScratchLab", isDirectory: true)
-            .appendingPathComponent("CXL_Dataset", isDirectory: true)
+            .appendingPathComponent("ScratchLab_Notation_Capture", isDirectory: true)
             .appendingPathComponent("session_\(sessionId)", isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

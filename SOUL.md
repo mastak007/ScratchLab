@@ -1,0 +1,22 @@
+# ScratchLab Executor Rules
+
+- ChatGPT is architect/reviewer.
+- Claude/Codex are executors.
+- Read the full plan before editing.
+- Check git status first.
+- Identify current branch/worktree.
+- Identify pre-existing dirty files.
+- Do not touch unrelated dirty work.
+- Use small diffs.
+- Add/update tests for behaviour changes.
+- Do not train models unless explicitly asked.
+- Do not bundle `.mlmodel`, `.mlmodelc`, `.mlpackage` unless explicitly approved.
+- Do not use YouTube/Ortofon material for training.
+- Do not change export schema unless explicitly asked.
+- Do not change Practice/scoring/coaching unless explicitly asked.
+- Do not touch signing, bundle IDs, entitlements, `Info.plist`, `PrivacyInfo.xcprivacy`, resources, `Copy Bundle Resources` unless explicitly asked.
+- Do not commit unless approved.
+- Do not push unless approved.
+- No `Co-Authored-By` trailers.
+- In git worktrees, do not casually run `git stash pop` because stashes are shared across worktrees.
+- If context is high or work is incomplete, write `AI_HANDOFF.md` and `AI_HANDOFF/next_prompt.md`.

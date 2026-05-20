@@ -647,7 +647,7 @@ struct MacAnalyzerView: View {
                     Text("Demo")
                         .font(.system(size: 24, weight: .semibold))
 
-                    Text("Hear the Baby Scratch reference and watch the coach react in real time.")
+                    Text("Hear the Baby Scratch reference and watch the coach demonstrate the move.")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -834,6 +834,7 @@ struct MacAnalyzerView: View {
                 seratoScreenCard
                     .disabled(captureEngine.isRoutineRecording)
                 scratchCard
+                audioOnsetDiagnosticsCard
             }
         case .cameraDeck:
             VStack(alignment: .leading, spacing: 22) {
@@ -1175,6 +1176,51 @@ struct MacAnalyzerView: View {
         relayedWatchCaptureStore.importedSessions.isEmpty ? "Not connected" : "Motion data available"
     }
 
+    // Slice X.1: Hand chip on the Capture tab. Reads the existing
+    // captureEngine.handMotionState (already published by MacCaptureEngine
+    // from the Vision hand-pose pipeline). No new engine state.
+    private var captureHandMotionStatusValue: String {
+        guard !captureEngine.selectedVideoDeviceUniqueID.isEmpty else { return "Camera off" }
+        guard captureEngine.isCameraActive else { return "Camera idle" }
+        // Slice X.1.1: copy must NOT claim notation-ready merely from
+        // Vision seeing a hand. The chip reports what the detector is
+        // tracking; whether that lands in the deck calibration zone is
+        // the user's setup responsibility.
+        switch captureEngine.handMotionState {
+        case .searching:   return "No hand visible"
+        case .steady:      return "Hand visible"
+        case .movingRight: return "Hand → forward"
+        case .movingLeft:  return "Hand ← back"
+        }
+    }
+
+    private var captureHandMotionStatusDetail: String {
+        switch captureEngine.handMotionState {
+        case .searching:
+            return captureEngine.isCameraActive
+                ? "Point the camera at your deck / hand"
+                : "Open Camera deck setup to verify the live preview"
+        case .steady, .movingRight, .movingLeft:
+            return "Vision sees a hand — confirm it is at the deck"
+        }
+    }
+
+    private var captureHandMotionStatusSystemImage: String {
+        switch captureEngine.handMotionState {
+        case .searching:   return "hand.raised.slash"
+        case .steady:      return "hand.raised"
+        case .movingRight: return "arrow.right"
+        case .movingLeft:  return "arrow.left"
+        }
+    }
+
+    private var captureHandMotionStatusColor: Color {
+        switch captureEngine.handMotionState {
+        case .searching:   return .secondary
+        case .steady, .movingRight, .movingLeft: return .green
+        }
+    }
+
     private var diagnosticsCameraValue: String {
         guard captureEngine.isCameraActive else { return "false" }
         if captureEngine.isRoutineRecording || captureEngine.cxlIsRecording {
@@ -1431,6 +1477,87 @@ struct MacAnalyzerView: View {
 
     private var reviewMixerMIDIEventCount: Int {
         currentRoutineNotationSnapshot?.mixerMidiEvents.count ?? 0
+    }
+
+    /// Slice S — bundles the source-resolved preview state needed by
+    /// both the Audio Onset Preview card and the captured-empty pane's
+    /// "preview-will-render" decision. Computed each render — the cost
+    /// is negligible (small array map + cap).
+    private struct ReviewAudioOnsetCardData {
+        let preview: ReviewAudioOnsetPreview
+        let marks: [TimeInterval]
+        let rawDisclosureCount: Int
+        let rawDisclosureLabel: String
+    }
+
+    /// Slice S — pick the take-scoped pipeline when a take is selected
+    /// with saved audio events, otherwise fall back to live diagnostics
+    /// (no take selected) or hide the preview (selected take but no
+    /// audio events). Never feeds live data into a take-scoped view.
+    private var reviewAudioOnsetCardData: ReviewAudioOnsetCardData {
+        let snapshot = currentRoutineNotationSnapshot
+        let capturedHasEvents = snapshot?.hasDetectedEvents ?? false
+        let hasSelectedTake = currentRoutineArtifactStatus != nil
+
+        let takeEvents = (snapshot?.audioEvents ?? []).map {
+            ReviewAudioOnsetTakeEvent(
+                startTime: $0.startTime,
+                peakLevel: $0.peakLevel
+            )
+        }
+
+        let liveReviewSummary = runtimeDiagnostics.audioOnsetReviewSummary
+        let liveRawSummary = runtimeDiagnostics.audioOnsetSummary
+        let liveTiming = liveReviewSummary.onsetCount + liveReviewSummary.strokeCount
+            + liveReviewSummary.uncertainCount + liveReviewSummary.cutCount
+        let liveRawTiming = liveRawSummary.onsetCount + liveRawSummary.strokeCount
+            + liveRawSummary.uncertainCount + liveRawSummary.cutCount
+
+        let source = ReviewAudioOnsetSourceResolver.resolve(
+            hasSelectedTake: hasSelectedTake,
+            takeAudioEventCount: takeEvents.count,
+            liveTimingCandidateCount: liveTiming
+        )
+
+        switch source {
+        case .selectedTakeSavedEvents:
+            let takeSummary = ReviewAudioOnsetMarksBuilder.summarizeTakeEvents(takeEvents)
+            let preview = ReviewAudioOnsetPreview.compute(
+                capturedHasEvents: capturedHasEvents,
+                takeSummary: takeSummary
+            )
+            let marks = ReviewAudioOnsetMarksBuilder.buildFromTakeEvents(takeEvents)
+            return ReviewAudioOnsetCardData(
+                preview: preview,
+                marks: marks,
+                rawDisclosureCount: takeSummary.rawEventCount,
+                rawDisclosureLabel: "Raw (saved)"
+            )
+        case .liveDiagnostics:
+            let preview = ReviewAudioOnsetPreview.compute(
+                capturedHasEvents: capturedHasEvents,
+                summary: liveReviewSummary,
+                source: .liveDiagnostics
+            )
+            return ReviewAudioOnsetCardData(
+                preview: preview,
+                marks: runtimeDiagnostics.audioOnsetReviewMarks,
+                rawDisclosureCount: liveRawTiming,
+                rawDisclosureLabel: "Raw (Advanced)"
+            )
+        case .unavailable:
+            let preview = ReviewAudioOnsetPreview.compute(
+                capturedHasEvents: capturedHasEvents,
+                summary: .empty,
+                source: .unavailable
+            )
+            return ReviewAudioOnsetCardData(
+                preview: preview,
+                marks: [],
+                rawDisclosureCount: 0,
+                rawDisclosureLabel: "Raw"
+            )
+        }
     }
 
     private var reviewArtifactStatusSummary: String {
@@ -2575,6 +2702,17 @@ struct MacAnalyzerView: View {
                     systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "circle.dashed" : "video",
                     color: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .secondary : .green
                 )
+                // Slice X.1: dedicated Hand chip so the user knows whether the
+                // Vision pipeline is actually tracking a hand. "Camera Ready"
+                // alone means a device is selected; it does NOT mean motion
+                // is reaching the notation builder.
+                captureInputStatusTile(
+                    title: "Hand",
+                    value: captureHandMotionStatusValue,
+                    detail: captureHandMotionStatusDetail,
+                    systemImage: captureHandMotionStatusSystemImage,
+                    color: captureHandMotionStatusColor
+                )
                 captureInputStatusTile(
                     title: "Mixer MIDI",
                     value: mixerStatusValue,
@@ -2589,6 +2727,46 @@ struct MacAnalyzerView: View {
                     systemImage: "applewatch",
                     color: relayedWatchCaptureStore.importedSessions.isEmpty ? .secondary : .green
                 )
+            }
+
+            // Slice X.1.1: discoverable calibration entry point. The deck
+            // calibration overlay lives over the live camera preview on the
+            // Practice tab (Advanced -> Camera Deck only has the controls,
+            // not a preview). To make the overlay actually visible AND
+            // editable in one click, we unlock calibration AND enable live
+            // input AND switch to Practice — the user lands on the live
+            // preview with the deck/mixer boxes drawn on top, ready to
+            // drag. A paired Lock button (only shown while unlocked) puts
+            // the user back here with calibration frozen for recording.
+            HStack(alignment: .top, spacing: 10) {
+                if captureEngine.calibrationLocked {
+                    Button {
+                        captureEngine.calibrationLocked = false
+                        liveInputEnabled = true
+                        workspaceTab = .practice
+                    } label: {
+                        Label("Camera deck setup", systemImage: "viewfinder")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.isRoutineRecording)
+                } else {
+                    Button {
+                        captureEngine.calibrationLocked = true
+                    } label: {
+                        Label("Lock calibration", systemImage: "lock.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.isRoutineRecording)
+                }
+
+                Text("Point the camera at your deck and hand. Drag the deck and mixer boxes on the live preview, then Lock calibration. Record movement requires the deck and hand to be visible to the camera — \"Camera Ready\" alone is not enough.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // MIDI source picker + Learn crossfader / Clear mapping live
@@ -2952,12 +3130,171 @@ struct MacAnalyzerView: View {
 
                 reviewTargetNotationStageCard
                 reviewCapturedNotationStageCard
+                reviewAudioOnsetPreviewStageCard
                 reviewSummaryFooterCard
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Color.black)
+    }
+
+    /// Slice P — Review-only audio-onset preview card. Diagnostic surface
+    /// only: never overwrites captured notation, never participates in
+    /// scoring or export. Hides itself when there's nothing useful to
+    /// show (`preview.shouldRender == false`).
+    @ViewBuilder
+    private var reviewAudioOnsetPreviewStageCard: some View {
+        // Slice S — input source is resolved upstream in
+        // `reviewAudioOnsetCardData`. When a take is selected with
+        // saved audio events the preview is take-scoped; otherwise it
+        // falls back to live diagnostics (no take) or hides
+        // (selected take with no audio events).
+        let cardData = reviewAudioOnsetCardData
+        let preview = cardData.preview
+        let marks = cardData.marks
+        if preview.shouldRender {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(preview.headerText)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 0)
+                    Text("Preview")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
+                            in: Capsule()
+                        )
+                }
+                Text(preview.subtitleText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.66))
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    reviewAudioOnsetPreviewRow(
+                        "Source",
+                        preview.source.label
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Timing candidates",
+                        String(preview.timingCandidateCount)
+                    )
+                    if cardData.rawDisclosureCount > preview.timingCandidateCount {
+                        reviewAudioOnsetPreviewRow(
+                            cardData.rawDisclosureLabel,
+                            "\(cardData.rawDisclosureCount) onsets · filtered for Review"
+                        )
+                    }
+                    reviewAudioOnsetPreviewRow(
+                        "First",
+                        preview.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Last",
+                        preview.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Uncertain",
+                        String(preview.uncertainCount)
+                    )
+                    reviewAudioOnsetPreviewRow(
+                        "Identity",
+                        preview.identityLabel
+                    )
+                }
+                if preview.shouldRenderTimelineStrip(marksCount: marks.count) {
+                    reviewAudioOnsetTimelineStrip(
+                        marks: marks,
+                        firstTimestamp: preview.firstTimestamp,
+                        lastTimestamp: preview.lastTimestamp
+                    )
+                }
+                Text(preview.footerDisclaimer)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    /// Slice R1 — compact, neutral timing-mark strip for the Review
+    /// preview card. Renders one thin vertical tick per filtered Review
+    /// candidate at its position within the [first, last] timestamp
+    /// range. Visual language is deliberately undifferentiated (no per-
+    /// stroke color, no identity, no chart axes) so it can never be
+    /// mistaken for the saved captured-notation rendering. Caller has
+    /// already gated on `shouldRenderTimelineStrip(marksCount:)`.
+    private func reviewAudioOnsetTimelineStrip(
+        marks: [TimeInterval],
+        firstTimestamp: TimeInterval?,
+        lastTimestamp: TimeInterval?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Uncertain timing marks")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.66))
+                Text("· preview only · not exported")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Canvas { context, size in
+                guard
+                    let first = firstTimestamp,
+                    let last = lastTimestamp,
+                    last >= first
+                else { return }
+                let span = last - first
+                for t in marks {
+                    let x: CGFloat
+                    if span > 0 {
+                        let frac = (t - first) / span
+                        x = max(0, min(size.width, CGFloat(frac) * size.width))
+                    } else {
+                        x = size.width / 2
+                    }
+                    let rect = CGRect(
+                        x: x - 0.75, y: 0, width: 1.5, height: size.height
+                    )
+                    context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                }
+            }
+            .frame(height: 14)
+            .background(
+                Color.white.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+            )
+            if let first = firstTimestamp,
+               let last = lastTimestamp,
+               last >= first {
+                HStack {
+                    Text(String(format: "%.2fs", first))
+                    Spacer(minLength: 0)
+                    Text(String(format: "%.2fs", last))
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+            }
+        }
+    }
+
+    private func reviewAudioOnsetPreviewRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.66))
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+        }
     }
 
     private var reviewTargetNotationStageCard: some View {
@@ -3026,11 +3363,20 @@ struct MacAnalyzerView: View {
                     .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity)
             } else {
+                // Slice S — share the same source-resolved preview so
+                // the "preview below" subtitle and the actual card stay
+                // in sync (e.g. captured-empty + take-selected + no
+                // audio events → both decide the preview won't render).
+                let emptyPreview = reviewAudioOnsetCardData.preview
+                let emptyCopy = ReviewCapturedEmptyStateCopy.compute(
+                    previewWillRender: emptyPreview.shouldRender,
+                    defaultSubtitle: reviewNotationAvailabilityMessage
+                )
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("No captured notation yet")
+                    Text(emptyCopy.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text(reviewNotationAvailabilityMessage)
+                    Text(emptyCopy.subtitle)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.6))
                         .fixedSize(horizontal: false, vertical: true)
@@ -4516,7 +4862,7 @@ struct MacAnalyzerView: View {
                     Text("Last match: \(detection.scratchName)")
                         .font(.system(size: 12, weight: .semibold))
 
-                    Text("Accuracy \(Int(detection.accuracy))%  |  Confidence \(Int(detection.confidence))%")
+                    Text("Estimated accuracy \(Int(detection.accuracy))%  |  Estimated confidence \(Int(detection.confidence))%")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
 
@@ -4743,7 +5089,7 @@ struct MacAnalyzerView: View {
                     color: captureEngine.handMotionState.color
                 )
                 testLabMetricBadge(
-                    title: "Conf",
+                    title: "Est. Conf",
                     value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
                     color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
                 )
@@ -4780,6 +5126,90 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// Slice O — diagnostics-only readout. Displays the latest summary of
+    /// notation candidates produced from the live audio envelope by
+    /// AudioOnsetDetector. Read-only: nothing here gates Practice,
+    /// Review, scoring, export, or notation rendering.
+    private var audioOnsetDiagnosticsCard: some View {
+        let summary = runtimeDiagnostics.audioOnsetSummary
+        let identityLabel = summary.isClassified ? "classified" : "not classified"
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Audio Onset Candidates")
+                    .font(.headline)
+                Spacer()
+                Button("Reset") {
+                    runtimeDiagnostics.resetAudioOnsetDiagnostics()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                onsetDiagnosticRow(
+                    "Candidates",
+                    String(summary.candidateCount)
+                )
+                onsetDiagnosticRow(
+                    "First",
+                    summary.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                )
+                onsetDiagnosticRow(
+                    "Last",
+                    summary.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                )
+                onsetDiagnosticRow(
+                    "Strongest",
+                    summary.strongestStrength > 0
+                        ? String(format: "%.2f", summary.strongestStrength)
+                        : "—"
+                )
+                onsetDiagnosticRow(
+                    "Mean strength",
+                    summary.meanStrength > 0
+                        ? String(format: "%.2f", summary.meanStrength)
+                        : "—"
+                )
+                onsetDiagnosticRow(
+                    "Silence gaps",
+                    String(summary.silenceGapCount)
+                )
+                onsetDiagnosticRow(
+                    "Uncertain",
+                    String(summary.uncertainCount)
+                )
+                onsetDiagnosticRow(
+                    "Identity",
+                    identityLabel
+                )
+                onsetDiagnosticRow(
+                    "Envelope",
+                    String(format: "%d frames · %.1fs",
+                           summary.envelopeFrameCount,
+                           summary.envelopeDurationSeconds)
+                )
+            }
+
+            Text("Diagnostics-only. Audio-onset timing is independent of the scratch classifier; low classifier confidence does not delete candidates.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func onsetDiagnosticRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        }
     }
 
     private var companionCard: some View {
@@ -4863,7 +5293,7 @@ struct MacAnalyzerView: View {
                     color: captureEngine.visibleStarCount == 0 ? .secondary : .green
                 )
                 testLabMetricBadge(
-                    title: "Conf",
+                    title: "Est. Conf",
                     value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
                     color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
                 )
@@ -4896,7 +5326,7 @@ struct MacAnalyzerView: View {
 
             if let detection = captureEngine.lastScratchDetection {
                 Label(
-                    "Latest read: \(detection.scratchName) at \(Int(detection.accuracy))% accuracy and \(Int(detection.confidence))% confidence.",
+                    "Latest read: \(detection.scratchName) at \(Int(detection.accuracy))% estimated accuracy and \(Int(detection.confidence))% estimated confidence.",
                     systemImage: "checkmark.seal.fill"
                 )
                 .font(.system(size: 12, weight: .semibold))
