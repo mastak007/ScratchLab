@@ -1911,37 +1911,53 @@ private enum PracticeNotationMetrics {
 
 // Auto-cut assist mode: the target chart with a deterministic, view-local
 // animated playhead. Visual preview only — drives no audio, capture, export,
-// or scoring. The TimelineView is the sole clock, reusing the
-// GuidedCutCueLayer render-side ticker pattern. The viewport auto-follows
-// the playhead so the active phrase stays on screen.
+// or scoring. The TimelineView is the sole clock; the looped playback time it
+// produces is the single source of truth. A pure NotationViewportModel turns
+// that time into all geometry — active phrase, visible window, playhead — so
+// the viewport frames one phrase at a time instead of compressing the whole
+// routine, and no scroll/layout state can feed back into timing.
 private struct AutoCutTargetChart: View {
     let notation: ScratchNotation
+    private let viewportModel: NotationViewportModel
 
     @State private var startDate = Date()
+
+    init(notation: ScratchNotation) {
+        self.notation = notation
+        // Phrases are derived once from stroke timings — the notation
+        // JSON/schema is never read or modified.
+        self.viewportModel = NotationViewportModel(
+            strokes: notation.strokes.map {
+                StrokeSpan(startTime: $0.startTime, endTime: $0.endTime)
+            })
+    }
 
     var body: some View {
         GeometryReader { geo in
             // TimelineView is the only clock — a render-side ticker, not a
-            // playback engine. The playhead loops deterministically over the
-            // target notation's fixed timeline duration.
+            // playback engine. `currentTime` loops over the notation's fixed
+            // timeline duration and is the sole input to the viewport model.
             TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
                 let loopDuration = max(notation.timelineDuration, 0.1)
                 let elapsed = timeline.date.timeIntervalSince(startDate)
-                let playhead = elapsed.truncatingRemainder(dividingBy: loopDuration)
+                let currentTime = elapsed.truncatingRemainder(dividingBy: loopDuration)
 
-                let chartWidth = PracticeNotationMetrics.chartWidth(
-                    for: notation, containerWidth: geo.size.width)
-                let playheadX = CGFloat(playhead) * PracticeNotationMetrics.pointsPerSecond
-                // Keep the playhead ~1/3 from the left edge as a look-ahead
-                // window; clamp so the viewport never scrolls past the ends.
-                let minOffset = min(0, geo.size.width - chartWidth)
-                let offset = min(0, max(minOffset, geo.size.width * 0.33 - playheadX))
+                let viewport = viewportModel.resolve(
+                    currentTime: currentTime, visibleWidth: geo.size.width)
+
+                // The full-routine chart is rendered at the model's scale and
+                // shifted so the active phrase window fills the viewport;
+                // ScratchPhraseChartView itself is unchanged. Geometry is a
+                // pure function of `viewport` — no @State written in layout.
+                let chartWidth = CGFloat(loopDuration) * viewport.pointsPerSecond
+                let chartOffsetX = -CGFloat(viewport.visibleTimeRange.lowerBound)
+                    * viewport.pointsPerSecond
 
                 ScratchPhraseChartView(source: .target(notation),
-                                       playheadTime: playhead,
+                                       playheadTime: viewport.clampedPlayheadTime,
                                        showPlayhead: true)
                     .frame(width: chartWidth, height: geo.size.height)
-                    .offset(x: offset)
+                    .offset(x: chartOffsetX)
                     .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
                     .clipped()
             }
