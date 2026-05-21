@@ -10343,7 +10343,7 @@ final class PracticeAssistModePickerTests: XCTestCase {
 
         // All four explainer strings, verbatim.
         let explainers = [
-            "Auto-cut playback is coming next. For now this mode only previews the target pattern.",
+            "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet.",
             "ScratchLab shows upcoming cut cues while you move the fader.",
             "ScratchLab compares your cuts against the target.",
             "ScratchLab leaves the fader fully manual.",
@@ -10408,9 +10408,10 @@ final class PracticeTargetNotationChartTests: XCTestCase {
         XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
                       "Target chart must read the existing bundled Baby Scratch notation")
 
-        // Static only — no playhead must be enabled at this render site.
-        XCTAssertFalse(view.contains("showPlayhead: true"),
-                       "Practice target chart must stay static — no playhead")
+        // The non-Auto-cut chart render stays static (no playhead). Auto-cut
+        // adds an animated playhead — see AutoCutVisualPlaybackTests.
+        XCTAssertTrue(view.contains("ScratchPhraseChartView(source: .target(notation))"),
+                      "A static (no-playhead) target chart render must remain for non-Auto-cut modes")
     }
 
     func testScratchPhraseChartViewIsOniOSTarget() throws {
@@ -10513,6 +10514,74 @@ final class GuidedCutCueLayerTests: XCTestCase {
             for token in forbiddenTokens {
                 XCTAssertFalse(text.contains(token),
                                "\(relativePath) must not reference cue-layer token \(token)")
+            }
+        }
+    }
+}
+
+// MARK: - iOS Auto-cut visual playback (Slice 4)
+
+// Source-string regression tests for the iOS-only Auto-cut visual-playback
+// chart. Visual preview only — no audio. Same read-from-disk pattern as the
+// Slice 2 / Slice 3 tests.
+final class AutoCutVisualPlaybackTests: XCTestCase {
+
+    private func repoRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(contentsOf: repoRoot().appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    func testAutoCutVisualPlaybackIsGatedToAutoCutMode() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        // The animated-chart view exists and enables the playhead.
+        XCTAssertTrue(view.contains("struct AutoCutTargetChart"),
+                      "PracticeModeView must declare the AutoCutTargetChart view")
+        XCTAssertTrue(view.contains("showPlayhead: true"),
+                      "Auto-cut chart must enable the ScratchPhraseChartView playhead")
+
+        // The animated chart is gated to Auto-cut assist mode only.
+        XCTAssertTrue(view.contains("practiceAssistMode == .autoCut"),
+                      "Auto-cut visual playback must render only in Auto-cut mode")
+        XCTAssertTrue(view.contains("AutoCutTargetChart(notation:"),
+                      "Auto-cut chart must be instantiated at the gated render site")
+
+        // Deterministic, view-local clock — reuses the GuidedCutCueLayer pattern.
+        XCTAssertTrue(view.contains("TimelineView(.periodic"),
+                      "Auto-cut playback must use a view-local TimelineView clock")
+
+        // Reuses the existing bundled target notation — no new data source.
+        XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
+                      "Auto-cut chart must reuse the existing bundled target notation")
+
+        // Honest copy — visual preview, explicitly not audio playback.
+        XCTAssertTrue(view.contains("visual preview — no audio playback yet"),
+                      "Auto-cut explainer copy must stay honest: visual preview, no audio")
+    }
+
+    func testAutoCutVisualPlaybackIsNotCoupledToEngineLayers() throws {
+        // Slice 4 is iOS Practice UI/rendering only — visual, no audio. The
+        // animated chart must not appear in capture, audio, export, or
+        // notation-capture code.
+        let isolationTargets = [
+            "ScratchLab/Models/CaptureCore.swift",
+            "ScratchLab/Audio/AudioEngine.swift",
+            "ScratchLab/Services/SessionExportCoordinator.swift",
+            "ScratchLabDesktop/Services/CXLNotationCapture.swift",
+        ]
+        let forbiddenTokens = ["AutoCutTargetChart"]
+        for relativePath in isolationTargets {
+            guard let text = try? source(relativePath) else {
+                continue
+            }
+            for token in forbiddenTokens {
+                XCTAssertFalse(text.contains(token),
+                               "\(relativePath) must not reference Auto-cut token \(token)")
             }
         }
     }

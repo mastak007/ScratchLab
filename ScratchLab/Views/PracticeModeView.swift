@@ -35,7 +35,7 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
 
     var explainer: String {
         switch self {
-        case .autoCut: return "Auto-cut playback is coming next. For now this mode only previews the target pattern."
+        case .autoCut: return "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet."
         case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
         case .coached: return "ScratchLab compares your cuts against the target."
         case .open:    return "ScratchLab leaves the fader fully manual."
@@ -666,18 +666,24 @@ struct PracticeModeView: View {
                     comboProgressCard
                 }
 
-                // Static target-notation chart — shows the scratch pattern
-                // the user is following. Render-only: no playhead, no
-                // animation, no playback.
+                // Target-notation chart. Static in Open/Guided/Coached;
+                // Auto-cut adds a deterministic, view-local animated playhead
+                // (visual preview only — no audio, capture, or scoring).
                 if let notation = targetNotation {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("TARGET PATTERN")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(.white.opacity(0.55))
 
-                        ScratchPhraseChartView(source: .target(notation))
-                            .frame(height: 110)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        Group {
+                            if practiceAssistMode == .autoCut {
+                                AutoCutTargetChart(notation: notation)
+                            } else {
+                                ScratchPhraseChartView(source: .target(notation))
+                            }
+                        }
+                        .frame(height: 110)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .padding(.horizontal, 20)
                 }
@@ -1772,6 +1778,30 @@ struct SessionSetupOverlay: View {
                 .padding(.top, topSafeAreaInset + 12)
                 .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
             }
+        }
+    }
+}
+
+// Auto-cut assist mode: the target chart with a deterministic, view-local
+// animated playhead. Visual preview only — drives no audio, capture, export,
+// or scoring. The TimelineView is the sole clock, reusing the
+// GuidedCutCueLayer render-side ticker pattern.
+private struct AutoCutTargetChart: View {
+    let notation: ScratchNotation
+
+    @State private var startDate = Date()
+
+    var body: some View {
+        // TimelineView is the only clock — a render-side ticker, not a
+        // playback engine. The playhead loops deterministically over the
+        // target notation's fixed timeline duration.
+        TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+            let loopDuration = max(notation.timelineDuration, 0.1)
+            let elapsed = timeline.date.timeIntervalSince(startDate)
+            let playhead = elapsed.truncatingRemainder(dividingBy: loopDuration)
+            ScratchPhraseChartView(source: .target(notation),
+                                   playheadTime: playhead,
+                                   showPlayhead: true)
         }
     }
 }
