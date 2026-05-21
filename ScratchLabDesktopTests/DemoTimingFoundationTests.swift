@@ -8,10 +8,10 @@ import Testing
 //   • the `PracticeReelTimeline` manifest model + loader + validator, and the
 //     derived copy-window ghost strokes;
 //   • the `DemoAudioClock` smoothing/latency clock and its player wiring;
-//   • source-string regression checks for `VerticalNotationReelView` and the
-//     Demo-mode wiring in `PracticeModeView`. The reel view layer is iOS-only
-//     and not importable into this test target, so it is asserted by file
-//     content — the same source-string pattern the wider regression suites use.
+//   • source-string regression checks for the unified `TimingLaneView` and
+//     its wiring in `PracticeModeView`. The view layer is iOS-only and not
+//     importable into this test target, so it is asserted by file content —
+//     the same source-string pattern the wider regression suites use.
 //
 // The model types are pure (no simulator, no view host); the source-string
 // suites read files from disk.
@@ -424,45 +424,53 @@ struct CopyGhostStrokeTests {
     }
 }
 
-// MARK: - VerticalNotationReelView (source-string regression)
+// MARK: - TimingLaneView (source-string regression)
 
-@Suite("Vertical reel view source")
-struct VerticalReelViewSourceTests {
+@Suite("Timing-lane view source")
+struct TimingLaneViewSourceTests {
 
-    private func reelViewSource() throws -> String {
-        try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
+    private func laneViewSource() throws -> String {
+        try reelSource("ScratchLab/Views/TimingLaneView.swift")
     }
 
-    @Test("The vertical reel view exists as a SwiftUI View")
+    @Test("The unified timing-lane view exists as a SwiftUI View")
     func viewExists() throws {
-        let source = try reelViewSource()
-        #expect(source.contains("struct VerticalNotationReelView: View"))
+        let source = try laneViewSource()
+        #expect(source.contains("struct TimingLaneView: View"))
     }
 
-    @Test("The reel is driven by a manifest and an audio clock, not scroll state")
-    func manifestAndClockDriven() throws {
-        let source = try reelViewSource()
-        #expect(source.contains("let timeline: PracticeReelTimeline"))
-        #expect(source.contains("let audioTime: () -> TimeInterval"))
-        // Geometry flows audioTime -> ReelViewport -> positions; no ScrollView,
-        // so reel position can never feed back into timing.
-        #expect(source.contains("ReelViewport"))
+    @Test("The lane is axis-parametric and driven by content plus a clock")
+    func axisParametricAndClockDriven() throws {
+        let source = try laneViewSource()
+        #expect(source.contains("let content: LaneContent"))
+        #expect(source.contains("let clock: LaneClock"))
+        #expect(source.contains("let axis: LaneAxis"))
+        // Geometry flows clock -> LaneViewport -> positions; no scroll view,
+        // so lane position can never feed back into timing.
+        #expect(source.contains("LaneViewport"))
         #expect(!source.contains("ScrollView"))
     }
 
-    @Test("The reel renders bands, beat grid and strokes from the manifest")
-    func rendersManifestContent() throws {
-        let source = try reelViewSource()
+    @Test("The lane renders bands, beat grid, strokes and the action line")
+    func rendersLaneContent() throws {
+        let source = try laneViewSource()
         #expect(source.contains("drawRegionBands"))
         #expect(source.contains("drawBeatGrid"))
-        #expect(source.contains("drawTargetStrokes"))
-        #expect(source.contains("drawGhostStrokes"))
-        #expect(source.contains("derivedCopyGhostStrokes()"))
+        #expect(source.contains("drawStrokes"))
+        #expect(source.contains("drawActionLine"))
     }
 
-    @Test("The reel runs no scoring, capture or live-mic work")
+    @Test("A looping pattern wraps; a finished demo parks")
+    func loopWrapAndCompletion() throws {
+        let source = try laneViewSource()
+        #expect(source.contains("visibleInstances"))
+        #expect(source.contains("content.loops"))
+        #expect(source.contains("Demo complete"))
+    }
+
+    @Test("The lane runs no scoring, capture or live-mic work")
     func noScoringOrCapture() throws {
-        let source = try reelViewSource()
+        let source = try laneViewSource()
         #expect(!source.contains("audioEngine"))
         #expect(!source.contains("startAnalyzing"))
         #expect(!source.contains("ScratchAnalysisResult"))
@@ -470,49 +478,42 @@ struct VerticalReelViewSourceTests {
     }
 }
 
-// MARK: - Demo-mode reel wiring (source-string regression)
+// MARK: - Unified lane wiring (source-string regression)
 
-@Suite("Demo reel wiring")
-struct DemoReelWiringTests {
+@Suite("Timing-lane wiring")
+struct LaneWiringTests {
 
     private func practiceSource() throws -> String {
         try reelSource("ScratchLab/Views/PracticeModeView.swift")
     }
 
-    @Test("Portrait Demo mode renders the manifest-driven vertical reel")
-    func portraitDemoUsesReel() throws {
+    @Test("Portrait runs the lane vertically, landscape horizontally")
+    func bothOrientationsUseOneLane() throws {
         let source = try practiceSource()
-        #expect(source.contains("if practiceAssistMode == .demo, let reel = demoReel"))
-        #expect(source.contains("demoReelPanel(reel: reel)"))
-        #expect(source.contains("VerticalNotationReelView("))
+        #expect(source.contains("notationLanePanel(axis: .vertical)"))
+        #expect(source.contains("notationLanePanel(axis: .horizontal)"))
+        #expect(source.contains("TimingLaneView(content:"))
     }
 
-    @Test("The vertical reel is Demo-gated — instantiated only in the demo panel")
-    func reelIsDemoGated() throws {
+    @Test("The two old renderers are retired — one engine, not two")
+    func oldRenderersRetired() throws {
         let source = try practiceSource()
-        let panel = try sliceBetween(source,
-            from: "private func demoReelPanel(",
-            to: "// Runtime status for the notation surface")
-        #expect(panel.contains("VerticalNotationReelView("))
-        // VerticalNotationReelView is constructed in exactly one place.
-        let occurrences = source.components(separatedBy: "VerticalNotationReelView(").count - 1
-        #expect(occurrences == 1)
+        #expect(!source.contains("AutoCutTargetChart"))
+        #expect(!source.contains("VerticalNotationReelView"))
+        #expect(!source.contains("NotationPlayheadClock"))
     }
 
-    @Test("The reel is fed the smoothed demo-audio clock")
-    func reelFedByDemoAudioClock() throws {
+    @Test("Demo follows the demo-audio clock; scored modes loop or park")
+    func clockPerMode() throws {
         let source = try practiceSource()
-        #expect(source.contains("audioTime: { demoPlayer.sampledPlaybackTime() }"))
-    }
-
-    @Test("A missing or invalid manifest falls back to the horizontal chart")
-    func fallbackPathExists() throws {
-        let source = try practiceSource()
-        // configureDemoPlayback nils demoReel and reuses the legacy coach audio.
-        #expect(source.contains("demoReel = demoPlayer.isAudioAvailable ? reel : nil"))
-        #expect(source.contains("demoPlayer.configure(with: coachInstruction)"))
-        // The portrait layout then falls through to the notation chart panel.
-        #expect(source.contains("} else if let notation = targetNotation {"))
+        let lane = try sliceBetween(source,
+            from: "private var activeLane",
+            to: "private func notationLanePanel")
+        #expect(lane.contains("LaneContent(reel: reel)"))
+        #expect(lane.contains("LaneContent(notation: notation)"))
+        #expect(lane.contains(".audioTime { demoPlayer.sampledPlaybackTime() }"))
+        #expect(lane.contains(".looping(start: notationClockStartDate"))
+        #expect(lane.contains(".fixed(0)"))
     }
 
     @Test("Demo mode starts no scoring or live-mic analysis")
@@ -521,32 +522,27 @@ struct DemoReelWiringTests {
         let startBody = try sliceBetween(source,
             from: "private func startSession()",
             to: "private func configureDemoPlayback")
-        // Demo plays bundled audio; every other mode runs the mic analyser.
         #expect(startBody.contains("configureDemoPlayback()"))
         #expect(startBody.contains("audioEngine.startAnalyzing(for: activeScratch)"))
-        // The demo branch itself starts no analysis.
         let demoBranch = try sliceBetween(startBody,
             from: "if practiceAssistMode == .demo {", to: "} else {")
         #expect(demoBranch.contains("demoPlayer.play()"))
         #expect(!demoBranch.contains("startAnalyzing"))
     }
 
-    @Test("Guided and Auto-cut keep the existing horizontal chart")
-    func guidedAutoCutUnchanged() throws {
+    @Test("A missing or invalid reel manifest falls back gracefully")
+    func fallbackPathExists() throws {
         let source = try practiceSource()
-        #expect(source.contains(".looping(start: notationClockStartDate)"))
-        #expect(source.contains("AutoCutTargetChart(notation: notation"))
-        #expect(source.contains("GuidedCutCueLayer(notation: notation"))
+        #expect(source.contains("demoReel = demoPlayer.isAudioAvailable ? reel : nil"))
+        #expect(source.contains("demoPlayer.configure(with: coachInstruction)"))
+        // The demo fallback still drives a lane — from the demo audio.
+        #expect(source.contains("// Reel manifest missing/invalid"))
     }
 
-    @Test("Landscape Demo keeps the horizontal chart, not the vertical reel")
-    func landscapeDemoUnchanged() throws {
+    @Test("Guided keeps its crossfader cue layer")
+    func guidedKeepsCueLayer() throws {
         let source = try practiceSource()
-        let landscape = try sliceBetween(source,
-            from: "private var landscapeFeedbackLayout",
-            to: "private var sessionHeader")
-        #expect(!landscape.contains("VerticalNotationReelView"))
-        #expect(!landscape.contains("demoReelPanel"))
+        #expect(source.contains("GuidedCutCueLayer(notation: notation"))
     }
 
     @Test("Coach cards remain absent from practice setup")
@@ -557,39 +553,39 @@ struct DemoReelWiringTests {
     }
 }
 
-// MARK: - User-attempt overlay scaffold (PHASE 7)
+// MARK: - User-attempt overlay scaffold
 
 @Suite("User-attempt overlay scaffold")
 struct UserAttemptScaffoldTests {
 
-    @Test("ReelUserEvent exists as an inert scaffold type")
+    @Test("LaneUserEvent exists as an inert scaffold type")
     func scaffoldTypeExists() throws {
-        let source = try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
-        #expect(source.contains("struct ReelUserEvent"))
+        let source = try reelSource("ScratchLab/Models/TimingLane.swift")
+        #expect(source.contains("struct LaneUserEvent"))
         // Clearly flagged as a non-functional scaffold.
         #expect(source.contains("SCAFFOLD"))
     }
 
-    @Test("The reel takes userEvents defaulting to empty — the overlay is inert")
+    @Test("The lane takes userEvents defaulting to empty — the overlay is inert")
     func userEventsDefaultsEmpty() throws {
-        let source = try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
-        #expect(source.contains("userEvents: [ReelUserEvent] = []"))
+        let source = try reelSource("ScratchLab/Views/TimingLaneView.swift")
+        #expect(source.contains("userEvents: [LaneUserEvent] = []"))
         // The renderer has a path for the overlay but draws nothing when empty.
         #expect(source.contains("drawUserEvents"))
     }
 
-    @Test("Demo wiring passes no user events and adds no scoring or capture")
+    @Test("The lane wiring passes no user events and adds no scoring or capture")
     func wiringStaysNonFunctional() throws {
         let practice = try reelSource("ScratchLab/Views/PracticeModeView.swift")
         let panel = try sliceBetween(practice,
-            from: "private func demoReelPanel(",
+            from: "private func notationLanePanel(",
             to: "// Runtime status for the notation surface")
-        // demoReelPanel constructs the reel without a userEvents argument.
+        // The lane panel constructs TimingLaneView without a userEvents argument.
         #expect(!panel.contains("userEvents"))
-        // The reel view itself still carries no scoring / capture / ML symbols.
-        let reel = try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
-        #expect(!reel.contains("startAnalyzing"))
-        #expect(!reel.contains("ScratchAnalysisResult"))
-        #expect(!reel.contains("AudioEngine"))
+        // The lane view itself still carries no scoring / capture / ML symbols.
+        let lane = try reelSource("ScratchLab/Views/TimingLaneView.swift")
+        #expect(!lane.contains("startAnalyzing"))
+        #expect(!lane.contains("ScratchAnalysisResult"))
+        #expect(!lane.contains("AudioEngine"))
     }
 }

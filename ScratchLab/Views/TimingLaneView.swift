@@ -39,8 +39,11 @@ import SwiftUI
 enum LaneClock {
     /// Locked to an external audio position, in seconds (Demo mode).
     case audioTime(() -> TimeInterval)
-    /// Free-running loop over `duration` seconds from `start` (scored modes).
+    /// Free-running loop over `duration` seconds from `start` (the scored
+    /// preview modes — Auto-cut, Guided).
     case looping(start: Date, duration: TimeInterval)
+    /// Parked at a fixed position — the lane holds still (Coached, Open).
+    case fixed(TimeInterval)
 
     /// Resolves the current timeline position for a render tick at `date`.
     func now(at date: Date) -> TimeInterval {
@@ -50,6 +53,8 @@ enum LaneClock {
         case .looping(let start, let duration):
             let span = max(duration, 0.0001)
             return date.timeIntervalSince(start).truncatingRemainder(dividingBy: span)
+        case .fixed(let time):
+            return max(0, time)
         }
     }
 }

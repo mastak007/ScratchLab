@@ -687,24 +687,14 @@ struct PracticeModeView: View {
                 comboProgressCard
             }
 
-            if practiceAssistMode == .demo, let reel = demoReel {
-                // Portrait Demo mode: the manifest-driven vertical timing reel.
-                demoReelPanel(reel: reel)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let notation = targetNotation {
-                // Other modes — and Demo's fallback when no valid reel
-                // manifest loaded — keep the horizontal target chart.
-                notationPanel(notation: notation)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The unified vertical timing lane is the primary surface.
+            notationLanePanel(axis: .vertical)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Guided assist mode adds a visual crossfader cue layer
-                // beneath the target chart.
-                if practiceAssistMode == .guided {
-                    GuidedCutCueLayer(notation: notation,
-                                      clockStartDate: notationClockStartDate)
-                }
-            } else {
-                Spacer(minLength: 0)
+            // Guided assist mode adds a crossfader cue layer beneath the lane.
+            if practiceAssistMode == .guided, let notation = targetNotation {
+                GuidedCutCueLayer(notation: notation,
+                                  clockStartDate: notationClockStartDate)
             }
 
             feedbackBanner
@@ -722,10 +712,9 @@ struct PracticeModeView: View {
     // which guarantees nothing clips on a short (compact-height) screen.
     private var landscapeFeedbackLayout: some View {
         HStack(spacing: 14) {
-            if let notation = targetNotation {
-                notationPanel(notation: notation)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            // The unified horizontal timing lane is the primary surface.
+            notationLanePanel(axis: .horizontal)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 12) {
@@ -835,64 +824,51 @@ struct PracticeModeView: View {
         .frame(width: 64, height: 64)
     }
 
-    // The primary learning surface. Renders the target pattern at a fixed,
-    // readable points-per-second scale inside a horizontal viewport so
-    // strokes never collapse into a thin strip. Static in Open / Coached
-    // modes; Auto-cut and Guided animate a deterministic playhead whose
-    // viewport auto-follows the current position (visual preview only — no
-    // audio, capture, or scoring). A status chip names the runtime state.
-    private func notationPanel(notation: ScratchNotation) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text("TARGET PATTERN")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.white.opacity(0.55))
-                Spacer()
-                notationStatusChip
-            }
-
-            Group {
-                // Demo locks the playhead to the demo-audio position; Auto-cut
-                // and Guided animate it from the looping session clock; Coached
-                // / Open keep the static, scrollable reference chart.
-                if practiceAssistMode == .demo {
-                    AutoCutTargetChart(notation: notation,
-                                       clock: .audioTime { demoPlayer.sampledPlaybackTime() })
-                } else if practiceAssistMode == .autoCut || practiceAssistMode == .guided {
-                    AutoCutTargetChart(notation: notation,
-                                       clock: .looping(start: notationClockStartDate))
-                } else {
-                    staticTargetChart(notation: notation)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.opacity(0.35))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
+    // The notation lane this mode + orientation should render, paired with its
+    // clock. Demo follows the demo-audio reel; Auto-cut / Guided loop the
+    // target pattern; Coached / Open hold it parked. `nil` when the active
+    // scratch ships no notation.
+    private var activeLane: (content: LaneContent, clock: LaneClock)? {
+        if practiceAssistMode == .demo, let reel = demoReel {
+            return (LaneContent(reel: reel),
+                    .audioTime { demoPlayer.sampledPlaybackTime() })
+        }
+        guard let notation = targetNotation else { return nil }
+        let content = LaneContent(notation: notation)
+        switch practiceAssistMode {
+        case .demo:
+            // Reel manifest missing/invalid — follow the demo audio anyway.
+            return (content, .audioTime { demoPlayer.sampledPlaybackTime() })
+        case .autoCut, .guided:
+            return (content, .looping(start: notationClockStartDate,
+                                      duration: content.duration))
+        case .coached, .open:
+            return (content, .fixed(0))
         }
     }
 
-    // Portrait Demo-mode surface: the manifest-driven vertical timing reel.
-    // Demo-gated, shown only when a valid reel manifest is loaded; keeps the
-    // honest "Demo playing" status chip. Uses the demo-audio clock
-    // (`sampledPlaybackTime()`) as the reel's sole timing source.
-    private func demoReelPanel(reel: PracticeReelTimeline) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text("TARGET PATTERN")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.white.opacity(0.55))
-                Spacer()
-                notationStatusChip
-            }
+    // The unified notation-first timing lane — the primary learning surface in
+    // every mode and orientation. `axis` is the only orientation difference
+    // (vertical in portrait, horizontal in landscape): Demo audio-sync, the
+    // looping preview, and the parked Coached / Open state all flow through the
+    // one renderer. A status chip names the runtime state.
+    @ViewBuilder
+    private func notationLanePanel(axis: LaneAxis) -> some View {
+        if let lane = activeLane {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("TARGET PATTERN")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white.opacity(0.55))
+                    Spacer()
+                    notationStatusChip
+                }
 
-            VerticalNotationReelView(
-                timeline: reel,
-                audioTime: { demoPlayer.sampledPlaybackTime() })
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                TimingLaneView(content: lane.content, clock: lane.clock, axis: axis)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            Spacer(minLength: 0)
         }
     }
 
@@ -926,23 +902,6 @@ struct PracticeModeView: View {
         .clipShape(Capsule())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Notation status: \(status.text)")
-    }
-
-    // Static (no-playhead) target chart for Open / Coached modes, rendered at
-    // a readable points-per-second scale inside a horizontal ScrollView so the
-    // learner can scan the whole routine without the strokes collapsing
-    // together.
-    private func staticTargetChart(notation: ScratchNotation) -> some View {
-        GeometryReader { geo in
-            ScrollView(.horizontal, showsIndicators: true) {
-                ScratchPhraseChartView(source: .target(notation))
-                    .frame(
-                        width: PracticeNotationMetrics.chartWidth(
-                            for: notation, containerWidth: geo.size.width),
-                        height: geo.size.height
-                    )
-            }
-        }
     }
 
     private var accuracyGradient: LinearGradient {
@@ -1987,104 +1946,6 @@ struct SessionSetupOverlay: View {
                 }
                 .padding(.top, topSafeAreaInset + 12)
                 .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
-            }
-        }
-    }
-}
-
-// Shared horizontal scale for the practice notation viewport. The routine
-// is rendered at a fixed points-per-second so strokes stay readable; the
-// viewport then scrolls (or, in Auto-cut, auto-follows the playhead)
-// instead of compressing the whole routine into a microscopic strip.
-private enum PracticeNotationMetrics {
-    static let pointsPerSecond: CGFloat = 96
-
-    static func chartWidth(for notation: ScratchNotation, containerWidth: CGFloat) -> CGFloat {
-        let duration = max(notation.timelineDuration, 0.1)
-        return max(containerWidth, CGFloat(duration) * pointsPerSecond)
-    }
-}
-
-// Clock driving the AutoCutTargetChart playhead.
-private enum NotationPlayheadClock {
-    // Free-running loop over the notation timeline — the silent visual-preview
-    // modes (Auto-cut, Guided). `start` is the session-owned origin.
-    case looping(start: Date)
-    // Locked to an external playback position in notation seconds — Demo mode
-    // feeds the demo-audio player's current time so audio and playhead share
-    // one clock.
-    case audioTime(() -> TimeInterval)
-}
-
-// Animated target chart for the Auto-cut / Guided / Demo modes: a
-// deterministic playhead over the target notation. Visual rendering only —
-// drives no capture, export, or scoring. The clock is supplied
-// (`NotationPlayheadClock`) — a looping session clock for the silent preview
-// modes, or the demo-audio position for Demo mode — so `currentTime` always
-// has a single source of truth and the TimelineView is just a render-side
-// ticker. A pure NotationViewportModel turns the time into all geometry —
-// active phrase, visible window, playhead — framing one phrase at a time
-// instead of compressing the whole routine.
-private struct AutoCutTargetChart: View {
-    let notation: ScratchNotation
-    let clock: NotationPlayheadClock
-    private let viewportModel: NotationViewportModel
-
-    init(notation: ScratchNotation, clock: NotationPlayheadClock) {
-        self.notation = notation
-        self.clock = clock
-        // Phrases are derived once from stroke timings — the notation
-        // JSON/schema is never read or modified.
-        self.viewportModel = NotationViewportModel(
-            strokes: notation.strokes.map {
-                StrokeSpan(startTime: $0.startTime, endTime: $0.endTime)
-            })
-    }
-
-    // Demo locks the chart to the demo-audio clock; a per-frame refresh lets
-    // the smoothed, latency-compensated playhead read true. The looping
-    // preview modes (Auto-cut, Guided) stay on the lighter 0.1 s cadence.
-    private var tickInterval: TimeInterval {
-        switch clock {
-        case .looping:   return 0.1
-        case .audioTime: return 1.0 / 60.0
-        }
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            // TimelineView is only a render-side ticker. `currentTime` comes
-            // from the supplied clock — a looping session clock or the demo
-            // audio position — and is the sole input to the viewport model, so
-            // no scroll/layout state can feed back into timing.
-            TimelineView(.periodic(from: .now, by: tickInterval)) { timeline in
-                let loopDuration = max(notation.timelineDuration, 0.1)
-                let currentTime: TimeInterval = switch clock {
-                case .looping(let start):
-                    timeline.date.timeIntervalSince(start)
-                        .truncatingRemainder(dividingBy: loopDuration)
-                case .audioTime(let provider):
-                    max(0, provider())
-                }
-
-                let viewport = viewportModel.resolve(
-                    currentTime: currentTime, visibleWidth: geo.size.width)
-
-                // The full-routine chart is rendered at the model's scale and
-                // shifted so the active phrase window fills the viewport;
-                // ScratchPhraseChartView itself is unchanged. Geometry is a
-                // pure function of `viewport` — no @State written in layout.
-                let chartWidth = CGFloat(loopDuration) * viewport.pointsPerSecond
-                let chartOffsetX = -CGFloat(viewport.visibleTimeRange.lowerBound)
-                    * viewport.pointsPerSecond
-
-                ScratchPhraseChartView(source: .target(notation),
-                                       playheadTime: viewport.clampedPlayheadTime,
-                                       showPlayhead: true)
-                    .frame(width: chartWidth, height: geo.size.height)
-                    .offset(x: chartOffsetX)
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
-                    .clipped()
             }
         }
     }
