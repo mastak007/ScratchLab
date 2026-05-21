@@ -10650,8 +10650,10 @@ final class PracticeNotationPlaybackStatusTests: XCTestCase {
                       && view.contains("demoPlayer.play()"),
                       "Demo mode must start the bundled demo-audio player on Start Session")
 
-        // The playhead is locked to the demo-audio position — one clock.
-        XCTAssertTrue(view.contains(".audioTime { demoPlayer.currentPlaybackTime }"),
+        // The playhead is locked to the demo-audio position — one clock. It
+        // samples the smoothed, latency-compensated demo clock so the notation
+        // tracks what the listener hears (see DemoAudioClock).
+        XCTAssertTrue(view.contains(".audioTime { demoPlayer.sampledPlaybackTime() }"),
                       "Demo mode must drive the playhead from the demo-audio clock")
 
         // Honest runtime chip for the audio-backed mode.
