@@ -51,10 +51,11 @@ struct PracticeModeView: View {
     let usesBackingTrack: Bool
     
     @Environment(\.dismiss) var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
-    
+
     // Session state
     @State private var isSessionActive = false
     @State private var isPaused = false
@@ -414,18 +415,26 @@ struct PracticeModeView: View {
                 VStack(spacing: 0) {
                     // Top bar
                     topBar(topSafeAreaInset: geometry.safeAreaInsets.top)
-                    
-                    Spacer()
-                    
-                    // Center feedback area
+
+                    // Notation-first practice surface. When a session is
+                    // active the feedback area fills the space between the
+                    // top bar and bottom controls so the notation can
+                    // dominate; otherwise the setup overlay covers the
+                    // screen and this branch is just empty space.
                     if isSessionActive {
                         centerFeedbackArea
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        Spacer()
                     }
-                    
-                    Spacer()
-                    
-                    // Bottom controls
-                    bottomControls
+
+                    // Bottom controls. In landscape (compact height) the
+                    // audio status / level / tip move into the feedback
+                    // area's scrollable side column so the notation keeps
+                    // the full screen height.
+                    if verticalSizeClass != .compact {
+                        bottomControls
+                    }
                 }
                 
                 // Accuracy burst animation
@@ -644,121 +653,222 @@ struct PracticeModeView: View {
     
     // MARK: - Center Feedback Area
     
+    // Notation-first practice surface. The target-notation chart is the
+    // primary learning surface; accuracy / score / streak are demoted to a
+    // compact secondary metrics row. Portrait stacks vertically with the
+    // notation filling the space; landscape (compact height) puts the
+    // notation beside a scrollable metrics column so nothing clips.
     private var centerFeedbackArea: some View {
-            VStack(spacing: 24) {
-                // Current scratch name
-                VStack(spacing: 4) {
-                Text(currentSessionTitle)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
-                
-                Text(currentSessionSubtitle)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-
-                if isGuidedDrillMode {
-                    guidedDrillCueCard
-                }
-
-                if isComboChallengeMode {
-                    comboProgressCard
-                }
-
-                // Target-notation chart. Static in Open/Guided/Coached;
-                // Auto-cut adds a deterministic, view-local animated playhead
-                // (visual preview only — no audio, capture, or scoring).
-                if let notation = targetNotation {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("TARGET PATTERN")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.white.opacity(0.55))
-
-                        Group {
-                            if practiceAssistMode == .autoCut {
-                                AutoCutTargetChart(notation: notation)
-                            } else {
-                                ScratchPhraseChartView(source: .target(notation))
-                            }
-                        }
-                        .frame(height: 110)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .padding(.horizontal, 20)
-                }
-
-                // Guided assist mode adds a visual crossfader cue layer
-                // beneath the static target chart.
-                if practiceAssistMode == .guided, let notation = targetNotation {
-                    GuidedCutCueLayer(notation: notation)
-                }
-
-            // Accuracy ring
-            ZStack {
-                // Outer pulse ring
-                Circle()
-                    .stroke(feedbackColor.opacity(0.3), lineWidth: 4)
-                    .frame(width: 180, height: 180)
-                    .scaleEffect(pulseRing ? 1.2 : 1.0)
-                    .opacity(pulseRing ? 0 : 1)
-                
-                // Main ring
-                Circle()
-                    .stroke(Color.white.opacity(0.2), lineWidth: 8)
-                    .frame(width: 160, height: 160)
-                
-                // Progress ring
-                Circle()
-                    .trim(from: 0, to: CGFloat(displayedAccuracy / 100))
-                    .stroke(
-                        accuracyGradient,
-                        style: StrokeStyle(lineWidth: 8, lineCap: .round)
-                    )
-                    .frame(width: 160, height: 160)
-                    .rotationEffect(.degrees(-90))
-                
-                // Center content
-                VStack(spacing: 4) {
-                    Text("\(Int(displayedAccuracy))%")
-                        .font(.system(size: 48, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                    
-                    Text(centerMetricLabel)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                }
+        Group {
+            if verticalSizeClass == .compact {
+                landscapeFeedbackLayout
+            } else {
+                portraitFeedbackLayout
             }
-            
-            // Feedback text
-            if showFeedback && !lastFeedback.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(lastFeedback, id: \.self) { feedback in
-                        Text(feedback)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(feedbackColor)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color.black.opacity(0.5))
-                            .cornerRadius(8)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            
-            // Stats row
-            HStack(spacing: 40) {
-                StatDisplay(icon: leadingStat.icon, value: leadingStat.value, label: leadingStat.label, color: leadingStat.color)
-                StatDisplay(icon: "star.fill", value: "\(currentScore)", label: "Score", color: Color(hex: "FFD700"))
-                StatDisplay(icon: "number", value: "\(attemptCount)", label: isComboChallengeMode ? "Detections" : "Attempts", color: Color(hex: "2196F3"))
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(Color.black.opacity(0.5))
-            .cornerRadius(16)
         }
     }
-    
+
+    private var portraitFeedbackLayout: some View {
+        VStack(spacing: 14) {
+            sessionHeader
+
+            if isGuidedDrillMode {
+                guidedDrillCueCard
+            }
+            if isComboChallengeMode {
+                comboProgressCard
+            }
+
+            if let notation = targetNotation {
+                notationPanel(notation: notation)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Guided assist mode adds a visual crossfader cue layer
+                // beneath the target chart.
+                if practiceAssistMode == .guided {
+                    GuidedCutCueLayer(notation: notation)
+                }
+            } else {
+                Spacer(minLength: 0)
+            }
+
+            feedbackBanner
+
+            compactMetricsRow
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
+    // Landscape: the notation stays the dominant surface on the left while
+    // the secondary practice content moves into a scrollable side column,
+    // which guarantees nothing clips on a short (compact-height) screen.
+    private var landscapeFeedbackLayout: some View {
+        HStack(spacing: 14) {
+            if let notation = targetNotation {
+                notationPanel(notation: notation)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 12) {
+                    sessionHeader
+                    if isGuidedDrillMode {
+                        guidedDrillCueCard
+                    }
+                    if isComboChallengeMode {
+                        comboProgressCard
+                    }
+                    if practiceAssistMode == .guided, let notation = targetNotation {
+                        GuidedCutCueLayer(notation: notation)
+                    }
+                    feedbackBanner
+                    compactMetricsRow
+                    audioStatusCard
+                    AudioLevelIndicator(level: audioEngine.inputLevel)
+                    tipBanner
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(width: 256)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+    }
+
+    private var sessionHeader: some View {
+        VStack(spacing: 2) {
+            Text(currentSessionTitle)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(.white)
+                .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+
+            Text(currentSessionSubtitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var feedbackBanner: some View {
+        if showFeedback && !lastFeedback.isEmpty {
+            VStack(spacing: 6) {
+                ForEach(lastFeedback, id: \.self) { feedback in
+                    Text(feedback)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(feedbackColor)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(8)
+                }
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+
+    // Compact secondary metrics: a small accuracy ring plus streak / score /
+    // attempts. Deliberately understated so the notation stays dominant.
+    private var compactMetricsRow: some View {
+        HStack(spacing: 16) {
+            compactAccuracyRing
+            StatDisplay(icon: leadingStat.icon, value: leadingStat.value, label: leadingStat.label, color: leadingStat.color)
+            StatDisplay(icon: "star.fill", value: "\(currentScore)", label: "Score", color: Color(hex: "FFD700"))
+            StatDisplay(icon: "number", value: "\(attemptCount)", label: isComboChallengeMode ? "Detections" : "Attempts", color: Color(hex: "2196F3"))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.5))
+        .cornerRadius(16)
+    }
+
+    private var compactAccuracyRing: some View {
+        ZStack {
+            Circle()
+                .stroke(feedbackColor.opacity(0.3), lineWidth: 3)
+                .frame(width: 64, height: 64)
+                .scaleEffect(pulseRing ? 1.18 : 1.0)
+                .opacity(pulseRing ? 0 : 1)
+
+            Circle()
+                .stroke(Color.white.opacity(0.2), lineWidth: 5)
+                .frame(width: 60, height: 60)
+
+            Circle()
+                .trim(from: 0, to: CGFloat(displayedAccuracy / 100))
+                .stroke(accuracyGradient, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .frame(width: 60, height: 60)
+                .rotationEffect(.degrees(-90))
+
+            VStack(spacing: 0) {
+                Text("\(Int(displayedAccuracy))%")
+                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                Text(centerMetricLabel)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+            }
+        }
+        .frame(width: 64, height: 64)
+    }
+
+    // The primary learning surface. Renders the target pattern at a fixed,
+    // readable points-per-second scale inside a horizontal viewport so
+    // strokes never collapse into a thin strip. Static in Open / Guided /
+    // Coached modes; Auto-cut adds a deterministic, view-local animated
+    // playhead whose viewport auto-follows the current position (visual
+    // preview only — no audio, capture, or scoring).
+    private func notationPanel(notation: ScratchNotation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("TARGET PATTERN")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white.opacity(0.55))
+                Spacer()
+                if practiceAssistMode != .autoCut {
+                    Text("SWIPE TO SCAN")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(0.32))
+                }
+            }
+
+            Group {
+                if practiceAssistMode == .autoCut {
+                    AutoCutTargetChart(notation: notation)
+                } else {
+                    staticTargetChart(notation: notation)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.35))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+        }
+    }
+
+    // Static (no-playhead) target chart for Open / Guided / Coached modes,
+    // rendered at a readable points-per-second scale inside a horizontal
+    // ScrollView so the learner can scan the whole routine without the
+    // strokes collapsing together.
+    private func staticTargetChart(notation: ScratchNotation) -> some View {
+        GeometryReader { geo in
+            ScrollView(.horizontal, showsIndicators: true) {
+                ScratchPhraseChartView(source: .target(notation))
+                    .frame(
+                        width: PracticeNotationMetrics.chartWidth(
+                            for: notation, containerWidth: geo.size.width),
+                        height: geo.size.height
+                    )
+            }
+        }
+    }
+
     private var accuracyGradient: LinearGradient {
         if displayedAccuracy >= 90 {
             return LinearGradient(colors: [Color(hex: "4CAF50"), Color(hex: "8BC34A")], startPoint: .leading, endPoint: .trailing)
@@ -772,7 +882,7 @@ struct PracticeModeView: View {
     // MARK: - Bottom Controls
     
     private var bottomControls: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             if isSessionActive {
                 audioStatusCard
             }
@@ -784,23 +894,27 @@ struct PracticeModeView: View {
             
             // Tips
             if isSessionActive {
-                HStack(spacing: 8) {
-                    Text("TIP")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(Color(hex: "FFD700"))
-
-                    Text(currentTipText)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
-                        .multilineTextAlignment(.leading)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.3))
-                .cornerRadius(8)
+                tipBanner
             }
         }
-        .padding(.bottom, 40)
+        .padding(.bottom, 22)
+    }
+
+    private var tipBanner: some View {
+        HStack(spacing: 8) {
+            Text("TIP")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(Color(hex: "FFD700"))
+
+            Text(currentTipText)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.8))
+                .multilineTextAlignment(.leading)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.3))
+        .cornerRadius(8)
     }
 
     private var audioStatusCard: some View {
@@ -1782,26 +1896,55 @@ struct SessionSetupOverlay: View {
     }
 }
 
+// Shared horizontal scale for the practice notation viewport. The routine
+// is rendered at a fixed points-per-second so strokes stay readable; the
+// viewport then scrolls (or, in Auto-cut, auto-follows the playhead)
+// instead of compressing the whole routine into a microscopic strip.
+private enum PracticeNotationMetrics {
+    static let pointsPerSecond: CGFloat = 96
+
+    static func chartWidth(for notation: ScratchNotation, containerWidth: CGFloat) -> CGFloat {
+        let duration = max(notation.timelineDuration, 0.1)
+        return max(containerWidth, CGFloat(duration) * pointsPerSecond)
+    }
+}
+
 // Auto-cut assist mode: the target chart with a deterministic, view-local
 // animated playhead. Visual preview only — drives no audio, capture, export,
 // or scoring. The TimelineView is the sole clock, reusing the
-// GuidedCutCueLayer render-side ticker pattern.
+// GuidedCutCueLayer render-side ticker pattern. The viewport auto-follows
+// the playhead so the active phrase stays on screen.
 private struct AutoCutTargetChart: View {
     let notation: ScratchNotation
 
     @State private var startDate = Date()
 
     var body: some View {
-        // TimelineView is the only clock — a render-side ticker, not a
-        // playback engine. The playhead loops deterministically over the
-        // target notation's fixed timeline duration.
-        TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
-            let loopDuration = max(notation.timelineDuration, 0.1)
-            let elapsed = timeline.date.timeIntervalSince(startDate)
-            let playhead = elapsed.truncatingRemainder(dividingBy: loopDuration)
-            ScratchPhraseChartView(source: .target(notation),
-                                   playheadTime: playhead,
-                                   showPlayhead: true)
+        GeometryReader { geo in
+            // TimelineView is the only clock — a render-side ticker, not a
+            // playback engine. The playhead loops deterministically over the
+            // target notation's fixed timeline duration.
+            TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+                let loopDuration = max(notation.timelineDuration, 0.1)
+                let elapsed = timeline.date.timeIntervalSince(startDate)
+                let playhead = elapsed.truncatingRemainder(dividingBy: loopDuration)
+
+                let chartWidth = PracticeNotationMetrics.chartWidth(
+                    for: notation, containerWidth: geo.size.width)
+                let playheadX = CGFloat(playhead) * PracticeNotationMetrics.pointsPerSecond
+                // Keep the playhead ~1/3 from the left edge as a look-ahead
+                // window; clamp so the viewport never scrolls past the ends.
+                let minOffset = min(0, geo.size.width - chartWidth)
+                let offset = min(0, max(minOffset, geo.size.width * 0.33 - playheadX))
+
+                ScratchPhraseChartView(source: .target(notation),
+                                       playheadTime: playhead,
+                                       showPlayhead: true)
+                    .frame(width: chartWidth, height: geo.size.height)
+                    .offset(x: offset)
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+                    .clipped()
+            }
         }
     }
 }

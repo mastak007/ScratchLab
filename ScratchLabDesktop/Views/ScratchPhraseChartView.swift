@@ -311,10 +311,26 @@ struct ScratchPhraseChartView: View {
     }
 
     private func drawPlayhead(ctx: GraphicsContext, size: CGSize, x: CGFloat) {
+        // Soft glow so the playhead reads clearly against dense notation.
+        var glow = Path()
+        glow.move(to: CGPoint(x: x, y: 0))
+        glow.addLine(to: CGPoint(x: x, y: size.height))
+        ctx.stroke(glow, with: .color(Color.white.opacity(0.22)), lineWidth: 6)
+
+        // Main playhead line — brighter and thicker than a hairline cursor
+        // so the current timing position is obvious at arm's length.
         var ph = Path()
         ph.move(to: CGPoint(x: x, y: 0))
         ph.addLine(to: CGPoint(x: x, y: size.height))
-        ctx.stroke(ph, with: .color(Color.white.opacity(0.80)), lineWidth: 1.5)
+        ctx.stroke(ph, with: .color(Color.white.opacity(0.95)), lineWidth: 2.5)
+
+        // Downward marker at the top edge anchors the eye to the playhead.
+        var marker = Path()
+        marker.move(to: CGPoint(x: x - 5, y: 0))
+        marker.addLine(to: CGPoint(x: x + 5, y: 0))
+        marker.addLine(to: CGPoint(x: x, y: 8))
+        marker.closeSubpath()
+        ctx.fill(marker, with: .color(Color.white.opacity(0.95)))
     }
 
     private func drawEmpty(ctx: GraphicsContext, size: CGSize, message: String) {
