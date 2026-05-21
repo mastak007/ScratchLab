@@ -10335,15 +10335,16 @@ final class PracticeAssistModePickerTests: XCTestCase {
         XCTAssertTrue(view.contains("enum PracticeAssistMode"),
                       "PracticeModeView must declare the PracticeAssistMode enum")
 
-        // All four mode display labels.
-        for label in ["\"Auto-cut\"", "\"Guided\"", "\"Coached\"", "\"Open\""] {
+        // All five mode display labels.
+        for label in ["\"Auto-cut\"", "\"Demo\"", "\"Guided\"", "\"Coached\"", "\"Open\""] {
             XCTAssertTrue(view.contains(label),
                           "Assist mode picker missing label: \(label)")
         }
 
-        // All four explainer strings, verbatim.
+        // All five explainer strings, verbatim.
         let explainers = [
             "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet.",
+            "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored.",
             "ScratchLab shows upcoming cut cues while you move the fader.",
             "ScratchLab compares your cuts against the target.",
             "ScratchLab leaves the fader fully manual.",
@@ -10626,9 +10627,32 @@ final class PracticeNotationPlaybackStatusTests: XCTestCase {
         // it survives view rebuilds (e.g. rotation) instead of resetting.
         XCTAssertTrue(view.contains("notationClockStartDate = Date()"),
                       "startSession must stamp the session-owned notation clock")
-        XCTAssertTrue(view.contains("clockStartDate: notationClockStartDate"),
+        XCTAssertTrue(view.contains("clockStartDate: notationClockStartDate")
+                      && view.contains(".looping(start: notationClockStartDate)"),
                       "Notation views must be driven by the shared session clock")
         XCTAssertFalse(view.contains("@State private var startDate = Date()"),
                        "Notation views must not own private free-running clocks")
+    }
+
+    func testDemoModeWiresReferenceAudioPlaybackWithoutScoring() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        // Demo is a distinct assist mode that plays the bundled demo audio
+        // and skips scored mic analysis — a non-scored reference run.
+        XCTAssertTrue(view.contains("case demo"),
+                      "PracticeAssistMode must declare the Demo mode")
+        XCTAssertTrue(view.contains("ScratchCoachDemoAudioPlayer()"),
+                      "PracticeModeView must own a demo-audio player")
+        XCTAssertTrue(view.contains("demoPlayer.configure(with: coachInstruction)")
+                      && view.contains("demoPlayer.play()"),
+                      "Demo mode must start the bundled demo-audio player on Start Session")
+
+        // The playhead is locked to the demo-audio position — one clock.
+        XCTAssertTrue(view.contains(".audioTime { demoPlayer.currentPlaybackTime }"),
+                      "Demo mode must drive the playhead from the demo-audio clock")
+
+        // Honest runtime chip for the audio-backed mode.
+        XCTAssertTrue(view.contains("\"Demo playing\""),
+                      "Demo mode status chip must read 'Demo playing'")
     }
 }

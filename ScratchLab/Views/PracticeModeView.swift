@@ -13,11 +13,12 @@ private enum PracticeBeatUIContract {
     static let stopLabel = "Stop Beat"
 }
 
-// Practice setup assist-mode picker. UI + persisted selection only — no
-// coach, playback, or scoring behaviour is wired up yet. Default is `.open`
-// so today's coaching loop is unchanged for existing users on first launch.
+// Practice assist modes. Default is `.open` so the existing coaching loop is
+// unchanged for users on first launch. Demo is a non-scored reference mode
+// that plays the bundled demo audio; the rest run the scored practice loop.
 fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
     case autoCut
+    case demo
     case guided
     case coached
     case open
@@ -27,6 +28,7 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .autoCut: return "Auto-cut"
+        case .demo:    return "Demo"
         case .guided:  return "Guided"
         case .coached: return "Coached"
         case .open:    return "Open"
@@ -36,6 +38,7 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
     var explainer: String {
         switch self {
         case .autoCut: return "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet."
+        case .demo:    return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
         case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
         case .coached: return "ScratchLab compares your cuts against the target."
         case .open:    return "ScratchLab leaves the fader fully manual."
@@ -55,6 +58,11 @@ struct PracticeModeView: View {
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
+
+    // Bundled demo-audio player for the non-scored Demo assist mode. Reused
+    // from the coach card; owned here so the live session can drive the demo
+    // playback and the audio-synced notation playhead.
+    @StateObject private var demoPlayer = ScratchCoachDemoAudioPlayer()
 
     // Session state
     @State private var isSessionActive = false
@@ -699,7 +707,9 @@ struct PracticeModeView: View {
 
             feedbackBanner
 
-            compactMetricsRow
+            if practiceAssistMode != .demo {
+                compactMetricsRow
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -729,7 +739,9 @@ struct PracticeModeView: View {
                                           clockStartDate: notationClockStartDate)
                     }
                     feedbackBanner
-                    compactMetricsRow
+                    if practiceAssistMode != .demo {
+                        compactMetricsRow
+                    }
                     audioStatusCard
                     AudioLevelIndicator(level: audioEngine.inputLevel)
                     tipBanner
@@ -838,13 +850,15 @@ struct PracticeModeView: View {
             }
 
             Group {
-                // Auto-cut and Guided are the "app shows you the pattern"
-                // modes — both animate the playhead from the shared session
-                // clock. Coached / Open are "you perform" modes and keep the
-                // static, scrollable reference chart.
-                if practiceAssistMode == .autoCut || practiceAssistMode == .guided {
+                // Demo locks the playhead to the demo-audio position; Auto-cut
+                // and Guided animate it from the looping session clock; Coached
+                // / Open keep the static, scrollable reference chart.
+                if practiceAssistMode == .demo {
                     AutoCutTargetChart(notation: notation,
-                                       clockStartDate: notationClockStartDate)
+                                       clock: .audioTime { demoPlayer.currentPlaybackTime })
+                } else if practiceAssistMode == .autoCut || practiceAssistMode == .guided {
+                    AutoCutTargetChart(notation: notation,
+                                       clock: .looping(start: notationClockStartDate))
                 } else {
                     staticTargetChart(notation: notation)
                 }
@@ -867,6 +881,7 @@ struct PracticeModeView: View {
     private var notationStatus: (text: String, isLive: Bool) {
         switch practiceAssistMode {
         case .autoCut: return ("Preview playing", true)
+        case .demo:    return ("Demo playing", true)
         case .guided:  return ("Guide active", true)
         case .coached, .open: return ("Waiting for input", false)
         }
@@ -1171,8 +1186,15 @@ struct PracticeModeView: View {
         // t = 0 together with this session.
         notationClockStartDate = Date()
 
-        // Start audio analysis
-        audioEngine.startAnalyzing(for: activeScratch)
+        // Demo mode is a non-scored reference playback: play the bundled demo
+        // audio and skip live scratch analysis. Every other mode runs scored
+        // mic analysis.
+        if practiceAssistMode == .demo {
+            demoPlayer.configure(with: coachInstruction)
+            demoPlayer.play()
+        } else {
+            audioEngine.startAnalyzing(for: activeScratch)
+        }
 
         if isGuidedDrillMode {
             updateGuidedDrillState()
@@ -1186,11 +1208,16 @@ struct PracticeModeView: View {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
+        demoPlayer.pause()
     }
     
     private func resumeSession() {
         isPaused = false
-        audioEngine.startAnalyzing(for: activeScratch)
+        if practiceAssistMode == .demo {
+            demoPlayer.play()
+        } else {
+            audioEngine.startAnalyzing(for: activeScratch)
+        }
 
         startSessionTimer()
     }
@@ -1200,8 +1227,14 @@ struct PracticeModeView: View {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
+        demoPlayer.stop()
         
         isSessionActive = false
+
+        // Demo mode is a non-scored reference playback — no results screen and
+        // no recorded practice attempt.
+        guard practiceAssistMode != .demo else { return }
+
         showingResults = true
         persistSessionProgressIfNeeded()
     }
@@ -1234,6 +1267,7 @@ struct PracticeModeView: View {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
+        demoPlayer.stop()
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
@@ -1504,6 +1538,7 @@ struct PracticeModeView: View {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
+        demoPlayer.stop()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
             endSession()
@@ -1791,8 +1826,8 @@ struct SessionSetupOverlay: View {
                         }
                     }
 
-                    // Assist mode — UI + persisted selection only. No coach,
-                    // playback, or scoring behaviour is wired up by this yet.
+                    // Assist mode picker. Drives which notation surface the
+                    // live session shows and, for Demo, its reference playback.
                     VStack(spacing: 12) {
                         Text("ASSIST MODE")
                             .font(.system(size: 12, weight: .bold))
@@ -1950,23 +1985,34 @@ private enum PracticeNotationMetrics {
     }
 }
 
-// Auto-cut assist mode: the target chart with a deterministic animated
-// playhead. Visual preview only — drives no audio, capture, export, or
-// scoring. `clockStartDate` is the session-owned clock origin — one source of
-// truth, stamped by startSession() and stable across view rebuilds such as
-// rotation; the TimelineView is only a render-side ticker. A pure
-// NotationViewportModel turns the looped time into all geometry — active
-// phrase, visible window, playhead — so the viewport frames one phrase at a
-// time instead of compressing the whole routine, and no scroll/layout state
-// can feed back into timing.
+// Clock driving the AutoCutTargetChart playhead.
+private enum NotationPlayheadClock {
+    // Free-running loop over the notation timeline — the silent visual-preview
+    // modes (Auto-cut, Guided). `start` is the session-owned origin.
+    case looping(start: Date)
+    // Locked to an external playback position in notation seconds — Demo mode
+    // feeds the demo-audio player's current time so audio and playhead share
+    // one clock.
+    case audioTime(() -> TimeInterval)
+}
+
+// Animated target chart for the Auto-cut / Guided / Demo modes: a
+// deterministic playhead over the target notation. Visual rendering only —
+// drives no capture, export, or scoring. The clock is supplied
+// (`NotationPlayheadClock`) — a looping session clock for the silent preview
+// modes, or the demo-audio position for Demo mode — so `currentTime` always
+// has a single source of truth and the TimelineView is just a render-side
+// ticker. A pure NotationViewportModel turns the time into all geometry —
+// active phrase, visible window, playhead — framing one phrase at a time
+// instead of compressing the whole routine.
 private struct AutoCutTargetChart: View {
     let notation: ScratchNotation
-    let clockStartDate: Date
+    let clock: NotationPlayheadClock
     private let viewportModel: NotationViewportModel
 
-    init(notation: ScratchNotation, clockStartDate: Date) {
+    init(notation: ScratchNotation, clock: NotationPlayheadClock) {
         self.notation = notation
-        self.clockStartDate = clockStartDate
+        self.clock = clock
         // Phrases are derived once from stroke timings — the notation
         // JSON/schema is never read or modified.
         self.viewportModel = NotationViewportModel(
@@ -1977,14 +2023,19 @@ private struct AutoCutTargetChart: View {
 
     var body: some View {
         GeometryReader { geo in
-            // TimelineView is only a render-side ticker; the clock origin is
-            // the session-owned `clockStartDate`. `currentTime` loops over the
-            // notation's fixed timeline duration and is the sole input to the
-            // viewport model.
+            // TimelineView is only a render-side ticker. `currentTime` comes
+            // from the supplied clock — a looping session clock or the demo
+            // audio position — and is the sole input to the viewport model, so
+            // no scroll/layout state can feed back into timing.
             TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
                 let loopDuration = max(notation.timelineDuration, 0.1)
-                let elapsed = timeline.date.timeIntervalSince(clockStartDate)
-                let currentTime = elapsed.truncatingRemainder(dividingBy: loopDuration)
+                let currentTime: TimeInterval = switch clock {
+                case .looping(let start):
+                    timeline.date.timeIntervalSince(start)
+                        .truncatingRemainder(dividingBy: loopDuration)
+                case .audioTime(let provider):
+                    max(0, provider())
+                }
 
                 let viewport = viewportModel.resolve(
                     currentTime: currentTime, visibleWidth: geo.size.width)
