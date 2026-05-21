@@ -101,11 +101,6 @@ struct PracticeReelTimeline: Decodable, Equatable, Sendable {
         segments.first { $0.contains(time: time) }
     }
 
-    /// The segment that follows `time`'s segment — the next one to begin.
-    func segmentAfter(time: TimeInterval) -> ReelSegment? {
-        segments.first { $0.startTime > time }
-    }
-
     /// Reference ("ghost") strokes to draw inside each copy window.
     ///
     /// A copy segment carries no strokes of its own — it is the silent window

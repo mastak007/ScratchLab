@@ -3,10 +3,18 @@ import Foundation
 import Testing
 @testable import ScratchLab
 
-// Unit tests for the call-and-response Demo timing foundation (Slices 0 & 1):
-// the `PracticeReelTimeline` manifest model + loader + validator, and the
-// `DemoAudioClock` smoothing/latency clock. Both types are pure, so these
-// construct inputs and assert — no simulator, no view host.
+// Unit tests for the call-and-response Demo timing & reel feature:
+//
+//   • the `PracticeReelTimeline` manifest model + loader + validator, and the
+//     derived copy-window ghost strokes;
+//   • the `DemoAudioClock` smoothing/latency clock and its player wiring;
+//   • source-string regression checks for `VerticalNotationReelView` and the
+//     Demo-mode wiring in `PracticeModeView`. The reel view layer is iOS-only
+//     and not importable into this test target, so it is asserted by file
+//     content — the same source-string pattern the wider regression suites use.
+//
+// The model types are pure (no simulator, no view host); the source-string
+// suites read files from disk.
 
 // MARK: - Shared helpers
 
@@ -16,6 +24,23 @@ private func reelTestsRepoRoot() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
+}
+
+/// Reads a project source file as text. The reel view layer is iOS-only and
+/// not importable into this test target, so it is asserted by file content.
+private func reelSource(_ relativePath: String) throws -> String {
+    try String(contentsOf: reelTestsRepoRoot().appendingPathComponent(relativePath),
+               encoding: .utf8)
+}
+
+/// The substring of `source` from the first occurrence of `start` up to the
+/// next occurrence of `end` — lets a source-string check target one function
+/// or layout block instead of the whole file.
+private func sliceBetween(_ source: String, from start: String, to end: String) throws -> String {
+    let head = try #require(source.range(of: start), "source marker not found: \(start)")
+    let rest = source[head.lowerBound...]
+    let tail = try #require(rest.range(of: end), "source marker not found after start: \(end)")
+    return String(rest[..<tail.lowerBound])
 }
 
 /// A flexible valid-manifest builder; each test overrides only what it probes.
@@ -326,5 +351,208 @@ struct DemoAudioClockWiringTests {
         // delta is output-latency independent (it cancels), so this holds on
         // every host platform.
         #expect(abs((second - first) - 0.5) < 0.01)
+    }
+}
+
+// MARK: - Copy-window ghost strokes
+
+@Suite("Copy-window ghost strokes")
+struct CopyGhostStrokeTests {
+
+    @Test("Echoes the preceding demo's strokes into a copy window, time-shifted")
+    func echoesPrecedingDemo() {
+        // makeManifest: demo 0–4 (strokes at 1.0 and 2.0), copy 4–8 (none).
+        let reel = makeManifest()
+        let ghosts = reel.derivedCopyGhostStrokes()
+        #expect(ghosts.count == 2)
+        // Copy window starts at 4.0, demo at 0.0 — every stroke shifts +4.0.
+        #expect(abs(ghosts[0].startTime - 5.0) < 1e-6)
+        #expect(abs(ghosts[1].startTime - 6.0) < 1e-6)
+        // Direction is carried across unchanged.
+        #expect(ghosts[0].direction == .backward)
+        #expect(ghosts[1].direction == .forward)
+    }
+
+    @Test("Every ghost lands inside a copy window, never a demo segment")
+    func ghostsLandInCopyWindows() {
+        let reel = makeManifest()
+        for ghost in reel.derivedCopyGhostStrokes() {
+            #expect(reel.segment(at: ghost.startTime)?.kind == .copy)
+        }
+    }
+
+    @Test("A copy window with no preceding demo yields no ghosts")
+    func noPrecedingDemoYieldsNoGhosts() {
+        let reel = makeManifest(segments: [
+            ReelSegment(kind: .copy, startTime: 0.0, endTime: 4.0, label: "Your turn"),
+            ReelSegment(kind: .demo, startTime: 4.0, endTime: 8.0, label: "Demo 1"),
+        ])
+        #expect(reel.derivedCopyGhostStrokes().isEmpty)
+    }
+
+    @Test("Ghosts that overrun a short copy window are clipped out")
+    func ghostsClippedToCopyWindow() {
+        // Demo 0–5 carries two strokes; the copy window 5–8 is shorter than it.
+        let reel = makeManifest(
+            audioDuration: 10.0,
+            segments: [
+                ReelSegment(kind: .demo, startTime: 0.0, endTime: 5.0, label: "Demo 1"),
+                ReelSegment(kind: .copy, startTime: 5.0, endTime: 8.0, label: "Your turn"),
+            ],
+            strokes: [
+                ReelStroke(startTime: 1.0, endTime: 1.5,
+                           direction: .backward, speedClassification: .slow, faderState: .open),
+                ReelStroke(startTime: 4.5, endTime: 4.9,
+                           direction: .forward, speedClassification: .fast, faderState: .open),
+            ])
+        // Shift +5: the first ghost 6.0–6.5 fits [5,8]; the second 9.5–9.9 does not.
+        let ghosts = reel.derivedCopyGhostStrokes()
+        #expect(ghosts.count == 1)
+        #expect(abs(ghosts[0].startTime - 6.0) < 1e-6)
+    }
+
+    @Test("The bundled Baby reel derives ghosts for all three copy windows")
+    func bundledBabyReelGhosts() throws {
+        let manifestURL = reelTestsRepoRoot().appendingPathComponent(
+            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+        let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
+        let ghosts = reel.derivedCopyGhostStrokes()
+        // Each of the 3 copy windows answers a 10-stroke demo segment.
+        #expect(ghosts.count == 30)
+        #expect(ghosts.allSatisfy { reel.segment(at: $0.startTime)?.kind == .copy })
+        #expect(ghosts.allSatisfy { $0.endTime <= reel.audioDuration })
+    }
+}
+
+// MARK: - VerticalNotationReelView (source-string regression)
+
+@Suite("Vertical reel view source")
+struct VerticalReelViewSourceTests {
+
+    private func reelViewSource() throws -> String {
+        try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
+    }
+
+    @Test("The vertical reel view exists as a SwiftUI View")
+    func viewExists() throws {
+        let source = try reelViewSource()
+        #expect(source.contains("struct VerticalNotationReelView: View"))
+    }
+
+    @Test("The reel is driven by a manifest and an audio clock, not scroll state")
+    func manifestAndClockDriven() throws {
+        let source = try reelViewSource()
+        #expect(source.contains("let timeline: PracticeReelTimeline"))
+        #expect(source.contains("let audioTime: () -> TimeInterval"))
+        // Geometry flows audioTime -> ReelViewport -> positions; no ScrollView,
+        // so reel position can never feed back into timing.
+        #expect(source.contains("ReelViewport"))
+        #expect(!source.contains("ScrollView"))
+    }
+
+    @Test("The reel renders bands, beat grid and strokes from the manifest")
+    func rendersManifestContent() throws {
+        let source = try reelViewSource()
+        #expect(source.contains("drawRegionBands"))
+        #expect(source.contains("drawBeatGrid"))
+        #expect(source.contains("drawTargetStrokes"))
+        #expect(source.contains("drawGhostStrokes"))
+        #expect(source.contains("derivedCopyGhostStrokes()"))
+    }
+
+    @Test("The reel runs no scoring, capture or live-mic work")
+    func noScoringOrCapture() throws {
+        let source = try reelViewSource()
+        #expect(!source.contains("audioEngine"))
+        #expect(!source.contains("startAnalyzing"))
+        #expect(!source.contains("ScratchAnalysisResult"))
+        #expect(!source.contains("currentScore"))
+    }
+}
+
+// MARK: - Demo-mode reel wiring (source-string regression)
+
+@Suite("Demo reel wiring")
+struct DemoReelWiringTests {
+
+    private func practiceSource() throws -> String {
+        try reelSource("ScratchLab/Views/PracticeModeView.swift")
+    }
+
+    @Test("Portrait Demo mode renders the manifest-driven vertical reel")
+    func portraitDemoUsesReel() throws {
+        let source = try practiceSource()
+        #expect(source.contains("if practiceAssistMode == .demo, let reel = demoReel"))
+        #expect(source.contains("demoReelPanel(reel: reel)"))
+        #expect(source.contains("VerticalNotationReelView("))
+    }
+
+    @Test("The vertical reel is Demo-gated — instantiated only in the demo panel")
+    func reelIsDemoGated() throws {
+        let source = try practiceSource()
+        let panel = try sliceBetween(source,
+            from: "private func demoReelPanel(",
+            to: "// Runtime status for the notation surface")
+        #expect(panel.contains("VerticalNotationReelView("))
+        // VerticalNotationReelView is constructed in exactly one place.
+        let occurrences = source.components(separatedBy: "VerticalNotationReelView(").count - 1
+        #expect(occurrences == 1)
+    }
+
+    @Test("The reel is fed the smoothed demo-audio clock")
+    func reelFedByDemoAudioClock() throws {
+        let source = try practiceSource()
+        #expect(source.contains("audioTime: { demoPlayer.sampledPlaybackTime() }"))
+    }
+
+    @Test("A missing or invalid manifest falls back to the horizontal chart")
+    func fallbackPathExists() throws {
+        let source = try practiceSource()
+        // configureDemoPlayback nils demoReel and reuses the legacy coach audio.
+        #expect(source.contains("demoReel = demoPlayer.isAudioAvailable ? reel : nil"))
+        #expect(source.contains("demoPlayer.configure(with: coachInstruction)"))
+        // The portrait layout then falls through to the notation chart panel.
+        #expect(source.contains("} else if let notation = targetNotation {"))
+    }
+
+    @Test("Demo mode starts no scoring or live-mic analysis")
+    func demoStartsNoAnalysis() throws {
+        let source = try practiceSource()
+        let startBody = try sliceBetween(source,
+            from: "private func startSession()",
+            to: "private func configureDemoPlayback")
+        // Demo plays bundled audio; every other mode runs the mic analyser.
+        #expect(startBody.contains("configureDemoPlayback()"))
+        #expect(startBody.contains("audioEngine.startAnalyzing(for: activeScratch)"))
+        // The demo branch itself starts no analysis.
+        let demoBranch = try sliceBetween(startBody,
+            from: "if practiceAssistMode == .demo {", to: "} else {")
+        #expect(demoBranch.contains("demoPlayer.play()"))
+        #expect(!demoBranch.contains("startAnalyzing"))
+    }
+
+    @Test("Guided and Auto-cut keep the existing horizontal chart")
+    func guidedAutoCutUnchanged() throws {
+        let source = try practiceSource()
+        #expect(source.contains(".looping(start: notationClockStartDate)"))
+        #expect(source.contains("AutoCutTargetChart(notation: notation"))
+        #expect(source.contains("GuidedCutCueLayer(notation: notation"))
+    }
+
+    @Test("Landscape Demo keeps the horizontal chart, not the vertical reel")
+    func landscapeDemoUnchanged() throws {
+        let source = try practiceSource()
+        let landscape = try sliceBetween(source,
+            from: "private var landscapeFeedbackLayout",
+            to: "private var sessionHeader")
+        #expect(!landscape.contains("VerticalNotationReelView"))
+        #expect(!landscape.contains("demoReelPanel"))
+    }
+
+    @Test("Coach cards remain absent from practice setup")
+    func coachCardsAbsent() throws {
+        let source = try practiceSource()
+        // The ScratchCoachCard view is kept defined but never instantiated.
+        #expect(!source.contains("ScratchCoachCard("))
     }
 }

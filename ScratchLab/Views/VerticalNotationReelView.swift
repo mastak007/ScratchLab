@@ -16,7 +16,7 @@
 //     audio time  ──►  ReelViewport  ──►  every item's screen position
 //
 // `ReelViewport` is a deterministic value type — `y(for:)` is a function of
-// `(now, size)` alone. There is no `ScrollView` and no scroll state, so reel
+// `(now, size)` alone. There is no scroll view and no scroll state, so reel
 // position can never feed back into timing or drift from the audio clock. The
 // `TimelineView` below is only a render-side ticker; the clock value comes
 // from the injected `audioTime` closure (the demo-audio player's smoothed,
