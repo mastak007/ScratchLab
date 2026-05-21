@@ -70,7 +70,6 @@ struct PracticeModeView: View {
     @State private var showingCaptureHelp = false
     @State private var showingQuickStartAgain = false
     @State private var showingResults = false
-    @State private var showingCoachPreview = false
     @AppStorage(QuickStartSettings.hasSeenKey) private var hasSeenQuickStart = false
     @AppStorage(QuickStartSettings.versionKey) private var quickStartVersion = 0
     @AppStorage("scratchlab.practice.assistMode") private var practiceAssistModeRaw = PracticeAssistMode.open.rawValue
@@ -486,7 +485,6 @@ struct PracticeModeView: View {
                 if !isSessionActive && !showingResults {
                     SessionSetupOverlay(
                         scratch: activeScratch,
-                        coachInstruction: coachInstruction,
                         practiceBeatStore: practiceBeatStore,
                         selectedDuration: $selectedDuration,
                         selectedAssistMode: assistModeBinding,
@@ -504,7 +502,6 @@ struct PracticeModeView: View {
                         topSafeAreaInset: geometry.safeAreaInsets.top,
                         bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
                         onSelectInputSource: { source in audioEngine.selectInputSource(source) },
-                        onShowCoachPreview: { showingCoachPreview = true },
                         onStart: { startSession() },
                         onBack: { dismiss() }
                     )
@@ -533,13 +530,6 @@ struct PracticeModeView: View {
             QuickStartView(onFinish: completeQuickStartReview)
                 .interactiveDismissDisabled()
         }
-        #if DEBUG && canImport(RealityKit)
-        .sheet(isPresented: $showingCoachPreview) {
-            NavigationStack {
-                CoachPreviewView()
-            }
-        }
-        #endif
     }
     
     // MARK: - Top Bar
@@ -1739,7 +1729,6 @@ struct AccuracyBurstView: View {
 
 struct SessionSetupOverlay: View {
     let scratch: Scratch
-    let coachInstruction: ScratchCoachInstruction
     @ObservedObject var practiceBeatStore: PracticeBeatStore
     @Binding var selectedDuration: TimeInterval
     @Binding fileprivate var selectedAssistMode: PracticeAssistMode
@@ -1757,7 +1746,6 @@ struct SessionSetupOverlay: View {
     let topSafeAreaInset: CGFloat
     let bottomSafeAreaInset: CGFloat
     let onSelectInputSource: (AudioInputSource) -> Void
-    let onShowCoachPreview: () -> Void
     let onStart: () -> Void
     let onBack: () -> Void
     
@@ -1872,38 +1860,6 @@ struct SessionSetupOverlay: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
                     }
-
-                    ScratchCoachCard(
-                        instruction: coachInstruction,
-                        practiceBeatStore: practiceBeatStore
-                    )
-
-                    #if DEBUG && canImport(RealityKit)
-                    Button(action: onShowCoachPreview) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "figure.stand")
-                                .font(.system(size: 15, weight: .bold))
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Open 3D Coach Demo")
-                                    .font(.system(size: 14, weight: .bold))
-
-                                Text("Try the 3D coach in Demo mode")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.74))
-                            }
-
-                            Spacer()
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .background(Color.white.opacity(0.08))
-                        .cornerRadius(14)
-                    }
-                    .padding(.horizontal, 16)
-                    .accessibilityIdentifier("practice-coach-preview-button")
-                    #endif
 
                     VStack(spacing: 12) {
                         Text("AUDIO INPUT")

@@ -2402,8 +2402,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(practiceSource.contains("ScratchCoachInstructionStore.shared.instruction("))
         XCTAssertTrue(practiceSource.contains("for: normalizeScratchType(input: activeScratch.id)"))
         XCTAssertTrue(practiceSource.contains("scratchDisplayName: activeScratch.name"))
-        XCTAssertTrue(practiceSource.contains("ScratchCoachCard("))
-        XCTAssertTrue(practiceSource.contains("instruction: coachInstruction"))
+        XCTAssertTrue(practiceSource.contains("demoPlayer.configure(with: coachInstruction)"))
         XCTAssertTrue(levelSource.contains("PracticeModeView("))
     }
 
@@ -2444,18 +2443,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains(".accessibilityIdentifier(\"practice-beat-playback-button\")"))
     }
 
-    func testPracticeModeSourceExposesCoachCardInScrollableSetupOverlay() throws {
+    func testPracticeSetupDoesNotRenderCoachCard() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // The 2D Coach Rig card was removed from the notation-first practice
+        // setup. The ScratchCoachCard view is preserved in code but no longer
+        // instantiated; the scrollable setup runs beat controls / assist mode
+        // straight into the audio-input section.
+        XCTAssertFalse(source.contains("ScratchCoachCard("),
+                       "Practice setup must not render the coach card")
+        XCTAssertTrue(source.contains("ScrollView(showsIndicators: true)"))
         let beatControlsRange = try XCTUnwrap(source.range(of: "PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
         let audioInputRange = try XCTUnwrap(source.range(of: "Text(\"AUDIO INPUT\")"))
-        let coachCardRange = try XCTUnwrap(source.range(of: "ScratchCoachCard("))
-
-        XCTAssertTrue(source.contains("ScrollView(showsIndicators: true)"))
-        XCTAssertTrue(source.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(source.contains(".accessibilityIdentifier(\"scratchlab-coach-card\")"))
-        XCTAssertLessThan(beatControlsRange.lowerBound, coachCardRange.lowerBound)
-        XCTAssertLessThan(coachCardRange.lowerBound, audioInputRange.lowerBound)
+        XCTAssertLessThan(beatControlsRange.lowerBound, audioInputRange.lowerBound)
     }
 
     func testPracticeModeSourceUsesSafeAreaAwareCoachSetupLayout() throws {
@@ -2487,7 +2488,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             XCTAssertFalse(source.contains(fragment), "PracticeModeView.swift exposes \(fragment)")
         }
         XCTAssertTrue(source.contains("SessionSetupOverlay("))
-        XCTAssertTrue(source.contains("ScratchCoachCard("))
+        XCTAssertTrue(source.contains("PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
         XCTAssertTrue(source.contains("onStart: { startSession() }"))
     }
 
@@ -2507,7 +2508,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
         XCTAssertTrue(source.contains("SessionSetupOverlay("))
-        XCTAssertTrue(source.contains("ScratchCoachCard("))
+        XCTAssertTrue(source.contains("PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
         XCTAssertTrue(source.contains("onStart: { startSession() }"))
         XCTAssertTrue(source.contains("private func startSession()"))
         XCTAssertFalse(source.contains("Bundle.main.url(forResource: activeScratch.tutorialVideoName"))
@@ -3657,19 +3658,21 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("Debug only"))
     }
 
-    func testPracticeModeSourceExposesDebugCoachPreviewEntryPoint() throws {
+    func testPracticeSetupDoesNotExposeCoachPreviewEntryPoint() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("@State private var showingCoachPreview = false"))
-        XCTAssertTrue(source.contains("#if DEBUG && canImport(RealityKit)"))
-        XCTAssertTrue(source.contains(".sheet(isPresented: $showingCoachPreview)"))
-        XCTAssertTrue(source.contains("CoachPreviewView()"))
-        XCTAssertTrue(source.contains("onShowCoachPreview: { showingCoachPreview = true }"))
-        XCTAssertTrue(source.contains(".accessibilityIdentifier(\"practice-coach-preview-button\")"))
-        XCTAssertTrue(source.contains("Text(\"Open 3D Coach Demo\")"))
-        XCTAssertTrue(source.contains("Text(\"Try the 3D coach in Demo mode\")"))
-        XCTAssertFalse(source.contains("Debug only"))
+        // The 3D Coach Demo entry point was removed from the practice flow.
+        // CoachPreviewView is preserved in code (still reachable from the main
+        // menu); practice no longer links to it.
+        XCTAssertFalse(source.contains("showingCoachPreview"),
+                       "Practice must not retain 3D coach preview state")
+        XCTAssertFalse(source.contains("CoachPreviewView()"),
+                       "Practice must not present the 3D coach preview")
+        XCTAssertFalse(source.contains("practice-coach-preview-button"),
+                       "Practice setup must not expose the 3D coach preview button")
+        XCTAssertFalse(source.contains("Open 3D Coach Demo"),
+                       "Practice setup must not advertise the 3D coach demo")
     }
 
     func testPracticeModeSourceExposesBabyScratchAudioMotionFeedback() throws {
