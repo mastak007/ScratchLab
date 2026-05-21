@@ -10343,7 +10343,7 @@ final class PracticeAssistModePickerTests: XCTestCase {
 
         // All four explainer strings, verbatim.
         let explainers = [
-            "ScratchLab plays the fader for you during the coach demo.",
+            "Auto-cut playback is coming next. For now this mode only previews the target pattern.",
             "ScratchLab shows upcoming cut cues while you move the fader.",
             "ScratchLab compares your cuts against the target.",
             "ScratchLab leaves the fader fully manual.",

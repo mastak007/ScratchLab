@@ -35,7 +35,7 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
 
     var explainer: String {
         switch self {
-        case .autoCut: return "ScratchLab plays the fader for you during the coach demo."
+        case .autoCut: return "Auto-cut playback is coming next. For now this mode only previews the target pattern."
         case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
         case .coached: return "ScratchLab compares your cuts against the target."
         case .open:    return "ScratchLab leaves the fader fully manual."
