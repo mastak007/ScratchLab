@@ -71,6 +71,10 @@ struct PracticeModeView: View {
     @State private var selectedDuration: TimeInterval = 300 // 5 min default
     @State private var timeRemaining: TimeInterval = 300
     @State private var sessionTimer: Timer?
+    // Origin for the live notation preview clock. Re-stamped by startSession()
+    // so the looping playhead / cue preview is one session-owned source of
+    // truth that survives view rebuilds (e.g. rotation) instead of resetting.
+    @State private var notationClockStartDate = Date()
     @State private var drillElapsedSeconds: TimeInterval = 0
     @State private var drillLoopCount: Int = 0
     @State private var drillBeatInLoop: Double = 0
@@ -686,7 +690,8 @@ struct PracticeModeView: View {
                 // Guided assist mode adds a visual crossfader cue layer
                 // beneath the target chart.
                 if practiceAssistMode == .guided {
-                    GuidedCutCueLayer(notation: notation)
+                    GuidedCutCueLayer(notation: notation,
+                                      clockStartDate: notationClockStartDate)
                 }
             } else {
                 Spacer(minLength: 0)
@@ -720,7 +725,8 @@ struct PracticeModeView: View {
                         comboProgressCard
                     }
                     if practiceAssistMode == .guided, let notation = targetNotation {
-                        GuidedCutCueLayer(notation: notation)
+                        GuidedCutCueLayer(notation: notation,
+                                          clockStartDate: notationClockStartDate)
                     }
                     feedbackBanner
                     compactMetricsRow
@@ -817,10 +823,10 @@ struct PracticeModeView: View {
 
     // The primary learning surface. Renders the target pattern at a fixed,
     // readable points-per-second scale inside a horizontal viewport so
-    // strokes never collapse into a thin strip. Static in Open / Guided /
-    // Coached modes; Auto-cut adds a deterministic, view-local animated
-    // playhead whose viewport auto-follows the current position (visual
-    // preview only — no audio, capture, or scoring).
+    // strokes never collapse into a thin strip. Static in Open / Coached
+    // modes; Auto-cut and Guided animate a deterministic playhead whose
+    // viewport auto-follows the current position (visual preview only — no
+    // audio, capture, or scoring). A status chip names the runtime state.
     private func notationPanel(notation: ScratchNotation) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -828,16 +834,17 @@ struct PracticeModeView: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.white.opacity(0.55))
                 Spacer()
-                if practiceAssistMode != .autoCut {
-                    Text("SWIPE TO SCAN")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white.opacity(0.32))
-                }
+                notationStatusChip
             }
 
             Group {
-                if practiceAssistMode == .autoCut {
-                    AutoCutTargetChart(notation: notation)
+                // Auto-cut and Guided are the "app shows you the pattern"
+                // modes — both animate the playhead from the shared session
+                // clock. Coached / Open are "you perform" modes and keep the
+                // static, scrollable reference chart.
+                if practiceAssistMode == .autoCut || practiceAssistMode == .guided {
+                    AutoCutTargetChart(notation: notation,
+                                       clockStartDate: notationClockStartDate)
                 } else {
                     staticTargetChart(notation: notation)
                 }
@@ -852,10 +859,41 @@ struct PracticeModeView: View {
         }
     }
 
-    // Static (no-playhead) target chart for Open / Guided / Coached modes,
-    // rendered at a readable points-per-second scale inside a horizontal
-    // ScrollView so the learner can scan the whole routine without the
-    // strokes collapsing together.
+    // Runtime status for the notation surface. Once a session is live the
+    // assist mode otherwise gives no on-screen signal, so this names what the
+    // active mode is doing: Auto-cut runs a silent visual preview, Guided
+    // shows the cue guide, and the remaining modes are listening for the
+    // learner's own scratches. Honest copy — no mode plays audio.
+    private var notationStatus: (text: String, isLive: Bool) {
+        switch practiceAssistMode {
+        case .autoCut: return ("Preview playing", true)
+        case .guided:  return ("Guide active", true)
+        case .coached, .open: return ("Waiting for input", false)
+        }
+    }
+
+    private var notationStatusChip: some View {
+        let status = notationStatus
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(Color(hex: status.isLive ? "22C55E" : "F59E0B"))
+                .frame(width: 6, height: 6)
+            Text(status.text)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white.opacity(0.65))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.white.opacity(0.06))
+        .clipShape(Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Notation status: \(status.text)")
+    }
+
+    // Static (no-playhead) target chart for Open / Coached modes, rendered at
+    // a readable points-per-second scale inside a horizontal ScrollView so the
+    // learner can scan the whole routine without the strokes collapsing
+    // together.
     private func staticTargetChart(notation: ScratchNotation) -> some View {
         GeometryReader { geo in
             ScrollView(.horizontal, showsIndicators: true) {
@@ -1129,7 +1167,10 @@ struct PracticeModeView: View {
         
         isSessionActive = true
         isPaused = false
-        
+        // Stamp the notation preview clock so the looping playhead starts from
+        // t = 0 together with this session.
+        notationClockStartDate = Date()
+
         // Start audio analysis
         audioEngine.startAnalyzing(for: activeScratch)
 
@@ -1909,21 +1950,23 @@ private enum PracticeNotationMetrics {
     }
 }
 
-// Auto-cut assist mode: the target chart with a deterministic, view-local
-// animated playhead. Visual preview only — drives no audio, capture, export,
-// or scoring. The TimelineView is the sole clock; the looped playback time it
-// produces is the single source of truth. A pure NotationViewportModel turns
-// that time into all geometry — active phrase, visible window, playhead — so
-// the viewport frames one phrase at a time instead of compressing the whole
-// routine, and no scroll/layout state can feed back into timing.
+// Auto-cut assist mode: the target chart with a deterministic animated
+// playhead. Visual preview only — drives no audio, capture, export, or
+// scoring. `clockStartDate` is the session-owned clock origin — one source of
+// truth, stamped by startSession() and stable across view rebuilds such as
+// rotation; the TimelineView is only a render-side ticker. A pure
+// NotationViewportModel turns the looped time into all geometry — active
+// phrase, visible window, playhead — so the viewport frames one phrase at a
+// time instead of compressing the whole routine, and no scroll/layout state
+// can feed back into timing.
 private struct AutoCutTargetChart: View {
     let notation: ScratchNotation
+    let clockStartDate: Date
     private let viewportModel: NotationViewportModel
 
-    @State private var startDate = Date()
-
-    init(notation: ScratchNotation) {
+    init(notation: ScratchNotation, clockStartDate: Date) {
         self.notation = notation
+        self.clockStartDate = clockStartDate
         // Phrases are derived once from stroke timings — the notation
         // JSON/schema is never read or modified.
         self.viewportModel = NotationViewportModel(
@@ -1934,12 +1977,13 @@ private struct AutoCutTargetChart: View {
 
     var body: some View {
         GeometryReader { geo in
-            // TimelineView is the only clock — a render-side ticker, not a
-            // playback engine. `currentTime` loops over the notation's fixed
-            // timeline duration and is the sole input to the viewport model.
+            // TimelineView is only a render-side ticker; the clock origin is
+            // the session-owned `clockStartDate`. `currentTime` loops over the
+            // notation's fixed timeline duration and is the sole input to the
+            // viewport model.
             TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
                 let loopDuration = max(notation.timelineDuration, 0.1)
-                let elapsed = timeline.date.timeIntervalSince(startDate)
+                let elapsed = timeline.date.timeIntervalSince(clockStartDate)
                 let currentTime = elapsed.truncatingRemainder(dividingBy: loopDuration)
 
                 let viewport = viewportModel.resolve(
@@ -1967,10 +2011,12 @@ private struct AutoCutTargetChart: View {
 
 // Guided assist-mode crossfader cue layer. UI-only: reads `faderState` from
 // the existing target notation and renders a forward-looking visual guide.
-// It drives nothing — no playback, scoring, capture, export, or audio. The
-// only clock is a SwiftUI TimelineView used purely for rendering.
+// It drives nothing — no playback, scoring, capture, export, or audio.
+// `clockStartDate` is the shared session-owned clock origin; the TimelineView
+// is only a render-side ticker.
 private struct GuidedCutCueLayer: View {
     let notation: ScratchNotation
+    let clockStartDate: Date
 
     // Forward look-ahead window drawn in the cue bar.
     private let windowSeconds: TimeInterval = 3.0
@@ -1981,8 +2027,6 @@ private struct GuidedCutCueLayer: View {
     private let openColor   = Color(red: 0.20, green: 0.88, blue: 0.55)
     private let closedColor = Color(red: 1.00, green: 0.25, blue: 0.25)
     private let soonColor   = Color(hex: "F59E0B")
-
-    @State private var startDate = Date()
 
     private enum CueState { case open, cutSoon, closed }
 
@@ -1999,11 +2043,11 @@ private struct GuidedCutCueLayer: View {
     }
 
     var body: some View {
-        // TimelineView is the only clock here — a render-side ticker, not a
-        // playback engine. ~10 Hz is smooth enough for a beginner cue.
+        // TimelineView is a render-side ticker; the clock origin is the
+        // shared session-owned clockStartDate. ~10 Hz is smooth for a cue.
         TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
             let loopDuration = max(notation.timelineDuration, 0.1)
-            let elapsed = timeline.date.timeIntervalSince(startDate)
+            let elapsed = timeline.date.timeIntervalSince(clockStartDate)
             let now = elapsed.truncatingRemainder(dividingBy: loopDuration)
             let state = faderState(at: now, loopDuration: loopDuration)
 

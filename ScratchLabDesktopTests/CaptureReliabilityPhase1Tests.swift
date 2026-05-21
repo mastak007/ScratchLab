@@ -10586,3 +10586,49 @@ final class AutoCutVisualPlaybackTests: XCTestCase {
         }
     }
 }
+
+// MARK: - iOS practice notation playback status (urgent bugfix slice)
+
+// Source-string regression tests for the live-session notation status chip
+// and the session-owned preview clock. Same read-from-disk pattern as the
+// Slice 2 / 3 / 4 tests.
+final class PracticeNotationPlaybackStatusTests: XCTestCase {
+
+    private func repoRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(contentsOf: repoRoot().appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    func testNotationSurfaceShowsRuntimeStatusChip() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        // A status chip names what the active assist mode is doing once a
+        // session is live, so a still notation surface reads as intended
+        // rather than as a broken feature.
+        XCTAssertTrue(view.contains("notationStatusChip"),
+                      "Notation panel must surface a runtime status chip")
+        for label in ["\"Preview playing\"", "\"Guide active\"", "\"Waiting for input\""] {
+            XCTAssertTrue(view.contains(label),
+                          "Status chip missing runtime-state label: \(label)")
+        }
+    }
+
+    func testNotationPreviewUsesSessionOwnedClock() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        // One source of truth for currentTime: a session-owned clock origin,
+        // stamped by startSession() and injected into both notation views so
+        // it survives view rebuilds (e.g. rotation) instead of resetting.
+        XCTAssertTrue(view.contains("notationClockStartDate = Date()"),
+                      "startSession must stamp the session-owned notation clock")
+        XCTAssertTrue(view.contains("clockStartDate: notationClockStartDate"),
+                      "Notation views must be driven by the shared session clock")
+        XCTAssertFalse(view.contains("@State private var startDate = Date()"),
+                       "Notation views must not own private free-running clocks")
+    }
+}
