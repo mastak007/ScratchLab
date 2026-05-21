@@ -202,17 +202,6 @@ struct PracticeModeView: View {
         return activeScratch.name
     }
 
-    private var currentSessionSubtitle: String {
-        if isComboChallengeMode {
-            return "Clear one clean \(comboTargetStepCount)-step baby phrase"
-        }
-        return activeScratch.technique.rawValue
-    }
-
-    private var centerMetricLabel: String {
-        isComboChallengeMode ? "Phrase Lock" : "Accuracy"
-    }
-
     private var leadingStat: (icon: String, value: String, label: String, color: Color) {
         if isComboChallengeMode {
             return (
@@ -268,19 +257,6 @@ struct PracticeModeView: View {
         }
     }
 
-    private var micStatusDetail: String {
-        switch audioEngine.inputMonitorState {
-        case .micOff:
-            return "Audio engine is offline."
-        case .micLive:
-            return "Using \(audioEngine.activeInputName). Start scratching."
-        case .listening:
-            return "Signal is coming through \(audioEngine.activeInputName)."
-        case .noSignal:
-            return "No scratch audio detected on \(audioEngine.activeInputName). Move closer to the mic or check your input route."
-        }
-    }
-
     private var micStatusIcon: String {
         switch audioEngine.inputMonitorState {
         case .micOff:
@@ -305,53 +281,6 @@ struct PracticeModeView: View {
         case .noSignal:
             return Color(hex: "FF9800")
         }
-    }
-
-    private var showsBabyScratchMotionFeedback: Bool {
-        activeScratch.id == "baby_scratch"
-    }
-
-    private var scratchMotionBalanceText: String {
-        audioEngine.scratchMotionFeedback?.balance.rawValue ?? ScratchMotionBalance.listening.rawValue
-    }
-
-    private var scratchMotionColor: Color {
-        switch audioEngine.scratchMotionFeedback?.balance ?? .listening {
-        case .listening:
-            return Color(hex: "38BDF8")
-        case .balanced:
-            return Color(hex: "22C55E")
-        case .unbalanced:
-            return Color(hex: "EF4444")
-        }
-    }
-
-    private var scratchMotionTimingErrorText: String {
-        guard let timingErrorMilliseconds = audioEngine.scratchMotionFeedback?.timingErrorMilliseconds else {
-            return "—"
-        }
-        return "\(timingErrorMilliseconds) ms"
-    }
-
-    private var scratchMotionForwardDurationText: String {
-        formatScratchMotionDuration(audioEngine.scratchMotionFeedback?.forwardDuration)
-    }
-
-    private var scratchMotionBackwardDurationText: String {
-        formatScratchMotionDuration(audioEngine.scratchMotionFeedback?.backwardDuration)
-    }
-
-    private var sessionAudioNote: String? {
-        if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
-            return playbackErrorMessage
-        }
-        if !practiceBeatStore.isBeatEnabled {
-            return "Practice beat off. Live scratch audio only."
-        }
-        if practiceBeatStore.isPlaying {
-            return "\(practiceBeatStore.beatEngineMode.title) playing at \(practiceBeatStore.bpmValue) BPM."
-        }
-        return "\(practiceBeatStore.beatEngineMode.title) ready at \(practiceBeatStore.bpmValue) BPM."
     }
 
     private var practiceInputSources: [AudioInputSource] {
@@ -433,24 +362,14 @@ struct PracticeModeView: View {
                     // Top bar
                     topBar(topSafeAreaInset: geometry.safeAreaInsets.top)
 
-                    // Notation-first practice surface. When a session is
-                    // active the feedback area fills the space between the
-                    // top bar and bottom controls so the notation can
-                    // dominate; otherwise the setup overlay covers the
-                    // screen and this branch is just empty space.
+                    // Notation-first practice surface — the timing lane fills
+                    // all the space below the top bar; status sits in thin HUD
+                    // chip rows inside it. Empty until a session starts.
                     if isSessionActive {
                         centerFeedbackArea
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         Spacer()
-                    }
-
-                    // Bottom controls. In landscape (compact height) the
-                    // audio status / level / tip move into the feedback
-                    // area's scrollable side column so the notation keeps
-                    // the full screen height.
-                    if verticalSizeClass != .compact {
-                        bottomControls
                     }
                 }
                 
@@ -661,103 +580,185 @@ struct PracticeModeView: View {
     
     // MARK: - Center Feedback Area
     
-    // Notation-first practice surface. The target-notation chart is the
-    // primary learning surface; accuracy / score / streak are demoted to a
-    // compact secondary metrics row. Portrait stacks vertically with the
-    // notation filling the space; landscape (compact height) puts the
-    // notation beside a scrollable metrics column so nothing clips.
+    // The unified notation-first practice surface. The timing lane dominates
+    // (~75% of the area); status, metrics and the beat control sit in two thin
+    // chip rows above and below it. Portrait runs the lane vertically,
+    // landscape horizontally — one hierarchy, one layout, both orientations.
     private var centerFeedbackArea: some View {
-        Group {
-            if verticalSizeClass == .compact {
-                landscapeFeedbackLayout
-            } else {
-                portraitFeedbackLayout
-            }
-        }
-    }
+        let axis: LaneAxis = verticalSizeClass == .compact ? .horizontal : .vertical
+        return VStack(spacing: 8) {
+            practiceTopHUD
 
-    private var portraitFeedbackLayout: some View {
-        VStack(spacing: 14) {
-            sessionHeader
-
-            if isGuidedDrillMode {
-                guidedDrillCueCard
-            }
-            if isComboChallengeMode {
-                comboProgressCard
-            }
-
-            // The unified vertical timing lane is the primary surface.
-            notationLanePanel(axis: .vertical)
+            notationLanePanel(axis: axis)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .bottom) {
+                    feedbackBanner.padding(.bottom, 10)
+                }
 
-            // Guided assist mode adds a crossfader cue layer beneath the lane.
+            // Guided mode keeps its crossfader cue beneath the lane.
             if practiceAssistMode == .guided, let notation = targetNotation {
                 GuidedCutCueLayer(notation: notation,
                                   clockStartDate: notationClockStartDate)
             }
 
-            feedbackBanner
-
-            if practiceAssistMode != .demo {
-                compactMetricsRow
-            }
+            practiceBottomHUD
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-    }
-
-    // Landscape: the notation stays the dominant surface on the left while
-    // the secondary practice content moves into a scrollable side column,
-    // which guarantees nothing clips on a short (compact-height) screen.
-    private var landscapeFeedbackLayout: some View {
-        HStack(spacing: 14) {
-            // The unified horizontal timing lane is the primary surface.
-            notationLanePanel(axis: .horizontal)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 12) {
-                    sessionHeader
-                    if isGuidedDrillMode {
-                        guidedDrillCueCard
-                    }
-                    if isComboChallengeMode {
-                        comboProgressCard
-                    }
-                    if practiceAssistMode == .guided, let notation = targetNotation {
-                        GuidedCutCueLayer(notation: notation,
-                                          clockStartDate: notationClockStartDate)
-                    }
-                    feedbackBanner
-                    if practiceAssistMode != .demo {
-                        compactMetricsRow
-                    }
-                    audioStatusCard
-                    AudioLevelIndicator(level: audioEngine.inputLevel)
-                    tipBanner
-                }
-                .padding(.vertical, 4)
-            }
-            .frame(width: 256)
-        }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 
-    private var sessionHeader: some View {
-        VStack(spacing: 2) {
+    // Thin top chip row: what the session is, and — when scored — how it goes.
+    private var practiceTopHUD: some View {
+        HStack(spacing: 8) {
             Text(currentSessionTitle)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                .lineLimit(1)
+                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
 
-            Text(currentSessionSubtitle)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
+            Spacer(minLength: 8)
+
+            notationStatusChip
+
+            if practiceAssistMode != .demo {
+                practiceMetricsChip
+            }
         }
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
+    }
+
+    // Compact scored-practice metrics — understated so the lane stays dominant.
+    private var practiceMetricsChip: some View {
+        HStack(spacing: 12) {
+            StatDisplay(icon: leadingStat.icon, value: leadingStat.value,
+                        label: leadingStat.label, color: leadingStat.color)
+            StatDisplay(icon: "star.fill", value: "\(currentScore)",
+                        label: "Score", color: Color(hex: "FFD700"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.5), in: Capsule())
+    }
+
+    // Thin bottom chip row: contextual guidance plus the practice-beat control.
+    private var practiceBottomHUD: some View {
+        HStack(spacing: 8) {
+            bottomHUDContext
+            Spacer(minLength: 8)
+            if practiceAssistMode != .demo {
+                micChip
+            }
+            beatToggleChip
+        }
+    }
+
+    // The leading bottom-row chip adapts to the session: a guided cue, the
+    // combo phrase progress, or a practice tip.
+    @ViewBuilder
+    private var bottomHUDContext: some View {
+        if isGuidedDrillMode {
+            guidedCueChip
+        } else if isComboChallengeMode {
+            comboProgressChip
+        } else {
+            tipChip
+        }
+    }
+
+    // Guided-drill cue, compact: the cue name and the step counter.
+    private var guidedCueChip: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(Color(hex: "38BDF8"))
+            Text(activeDrillEvent.map(drillCueTitle(for:)) ?? "Get ready")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+            if let activeDrillEventIndex {
+                Text("\(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.5), in: Capsule())
+    }
+
+    // Combo-challenge phrase progress, compact.
+    private var comboProgressChip: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "circle.grid.3x3.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(Color(hex: "00BCD4"))
+            Text("Phrase \(comboLockedStepCount)/\(max(1, comboTargetStepCount))")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+            Text("· best \(comboBestLockedStepCount)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.5), in: Capsule())
+    }
+
+    // A practice tip, compact.
+    @ViewBuilder
+    private var tipChip: some View {
+        if !currentTipText.isEmpty {
+            HStack(spacing: 6) {
+                Text("TIP")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(Color(hex: "FFD700"))
+                Text(currentTipText)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.8))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.4), in: Capsule())
+        }
+    }
+
+    // Compact microphone status: a state dot plus the live input level.
+    private var micChip: some View {
+        HStack(spacing: 6) {
+            Image(systemName: micStatusIcon)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(micStatusColor)
+            AudioLevelIndicator(level: audioEngine.inputLevel)
+                .frame(width: 46)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.5), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Microphone: \(micStatusTitle)")
+    }
+
+    // Compact practice-beat toggle.
+    private var beatToggleChip: some View {
+        Button(action: { practiceBeatStore.togglePlayback() }) {
+            HStack(spacing: 6) {
+                Image(systemName: practiceBeatStore.isPlaying ? "stop.fill" : "play.fill")
+                    .font(.system(size: 10, weight: .bold))
+                Text(practiceBeatStore.isPlaying
+                     ? PracticeBeatUIContract.stopLabel
+                     : PracticeBeatUIContract.playLabel)
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .foregroundColor(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                practiceBeatStore.isBeatEnabled
+                    ? Color(hex: practiceBeatStore.isPlaying ? "F59E0B" : "22C55E")
+                    : Color.white.opacity(0.25),
+                in: Capsule())
+        }
+        .disabled(!practiceBeatStore.isBeatEnabled)
     }
 
     @ViewBuilder
@@ -776,52 +777,6 @@ struct PracticeModeView: View {
             }
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
-    }
-
-    // Compact secondary metrics: a small accuracy ring plus streak / score /
-    // attempts. Deliberately understated so the notation stays dominant.
-    private var compactMetricsRow: some View {
-        HStack(spacing: 16) {
-            compactAccuracyRing
-            StatDisplay(icon: leadingStat.icon, value: leadingStat.value, label: leadingStat.label, color: leadingStat.color)
-            StatDisplay(icon: "star.fill", value: "\(currentScore)", label: "Score", color: Color(hex: "FFD700"))
-            StatDisplay(icon: "number", value: "\(attemptCount)", label: isComboChallengeMode ? "Detections" : "Attempts", color: Color(hex: "2196F3"))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.5))
-        .cornerRadius(16)
-    }
-
-    private var compactAccuracyRing: some View {
-        ZStack {
-            Circle()
-                .stroke(feedbackColor.opacity(0.3), lineWidth: 3)
-                .frame(width: 64, height: 64)
-                .scaleEffect(pulseRing ? 1.18 : 1.0)
-                .opacity(pulseRing ? 0 : 1)
-
-            Circle()
-                .stroke(Color.white.opacity(0.2), lineWidth: 5)
-                .frame(width: 60, height: 60)
-
-            Circle()
-                .trim(from: 0, to: CGFloat(displayedAccuracy / 100))
-                .stroke(accuracyGradient, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                .frame(width: 60, height: 60)
-                .rotationEffect(.degrees(-90))
-
-            VStack(spacing: 0) {
-                Text("\(Int(displayedAccuracy))%")
-                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-                Text(centerMetricLabel)
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundColor(.white.opacity(0.6))
-            }
-        }
-        .frame(width: 64, height: 64)
     }
 
     // The notation lane this mode + orientation should render, paired with its
@@ -904,227 +859,7 @@ struct PracticeModeView: View {
         .accessibilityLabel("Notation status: \(status.text)")
     }
 
-    private var accuracyGradient: LinearGradient {
-        if displayedAccuracy >= 90 {
-            return LinearGradient(colors: [Color(hex: "4CAF50"), Color(hex: "8BC34A")], startPoint: .leading, endPoint: .trailing)
-        } else if displayedAccuracy >= 70 {
-            return LinearGradient(colors: [Color(hex: "FF9800"), Color(hex: "FFC107")], startPoint: .leading, endPoint: .trailing)
-        } else {
-            return LinearGradient(colors: [Color(hex: "F44336"), Color(hex: "FF5722")], startPoint: .leading, endPoint: .trailing)
-        }
-    }
-    
-    // MARK: - Bottom Controls
-    
-    private var bottomControls: some View {
-        VStack(spacing: 12) {
-            if isSessionActive {
-                audioStatusCard
-            }
 
-            // Audio level indicator
-            if isSessionActive {
-                AudioLevelIndicator(level: audioEngine.inputLevel)
-            }
-            
-            // Tips
-            if isSessionActive {
-                tipBanner
-            }
-        }
-        .padding(.bottom, 22)
-    }
-
-    private var tipBanner: some View {
-        HStack(spacing: 8) {
-            Text("TIP")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundColor(Color(hex: "FFD700"))
-
-            Text(currentTipText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.leading)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .background(Color.black.opacity(0.3))
-        .cornerRadius(8)
-    }
-
-    private var audioStatusCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Image(systemName: micStatusIcon)
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(micStatusColor)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(micStatusTitle)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-
-                    Text(micStatusDetail)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.75))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
-
-                Circle()
-                    .fill(micStatusColor)
-                    .frame(width: 10, height: 10)
-            }
-
-            if let sessionAudioNote {
-                Rectangle()
-                    .fill(Color.white.opacity(0.12))
-                    .frame(height: 1)
-
-                HStack(spacing: 10) {
-                    Image(systemName: "music.note.slash")
-                        .foregroundColor(Color(hex: "F59E0B"))
-
-                    Text(sessionAudioNote)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if showsBabyScratchMotionFeedback {
-                Rectangle()
-                    .fill(Color.white.opacity(0.12))
-                    .frame(height: 1)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("AUDIO MOTION")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.white.opacity(0.55))
-
-                        Spacer()
-
-                        Text(scratchMotionBalanceText)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.black)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(scratchMotionColor, in: Capsule())
-                    }
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        audioMotionChip(title: "Direction", value: audioEngine.scratchMotionDirection.label)
-                        audioMotionChip(title: "Forward", value: scratchMotionForwardDurationText)
-                        audioMotionChip(title: "Back", value: scratchMotionBackwardDurationText)
-                        audioMotionChip(title: "Error", value: scratchMotionTimingErrorText)
-                    }
-                }
-            }
-
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(practiceBeatStore.isBeatEnabled ? "Practice beat ready" : "Practice beat off")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white)
-
-                    Text(practiceBeatStore.isBeatEnabled
-                        ? "\(practiceBeatStore.beatEngineMode.title) • \(practiceBeatStore.bpmValue) BPM"
-                        : "Turn beat guidance on in setup if you want metronome help.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-
-                Spacer()
-
-                Button(action: { practiceBeatStore.togglePlayback() }) {
-                    Text(practiceBeatStore.isPlaying ? "Stop Beat" : "Play Beat")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.black)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(
-                            practiceBeatStore.isBeatEnabled
-                                ? Color(hex: practiceBeatStore.isPlaying ? "F59E0B" : "22C55E")
-                                : Color.white.opacity(0.22),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        )
-                }
-                .disabled(!practiceBeatStore.isBeatEnabled)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color.black.opacity(0.55))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(micStatusColor.opacity(0.35), lineWidth: 1)
-        )
-        .cornerRadius(14)
-        .padding(.horizontal, 20)
-    }
-
-    private func audioMotionChip(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .foregroundColor(.white.opacity(0.48))
-
-            Text(value)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private var comboProgressCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Current Phrase")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(Color(hex: "FFD700"))
-
-                Spacer()
-
-                Text("Best \(comboBestLockedStepCount)/\(max(1, comboTargetStepCount))")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.75))
-            }
-
-            HStack(spacing: 10) {
-                ForEach(0..<max(1, comboTargetStepCount), id: \.self) { index in
-                    Capsule()
-                        .fill(comboStepsHitThisLoop.contains(index) ? Color(hex: "4CAF50") : Color.white.opacity(0.18))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 12)
-                        .overlay(
-                            Text("\(index + 1)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(comboStepsHitThisLoop.contains(index) ? .black : .white.opacity(0.65))
-                        )
-                }
-            }
-
-            Text(comboCompleted
-                ? "Phrase locked. Result screen incoming."
-                : "Window live: \(comboLockedStepCount)/\(max(1, comboTargetStepCount)) hits chained.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.72))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color.black.opacity(0.45))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(hex: "00BCD4").opacity(0.4), lineWidth: 1.5)
-        )
-        .cornerRadius(12)
-    }
-    
     // MARK: - Session Management
     
     private func setupAudioEngine() {
@@ -1392,11 +1127,6 @@ struct PracticeModeView: View {
         return String(format: "%d:%02d", mins, secs)
     }
 
-    private func formatScratchMotionDuration(_ duration: TimeInterval?) -> String {
-        guard let duration else { return "—" }
-        return "\(Int((duration * 1_000).rounded())) ms"
-    }
-
     private func startSessionTimer() {
         sessionTimer?.invalidate()
 
@@ -1558,43 +1288,6 @@ struct PracticeModeView: View {
         }
     }
 
-    private var guidedDrillCueCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Current Cue", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Color(hex: "38BDF8"))
-
-                Spacer()
-
-                if let activeDrillEventIndex {
-                    Text("Step \(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.74))
-                }
-            }
-
-            Text(activeDrillEvent.map(drillCueTitle(for:)) ?? "Get Ready")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(.white)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 12) {
-                Text("Loop \(drillLoopCount + 1)")
-                Text("Beat \(drillBeatInLoop.formatted(.number.precision(.fractionLength(0...2))))")
-            }
-            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-            .foregroundColor(.white.opacity(0.75))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.black.opacity(0.62))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(hex: "38BDF8").opacity(0.45), lineWidth: 1.5)
-        )
-        .cornerRadius(8)
-    }
 }
 
 // MARK: - Camera Preview
