@@ -1354,7 +1354,7 @@ struct CapturedNotationDisplayView: View {
         if snapshot.faderEvents.isEmpty {
             return AnyView(
                 HStack(spacing: 8) {
-                    laneHeader("FADER", icon: "slider.horizontal.3")
+                    laneHeader("CROSSFADER", icon: "slider.horizontal.3")
                     Text("No fader data captured.")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
@@ -1367,7 +1367,7 @@ struct CapturedNotationDisplayView: View {
 
         return AnyView(
             VStack(alignment: .leading, spacing: 0) {
-                laneHeader("FADER", icon: "slider.horizontal.3")
+                laneHeader("CROSSFADER", icon: "slider.horizontal.3")
                 Canvas { ctx, size in
                     let labelX: CGFloat = 56
                     let top    = size.height * 0.12

@@ -24,6 +24,13 @@ struct ScratchPhraseChartView: View {
     private let backCol    = Color(red: 1.00, green: 0.55, blue: 0.10)
     private let holdCol    = Color(white: 0.40)
     private let dotCol     = Color(white: 0.82)
+    private let faderOpenCol   = Color(red: 0.20, green: 0.88, blue: 0.55).opacity(0.55)
+    private let faderClosedCol = Color(red: 1.00, green: 0.25, blue: 0.25).opacity(0.65)
+    private let laneDividerCol = Color(white: 0.28)
+
+    // Fraction of the chart vertically reserved for the crossfader sub-lane.
+    // The strokes region gets the remaining (1 - faderLaneFraction).
+    private let faderLaneFraction: CGFloat = 0.22
 
     var body: some View {
         switch source {
@@ -50,9 +57,11 @@ struct ScratchPhraseChartView: View {
     private func drawTarget(ctx: GraphicsContext, size: CGSize, notation: ScratchNotation) {
         let duration = max(notation.timelineDuration, 0.1)
         let pps = size.width / CGFloat(duration)
-        let midY = size.height / 2
+        let strokeRegionHeight = size.height * (1 - faderLaneFraction)
+        let midY = strokeRegionHeight / 2
 
-        drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps)
+        drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps,
+                     labelBottomY: strokeRegionHeight - 2)
 
         for i in 0..<notation.strokes.count {
             let after = notation.strokes[i]
@@ -62,10 +71,15 @@ struct ScratchPhraseChartView: View {
         }
 
         for stroke in notation.strokes {
-            drawTargetStroke(ctx: ctx, size: size, stroke: stroke, pps: pps, midY: midY)
+            drawTargetStroke(ctx: ctx, size: size, stroke: stroke, pps: pps, midY: midY,
+                             strokeRegionHeight: strokeRegionHeight)
         }
 
-        drawAxisLabels(ctx: ctx, size: size, midY: midY)
+        drawLaneDivider(ctx: ctx, size: size, y: strokeRegionHeight)
+        drawTargetCrossfaderLane(ctx: ctx, size: size, notation: notation,
+                                  pps: pps, strokeRegionTop: strokeRegionHeight)
+        drawTargetAxisLabels(ctx: ctx, size: size, midY: midY,
+                             strokeRegionHeight: strokeRegionHeight)
 
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime) * pps)
@@ -73,12 +87,14 @@ struct ScratchPhraseChartView: View {
     }
 
     private func drawTargetStroke(ctx: GraphicsContext, size: CGSize,
-                                   stroke: ScratchNotation.Stroke, pps: CGFloat, midY: CGFloat) {
+                                   stroke: ScratchNotation.Stroke, pps: CGFloat, midY: CGFloat,
+                                   strokeRegionHeight: CGFloat) {
         let x1 = CGFloat(stroke.startTime) * pps
         let x2 = CGFloat(stroke.endTime) * pps
         guard x2 > x1 else { return }
 
-        let halfH = slopeHalfHeight(size: size, fast: stroke.speedClassification == .fast,
+        let halfH = slopeHalfHeight(strokeRegionHeight: strokeRegionHeight,
+                                    fast: stroke.speedClassification == .fast,
                                     slow: stroke.speedClassification == .slow)
         let isForward = stroke.direction == .forward
         let (y1, y2) = isForward ? (midY + halfH, midY - halfH) : (midY - halfH, midY + halfH)
@@ -115,7 +131,8 @@ struct ScratchPhraseChartView: View {
         let pps = size.width / CGFloat(duration)
         let midY = size.height / 2
 
-        drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps)
+        drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps,
+                     labelBottomY: size.height - 2)
 
         for event in events {
             let x1 = CGFloat(event.startTime) * pps
@@ -135,7 +152,7 @@ struct ScratchPhraseChartView: View {
             drawDots(ctx: ctx, p1: CGPoint(x: x1, y: y1), p2: CGPoint(x: x2, y: y2), alpha: alpha)
         }
 
-        drawAxisLabels(ctx: ctx, size: size, midY: midY)
+        drawCapturedAxisLabels(ctx: ctx, size: size, midY: midY)
 
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime) * pps)
@@ -144,9 +161,9 @@ struct ScratchPhraseChartView: View {
 
     // MARK: - Helpers
 
-    private func slopeHalfHeight(size: CGSize, fast: Bool, slow: Bool) -> CGFloat {
+    private func slopeHalfHeight(strokeRegionHeight: CGFloat, fast: Bool, slow: Bool) -> CGFloat {
         let fraction: CGFloat = fast ? 0.84 : slow ? 0.38 : 0.60
-        return size.height * 0.44 * fraction
+        return strokeRegionHeight * 0.44 * fraction
     }
 
     private func capturedHalfHeight(size: CGSize, kind: ScratchMovementKind) -> CGFloat {
@@ -181,7 +198,8 @@ struct ScratchPhraseChartView: View {
                  with: .color(dotCol.opacity(alpha)))
     }
 
-    private func drawBeatGrid(ctx: GraphicsContext, size: CGSize, duration: Double, pps: CGFloat) {
+    private func drawBeatGrid(ctx: GraphicsContext, size: CGSize, duration: Double, pps: CGFloat,
+                              labelBottomY: CGFloat) {
         let beatInterval = 60.0 / max(bpm, 1)
         var t = 0.0
         var beat = 0
@@ -198,7 +216,7 @@ struct ScratchPhraseChartView: View {
                     Text("\(beat)")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Color(white: 0.55)),
-                    at: CGPoint(x: x + 2, y: size.height - 2),
+                    at: CGPoint(x: x + 2, y: labelBottomY),
                     anchor: .bottomLeading
                 )
             }
@@ -207,7 +225,64 @@ struct ScratchPhraseChartView: View {
         }
     }
 
-    private func drawAxisLabels(ctx: GraphicsContext, size: CGSize, midY: CGFloat) {
+    private func drawLaneDivider(ctx: GraphicsContext, size: CGSize, y: CGFloat) {
+        var line = Path()
+        line.move(to: CGPoint(x: 0, y: y))
+        line.addLine(to: CGPoint(x: size.width, y: y))
+        ctx.stroke(line, with: .color(laneDividerCol), lineWidth: 0.5)
+    }
+
+    private func drawTargetCrossfaderLane(ctx: GraphicsContext, size: CGSize,
+                                           notation: ScratchNotation,
+                                           pps: CGFloat,
+                                           strokeRegionTop: CGFloat) {
+        let laneHeight = size.height - strokeRegionTop
+        let inset: CGFloat = 3
+        let barTop = strokeRegionTop + inset
+        let barHeight = max(0, laneHeight - inset * 2)
+
+        // Each stroke contributes a colored bar over its time interval.
+        // Color reflects the crossfader state on that stroke (open vs. closed).
+        for stroke in notation.strokes {
+            let x1 = CGFloat(stroke.startTime) * pps
+            let x2 = CGFloat(stroke.endTime) * pps
+            guard x2 > x1, barHeight > 0 else { continue }
+
+            let rect = CGRect(x: x1, y: barTop, width: x2 - x1, height: barHeight)
+            let isOpen = stroke.faderState == .open
+            let fill = isOpen ? faderOpenCol : faderClosedCol
+            ctx.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(fill))
+        }
+
+        // Lane label: keep copy short and user-facing.
+        ctx.draw(
+            Text("CROSSFADER")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(white: 0.55)),
+            at: CGPoint(x: 4, y: strokeRegionTop + laneHeight / 2),
+            anchor: .leading
+        )
+    }
+
+    private func drawTargetAxisLabels(ctx: GraphicsContext, size: CGSize, midY: CGFloat,
+                                       strokeRegionHeight: CGFloat) {
+        ctx.draw(
+            Text("FWD")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(forwardCol.opacity(0.55)),
+            at: CGPoint(x: 4, y: midY - strokeRegionHeight * 0.38),
+            anchor: .leading
+        )
+        ctx.draw(
+            Text("BACK")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(backCol.opacity(0.55)),
+            at: CGPoint(x: 4, y: midY + strokeRegionHeight * 0.30),
+            anchor: .leading
+        )
+    }
+
+    private func drawCapturedAxisLabels(ctx: GraphicsContext, size: CGSize, midY: CGFloat) {
         ctx.draw(
             Text("FWD")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))

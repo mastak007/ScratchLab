@@ -452,6 +452,60 @@ struct NotationSheetTests {
         #expect(!body.contains("practiceViewEnabled"))
     }
 
+    // MARK: 19. Crossfader lane label is present across notation surfaces
+
+    @Test("Crossfader lane label appears in target, captured, and live notation views")
+    func crossfaderLaneLabelPresentInAllSurfaces() throws {
+        let viewsDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views")
+
+        let files = [
+            "ScratchPhraseChartView.swift",
+            "NotationVisualizerView.swift",
+            "ScratchNotationCanvasView.swift",
+        ]
+        for name in files {
+            let url = viewsDir.appendingPathComponent(name)
+            let source = try String(contentsOf: url, encoding: .utf8)
+            #expect(source.contains("CROSSFADER"),
+                    "\(name) should label the crossfader lane with 'CROSSFADER'")
+        }
+    }
+
+    // MARK: 20. Crossfader lane uses existing notation event types only
+
+    @Test("Crossfader rendering does not introduce new ScratchFaderEventKind cases")
+    func crossfaderLaneUsesExistingEventKindsOnly() throws {
+        let captureCoreURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let captureCore = try String(contentsOf: captureCoreURL, encoding: .utf8)
+
+        // Pin the existing case list so a renderer change cannot silently introduce a new event kind.
+        let expectedKinds = [
+            "case open",
+            "case closed",
+            "case cut",
+            "case pulse",
+            "case transformPulse",
+            "case flareClick",
+            "case unknown",
+        ]
+        let enumDeclRange = captureCore.range(of: "enum ScratchFaderEventKind")
+        #expect(enumDeclRange != nil)
+        if let enumDeclRange {
+            let afterDecl = captureCore[enumDeclRange.upperBound...]
+            let braceClose = afterDecl.range(of: "}")!
+            let body = String(afterDecl[..<braceClose.lowerBound])
+            for k in expectedKinds {
+                #expect(body.contains(k), "Expected \(k) in ScratchFaderEventKind")
+            }
+        }
+    }
+
     // MARK: Bonus: movement kind slope encoding
 
     @Test("Fast push/pull have higher height fraction than slow drag")

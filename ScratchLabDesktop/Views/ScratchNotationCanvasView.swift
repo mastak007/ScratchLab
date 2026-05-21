@@ -64,7 +64,7 @@ struct ScratchNotationCanvasView: View {
 
             // Lane labels (left side, inside the canvas)
             drawLaneLabel(ctx: ctx, text: "RECORD", y: recordH * 0.08, size: size)
-            drawLaneLabel(ctx: ctx, text: "FADER",  y: faderY + faderH * 0.18, size: size)
+            drawLaneLabel(ctx: ctx, text: "CROSSFADER",  y: faderY + faderH * 0.18, size: size)
 
             let recordRect = CGRect(x: 0, y: 0, width: size.width, height: recordH)
             let faderRect  = CGRect(x: 0, y: faderY, width: size.width, height: faderH)
