@@ -100,6 +100,49 @@ struct PracticeReelTimeline: Decodable, Equatable, Sendable {
     func segment(at time: TimeInterval) -> ReelSegment? {
         segments.first { $0.contains(time: time) }
     }
+
+    /// The segment that follows `time`'s segment — the next one to begin.
+    func segmentAfter(time: TimeInterval) -> ReelSegment? {
+        segments.first { $0.startTime > time }
+    }
+
+    /// Reference ("ghost") strokes to draw inside each copy window.
+    ///
+    /// A copy segment carries no strokes of its own — it is the silent window
+    /// the user fills. To keep the reel from showing dead space there, the
+    /// renderer echoes the strokes of the demo segment the copy window answers:
+    /// the nearest preceding demo segment, time-shifted forward so its rhythm
+    /// lines up with the copy window. Ghosts that would fall outside the copy
+    /// window (a copy window shorter than its demo) are dropped.
+    ///
+    /// Pure and derived — the manifest's own `strokes` are never mutated. These
+    /// are computed targets the Demo reel draws as outlines, distinct from the
+    /// solid reference strokes inside demo segments.
+    func derivedCopyGhostStrokes() -> [ReelStroke] {
+        let epsilon = 1e-6
+        var ghosts: [ReelStroke] = []
+        for copySegment in segments where copySegment.kind == .copy {
+            // The demo segment this copy window answers: the last demo segment
+            // that begins before it.
+            guard let source = segments.last(where: {
+                $0.kind == .demo && $0.startTime < copySegment.startTime
+            }) else { continue }
+            let shift = copySegment.startTime - source.startTime
+            for stroke in strokes(in: source) {
+                let start = stroke.startTime + shift
+                let end = stroke.endTime + shift
+                guard start >= copySegment.startTime - epsilon,
+                      end <= copySegment.endTime + epsilon else { continue }
+                ghosts.append(ReelStroke(
+                    startTime: start,
+                    endTime: end,
+                    direction: stroke.direction,
+                    speedClassification: stroke.speedClassification,
+                    faderState: stroke.faderState))
+            }
+        }
+        return ghosts
+    }
 }
 
 // MARK: - Loading
