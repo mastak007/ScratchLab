@@ -10305,3 +10305,78 @@ extension CaptureReliabilityPhase1CoreTests {
         }
     }
 }
+
+// MARK: - iOS Practice assist-mode picker (Slice 2)
+
+// Source-string regression tests for the iOS-only Practice assist-mode
+// picker. The iOS app has no dedicated unit-test target, but these read the
+// view file from disk as text — the same pattern already used elsewhere in
+// this suite for iOS sources such as ScratchCoachViews.swift.
+final class PracticeAssistModePickerTests: XCTestCase {
+
+    private func repoRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(contentsOf: repoRoot().appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    func testAssistModePickerCopyIsPresentInPracticeModeView() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        // Section heading and persisted-state key.
+        XCTAssertTrue(view.contains("\"ASSIST MODE\""),
+                      "Practice setup must expose an 'ASSIST MODE' section")
+        XCTAssertTrue(view.contains("scratchlab.practice.assistMode"),
+                      "Assist mode must persist via @AppStorage")
+        XCTAssertTrue(view.contains("enum PracticeAssistMode"),
+                      "PracticeModeView must declare the PracticeAssistMode enum")
+
+        // All four mode display labels.
+        for label in ["\"Auto-cut\"", "\"Guided\"", "\"Coached\"", "\"Open\""] {
+            XCTAssertTrue(view.contains(label),
+                          "Assist mode picker missing label: \(label)")
+        }
+
+        // All four explainer strings, verbatim.
+        let explainers = [
+            "ScratchLab plays the fader for you during the coach demo.",
+            "ScratchLab shows upcoming cut cues while you move the fader.",
+            "ScratchLab compares your cuts against the target.",
+            "ScratchLab leaves the fader fully manual.",
+        ]
+        for line in explainers {
+            XCTAssertTrue(view.contains(line),
+                          "Assist mode section missing explainer: \(line)")
+        }
+    }
+
+    func testAssistModeStateIsNotCoupledToEngineLayers() throws {
+        // Slice 2 is UI + @AppStorage only. The new identifiers must not
+        // appear in capture, export, audio engine, or notation-capture code.
+        let isolationTargets = [
+            "ScratchLab/Models/CaptureCore.swift",
+            "ScratchLab/Audio/AudioEngine.swift",
+            "ScratchLab/Services/SessionExportCoordinator.swift",
+            "ScratchLabDesktop/Services/CXLNotationCapture.swift",
+        ]
+        let forbiddenTokens = [
+            "PracticeAssistMode",
+            "practiceAssistMode",
+            "scratchlab.practice.assistMode",
+        ]
+        for relativePath in isolationTargets {
+            guard let text = try? source(relativePath) else {
+                // Not present in this checkout — skip rather than fail noisily.
+                continue
+            }
+            for token in forbiddenTokens {
+                XCTAssertFalse(text.contains(token),
+                               "\(relativePath) must not reference assist-mode token \(token)")
+            }
+        }
+    }
+}

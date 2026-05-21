@@ -13,6 +13,36 @@ private enum PracticeBeatUIContract {
     static let stopLabel = "Stop Beat"
 }
 
+// Practice setup assist-mode picker. UI + persisted selection only — no
+// coach, playback, or scoring behaviour is wired up yet. Default is `.open`
+// so today's coaching loop is unchanged for existing users on first launch.
+fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
+    case autoCut
+    case guided
+    case coached
+    case open
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .autoCut: return "Auto-cut"
+        case .guided:  return "Guided"
+        case .coached: return "Coached"
+        case .open:    return "Open"
+        }
+    }
+
+    var explainer: String {
+        switch self {
+        case .autoCut: return "ScratchLab plays the fader for you during the coach demo."
+        case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
+        case .coached: return "ScratchLab compares your cuts against the target."
+        case .open:    return "ScratchLab leaves the fader fully manual."
+        }
+    }
+}
+
 struct PracticeModeView: View {
     let scratch: Scratch
     let drillTimeline: ScratchRenderTimeline?
@@ -34,6 +64,7 @@ struct PracticeModeView: View {
     @State private var showingCoachPreview = false
     @AppStorage(QuickStartSettings.hasSeenKey) private var hasSeenQuickStart = false
     @AppStorage(QuickStartSettings.versionKey) private var quickStartVersion = 0
+    @AppStorage("scratchlab.practice.assistMode") private var practiceAssistModeRaw = PracticeAssistMode.open.rawValue
     
     // Timing
     @State private var selectedDuration: TimeInterval = 300 // 5 min default
@@ -83,6 +114,13 @@ struct PracticeModeView: View {
 
     private var activeScratch: Scratch {
         scratch
+    }
+
+    private var assistModeBinding: Binding<PracticeAssistMode> {
+        Binding(
+            get: { PracticeAssistMode(rawValue: practiceAssistModeRaw) ?? .open },
+            set: { practiceAssistModeRaw = $0.rawValue }
+        )
     }
 
     private var normalizedDrillEvents: [ScratchRenderEvent] {
@@ -419,6 +457,7 @@ struct PracticeModeView: View {
                         coachInstruction: coachInstruction,
                         practiceBeatStore: practiceBeatStore,
                         selectedDuration: $selectedDuration,
+                        selectedAssistMode: assistModeBinding,
                         durationOptions: durationOptions,
                         sessionTitle: isComboChallengeMode ? "Combo Challenge" : "Practice",
                         sessionDescription: isComboChallengeMode ? comboChallenge?.description : nil,
@@ -1474,6 +1513,7 @@ struct SessionSetupOverlay: View {
     let coachInstruction: ScratchCoachInstruction
     @ObservedObject var practiceBeatStore: PracticeBeatStore
     @Binding var selectedDuration: TimeInterval
+    @Binding fileprivate var selectedAssistMode: PracticeAssistMode
     let durationOptions: [(String, TimeInterval)]
     let sessionTitle: String
     let sessionDescription: String?
@@ -1555,6 +1595,37 @@ struct SessionSetupOverlay: View {
                                 }
                             }
                         }
+                    }
+
+                    // Assist mode — UI + persisted selection only. No coach,
+                    // playback, or scoring behaviour is wired up by this yet.
+                    VStack(spacing: 12) {
+                        Text("ASSIST MODE")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white.opacity(0.5))
+
+                        HStack(spacing: 8) {
+                            ForEach(PracticeAssistMode.allCases) { mode in
+                                Button(action: { selectedAssistMode = mode }) {
+                                    Text(mode.title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(selectedAssistMode == mode ? .black : .white)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                        .background(selectedAssistMode == mode ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                                        .cornerRadius(12)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 24)
+
+                        Text(selectedAssistMode.explainer)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.66))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 28)
                     }
 
                     if let objectiveText {
