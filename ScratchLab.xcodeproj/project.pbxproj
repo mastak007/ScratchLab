@@ -48,6 +48,7 @@
 		PVM0001000PVM001PVM00001 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
 		DAC0001000DAC001DAC00001 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
 		PRT0001000PRT001PRT00001 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
+		TML0001000TML001TML00001 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
 		433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */; };
 		43751697AA2973A2E1462B3F /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC927BE2AC20BBF592338F0B /* Entry.swift */; };
 		4A543CD477CFCC3F9EB88C03 /* WatchCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9886FB2B8E07860472DD229 /* WatchCaptureView.swift */; };
@@ -137,6 +138,7 @@
 		PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
 		DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
 		PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
+		TML0001000TML001TML00002 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -323,6 +325,7 @@
 		PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModel.swift; sourceTree = "<group>"; };
 		DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAudioClock.swift; sourceTree = "<group>"; };
 		PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeReelTimeline.swift; sourceTree = "<group>"; };
+		TML0000000TML001TML00001 /* TimingLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingLane.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -542,6 +545,7 @@
 				PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */,
 				DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */,
 				PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */,
+				TML0000000TML001TML00001 /* TimingLane.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
 				8EDD250716FA81582843E833 /* WatchMotionCapture.swift */,
@@ -879,6 +883,7 @@
 				PVM0001000PVM001PVM00001 /* PhraseViewportModel.swift in Sources */,
 				DAC0001000DAC001DAC00001 /* DemoAudioClock.swift in Sources */,
 				PRT0001000PRT001PRT00001 /* PracticeReelTimeline.swift in Sources */,
+				TML0001000TML001TML00001 /* TimingLane.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -953,6 +958,7 @@
 				PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */,
 				DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */,
 				PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */,
+				TML0001000TML001TML00002 /* TimingLane.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
