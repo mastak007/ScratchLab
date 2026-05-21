@@ -10380,3 +10380,70 @@ final class PracticeAssistModePickerTests: XCTestCase {
         }
     }
 }
+
+// MARK: - iOS Practice target notation chart
+
+// Source-string regression tests for the static target-notation chart
+// surfaced into the iOS Practice screen. Same read-from-disk pattern as the
+// Slice 2 / Slice 3 tests.
+final class PracticeTargetNotationChartTests: XCTestCase {
+
+    private func repoRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(contentsOf: repoRoot().appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    func testTargetNotationChartIsRenderedInPracticeModeView() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        XCTAssertTrue(view.contains("\"TARGET PATTERN\""),
+                      "Practice must show a 'TARGET PATTERN' heading")
+        XCTAssertTrue(view.contains("ScratchPhraseChartView(source: .target("),
+                      "Practice must render the existing ScratchPhraseChartView with a target notation")
+        XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
+                      "Target chart must read the existing bundled Baby Scratch notation")
+
+        // Static only — no playhead must be enabled at this render site.
+        XCTAssertFalse(view.contains("showPlayhead: true"),
+                       "Practice target chart must stay static — no playhead")
+    }
+
+    func testScratchPhraseChartViewIsOniOSTarget() throws {
+        // The renderer is exposed to the iOS app target via build-phase
+        // membership, not duplicated. Confirm both: the file is still a
+        // single source, and the iOS Sources phase references it.
+        let pbxproj = try source("ScratchLab.xcodeproj/project.pbxproj")
+        XCTAssertEqual(
+            pbxproj.components(separatedBy: "path = ScratchPhraseChartView.swift;").count - 1, 1,
+            "ScratchPhraseChartView.swift must remain a single, non-duplicated source file")
+        XCTAssertTrue(
+            pbxproj.contains("SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */"),
+            "ScratchPhraseChartView.swift must be a member of the iOS ScratchLab target Sources phase")
+    }
+
+    func testTargetNotationChartIsNotCoupledToEngineLayers() throws {
+        // Render-only slice: the chart render site must not pull capture,
+        // audio, export, or notation-capture code into the Practice view.
+        let isolationTargets = [
+            "ScratchLab/Models/CaptureCore.swift",
+            "ScratchLab/Audio/AudioEngine.swift",
+            "ScratchLab/Services/SessionExportCoordinator.swift",
+            "ScratchLabDesktop/Services/CXLNotationCapture.swift",
+        ]
+        let forbiddenTokens = ["TARGET PATTERN", "targetNotation"]
+        for relativePath in isolationTargets {
+            guard let text = try? source(relativePath) else {
+                continue
+            }
+            for token in forbiddenTokens {
+                XCTAssertFalse(text.contains(token),
+                               "\(relativePath) must not reference target-chart token \(token)")
+            }
+        }
+    }
+}

@@ -116,6 +116,13 @@ struct PracticeModeView: View {
         scratch
     }
 
+    // Target notation for the current scratch. Only Baby Scratch ships a
+    // bundled notation today; other scratches return nil so the target
+    // chart panel is omitted (graceful).
+    private var targetNotation: ScratchNotation? {
+        scratch.id == "baby_scratch" ? ScratchNotation.babyScratch : nil
+    }
+
     private var assistModeBinding: Binding<PracticeAssistMode> {
         Binding(
             get: { PracticeAssistMode(rawValue: practiceAssistModeRaw) ?? .open },
@@ -654,7 +661,23 @@ struct PracticeModeView: View {
                 if isComboChallengeMode {
                     comboProgressCard
                 }
-            
+
+                // Static target-notation chart — shows the scratch pattern
+                // the user is following. Render-only: no playhead, no
+                // animation, no playback.
+                if let notation = targetNotation {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("TARGET PATTERN")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.white.opacity(0.55))
+
+                        ScratchPhraseChartView(source: .target(notation))
+                            .frame(height: 110)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .padding(.horizontal, 20)
+                }
+
             // Accuracy ring
             ZStack {
                 // Outer pulse ring

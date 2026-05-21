@@ -201,6 +201,17 @@ struct ScratchPhraseChartView: View {
     private func drawBeatGrid(ctx: GraphicsContext, size: CGSize, duration: Double, pps: CGFloat,
                               labelBottomY: CGFloat) {
         let beatInterval = 60.0 / max(bpm, 1)
+
+        // Width-aware label thinning. A beat number is ~14 pt wide, so when
+        // beats pack closer than that the number row becomes an unreadable
+        // strip (e.g. a long phrase at iPhone width). Draw every Nth label
+        // so neighbours stay legible. On wide charts (macOS Review) the
+        // stride resolves to 1 — every beat labelled, behaviour unchanged.
+        // Grid lines are always drawn; only the numerals are thinned.
+        let beatSpacing = CGFloat(beatInterval) * pps
+        let minLabelGap: CGFloat = 26
+        let labelStride = max(1, Int((minLabelGap / max(beatSpacing, 0.5)).rounded(.up)))
+
         var t = 0.0
         var beat = 0
         while t <= duration + beatInterval * 0.5 {
@@ -211,7 +222,7 @@ struct ScratchPhraseChartView: View {
             line.addLine(to: CGPoint(x: x, y: size.height))
             ctx.stroke(line, with: .color(isMajor ? gridMajor : gridMinor),
                        lineWidth: isMajor ? 0.8 : 0.35)
-            if beat > 0 {
+            if beat > 0 && beat % labelStride == 0 {
                 ctx.draw(
                     Text("\(beat)")
                         .font(.system(size: 10, design: .monospaced))
