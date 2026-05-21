@@ -145,6 +145,27 @@ struct PracticeReelTimeline: Decodable, Equatable, Sendable {
     }
 }
 
+// MARK: - Future audio assets
+//
+// The bundled interim asset is `baby_noBeat.wav` — a dry, beat-free Baby
+// Scratch take — described by `baby_reel.json` with `bpm` omitted. The
+// call-and-response model is already shaped for the planned over-beat asset,
+// so swapping it in is a manifest change with no code change:
+//
+//   • Author one audio file alternating <baby scratch over beat> and
+//     <beat-only copy break>, e.g. demo / copy / demo / copy.
+//   • Point a manifest's `audioFile` at it and set `bpm` to the beat tempo —
+//     the Demo reel then renders a beat grid automatically.
+//   • Mark each "scratch over beat" span as a `demo` segment and each
+//     "beat-only" span as a `copy` segment; place reference `strokes` only
+//     inside the demo segments (copy windows derive their ghost targets via
+//     `derivedCopyGhostStrokes()`).
+//   • Keep `audioDuration` frame-accurate; `audioDurationIssue(actualDuration:)`
+//     cross-checks it against the real file.
+//
+// The loader resolves audio purely from the manifest's `audioFile` field — no
+// filename is hardcoded — so a new asset needs only a new or edited manifest.
+
 // MARK: - Loading
 
 extension PracticeReelTimeline {

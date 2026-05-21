@@ -64,6 +64,12 @@ struct PracticeModeView: View {
     // playback and the audio-synced notation playhead.
     @StateObject private var demoPlayer = ScratchCoachDemoAudioPlayer()
 
+    // The call-and-response reel manifest backing the active Demo session,
+    // when a valid, audio-backed one is bundled. `nil` outside Demo mode or
+    // when the manifest is missing/invalid — the portrait reel then falls
+    // back to the horizontal demo chart. Set by configureDemoPlayback().
+    @State private var demoReel: PracticeReelTimeline?
+
     // Session state
     @State private var isSessionActive = false
     @State private var isPaused = false
@@ -681,7 +687,13 @@ struct PracticeModeView: View {
                 comboProgressCard
             }
 
-            if let notation = targetNotation {
+            if practiceAssistMode == .demo, let reel = demoReel {
+                // Portrait Demo mode: the manifest-driven vertical timing reel.
+                demoReelPanel(reel: reel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let notation = targetNotation {
+                // Other modes — and Demo's fallback when no valid reel
+                // manifest loaded — keep the horizontal target chart.
                 notationPanel(notation: notation)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -860,6 +872,27 @@ struct PracticeModeView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
+        }
+    }
+
+    // Portrait Demo-mode surface: the manifest-driven vertical timing reel.
+    // Demo-gated, shown only when a valid reel manifest is loaded; keeps the
+    // honest "Demo playing" status chip. Uses the demo-audio clock
+    // (`sampledPlaybackTime()`) as the reel's sole timing source.
+    private func demoReelPanel(reel: PracticeReelTimeline) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("TARGET PATTERN")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white.opacity(0.55))
+                Spacer()
+                notationStatusChip
+            }
+
+            VerticalNotationReelView(
+                timeline: reel,
+                audioTime: { demoPlayer.sampledPlaybackTime() })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1193,13 +1226,23 @@ struct PracticeModeView: View {
         startSessionTimer()
     }
 
-    /// Configures the Demo-mode audio. Prefers the bundled call-and-response
-    /// reel manifest (manifest-driven audio selection); falls back to the
-    /// coach instruction's demo audio when no valid manifest is bundled.
+    /// Configures the Demo-mode audio and the matching notation surface.
+    ///
+    /// Prefers the bundled call-and-response reel manifest: its `audioFile`
+    /// field — never a hardcoded filename — selects the audio, and a valid,
+    /// audio-backed manifest is stored in `demoReel` so the portrait vertical
+    /// reel can render it. Falls back to the legacy coach demo audio with a
+    /// nil `demoReel` (the horizontal chart) when no usable manifest is
+    /// bundled, or when a manifest loads but its paired audio file is missing.
     private func configureDemoPlayback() {
         if let reel = loadDemoReelTimeline(), reel.isValid {
             demoPlayer.configure(withAudioFileNamed: reel.audioFile)
+            // The manifest only drives the reel if its paired audio resolved.
+            demoReel = demoPlayer.isAudioAvailable ? reel : nil
         } else {
+            demoReel = nil
+        }
+        if demoReel == nil {
             demoPlayer.configure(with: coachInstruction)
         }
     }
@@ -1232,6 +1275,7 @@ struct PracticeModeView: View {
     
     private func endSession() {
         finalizeComboLoopProgress()
+        demoReel = nil
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
@@ -1269,6 +1313,7 @@ struct PracticeModeView: View {
         sessionTipText = ""
         showingResults = false
         isSessionActive = false
+        demoReel = nil
     }
     
     private func cleanupSession() {
@@ -1276,6 +1321,7 @@ struct PracticeModeView: View {
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
         demoPlayer.stop()
+        demoReel = nil
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
