@@ -1721,12 +1721,20 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     private var currentAudioFile: String?
     private var lifecycleObservers: [NSObjectProtocol] = []
 
+    // Host-clock source for the Demo-mode playhead clock (injectable for tests).
+    private let hostTimeProvider: () -> TimeInterval
+    // Smoothing, latency-compensated clock for the Demo-mode notation playhead
+    // — see `sampledPlaybackTime()`.
+    private var syncClock = DemoAudioClock()
+
     init(
         resourceURLProvider: @escaping ResourceURLProvider = ScratchCoachDemoAudioPlayer.defaultResourceURLProvider(in: .main),
-        playerFactory: @escaping PlayerFactory = { try ScratchCoachAVAudioPlayerAdapter(url: $0) }
+        playerFactory: @escaping PlayerFactory = { try ScratchCoachAVAudioPlayerAdapter(url: $0) },
+        hostTimeProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.resourceURLProvider = resourceURLProvider
         self.playerFactory = playerFactory
+        self.hostTimeProvider = hostTimeProvider
         registerLifecycleObservers()
     }
 
@@ -1744,12 +1752,35 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         player?.currentTime ?? 0
     }
 
+    /// A smoothed, latency-compensated playback position for the Demo-mode
+    /// notation playhead. Unlike `currentPlaybackTime` — a raw `AVAudioPlayer`
+    /// sample — this interpolates against the host clock and subtracts the
+    /// audio output latency, so the notation tracks what the listener hears
+    /// instead of stepping coarsely and leading the sound.
+    func sampledPlaybackTime() -> TimeInterval {
+        let hostTime = hostTimeProvider()
+        syncClock.outputLatency = Self.currentOutputLatency()
+        syncClock.ingest(
+            playerTime: player?.currentTime ?? 0,
+            isPlaying: player?.isPlaying ?? false,
+            hostTime: hostTime
+        )
+        return syncClock.currentTime(hostTime: hostTime)
+    }
+
     var isActivelyPlayingAudio: Bool {
         player?.isPlaying ?? false
     }
 
     func configure(with instruction: ScratchCoachInstruction) {
-        let nextAudioFile = Self.normalizedAudioFileName(instruction.demoAudioFile)
+        configure(withAudioFileNamed: instruction.demoAudioFile)
+    }
+
+    /// Loads a specific bundled demo-audio file by name. The manifest-driven
+    /// Demo path resolves the audio from a `PracticeReelTimeline`; the legacy
+    /// path routes here via `configure(with:)`.
+    func configure(withAudioFileNamed audioFileName: String?) {
+        let nextAudioFile = Self.normalizedAudioFileName(audioFileName)
         guard nextAudioFile != currentAudioFile || (nextAudioFile != nil && player == nil) else { return }
 
         clearLoadedAudio()
@@ -1875,10 +1906,22 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Current audio output latency, used to align the notation playhead with
+    /// what the listener hears. Sourced from the audio session on iOS; macOS
+    /// has no equivalent API, so compensation is off there.
+    nonisolated private static func currentOutputLatency() -> TimeInterval {
+        #if canImport(UIKit)
+        return max(0, AVAudioSession.sharedInstance().outputLatency)
+        #else
+        return 0
+        #endif
+    }
+
     private func clearLoadedAudio() {
         stop()
         player = nil
         isAudioAvailable = false
+        syncClock.reset()
     }
 
     private func registerLifecycleObservers() {

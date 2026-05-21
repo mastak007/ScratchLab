@@ -845,7 +845,7 @@ struct PracticeModeView: View {
                 // / Open keep the static, scrollable reference chart.
                 if practiceAssistMode == .demo {
                     AutoCutTargetChart(notation: notation,
-                                       clock: .audioTime { demoPlayer.currentPlaybackTime })
+                                       clock: .audioTime { demoPlayer.sampledPlaybackTime() })
                 } else if practiceAssistMode == .autoCut || practiceAssistMode == .guided {
                     AutoCutTargetChart(notation: notation,
                                        clock: .looping(start: notationClockStartDate))
@@ -1180,7 +1180,7 @@ struct PracticeModeView: View {
         // audio and skip live scratch analysis. Every other mode runs scored
         // mic analysis.
         if practiceAssistMode == .demo {
-            demoPlayer.configure(with: coachInstruction)
+            configureDemoPlayback()
             demoPlayer.play()
         } else {
             audioEngine.startAnalyzing(for: activeScratch)
@@ -1191,6 +1191,24 @@ struct PracticeModeView: View {
         }
 
         startSessionTimer()
+    }
+
+    /// Configures the Demo-mode audio. Prefers the bundled call-and-response
+    /// reel manifest (manifest-driven audio selection); falls back to the
+    /// coach instruction's demo audio when no valid manifest is bundled.
+    private func configureDemoPlayback() {
+        if let reel = loadDemoReelTimeline(), reel.isValid {
+            demoPlayer.configure(withAudioFileNamed: reel.audioFile)
+        } else {
+            demoPlayer.configure(with: coachInstruction)
+        }
+    }
+
+    /// Loads the call-and-response demo manifest for the active scratch, if one
+    /// is bundled. Only Baby Scratch ships a reel manifest today.
+    private func loadDemoReelTimeline() -> PracticeReelTimeline? {
+        guard activeScratch.id == "baby_scratch" else { return nil }
+        return PracticeReelTimeline.loadBundled(named: PracticeReelTimeline.babyReelManifestName)
     }
     
     private func pauseSession() {
@@ -1977,13 +1995,23 @@ private struct AutoCutTargetChart: View {
             })
     }
 
+    // Demo locks the chart to the demo-audio clock; a per-frame refresh lets
+    // the smoothed, latency-compensated playhead read true. The looping
+    // preview modes (Auto-cut, Guided) stay on the lighter 0.1 s cadence.
+    private var tickInterval: TimeInterval {
+        switch clock {
+        case .looping:   return 0.1
+        case .audioTime: return 1.0 / 60.0
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
             // TimelineView is only a render-side ticker. `currentTime` comes
             // from the supplied clock — a looping session clock or the demo
             // audio position — and is the sole input to the viewport model, so
             // no scroll/layout state can feed back into timing.
-            TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+            TimelineView(.periodic(from: .now, by: tickInterval)) { timeline in
                 let loopDuration = max(notation.timelineDuration, 0.1)
                 let currentTime: TimeInterval = switch clock {
                 case .looping(let start):
