@@ -93,6 +93,25 @@ struct ReelViewport: Equatable {
     }
 }
 
+// MARK: - User-attempt overlay (scaffold)
+
+/// A single user-attempt mark, for the future scored-overlay work.
+///
+/// PHASE-7 SCAFFOLD ONLY. The type exists so the reel renderer and its call
+/// sites already have a shape to carry user attempts; it is never populated
+/// today. Wiring it to a live source — mic analysis, capture, or scoring — is
+/// deliberately out of scope. `VerticalNotationReelView` takes `userEvents`
+/// defaulting to `[]`, draws nothing for an empty list, and runs no scoring
+/// whatever the list holds.
+struct ReelUserEvent: Equatable {
+    /// When the user's stroke began, in demo-audio seconds.
+    let startTime: TimeInterval
+    /// When the user's stroke ended, in demo-audio seconds.
+    let endTime: TimeInterval
+    /// The stroke direction the user performed.
+    let direction: ScratchNotationDirection
+}
+
 // MARK: - VerticalNotationReelView
 
 struct VerticalNotationReelView: View {
@@ -103,12 +122,19 @@ struct VerticalNotationReelView: View {
     /// per render tick; never written back to.
     let audioTime: () -> TimeInterval
 
+    /// User-attempt marks for the overlay. PHASE-7 SCAFFOLD: empty on every
+    /// shipping path, so the overlay draws nothing and scores nothing.
+    let userEvents: [ReelUserEvent]
+
     /// Echoed copy-window targets, derived once from the manifest.
     private let ghostStrokes: [ReelStroke]
 
-    init(timeline: PracticeReelTimeline, audioTime: @escaping () -> TimeInterval) {
+    init(timeline: PracticeReelTimeline,
+         audioTime: @escaping () -> TimeInterval,
+         userEvents: [ReelUserEvent] = []) {
         self.timeline = timeline
         self.audioTime = audioTime
+        self.userEvents = userEvents
         self.ghostStrokes = timeline.derivedCopyGhostStrokes()
     }
 
@@ -178,6 +204,7 @@ struct VerticalNotationReelView: View {
                 drawBeatGrid(in: context, viewport: viewport)
                 drawGhostStrokes(in: context, viewport: viewport)
                 drawTargetStrokes(in: context, viewport: viewport)
+                drawUserEvents(in: context, viewport: viewport)
                 drawActionLine(in: context, viewport: viewport, segment: currentSegment)
             }
 
@@ -347,6 +374,29 @@ struct VerticalNotationReelView: View {
         chevron.addLine(to: CGPoint(x: center.x - dx, y: center.y + s))
         context.stroke(chevron, with: .color(color),
                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+    }
+
+    // MARK: - Canvas: user-attempt overlay (scaffold)
+
+    /// Draws the user's own attempt marks over the reference reel.
+    ///
+    /// PHASE-7 SCAFFOLD. `userEvents` is empty on every shipping call path, so
+    /// this draws nothing today. It keeps a populated render path ready for a
+    /// future scored-practice overlay; wiring `userEvents` to a live source
+    /// (mic analysis, capture, scoring) is deliberately out of scope here.
+    private func drawUserEvents(in context: GraphicsContext, viewport: ReelViewport) {
+        for event in userEvents
+        where viewport.isVisible(startTime: event.startTime, endTime: event.endTime) {
+            let topY = viewport.y(for: event.endTime)
+            let bottomY = viewport.y(for: event.startTime)
+            // A slim marker hugging the lane's trailing edge, clear of the
+            // centered reference strokes.
+            let mark = CGRect(x: viewport.size.width - Self.laneInset + 5,
+                              y: topY, width: 4, height: max(bottomY - topY, 4))
+            context.fill(
+                Path(roundedRect: mark, cornerRadius: 2, style: .continuous),
+                with: .color(.white.opacity(0.85)))
+        }
     }
 
     // MARK: - Canvas: action line

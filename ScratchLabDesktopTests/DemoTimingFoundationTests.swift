@@ -556,3 +556,40 @@ struct DemoReelWiringTests {
         #expect(!source.contains("ScratchCoachCard("))
     }
 }
+
+// MARK: - User-attempt overlay scaffold (PHASE 7)
+
+@Suite("User-attempt overlay scaffold")
+struct UserAttemptScaffoldTests {
+
+    @Test("ReelUserEvent exists as an inert scaffold type")
+    func scaffoldTypeExists() throws {
+        let source = try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
+        #expect(source.contains("struct ReelUserEvent"))
+        // Clearly flagged as a non-functional scaffold.
+        #expect(source.contains("SCAFFOLD"))
+    }
+
+    @Test("The reel takes userEvents defaulting to empty — the overlay is inert")
+    func userEventsDefaultsEmpty() throws {
+        let source = try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
+        #expect(source.contains("userEvents: [ReelUserEvent] = []"))
+        // The renderer has a path for the overlay but draws nothing when empty.
+        #expect(source.contains("drawUserEvents"))
+    }
+
+    @Test("Demo wiring passes no user events and adds no scoring or capture")
+    func wiringStaysNonFunctional() throws {
+        let practice = try reelSource("ScratchLab/Views/PracticeModeView.swift")
+        let panel = try sliceBetween(practice,
+            from: "private func demoReelPanel(",
+            to: "// Runtime status for the notation surface")
+        // demoReelPanel constructs the reel without a userEvents argument.
+        #expect(!panel.contains("userEvents"))
+        // The reel view itself still carries no scoring / capture / ML symbols.
+        let reel = try reelSource("ScratchLab/Views/VerticalNotationReelView.swift")
+        #expect(!reel.contains("startAnalyzing"))
+        #expect(!reel.contains("ScratchAnalysisResult"))
+        #expect(!reel.contains("AudioEngine"))
+    }
+}
