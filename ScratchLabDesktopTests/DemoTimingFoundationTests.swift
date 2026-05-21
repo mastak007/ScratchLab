@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 import Testing
 @testable import ScratchLab
@@ -487,12 +488,28 @@ struct LaneWiringTests {
         try reelSource("ScratchLab/Views/PracticeModeView.swift")
     }
 
-    @Test("Portrait runs the lane vertically, landscape horizontally")
+    @Test("One lane renderer, its axis chosen by orientation")
     func bothOrientationsUseOneLane() throws {
         let source = try practiceSource()
-        #expect(source.contains("notationLanePanel(axis: .vertical)"))
-        #expect(source.contains("notationLanePanel(axis: .horizontal)"))
+        // A single notationLanePanel call; the axis is derived from orientation.
+        #expect(source.contains("notationLanePanel(axis: axis)"))
+        #expect(source.contains("verticalSizeClass == .compact ? .horizontal : .vertical"))
         #expect(source.contains("TimingLaneView(content:"))
+    }
+
+    @Test("The layout is notation-first — the lane dominates, the cards are gone")
+    func notationFirstLayout() throws {
+        let source = try practiceSource()
+        // The lane fills the feedback area, framed only by thin HUD chip rows.
+        #expect(source.contains("practiceTopHUD"))
+        #expect(source.contains("practiceBottomHUD"))
+        // The giant diagnostic cards and the landscape side column are gone.
+        #expect(!source.contains("audioStatusCard"))
+        #expect(!source.contains("comboProgressCard"))
+        #expect(!source.contains("guidedDrillCueCard"))
+        #expect(!source.contains("portraitFeedbackLayout"))
+        #expect(!source.contains("landscapeFeedbackLayout"))
+        #expect(!source.contains(".frame(width: 256)"))
     }
 
     @Test("The two old renderers are retired — one engine, not two")
@@ -587,5 +604,105 @@ struct UserAttemptScaffoldTests {
         #expect(!lane.contains("startAnalyzing"))
         #expect(!lane.contains("ScratchAnalysisResult"))
         #expect(!lane.contains("AudioEngine"))
+    }
+}
+
+// MARK: - LaneContent adapters
+
+@Suite("LaneContent adapters")
+struct LaneContentTests {
+
+    @Test("A Demo reel adapts to non-looping content with demo/copy bands")
+    func reelAdapter() throws {
+        let manifestURL = reelTestsRepoRoot().appendingPathComponent(
+            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+        let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
+        let content = LaneContent(reel: reel)
+
+        #expect(content.loops == false)                       // Demo plays once through
+        #expect(content.segments.count == reel.segments.count)
+        #expect(content.beatsPerMinute == reel.bpm)
+        #expect(abs(content.duration - reel.audioDuration) < 1e-6)
+        // Solid reference strokes plus the derived copy-window ghosts.
+        #expect(content.strokes.filter { !$0.isGhost }.count == reel.strokes.count)
+        #expect(content.strokes.contains { $0.isGhost })
+    }
+
+    @Test("A scored notation adapts to looping content with no segments")
+    func notationAdapter() {
+        let notation = ScratchNotation(
+            version: 1, scratchID: "test", demoStart: 0, demoEnd: 2.0,
+            phraseStart: nil, phraseEnd: nil, timingBasis: "beat",
+            strokes: [
+                ScratchNotation.Stroke(startTime: 0.1, endTime: 0.4,
+                    direction: .backward, speedClassification: .slow, faderState: .open),
+                ScratchNotation.Stroke(startTime: 0.5, endTime: 0.8,
+                    direction: .forward, speedClassification: .fast, faderState: .open),
+            ])
+        let content = LaneContent(notation: notation)
+
+        #expect(content.loops == true)                        // scored modes loop
+        #expect(content.segments.isEmpty)                     // no demo/copy bands
+        #expect(content.strokes.count == 2)
+        #expect(content.strokes.allSatisfy { !$0.isGhost })
+        #expect(abs(content.duration - 2.0) < 1e-6)
+    }
+}
+
+// MARK: - LaneViewport geometry
+
+@Suite("LaneViewport geometry")
+struct LaneViewportTests {
+
+    @Test("Vertical: now sits on the action line; the future is above it")
+    func verticalMapping() {
+        let viewport = LaneViewport(
+            size: CGSize(width: 100, height: 200), now: 10,
+            axis: .vertical, actionLineFraction: 0.7, secondsAhead: 5)
+        #expect(viewport.scrollLength == 200)
+        #expect(viewport.crossLength == 100)
+        #expect(abs(viewport.actionLinePos - 140) < 1e-6)
+        #expect(abs(viewport.pos(for: 10) - 140) < 1e-6)      // now → action line
+        #expect(viewport.pos(for: 11) < viewport.actionLinePos)   // future above
+        #expect(viewport.pos(for: 9) > viewport.actionLinePos)    // past below
+    }
+
+    @Test("Horizontal: the future is to the right of the action line")
+    func horizontalMapping() {
+        let viewport = LaneViewport(
+            size: CGSize(width: 200, height: 100), now: 10,
+            axis: .horizontal, actionLineFraction: 0.3, secondsAhead: 5)
+        #expect(viewport.scrollLength == 200)
+        #expect(viewport.crossLength == 100)
+        #expect(abs(viewport.pos(for: 10) - 60) < 1e-6)       // now → action line
+        #expect(viewport.pos(for: 11) > viewport.actionLinePos)   // future to the right
+        #expect(viewport.pos(for: 9) < viewport.actionLinePos)    // past to the left
+    }
+
+    @Test("rect and point map scroll/cross coordinates onto the active axis")
+    func axisCoordinateMapping() {
+        let vertical = LaneViewport(
+            size: CGSize(width: 100, height: 200), now: 0,
+            axis: .vertical, actionLineFraction: 0.7, secondsAhead: 5)
+        #expect(vertical.rect(scroll0: 50, scroll1: 100, cross0: 10, cross1: 90)
+                == CGRect(x: 10, y: 50, width: 80, height: 50))
+        #expect(vertical.point(scroll: 30, cross: 40) == CGPoint(x: 40, y: 30))
+
+        let horizontal = LaneViewport(
+            size: CGSize(width: 200, height: 100), now: 0,
+            axis: .horizontal, actionLineFraction: 0.3, secondsAhead: 5)
+        #expect(horizontal.rect(scroll0: 50, scroll1: 100, cross0: 10, cross1: 90)
+                == CGRect(x: 50, y: 10, width: 50, height: 80))
+        #expect(horizontal.point(scroll: 30, cross: 40) == CGPoint(x: 30, y: 40))
+    }
+
+    @Test("time(atPos:) inverts pos(for:)")
+    func inverseMapping() {
+        let viewport = LaneViewport(
+            size: CGSize(width: 120, height: 240), now: 7,
+            axis: .vertical, actionLineFraction: 0.7, secondsAhead: 6)
+        for time in stride(from: 0.0, through: 14.0, by: 2.0) {
+            #expect(abs(viewport.time(atPos: viewport.pos(for: time)) - time) < 1e-6)
+        }
     }
 }
