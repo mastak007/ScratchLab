@@ -130,6 +130,10 @@ struct PracticeModeView: View {
         )
     }
 
+    private var practiceAssistMode: PracticeAssistMode {
+        PracticeAssistMode(rawValue: practiceAssistModeRaw) ?? .open
+    }
+
     private var normalizedDrillEvents: [ScratchRenderEvent] {
         guard let drillTimeline else { return [] }
         return drillTimeline.events.sorted { lhs, rhs in
@@ -676,6 +680,12 @@ struct PracticeModeView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .padding(.horizontal, 20)
+                }
+
+                // Guided assist mode adds a visual crossfader cue layer
+                // beneath the static target chart.
+                if practiceAssistMode == .guided, let notation = targetNotation {
+                    GuidedCutCueLayer(notation: notation)
                 }
 
             // Accuracy ring
@@ -1762,6 +1772,157 @@ struct SessionSetupOverlay: View {
                 .padding(.top, topSafeAreaInset + 12)
                 .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
             }
+        }
+    }
+}
+
+// Guided assist-mode crossfader cue layer. UI-only: reads `faderState` from
+// the existing target notation and renders a forward-looking visual guide.
+// It drives nothing — no playback, scoring, capture, export, or audio. The
+// only clock is a SwiftUI TimelineView used purely for rendering.
+private struct GuidedCutCueLayer: View {
+    let notation: ScratchNotation
+
+    // Forward look-ahead window drawn in the cue bar.
+    private let windowSeconds: TimeInterval = 3.0
+    // Lead time before an upcoming closed window that triggers "CUT SOON".
+    private let cutLeadSeconds: TimeInterval = 0.2
+
+    // Palette matches the macOS crossfader lane (Slice 1) for consistency.
+    private let openColor   = Color(red: 0.20, green: 0.88, blue: 0.55)
+    private let closedColor = Color(red: 1.00, green: 0.25, blue: 0.25)
+    private let soonColor   = Color(hex: "F59E0B")
+
+    @State private var startDate = Date()
+
+    private enum CueState { case open, cutSoon, closed }
+
+    private var closedStrokes: [ScratchNotation.Stroke] {
+        notation.strokes.filter { $0.faderState == .closed }
+    }
+
+    private var hasCuts: Bool { !closedStrokes.isEmpty }
+
+    private var caption: String {
+        hasCuts
+            ? "Upcoming fader cuts — close on the red, open on the green."
+            : "Keep the fader open — no cuts in this pattern."
+    }
+
+    var body: some View {
+        // TimelineView is the only clock here — a render-side ticker, not a
+        // playback engine. ~10 Hz is smooth enough for a beginner cue.
+        TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+            let loopDuration = max(notation.timelineDuration, 0.1)
+            let elapsed = timeline.date.timeIntervalSince(startDate)
+            let now = elapsed.truncatingRemainder(dividingBy: loopDuration)
+            let state = faderState(at: now, loopDuration: loopDuration)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("GUIDED CUE")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white.opacity(0.55))
+                    Spacer()
+                    statusPill(state)
+                }
+
+                lookaheadBar(now: now, loopDuration: loopDuration)
+                    .frame(height: 16)
+
+                Text(caption)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.66))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.black.opacity(0.5))
+            .cornerRadius(16)
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private func faderState(at t: TimeInterval, loopDuration: TimeInterval) -> CueState {
+        // A closed stroke covering `t` (checked in this loop and the next so
+        // the result is correct across the loop boundary).
+        let active = closedStrokes.contains { stroke in
+            (t >= stroke.startTime && t < stroke.endTime) ||
+            (t + loopDuration >= stroke.startTime && t + loopDuration < stroke.endTime)
+        }
+        if active { return .closed }
+
+        let soon = closedStrokes.contains { stroke in
+            let lead = stroke.startTime - t
+            let wrappedLead = stroke.startTime + loopDuration - t
+            return (lead > 0 && lead <= cutLeadSeconds) ||
+                   (wrappedLead > 0 && wrappedLead <= cutLeadSeconds)
+        }
+        return soon ? .cutSoon : .open
+    }
+
+    private func pillStyle(_ state: CueState) -> (label: String, color: Color) {
+        switch state {
+        case .open:    return ("FADER OPEN", openColor)
+        case .cutSoon: return ("CUT SOON", soonColor)
+        case .closed:  return ("CLOSE FADER", closedColor)
+        }
+    }
+
+    private func statusPill(_ state: CueState) -> some View {
+        let style = pillStyle(state)
+        return Text(style.label)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundColor(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(style.color)
+            .cornerRadius(8)
+    }
+
+    private func lookaheadBar(now: TimeInterval, loopDuration: TimeInterval) -> some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            ZStack(alignment: .leading) {
+                // Base: fader open across the whole look-ahead window.
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(openColor.opacity(0.45))
+
+                // Closed (cut) windows intersecting [now, now + window].
+                ForEach(Array(closedStrokes.enumerated()), id: \.offset) { _, stroke in
+                    ForEach(segmentRects(for: stroke, now: now,
+                                         loopDuration: loopDuration, width: width),
+                            id: \.minX) { rect in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(closedColor)
+                            .frame(width: rect.width)
+                            .offset(x: rect.minX)
+                    }
+                }
+
+                // "Now" marker at the leading edge of the window.
+                Rectangle()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: 2)
+            }
+        }
+    }
+
+    // Visible rectangles for a closed stroke — checked in this loop and the
+    // next so cuts near the loop boundary still scroll in correctly.
+    private func segmentRects(for stroke: ScratchNotation.Stroke,
+                              now: TimeInterval,
+                              loopDuration: TimeInterval,
+                              width: CGFloat) -> [(minX: CGFloat, width: CGFloat)] {
+        [stroke.startTime, stroke.startTime + loopDuration].compactMap { start in
+            let end = start + stroke.duration
+            let visibleStart = max(start, now)
+            let visibleEnd   = min(end, now + windowSeconds)
+            guard visibleEnd > visibleStart else { return nil }
+            let scale = width / CGFloat(windowSeconds)
+            return (CGFloat(visibleStart - now) * scale,
+                    CGFloat(visibleEnd - visibleStart) * scale)
         }
     }
 }

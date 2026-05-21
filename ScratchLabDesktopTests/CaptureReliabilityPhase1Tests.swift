@@ -10447,3 +10447,73 @@ final class PracticeTargetNotationChartTests: XCTestCase {
         }
     }
 }
+
+// MARK: - iOS Guided-cut visual cue layer (Slice 3)
+
+// Source-string regression tests for the iOS-only Guided assist-mode
+// crossfader cue layer. Same read-from-disk pattern as the Slice 2 tests.
+final class GuidedCutCueLayerTests: XCTestCase {
+
+    private func repoRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(contentsOf: repoRoot().appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    func testGuidedCueLayerExistsInPracticeModeView() throws {
+        let view = try source("ScratchLab/Views/PracticeModeView.swift")
+
+        // The cue view and its render site exist.
+        XCTAssertTrue(view.contains("struct GuidedCutCueLayer"),
+                      "PracticeModeView must declare the GuidedCutCueLayer view")
+        XCTAssertTrue(view.contains("\"GUIDED CUE\""),
+                      "Cue layer must carry the 'GUIDED CUE' heading")
+
+        // Cue is gated on Guided assist mode only.
+        XCTAssertTrue(view.contains("practiceAssistMode == .guided"),
+                      "Cue layer must render only when assist mode is Guided")
+
+        // Uses existing target notation / faderState data.
+        XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
+                      "Cue must read the existing bundled target notation")
+        XCTAssertTrue(view.contains("faderState"),
+                      "Cue must derive state from existing stroke faderState data")
+
+        // Open / close / cut visual language.
+        for label in ["\"FADER OPEN\"", "\"CUT SOON\"", "\"CLOSE FADER\""] {
+            XCTAssertTrue(view.contains(label),
+                          "Cue layer missing visual-language label: \(label)")
+        }
+
+        // Honest caption copy for both the no-cut and cut cases.
+        XCTAssertTrue(view.contains("Keep the fader open — no cuts in this pattern."),
+                      "Cue must render an honest caption when the pattern has no cuts")
+        XCTAssertTrue(view.contains("Upcoming fader cuts"),
+                      "Cue must render a cut-guidance caption when the pattern has cuts")
+    }
+
+    func testGuidedCueLayerIsNotCoupledToEngineLayers() throws {
+        // Slice 3 is iOS Practice UI/rendering only. The cue view must not
+        // appear in capture, audio, export, or notation-capture code.
+        let isolationTargets = [
+            "ScratchLab/Models/CaptureCore.swift",
+            "ScratchLab/Audio/AudioEngine.swift",
+            "ScratchLab/Services/SessionExportCoordinator.swift",
+            "ScratchLabDesktop/Services/CXLNotationCapture.swift",
+        ]
+        let forbiddenTokens = ["GuidedCutCueLayer", "GUIDED CUE"]
+        for relativePath in isolationTargets {
+            guard let text = try? source(relativePath) else {
+                continue
+            }
+            for token in forbiddenTokens {
+                XCTAssertFalse(text.contains(token),
+                               "\(relativePath) must not reference cue-layer token \(token)")
+            }
+        }
+    }
+}
