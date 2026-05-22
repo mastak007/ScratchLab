@@ -819,7 +819,7 @@ struct PracticeModeView: View {
                     notationStatusChip
                 }
 
-                TimingLaneView(content: lane.content, clock: lane.clock, axis: axis)
+                ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
