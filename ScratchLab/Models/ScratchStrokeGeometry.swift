@@ -87,6 +87,22 @@ struct MotionPath: Equatable, Sendable {
         }
         return last.endPosition
     }
+
+    /// The path with every time shifted by `offset` — used to tile a looping
+    /// pattern seamlessly across the lane.
+    func shifted(by offset: TimeInterval) -> MotionPath {
+        guard offset != 0 else { return self }
+        return MotionPath(
+            segments: segments.map {
+                MotionSegment(kind: $0.kind,
+                              startTime: $0.startTime + offset,
+                              endTime: $0.endTime + offset,
+                              startPosition: $0.startPosition,
+                              endPosition: $0.endPosition,
+                              speed: $0.speed, isGhost: $0.isGhost)
+            },
+            timeRange: (timeRange.lowerBound + offset)...(timeRange.upperBound + offset))
+    }
 }
 
 // MARK: - Derivation

@@ -1,39 +1,30 @@
-// TimingLaneView.swift
+// ScratchMotionLane.swift
 // ScratchLab - Practice
 //
-// The unified notation-first timing lane — one renderer for both orientations
-// and every practice mode.
+// The Scratch Motion Lane — the notation surface as a motion graph of platter
+// position over time, not block arrows.
 //
-// The lane is a strip the notation scrolls along toward a fixed action line
-// that marks "now". A stroke reaches the line exactly when it should be
-// performed. Portrait runs the lane vertically (time flows top→bottom, line
-// ~70% down); landscape runs it horizontally (time flows left→right with the
-// future on the right, line ~28% from the leading edge). It is the SAME lane —
-// same strokes, same line, same spacing, same colours, same Demo/Copy bands,
-// same user-overlay model — only the `LaneAxis` differs.
+// It is the unified action-line lane: a strip the notation scrolls along
+// toward a fixed action line that marks "now". What scrolls is no longer a row
+// of direction bars — it is one continuous, eased platter-position curve
+// (`ScratchStrokeGeometry` → `MotionPath`, drawn by `ScratchMotionRenderer`):
+// forward motion rises, backward falls, holds run flat; a slow drag is a long
+// shallow curve, a fast stab a short steep one.
 //
-// Timing model
-// ------------
-// The clock is the master; the lane is a pure follower:
+// Substrate kept from the timing lane: the axis-parametric `LaneViewport`, the
+// `LaneClock` (audio is the master clock), the fixed action line, the
+// demo/copy bands, the beat grid, the segment / status overlays, and the
+// 60 Hz `TimelineView` ticker. Only the stroke layer changed — bars and
+// chevrons became the motion curve.
 //
-//     clock → now → LaneViewport → every item's screen position
-//
-// `LaneViewport` (see TimingLane.swift) is a deterministic, axis-parametric
-// value type. There is no scroll view and no scroll state, so lane position
-// can never feed back into timing. The `TimelineView` is only a render-side
-// ticker; `now` comes solely from the supplied `LaneClock` — the demo-audio
-// position for Demo mode, or a free-running loop for the scored preview modes.
-//
-// This view replaces both the horizontal `AutoCutTargetChart` and the vertical
-// `VerticalNotationReelView`: one engine, not two. It drives no capture,
-// export, scoring or ML, and takes no live-mic input. `userEvents` is an inert
-// scaffold for the future timing-comparison overlay.
+// Portrait runs the lane vertically (time flows top→bottom); landscape runs it
+// horizontally (time flows left→right). It drives no capture, export, scoring
+// or ML, and takes no live-mic input. `userEvents` is an inert scaffold for
+// the future captured-motion overlay.
 
 import SwiftUI
 
-// MARK: - TimingLaneView
-
-struct TimingLaneView: View {
+struct ScratchMotionLane: View {
 
     /// What the lane renders — strokes, demo/copy bands, tempo, duration.
     let content: LaneContent
@@ -45,12 +36,22 @@ struct TimingLaneView: View {
     /// path, so the overlay draws nothing and scores nothing.
     var userEvents: [LaneUserEvent] = []
 
+    /// The integrated platter-position curve, derived once from `content`.
+    private let motionPath: MotionPath
+
+    init(content: LaneContent, clock: LaneClock, axis: LaneAxis,
+         userEvents: [LaneUserEvent] = []) {
+        self.content = content
+        self.clock = clock
+        self.axis = axis
+        self.userEvents = userEvents
+        self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
+    }
+
     // MARK: Tuning
 
     private static let tickInterval: TimeInterval = 1.0 / 60.0
     private static let completionEpsilon: TimeInterval = 0.06
-    private static let minBarLength: CGFloat = 16
-    private static let barCornerRadius: CGFloat = 7
 
     /// Action-line position along the scroll axis, per orientation.
     private func actionLineFraction(for axis: LaneAxis) -> CGFloat {
@@ -60,10 +61,6 @@ struct TimingLaneView: View {
     private func secondsAhead(for axis: LaneAxis) -> TimeInterval {
         axis == .vertical ? 5.5 : 6.5
     }
-    /// Inset of the stroke lane from the cross-axis edges.
-    private func laneInset(for viewport: LaneViewport) -> CGFloat {
-        min(max(viewport.crossLength * 0.14, 14), 40)
-    }
 
     // MARK: Palette — one shared language across both orientations
 
@@ -72,10 +69,6 @@ struct TimingLaneView: View {
     /// Demo segments read cool; copy windows read warm/active.
     private static let demoAccent = Color(red: 0.23, green: 0.51, blue: 0.96)
     private static let copyAccent = Color(red: 0.96, green: 0.62, blue: 0.07)
-    /// Stroke direction — the app's established forward/backward semantics,
-    /// matching the capture-review chart.
-    private static let forwardColor = Color(red: 0.20, green: 0.88, blue: 0.55)
-    private static let backwardColor = Color(red: 1.00, green: 0.55, blue: 0.10)
     private static let beatLineColor = Color.white.opacity(0.05)
     private static let downbeatLineColor = Color.white.opacity(0.11)
 
@@ -114,7 +107,7 @@ struct TimingLaneView: View {
             Canvas { context, _ in
                 drawRegionBands(in: context, viewport: viewport)
                 drawBeatGrid(in: context, viewport: viewport)
-                drawStrokes(in: context, viewport: viewport)
+                drawMotionPath(in: context, viewport: viewport)
                 drawUserEvents(in: context, viewport: viewport)
                 drawActionLine(in: context, viewport: viewport, segment: currentSegment)
             }
@@ -207,114 +200,44 @@ struct TimingLaneView: View {
         }
     }
 
-    // MARK: - Canvas: strokes
+    // MARK: - Canvas: motion path
 
-    /// Every reference and ghost stroke that falls in the visible window. A
-    /// looping pattern is wrapped — each stroke is also drawn one timeline
-    /// length ahead and behind — so the loop scrolls seamlessly.
-    private func drawStrokes(in context: GraphicsContext, viewport: LaneViewport) {
-        for stroke in content.strokes {
-            for (start, end) in visibleInstances(start: stroke.startTime, end: stroke.endTime,
-                                                 viewport: viewport) {
-                drawStroke(stroke, start: start, end: end, in: context, viewport: viewport)
-            }
-        }
-    }
-
-    /// The visible on-screen instances of a `[start, end]` span. Non-looping
-    /// content yields the span itself when visible; a looping pattern also
-    /// yields its `±duration` repeats so the loop reads continuously.
-    private func visibleInstances(start: TimeInterval, end: TimeInterval,
-                                  viewport: LaneViewport) -> [(TimeInterval, TimeInterval)] {
+    /// The platter-position curve — the heart of the lane. A non-looping Demo
+    /// path is drawn once; a looping scored pattern is tiled across every
+    /// visible period so it scrolls seamlessly. `ScratchMotionRenderer` does
+    /// the actual eased drawing.
+    private func drawMotionPath(in context: GraphicsContext, viewport: LaneViewport) {
+        guard !motionPath.isEmpty else { return }
         guard content.loops, content.duration > 0 else {
-            return viewport.isVisible(from: start, to: end) ? [(start, end)] : []
+            ScratchMotionRenderer.draw(motionPath, in: context,
+                                       viewport: viewport, style: .target)
+            return
         }
         let span = content.duration
         let window = viewport.visibleTimeRange
-        let kLow = Int(((window.lowerBound - end) / span).rounded(.down)) - 1
-        let kHigh = Int(((window.upperBound - start) / span).rounded(.up)) + 1
-        guard kLow <= kHigh else { return [] }
-        var instances: [(TimeInterval, TimeInterval)] = []
+        let kLow = Int((window.lowerBound / span).rounded(.down)) - 1
+        let kHigh = Int((window.upperBound / span).rounded(.up)) + 1
+        guard kLow <= kHigh else { return }
         for k in kLow...kHigh {
-            let offset = Double(k) * span
-            let s = start + offset, e = end + offset
-            if viewport.isVisible(from: s, to: e) {
-                instances.append((s, e))
-            }
+            ScratchMotionRenderer.draw(motionPath.shifted(by: Double(k) * span),
+                                       in: context, viewport: viewport, style: .target)
         }
-        return instances
-    }
-
-    /// One stroke instance: a rounded bar in the centered stroke lane. Solid
-    /// for a reference stroke, translucent + dashed for a copy-window ghost.
-    /// A bar whose span straddles the action line is "sounding now" and is
-    /// haloed. Direction shows as both colour and a chevron.
-    private func drawStroke(_ stroke: LaneStroke,
-                            start: TimeInterval, end: TimeInterval,
-                            in context: GraphicsContext, viewport: LaneViewport) {
-        let p0 = viewport.pos(for: start)
-        let p1 = viewport.pos(for: end)
-        let center = (p0 + p1) / 2
-        let length = max(abs(p1 - p0), Self.minBarLength)
-        let inset = laneInset(for: viewport)
-        guard viewport.crossLength - inset * 2 > 0 else { return }
-
-        let barRect = viewport.rect(scroll0: center - length / 2, scroll1: center + length / 2,
-                                    cross0: inset, cross1: viewport.crossLength - inset)
-        let bar = Path(roundedRect: barRect, cornerRadius: Self.barCornerRadius, style: .continuous)
-        let color = stroke.direction == .forward ? Self.forwardColor : Self.backwardColor
-        let isSounding = viewport.now >= start && viewport.now < end
-
-        if stroke.isGhost {
-            // Bright, neutral outline so it stays legible on the copy band.
-            context.fill(bar, with: .color(.white.opacity(0.08)))
-            context.stroke(bar, with: .color(.white.opacity(0.7)),
-                           style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-        } else {
-            context.fill(bar, with: .color(color.opacity(stroke.speed == .fast ? 1.0 : 0.86)))
-            if isSounding {
-                context.stroke(bar, with: .color(.white.opacity(0.95)), lineWidth: 2.5)
-            }
-        }
-
-        drawChevron(stroke.direction, scrollCenter: center, in: context, viewport: viewport,
-                    color: .white.opacity(stroke.isGhost ? 0.55 : 0.95))
-    }
-
-    /// A clean two-segment chevron centred on the bar, its point aimed along
-    /// the cross axis — forward one way, backward the other. Expressed in
-    /// (scroll, cross) coordinates so it rotates with the lane.
-    private func drawChevron(_ direction: ScratchNotationDirection,
-                             scrollCenter: CGFloat,
-                             in context: GraphicsContext, viewport: LaneViewport,
-                             color: Color) {
-        let crossCenter = viewport.crossLength / 2
-        let half: CGFloat = 5
-        let reach: CGFloat = direction == .forward ? 5 : -5
-        var chevron = Path()
-        chevron.move(to: viewport.point(scroll: scrollCenter - half, cross: crossCenter - reach))
-        chevron.addLine(to: viewport.point(scroll: scrollCenter, cross: crossCenter + reach))
-        chevron.addLine(to: viewport.point(scroll: scrollCenter + half, cross: crossCenter - reach))
-        context.stroke(chevron, with: .color(color),
-                       style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
     }
 
     // MARK: - Canvas: user-attempt overlay (scaffold)
 
-    /// Draws the user's own attempt marks alongside the reference lane.
+    /// Draws the user's own attempt marks alongside the reference curve.
     ///
     /// SCAFFOLD. `userEvents` is empty on every shipping call path, so this
     /// draws nothing today. It keeps a populated render path ready for the
     /// future timing-comparison overlay; wiring `userEvents` to a live source
     /// (mic analysis, capture, scoring) is deliberately out of scope here.
     private func drawUserEvents(in context: GraphicsContext, viewport: LaneViewport) {
-        let inset = laneInset(for: viewport)
+        let inset = min(max(viewport.crossLength * 0.14, 14), 40)
         for event in userEvents
         where viewport.isVisible(from: event.startTime, to: event.endTime) {
             let p0 = viewport.pos(for: event.startTime)
             let p1 = viewport.pos(for: event.endTime)
-            // A slim marker hugging the lane's trailing edge, clear of the
-            // centered reference strokes.
             let mark = viewport.rect(scroll0: p0, scroll1: p1,
                                      cross0: viewport.crossLength - inset + 5,
                                      cross1: viewport.crossLength - inset + 9)
@@ -328,14 +251,14 @@ struct TimingLaneView: View {
 
     /// The fixed "now" line — perpendicular to the scroll axis. It picks up the
     /// active segment's accent: amber while the user is copying, blue while
-    /// watching the demo (white when there is no segment, e.g. scored modes).
+    /// watching the demo (blue too when there is no segment, e.g. scored modes).
     private func drawActionLine(in context: GraphicsContext, viewport: LaneViewport,
                                 segment: LaneSegment?) {
         let pos = viewport.actionLinePos
         let tint: Color = switch segment?.kind {
         case .copy: Self.copyAccent
         case .demo: Self.demoAccent
-        case nil:   Self.forwardColor
+        case nil:   Self.demoAccent
         }
 
         // Soft glow band straddling the line.

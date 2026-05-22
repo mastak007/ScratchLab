@@ -82,6 +82,7 @@
 		A1000002 /* MainMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* MainMenuView.swift */; };
 		A1000003 /* LevelSelectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* LevelSelectView.swift */; };
 		A1000004 /* PracticeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* PracticeModeView.swift */; };		TLV0001000TLV001TLV00001 /* TimingLaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TLV0000000TLV001TLV00001 /* TimingLaneView.swift */; };
+		SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SML0000000SML001SML00001 /* ScratchMotionLane.swift */; };
 		A1000005 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
 		A1000006 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
 		A1000007 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* AudioEngine.swift */; };
@@ -267,6 +268,7 @@
 		A2000002 /* MainMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainMenuView.swift; sourceTree = "<group>"; };
 		A2000003 /* LevelSelectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelSelectView.swift; sourceTree = "<group>"; };
 		A2000004 /* PracticeModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeModeView.swift; sourceTree = "<group>"; };		TLV0000000TLV001TLV00001 /* TimingLaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingLaneView.swift; sourceTree = "<group>"; };
+		SML0000000SML001SML00001 /* ScratchMotionLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionLane.swift; sourceTree = "<group>"; };
 		A2000005 /* Scratch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scratch.swift; sourceTree = "<group>"; };
 		A2000006 /* GameState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameState.swift; sourceTree = "<group>"; };
 		A2000007 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
@@ -528,6 +530,7 @@
 				51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */,
 				A2000003 /* LevelSelectView.swift */,
 				A2000004 /* PracticeModeView.swift */,				TLV0000000TLV001TLV00001 /* TimingLaneView.swift */,
+				SML0000000SML001SML00001 /* ScratchMotionLane.swift */,
 				A2000014 /* AIBattleModeView.swift */,
 				A2000023 /* FormulaPlaygroundView.swift */,
 				A2000026 /* CompanionCameraView.swift */,
@@ -954,6 +957,7 @@
 				51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */,
 				A1000003 /* LevelSelectView.swift in Sources */,
 				A1000004 /* PracticeModeView.swift in Sources */,				TLV0001000TLV001TLV00001 /* TimingLaneView.swift in Sources */,
+				SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */,
 				SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */,
 				A1000025 /* CompanionCameraView.swift in Sources */,
 				A1000029 /* StagingInspectorView.swift in Sources */,

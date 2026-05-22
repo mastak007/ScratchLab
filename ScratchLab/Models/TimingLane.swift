@@ -265,3 +265,32 @@ struct LaneViewport: Equatable, Sendable {
         }
     }
 }
+
+// MARK: - Lane clock
+
+/// The timing source driving the lane. The single shared clock abstraction —
+/// Demo mode locks to the demo-audio position, the scored preview modes run a
+/// free-running loop over the pattern, and the manual modes hold it parked.
+/// Audio playback is always the master clock.
+enum LaneClock {
+    /// Locked to an external audio position, in seconds (Demo mode).
+    case audioTime(() -> TimeInterval)
+    /// Free-running loop over `duration` seconds from `start` (the scored
+    /// preview modes — Auto-cut, Guided).
+    case looping(start: Date, duration: TimeInterval)
+    /// Parked at a fixed position — the lane holds still (Coached, Open).
+    case fixed(TimeInterval)
+
+    /// Resolves the current timeline position for a render tick at `date`.
+    func now(at date: Date) -> TimeInterval {
+        switch self {
+        case .audioTime(let provider):
+            return max(0, provider())
+        case .looping(let start, let duration):
+            let span = max(duration, 0.0001)
+            return date.timeIntervalSince(start).truncatingRemainder(dividingBy: span)
+        case .fixed(let time):
+            return max(0, time)
+        }
+    }
+}
