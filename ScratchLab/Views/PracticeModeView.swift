@@ -618,8 +618,8 @@ struct PracticeModeView: View {
 
             Spacer(minLength: 8)
 
-            notationStatusChip
-
+            // The notation status pill lives in the lane panel's own
+            // "TARGET PATTERN" header (notationLanePanel) — not duplicated here.
             if practiceAssistMode != .demo {
                 practiceMetricsChip
             }

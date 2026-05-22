@@ -516,6 +516,21 @@ struct LaneWiringTests {
         #expect(!source.contains(".frame(width: 256)"))
     }
 
+    @Test("The notation status pill is shown once — in the lane header")
+    func statusPillNotDuplicated() throws {
+        let source = try practiceSource()
+        // The status pill lives in the lane panel's "TARGET PATTERN" header…
+        let lanePanel = try sliceBetween(source,
+            from: "private func notationLanePanel(",
+            to: "// Runtime status for the notation surface")
+        #expect(lanePanel.contains("notationStatusChip"))
+        // …and is not duplicated into the top HUD chip row above the lane.
+        let topHUD = try sliceBetween(source,
+            from: "private var practiceTopHUD",
+            to: "private var practiceMetricsChip")
+        #expect(!topHUD.contains("notationStatusChip"))
+    }
+
     @Test("Every retired renderer is gone — one motion engine")
     func oldRenderersRetired() throws {
         let source = try practiceSource()
