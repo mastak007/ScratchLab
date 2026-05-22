@@ -812,3 +812,36 @@ struct MotionPathTests {
         }
     }
 }
+
+// MARK: - Motion renderer — angular notation, not a waveform
+
+@Suite("Scratch motion renderer")
+struct ScratchMotionRendererTests {
+
+    private func rendererSource() throws -> String {
+        try reelSource("ScratchLab/Models/ScratchMotionRenderer.swift")
+    }
+
+    @Test("Strokes draw as straight ramps — no easing, no waveform sampling")
+    func strokesAreStraightRamps() throws {
+        let source = try rendererSource()
+        // A stroke is one straight line: no smooth-step easing and no
+        // per-stroke multi-sampling — the angular shape itself is the notation.
+        #expect(!source.contains("smoothStep"))
+        #expect(!source.contains("samplesPerStroke"))
+    }
+
+    @Test("No area fill under the line — a stroke chart, not an audio waveform")
+    func noWaveformFill() throws {
+        let source = try rendererSource()
+        #expect(!source.contains("fillsUnderCurve"))
+        #expect(!source.contains("drawFill"))
+    }
+
+    @Test("Stroke boundaries are punctuated with node marks")
+    func strokeBoundariesGetNodes() throws {
+        let source = try rendererSource()
+        #expect(source.contains("drawNode"))
+        #expect(source.contains("showsNodes"))
+    }
+}
