@@ -9,8 +9,8 @@ import Testing
 //   • the `PracticeReelTimeline` manifest model + loader + validator, and the
 //     derived copy-window ghost strokes;
 //   • the `DemoAudioClock` smoothing/latency clock and its player wiring;
-//   • source-string regression checks for the unified `TimingLaneView` and
-//     its wiring in `PracticeModeView`. The view layer is iOS-only and not
+//   • source-string regression checks for `ScratchMotionLane` and its wiring
+//     in `PracticeModeView`. The view layer is iOS-only and not
 //     importable into this test target, so it is asserted by file content —
 //     the same source-string pattern the wider regression suites use.
 //
@@ -425,24 +425,24 @@ struct CopyGhostStrokeTests {
     }
 }
 
-// MARK: - TimingLaneView (source-string regression)
+// MARK: - ScratchMotionLane (source-string regression)
 
-@Suite("Timing-lane view source")
-struct TimingLaneViewSourceTests {
+@Suite("Scratch motion lane source")
+struct ScratchMotionLaneSourceTests {
 
-    private func laneViewSource() throws -> String {
-        try reelSource("ScratchLab/Views/TimingLaneView.swift")
+    private func laneSource() throws -> String {
+        try reelSource("ScratchLab/Views/ScratchMotionLane.swift")
     }
 
-    @Test("The unified timing-lane view exists as a SwiftUI View")
+    @Test("The motion lane exists as a SwiftUI View")
     func viewExists() throws {
-        let source = try laneViewSource()
-        #expect(source.contains("struct TimingLaneView: View"))
+        let source = try laneSource()
+        #expect(source.contains("struct ScratchMotionLane: View"))
     }
 
     @Test("The lane is axis-parametric and driven by content plus a clock")
     func axisParametricAndClockDriven() throws {
-        let source = try laneViewSource()
+        let source = try laneSource()
         #expect(source.contains("let content: LaneContent"))
         #expect(source.contains("let clock: LaneClock"))
         #expect(source.contains("let axis: LaneAxis"))
@@ -452,26 +452,30 @@ struct TimingLaneViewSourceTests {
         #expect(!source.contains("ScrollView"))
     }
 
-    @Test("The lane renders bands, beat grid, strokes and the action line")
-    func rendersLaneContent() throws {
-        let source = try laneViewSource()
+    @Test("Strokes render as a continuous motion curve, not block arrows")
+    func rendersMotionCurve() throws {
+        let source = try laneSource()
         #expect(source.contains("drawRegionBands"))
         #expect(source.contains("drawBeatGrid"))
-        #expect(source.contains("drawStrokes"))
         #expect(source.contains("drawActionLine"))
+        // The motion-graph renderer replaces the old bar / chevron drawing.
+        #expect(source.contains("drawMotionPath"))
+        #expect(source.contains("ScratchMotionRenderer"))
+        #expect(source.contains("ScratchStrokeGeometry.motionPath"))
+        #expect(!source.contains("drawChevron"))
     }
 
     @Test("A looping pattern wraps; a finished demo parks")
     func loopWrapAndCompletion() throws {
-        let source = try laneViewSource()
-        #expect(source.contains("visibleInstances"))
+        let source = try laneSource()
         #expect(source.contains("content.loops"))
+        #expect(source.contains("shifted(by:"))
         #expect(source.contains("Demo complete"))
     }
 
     @Test("The lane runs no scoring, capture or live-mic work")
     func noScoringOrCapture() throws {
-        let source = try laneViewSource()
+        let source = try laneSource()
         #expect(!source.contains("audioEngine"))
         #expect(!source.contains("startAnalyzing"))
         #expect(!source.contains("ScratchAnalysisResult"))
@@ -494,7 +498,7 @@ struct LaneWiringTests {
         // A single notationLanePanel call; the axis is derived from orientation.
         #expect(source.contains("notationLanePanel(axis: axis)"))
         #expect(source.contains("verticalSizeClass == .compact ? .horizontal : .vertical"))
-        #expect(source.contains("TimingLaneView(content:"))
+        #expect(source.contains("ScratchMotionLane(content:"))
     }
 
     @Test("The layout is notation-first — the lane dominates, the cards are gone")
@@ -512,12 +516,13 @@ struct LaneWiringTests {
         #expect(!source.contains(".frame(width: 256)"))
     }
 
-    @Test("The two old renderers are retired — one engine, not two")
+    @Test("Every retired renderer is gone — one motion engine")
     func oldRenderersRetired() throws {
         let source = try practiceSource()
         #expect(!source.contains("AutoCutTargetChart"))
         #expect(!source.contains("VerticalNotationReelView"))
         #expect(!source.contains("NotationPlayheadClock"))
+        #expect(!source.contains("TimingLaneView"))
     }
 
     @Test("Demo follows the demo-audio clock; scored modes loop or park")
@@ -585,7 +590,7 @@ struct UserAttemptScaffoldTests {
 
     @Test("The lane takes userEvents defaulting to empty — the overlay is inert")
     func userEventsDefaultsEmpty() throws {
-        let source = try reelSource("ScratchLab/Views/TimingLaneView.swift")
+        let source = try reelSource("ScratchLab/Views/ScratchMotionLane.swift")
         #expect(source.contains("userEvents: [LaneUserEvent] = []"))
         // The renderer has a path for the overlay but draws nothing when empty.
         #expect(source.contains("drawUserEvents"))
@@ -597,10 +602,10 @@ struct UserAttemptScaffoldTests {
         let panel = try sliceBetween(practice,
             from: "private func notationLanePanel(",
             to: "// Runtime status for the notation surface")
-        // The lane panel constructs TimingLaneView without a userEvents argument.
+        // The lane panel constructs ScratchMotionLane without a userEvents argument.
         #expect(!panel.contains("userEvents"))
         // The lane view itself still carries no scoring / capture / ML symbols.
-        let lane = try reelSource("ScratchLab/Views/TimingLaneView.swift")
+        let lane = try reelSource("ScratchLab/Views/ScratchMotionLane.swift")
         #expect(!lane.contains("startAnalyzing"))
         #expect(!lane.contains("ScratchAnalysisResult"))
         #expect(!lane.contains("AudioEngine"))
