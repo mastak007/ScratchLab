@@ -706,3 +706,89 @@ struct LaneViewportTests {
         }
     }
 }
+
+// MARK: - Scratch motion path
+
+@Suite("Scratch motion path")
+struct MotionPathTests {
+
+    /// Lane content from `(direction, speed, start, end)` tuples — no segments,
+    /// non-looping — for the geometry tests.
+    private func laneContent(
+        duration: TimeInterval,
+        _ strokes: [(ScratchNotationDirection, ScratchNotationSpeedClassification,
+                     TimeInterval, TimeInterval)]
+    ) -> LaneContent {
+        LaneContent(
+            strokes: strokes.map {
+                LaneStroke(startTime: $0.2, endTime: $0.3, direction: $0.0,
+                           speed: $0.1, faderState: .open, isGhost: false)
+            },
+            segments: [], beatsPerMinute: nil, duration: duration, loops: false)
+    }
+
+    private func strokeSegments(_ path: MotionPath) -> [MotionSegment] {
+        path.segments.filter { !$0.isHold }
+    }
+
+    @Test("A forward stroke produces rising motion")
+    func forwardRises() throws {
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 4, [(.forward, .medium, 1, 2)]))
+        let stroke = try #require(strokeSegments(path).first)
+        #expect(stroke.endPosition > stroke.startPosition)
+    }
+
+    @Test("A backward stroke produces falling motion")
+    func backwardFalls() throws {
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 4,
+                             [(.forward, .medium, 1, 2), (.backward, .medium, 2, 3)]))
+        let strokes = strokeSegments(path)
+        try #require(strokes.count == 2)
+        #expect(strokes[0].endPosition > strokes[0].startPosition)   // forward rises
+        #expect(strokes[1].endPosition < strokes[1].startPosition)   // backward falls
+    }
+
+    @Test("Gaps between strokes become flat hold segments")
+    func gapsAreFlat() {
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 5,
+                             [(.forward, .medium, 1, 2), (.backward, .medium, 3, 4)]))
+        let holds = path.segments.filter { $0.isHold }
+        // The 2–3 s gap is a hold, and every hold is flat.
+        #expect(holds.contains { $0.startTime == 2 && $0.endTime == 3 })
+        #expect(holds.allSatisfy { abs($0.endPosition - $0.startPosition) < 1e-9 })
+    }
+
+    @Test("Normalization keeps the whole path within 0...1 and fills the band")
+    func normalizationBounds() throws {
+        let manifestURL = reelTestsRepoRoot().appendingPathComponent(
+            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+        let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
+        let path = ScratchStrokeGeometry.motionPath(for: LaneContent(reel: reel))
+
+        for segment in path.segments {
+            #expect(segment.startPosition >= -1e-9 && segment.startPosition <= 1 + 1e-9)
+            #expect(segment.endPosition >= -1e-9 && segment.endPosition <= 1 + 1e-9)
+        }
+        let positions = path.segments.flatMap { [$0.startPosition, $0.endPosition] }
+        #expect(abs((positions.min() ?? -1) - 0) < 1e-6)
+        #expect(abs((positions.max() ?? -1) - 1) < 1e-6)
+    }
+
+    @Test("The path is continuous — segments share boundary time and position")
+    func continuousBetweenStrokes() {
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 6,
+                             [(.forward, .fast, 0.5, 1.0),
+                              (.backward, .slow, 1.0, 2.0),
+                              (.forward, .medium, 3.0, 3.5)]))
+        for index in 1..<path.segments.count {
+            #expect(abs(path.segments[index].startTime
+                        - path.segments[index - 1].endTime) < 1e-9)
+            #expect(abs(path.segments[index].startPosition
+                        - path.segments[index - 1].endPosition) < 1e-9)
+        }
+    }
+}
