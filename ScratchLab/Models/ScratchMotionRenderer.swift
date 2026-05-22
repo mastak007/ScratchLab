@@ -48,9 +48,10 @@ enum ScratchMotionRenderer {
 
     // MARK: - Tuning
 
-    /// Inset of the motion band from the lane's cross-axis edges, as a fraction
-    /// of the cross length. Small — the notation uses most of the lane height.
-    private static let crossInsetFraction: CGFloat = 0.08
+    /// Inset of the motion band from each cross-axis edge, as a fraction of the
+    /// cross length — a safe margin that keeps the curve, its boundary nodes
+    /// and its glow clear of the lane edges. The motion fills the rest (~76%).
+    static let crossInsetFraction: CGFloat = 0.12
     /// Hold width relative to a stroke ramp — a pause is a thinner, quieter line.
     private static let holdWidthScale: CGFloat = 0.5
     /// Hold opacity — a quiet flat line, clearly subordinate to the strokes.

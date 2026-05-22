@@ -811,6 +811,35 @@ struct MotionPathTests {
                         - path.segments[index - 1].endPosition) < 1e-9)
         }
     }
+
+    @Test("Each push and pull lands on a rail — full, centred swings, no drift")
+    func strokesLandOnRails() {
+        // An alternating push/pull pattern with mixed speeds — the kind that
+        // used to drift and compress under cumulative integration.
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 7,
+                             [(.forward, .fast, 0.5, 1.0),
+                              (.backward, .slow, 1.0, 1.8),
+                              (.forward, .medium, 1.8, 2.3),
+                              (.backward, .fast, 2.3, 2.7),
+                              (.forward, .slow, 2.7, 3.6)]))
+        // Every push lands on the high rail, every pull on the low rail —
+        // whatever the speed — so each visible window uses the full range.
+        for segment in path.segments {
+            guard case .stroke(let direction) = segment.kind else { continue }
+            switch direction {
+            case .forward:  #expect(segment.endPosition >= 0.98)
+            case .backward: #expect(segment.endPosition <= 0.02)
+            }
+        }
+        // The normalized path spans the whole 0...1 band — a meaningful range.
+        let positions = path.segments.flatMap { [$0.startPosition, $0.endPosition] }
+        #expect((positions.min() ?? 1) <= 0.02)
+        #expect((positions.max() ?? 0) >= 0.98)
+        // The motion is centred: it rests at the lane's middle before the
+        // first stroke, so it never hugs an edge.
+        #expect(abs((path.segments.first?.startPosition ?? 0) - 0.5) < 1e-6)
+    }
 }
 
 // MARK: - Motion renderer — angular notation, not a waveform
@@ -843,5 +872,13 @@ struct ScratchMotionRendererTests {
         let source = try rendererSource()
         #expect(source.contains("drawNode"))
         #expect(source.contains("showsNodes"))
+    }
+
+    @Test("The renderer keeps a safe cross-axis inset — the curve never clips")
+    func rendererKeepsSafeInset() {
+        // A real, non-trivial inset leaves room for the line, its boundary
+        // nodes and its glow, while the motion still fills most of the lane.
+        #expect(ScratchMotionRenderer.crossInsetFraction >= 0.10)
+        #expect(ScratchMotionRenderer.crossInsetFraction <= 0.20)
     }
 }

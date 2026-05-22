@@ -4,7 +4,7 @@ import Foundation
 // Derived platter-motion geometry for the Scratch Motion Lane.
 //
 // The notation renderer used to draw each stroke as an isolated block. This
-// turns the SAME stroke data into an *integrated platter-position curve* — a
+// turns the SAME stroke data into a *platter-position curve* — a
 // continuous line of where the platter sits over time. Forward motion rises,
 // backward motion falls, gaps and holds stay flat; a stroke's duration is the
 // curve's horizontal length and its travel is the vertical rise or fall.
@@ -107,25 +107,16 @@ struct MotionPath: Equatable, Sendable {
 
 // MARK: - Derivation
 
-/// Turns lane content into its integrated platter-position curve.
+/// Turns lane content into its platter-position curve.
 enum ScratchStrokeGeometry {
 
-    /// Raw travel amplitude per speed class, pre-normalization. Only the ratios
-    /// matter (the path is normalized to 0...1) — a slow drag sweeps the
-    /// platter further than a quick stab, so it rises taller.
-    static func travelAmplitude(for speed: ScratchNotationSpeedClassification) -> CGFloat {
-        switch speed {
-        case .slow:   return 1.00
-        case .medium: return 0.72
-        case .fast:   return 0.50
-        }
-    }
-
     /// Derives the platter-position curve for `content`. Strokes are taken in
-    /// time order; forward strokes ramp the curve up, backward strokes ramp it
-    /// down, and the gaps between them (plus any lead-in / lead-out) become
-    /// flat holds. The raw curve is then normalized so it fills 0...1 — bounded
-    /// and readable for any pattern.
+    /// time order; a forward push drives the platter to the high rail, a
+    /// backward pull to the low rail, and the gaps between them (plus any
+    /// lead-in / lead-out) become flat holds at the current rail. The position
+    /// is set to a rail rather than accumulated, so an uneven pattern can never
+    /// drift off-centre — every push and pull stays a full, centred swing. The
+    /// raw curve is then normalized to fill 0...1.
     static func motionPath(for content: LaneContent) -> MotionPath {
         let duration = max(content.duration, 0.001)
         let strokes = content.strokes.sorted { $0.startTime < $1.startTime }
@@ -172,14 +163,18 @@ enum ScratchStrokeGeometry {
                                speed: .medium, isGhost: last.isGhost))
         }
 
-        // 2. Integrate raw boundary positions: forward rises, backward falls,
-        //    holds stay put.
+        // 2. Raw boundary positions. A scratch oscillates the platter between
+        //    two rails: a forward push drives it to the high rail (+1), a
+        //    backward pull to the low rail (-1); a hold keeps it where it is.
+        //    The position is SET to a rail, never accumulated, so an uneven
+        //    pattern cannot drift — every push and pull is a full, centred
+        //    swing, and the visible window always uses the full range.
         var raw: [CGFloat] = [0]
         var position: CGFloat = 0
         for span in spans {
             switch span.kind {
-            case .stroke(.forward):  position += travelAmplitude(for: span.speed)
-            case .stroke(.backward): position -= travelAmplitude(for: span.speed)
+            case .stroke(.forward):  position = 1
+            case .stroke(.backward): position = -1
             case .hold:              break
             }
             raw.append(position)
