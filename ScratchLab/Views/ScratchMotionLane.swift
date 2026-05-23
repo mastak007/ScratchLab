@@ -70,8 +70,10 @@ struct ScratchMotionLane: View {
     /// Demo segments read cool; copy windows read warm/active.
     private static let demoAccent = Color(red: 0.23, green: 0.51, blue: 0.96)
     private static let copyAccent = Color(red: 0.96, green: 0.62, blue: 0.07)
-    private static let beatLineColor = Color.white.opacity(0.05)
-    private static let downbeatLineColor = Color.white.opacity(0.11)
+    /// One quiet weight for every beat — the grid supports timing, it doesn't
+    /// compete with the strokes. (Wider macOS Review keeps numeric beat
+    /// labels via its own chart helper; the iOS lane stays single-weight.)
+    private static let beatLineColor = Color.white.opacity(0.06)
 
     // MARK: Body
 
@@ -173,10 +175,7 @@ struct ScratchMotionLane: View {
             var line = Path()
             line.move(to: viewport.point(scroll: pos, cross: 0))
             line.addLine(to: viewport.point(scroll: pos, cross: viewport.crossLength))
-            let isDownbeat = index % 4 == 0
-            context.stroke(line,
-                           with: .color(isDownbeat ? Self.downbeatLineColor : Self.beatLineColor),
-                           lineWidth: isDownbeat ? 1.5 : 1)
+            context.stroke(line, with: .color(Self.beatLineColor), lineWidth: 1)
             index += 1
         }
     }
@@ -285,19 +284,24 @@ struct ScratchMotionLane: View {
 
     private func segmentLabelChip(_ segment: LaneSegment) -> some View {
         let accent = segment.kind == .copy ? Self.copyAccent : Self.demoAccent
+        // A quiet inline label — secondary to the strokes. Tinted with its
+        // segment accent, no heavy capsule fill, no shadow.
         return Text(laneLabel(for: segment).uppercased())
-            .font(.system(size: 11, weight: .bold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(accent.opacity(0.9))
+            .font(.system(size: 9, weight: .semibold))
+            .tracking(0.3)
+            .foregroundColor(.white.opacity(0.85))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(accent.opacity(0.40))
             .clipShape(Capsule())
     }
 
     // MARK: - Overlay: action-line status chip
 
-    /// The pinned chip at the action line — the lane's most prominent label.
-    /// Names what is happening *now*.
+    /// The label at the action line — names what is happening *now* in
+    /// instructional terms (TARGET / YOUR TURN / Watch & listen). A small,
+    /// quiet pill rather than a heavy game badge: smaller font, no shadow,
+    /// no white border, low-opacity accent fill.
     private func actionLineChip(viewport: LaneViewport, segment: LaneSegment?) -> some View {
         let isCopy = segment?.kind == .copy
         let accent = isCopy ? Self.copyAccent : Self.demoAccent
@@ -311,23 +315,21 @@ struct ScratchMotionLane: View {
             subtitle = "Play it on the line"
         }
 
-        let chipPoint = viewport.point(scroll: viewport.actionLinePos - 30,
+        let chipPoint = viewport.point(scroll: viewport.actionLinePos - 22,
                                        cross: viewport.crossLength / 2)
 
         return VStack(spacing: 1) {
             Text(title)
-                .font(.system(size: 15, weight: .heavy))
-                .foregroundColor(.white)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.4)
+                .foregroundColor(.white.opacity(0.92))
             Text(subtitle)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.white.opacity(0.8))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(.white.opacity(0.65))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(
-            Capsule().fill(accent.opacity(0.92))
-                .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1)))
-        .shadow(color: .black.opacity(0.4), radius: 5, y: 2)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(accent.opacity(0.45)))
         .position(chipPoint)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)

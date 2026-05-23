@@ -1014,14 +1014,19 @@ struct ScratchMotionRendererTests {
                 != ScratchMotionRenderer.Style.target.backwardColor)
     }
 
-    @Test("Holds draw as a dashed rest line — clearly subordinate to strokes")
-    func holdsAreDashedRestLines() throws {
+    @Test("Holds draw as a quiet solid centre-line rest — no dashing")
+    func holdsDrawAsQuietSolidRest() throws {
         let source = try rendererSource()
-        // The hold-drawing branch of `draw` builds a dashed stroke style.
+        // The hold branch of `draw` strokes a thin, low-opacity, continuous
+        // line — a rest the eye reads through, not a row of dashes that
+        // ticks the empty span between strokes.
         let drawBody = try sliceBetween(source,
             from: "if item.segment.isHold {",
             to: "} else {")
-        #expect(drawBody.contains("dash:"))
+        #expect(!drawBody.contains("dash:"))
+        // Still rendered (a solid stroke), not omitted — the rest is felt,
+        // just no longer competing with the strokes themselves.
+        #expect(drawBody.contains("stroke"))
     }
 
     @Test("Apex nodes punctuate stroke peaks — not every centre transition")

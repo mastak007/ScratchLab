@@ -78,8 +78,10 @@ enum ScratchMotionRenderer {
     /// Hold width relative to a stroke ramp — a pause is a thinner, quieter
     /// line so it reads as subordinate to the strokes themselves.
     private static let holdWidthScale: CGFloat = 0.5
-    /// Hold opacity — a soft dashed rest line, clearly subordinate to strokes.
-    private static let holdOpacity: Double = 0.55
+    /// Hold opacity — a quiet solid centre-line rest. Lower than the dashed
+    /// version it replaced, because a solid line reads heavier than dashes
+    /// at the same alpha; the line is meant to be felt, not noticed.
+    private static let holdOpacity: Double = 0.40
     /// Glow width relative to the stroke line — a tight edge, not a soft halo.
     private static let glowWidthScale: CGFloat = 1.6
     /// Node-dot radius at every stroke apex (rail peak).
@@ -128,18 +130,16 @@ enum ScratchMotionRenderer {
         }
 
         // 2. The notation line, per segment. A stroke is a bold angular ramp in
-        //    its direction colour; a hold is a DASHED, thin, quiet line at the
-        //    centre — clearly a rest, separating each push and pull as its own
-        //    notation event.
+        //    its direction colour; a hold is a thin, low-opacity, SOLID line
+        //    at the centre — a quiet rest the eye reads through, not a row
+        //    of dashes that tick the empty span.
         for item in drawn {
             let color = strokeColor(for: item.segment, style: style)
             if item.segment.isHold {
-                let width = max(style.lineWidth * holdWidthScale, 1.5)
-                let dashUnit = max(width * 1.6, 3)
+                let width = max(style.lineWidth * holdWidthScale, 1.2)
                 layer.stroke(segmentPath(item.a, item.b),
                              with: .color(color.opacity(holdOpacity)),
-                             style: StrokeStyle(lineWidth: width, lineCap: .round,
-                                                dash: [dashUnit, dashUnit * 1.2]))
+                             style: StrokeStyle(lineWidth: width, lineCap: .round))
             } else {
                 let width = style.lineWidth * speedWeight(item.segment.speed)
                 let dash: [CGFloat] = style.dashed ? [width * 1.5, width * 1.4] : []
