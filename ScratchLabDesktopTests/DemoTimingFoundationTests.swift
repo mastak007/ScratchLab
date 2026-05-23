@@ -765,9 +765,19 @@ struct MotionPathTests {
             for: laneContent(duration: 4,
                              [(.forward, .medium, 1, 2), (.backward, .medium, 2, 3)]))
         let strokes = strokeSegments(path)
-        try #require(strokes.count == 2)
-        #expect(strokes[0].endPosition > strokes[0].startPosition)   // forward rises
-        #expect(strokes[1].endPosition < strokes[1].startPosition)   // backward falls
+        // Each stroke becomes two sub-segments (out + return), so two input
+        // strokes produce four stroke sub-segments.
+        try #require(strokes.count == 4)
+        // The forward stroke deflects above the centre at its peak.
+        let forwardPeak = strokes
+            .filter { if case .stroke(.forward) = $0.kind { return true }; return false }
+            .flatMap { [$0.startPosition, $0.endPosition] }.max() ?? 0
+        #expect(forwardPeak > 0.5)
+        // The backward stroke deflects below the centre at its trough.
+        let backwardTrough = strokes
+            .filter { if case .stroke(.backward) = $0.kind { return true }; return false }
+            .flatMap { [$0.startPosition, $0.endPosition] }.min() ?? 1
+        #expect(backwardTrough < 0.5)
     }
 
     @Test("Gaps between strokes become flat hold segments")
@@ -812,10 +822,12 @@ struct MotionPathTests {
         }
     }
 
-    @Test("Each push and pull lands on a rail — full, centred swings, no drift")
-    func strokesLandOnRails() {
-        // An alternating push/pull pattern with mixed speeds — the kind that
-        // used to drift and compress under cumulative integration.
+    @Test("Each push and pull deflects from centre to its rail and back")
+    func strokesDeflectToRails() {
+        // An alternating push/pull pattern with mixed speeds. The platter
+        // rests at the centre between scratches, so every stroke shows as a
+        // distinct bump aligned to its own time window — no flat runs from
+        // consecutive same-direction strokes, no drift.
         let path = ScratchStrokeGeometry.motionPath(
             for: laneContent(duration: 7,
                              [(.forward, .fast, 0.5, 1.0),
@@ -823,22 +835,38 @@ struct MotionPathTests {
                               (.forward, .medium, 1.8, 2.3),
                               (.backward, .fast, 2.3, 2.7),
                               (.forward, .slow, 2.7, 3.6)]))
-        // Every push lands on the high rail, every pull on the low rail —
-        // whatever the speed — so each visible window uses the full range.
-        for segment in path.segments {
-            guard case .stroke(let direction) = segment.kind else { continue }
-            switch direction {
-            case .forward:  #expect(segment.endPosition >= 0.98)
-            case .backward: #expect(segment.endPosition <= 0.02)
-            }
-        }
-        // The normalized path spans the whole 0...1 band — a meaningful range.
+
+        // Forward strokes reach the high rail at their peak.
+        let forwardPeak = path.segments
+            .filter { if case .stroke(.forward) = $0.kind { return true }; return false }
+            .flatMap { [$0.startPosition, $0.endPosition] }.max() ?? 0
+        #expect(forwardPeak >= 0.98)
+
+        // Backward strokes reach the low rail at their trough.
+        let backwardTrough = path.segments
+            .filter { if case .stroke(.backward) = $0.kind { return true }; return false }
+            .flatMap { [$0.startPosition, $0.endPosition] }.min() ?? 1
+        #expect(backwardTrough <= 0.02)
+
+        // The path spans the whole 0...1 band — a meaningful range.
         let positions = path.segments.flatMap { [$0.startPosition, $0.endPosition] }
         #expect((positions.min() ?? 1) <= 0.02)
         #expect((positions.max() ?? 0) >= 0.98)
-        // The motion is centred: it rests at the lane's middle before the
-        // first stroke, so it never hugs an edge.
-        #expect(abs((path.segments.first?.startPosition ?? 0) - 0.5) < 1e-6)
+
+        // Every stroke segment either starts or ends at the centre — the
+        // platter rests at the centre, the stroke deflects and returns.
+        for segment in path.segments {
+            guard case .stroke = segment.kind else { continue }
+            let touchesCentre = abs(segment.startPosition - 0.5) < 1e-6
+                             || abs(segment.endPosition - 0.5) < 1e-6
+            #expect(touchesCentre)
+        }
+
+        // The lead-in hold rests at the centre — no edge-hugging.
+        if let leadIn = path.segments.first, leadIn.isHold {
+            #expect(abs(leadIn.startPosition - 0.5) < 1e-6)
+            #expect(abs(leadIn.endPosition - 0.5) < 1e-6)
+        }
     }
 
     @Test("A looping pattern closes the loop — tiles meet seamlessly at the wrap")
@@ -858,6 +886,76 @@ struct MotionPathTests {
         let path = ScratchStrokeGeometry.motionPath(for: looping)
         if let first = path.segments.first, let last = path.segments.last {
             #expect(abs(first.startPosition - last.endPosition) < 1e-9)
+        }
+    }
+
+    @Test("Stroke times are preserved exactly — geometry never moves a stroke")
+    func strokeTimesPreservedExactly() {
+        let inputs: [(ScratchNotationDirection, ScratchNotationSpeedClassification,
+                      TimeInterval, TimeInterval)] = [
+            (.forward, .fast, 0.27, 0.778),
+            (.backward, .slow, 1.07, 1.378),
+            (.forward, .medium, 1.46, 1.763),
+        ]
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 5, inputs))
+        for input in inputs {
+            let (_, _, inStart, inEnd) = input
+            // Every sub-segment within [inStart, inEnd] belongs to this
+            // stroke; collectively they span exactly the input window.
+            let covering = path.segments.filter {
+                if case .stroke = $0.kind {
+                    return $0.startTime >= inStart - 1e-9
+                        && $0.endTime   <= inEnd   + 1e-9
+                }
+                return false
+            }
+            #expect(!covering.isEmpty)
+            if let first = covering.first, let last = covering.last {
+                #expect(abs(first.startTime - inStart) < 1e-9)
+                #expect(abs(last.endTime - inEnd) < 1e-9)
+            }
+        }
+    }
+
+    @Test("Demo (non-looping) content opens at the centre rest position")
+    func demoStartsAtCentreRestState() throws {
+        let manifestURL = reelTestsRepoRoot().appendingPathComponent(
+            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+        let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
+        let demoContent = LaneContent(reel: reel)
+        #expect(!demoContent.loops)
+        let path = ScratchStrokeGeometry.motionPath(for: demoContent)
+        // The Demo's first segment is the lead-in hold, resting at centre —
+        // the platter rests at the middle of the lane before the demo starts.
+        if let leadIn = path.segments.first {
+            #expect(leadIn.isHold)
+            #expect(abs(leadIn.startPosition - 0.5) < 1e-6)
+            #expect(abs(leadIn.endPosition - 0.5) < 1e-6)
+        }
+    }
+
+    @Test("Loop-seam handling does not shift any stroke time")
+    func loopSeamDoesNotShiftStrokeTimes() {
+        let pattern: [(ScratchNotationDirection, ScratchNotationSpeedClassification,
+                       TimeInterval, TimeInterval)] = [
+            (.forward, .medium, 0.0, 0.5),
+            (.backward, .medium, 0.5, 1.0),
+            (.forward, .medium, 1.0, 1.5),
+            (.backward, .medium, 1.5, 2.0),
+        ]
+        let base = laneContent(duration: 4, pattern)
+        let looping = LaneContent(strokes: base.strokes, segments: base.segments,
+                                  beatsPerMinute: nil, duration: base.duration,
+                                  loops: true)
+        let nonLoopingPath = ScratchStrokeGeometry.motionPath(for: base)
+        let loopingPath = ScratchStrokeGeometry.motionPath(for: looping)
+        // Looping and non-looping share identical segment time boundaries —
+        // the `loops` flag affects positions only, never time.
+        #expect(nonLoopingPath.segments.count == loopingPath.segments.count)
+        for (nonLooping, looping) in zip(nonLoopingPath.segments, loopingPath.segments) {
+            #expect(abs(nonLooping.startTime - looping.startTime) < 1e-9)
+            #expect(abs(nonLooping.endTime - looping.endTime) < 1e-9)
         }
     }
 }
@@ -900,5 +998,38 @@ struct ScratchMotionRendererTests {
         // nodes and its glow, while the motion still fills most of the lane.
         #expect(ScratchMotionRenderer.crossInsetFraction >= 0.10)
         #expect(ScratchMotionRenderer.crossInsetFraction <= 0.20)
+    }
+
+    @Test("Push and pull strokes carry distinct colours — a direction-coded notation")
+    func pushAndPullUseDistinctColours() throws {
+        let source = try rendererSource()
+        // The Style carries an explicit backward (pull) colour…
+        #expect(source.contains("var backwardColor"))
+        // …and the renderer routes each stroke through that colour.
+        #expect(source.contains("strokeColor(for:"))
+        #expect(source.contains("case .stroke(.backward):"))
+        // The .target preset never overrides backwardColor, so its push (cyan)
+        // and its pull (the default pink) are different — not one continuous wave.
+        #expect(ScratchMotionRenderer.Style.target.color
+                != ScratchMotionRenderer.Style.target.backwardColor)
+    }
+
+    @Test("Holds draw as a dashed rest line — clearly subordinate to strokes")
+    func holdsAreDashedRestLines() throws {
+        let source = try rendererSource()
+        // The hold-drawing branch of `draw` builds a dashed stroke style.
+        let drawBody = try sliceBetween(source,
+            from: "if item.segment.isHold {",
+            to: "} else {")
+        #expect(drawBody.contains("dash:"))
+    }
+
+    @Test("Apex nodes punctuate stroke peaks — not every centre transition")
+    func nodesPunctuateApexes() throws {
+        let source = try rendererSource()
+        // The renderer asks each segment whether its endpoint sits on a rail
+        // (apex) before drawing a node — keeping centre-line transitions
+        // un-marked so the rest line stays uncluttered.
+        #expect(source.contains("isAtRail("))
     }
 }

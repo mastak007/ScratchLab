@@ -110,13 +110,18 @@ struct MotionPath: Equatable, Sendable {
 /// Turns lane content into its platter-position curve.
 enum ScratchStrokeGeometry {
 
-    /// Derives the platter-position curve for `content`. Strokes are taken in
-    /// time order; a forward push drives the platter to the high rail, a
-    /// backward pull to the low rail, and the gaps between them (plus any
-    /// lead-in / lead-out) become flat holds at the current rail. The position
-    /// is set to a rail rather than accumulated, so an uneven pattern can never
-    /// drift off-centre — every push and pull stays a full, centred swing. The
-    /// raw curve is then normalized to fill 0...1.
+    /// Derives the platter-position curve for `content`. Each stroke is a
+    /// brief deflection from the resting centre to its rail and back: a
+    /// forward push rises to the high rail then returns, a backward pull dips
+    /// to the low rail then returns, both within the stroke's own
+    /// `[startTime, endTime]` window. The lead-in, the gaps between strokes
+    /// and the trailing tail stay flat at the centre — the platter's resting
+    /// position — so every scratched stroke shows as a distinct bump aligned
+    /// in time to its audio. There is no cumulative integration, so an
+    /// unbalanced pattern cannot drift; and consecutive same-direction
+    /// strokes each show as their own bump rather than collapsing into one
+    /// move followed by a long flat run. The raw curve is then normalized
+    /// into 0...1.
     static func motionPath(for content: LaneContent) -> MotionPath {
         let duration = max(content.duration, 0.001)
         let strokes = content.strokes.sorted { $0.startTime < $1.startTime }
@@ -131,76 +136,85 @@ enum ScratchStrokeGeometry {
                 timeRange: 0...duration)
         }
 
-        // 1. Ordered spans: a lead-in hold, each stroke, the gap holds between
-        //    consecutive strokes, and a trailing hold.
+        // 1. Ordered sub-spans. Each stroke becomes two: an "out" sub from
+        //    centre to its rail and a "return" sub back to centre, meeting at
+        //    the stroke's mid-time. The lead-in, gap-holds and trailing tail
+        //    rest flat at the centre. Stroke times are preserved exactly —
+        //    the out + return halves cover [stroke.startTime, stroke.endTime]
+        //    and nothing else.
         struct Span {
             let kind: MotionSegmentKind
             let start: TimeInterval
             let end: TimeInterval
+            /// Un-normalized cross-axis position. 0 = centre (rest), ±1 = rails.
+            let startPos: CGFloat
+            let endPos: CGFloat
             let speed: ScratchNotationSpeedClassification
             let isGhost: Bool
         }
         var spans: [Span] = []
 
-        if strokes[0].startTime > epsilon {
-            spans.append(Span(kind: .hold, start: 0, end: strokes[0].startTime,
-                               speed: .medium, isGhost: strokes[0].isGhost))
+        func appendHold(start: TimeInterval, end: TimeInterval, isGhost: Bool) {
+            guard end > start + epsilon else { return }
+            spans.append(Span(kind: .hold, start: start, end: end,
+                              startPos: 0, endPos: 0,
+                              speed: .medium, isGhost: isGhost))
         }
+
+        appendHold(start: 0, end: strokes[0].startTime, isGhost: strokes[0].isGhost)
+
         for (index, stroke) in strokes.enumerated() {
-            spans.append(Span(kind: .stroke(stroke.direction),
-                               start: stroke.startTime, end: stroke.endTime,
-                               speed: stroke.speed, isGhost: stroke.isGhost))
+            let rail: CGFloat = (stroke.direction == .forward) ? 1 : -1
+            let strokeDuration = stroke.endTime - stroke.startTime
+            if strokeDuration <= epsilon {
+                // Degenerate zero-duration stroke — render as one
+                // instantaneous mark to the rail without dividing by zero.
+                spans.append(Span(kind: .stroke(stroke.direction),
+                                  start: stroke.startTime, end: stroke.endTime,
+                                  startPos: 0, endPos: rail,
+                                  speed: stroke.speed, isGhost: stroke.isGhost))
+            } else {
+                let mid = (stroke.startTime + stroke.endTime) / 2
+                // Out half: centre → rail. The platter leaves rest, deflects.
+                spans.append(Span(kind: .stroke(stroke.direction),
+                                  start: stroke.startTime, end: mid,
+                                  startPos: 0, endPos: rail,
+                                  speed: stroke.speed, isGhost: stroke.isGhost))
+                // Return half: rail → centre. The platter springs back to rest.
+                spans.append(Span(kind: .stroke(stroke.direction),
+                                  start: mid, end: stroke.endTime,
+                                  startPos: rail, endPos: 0,
+                                  speed: stroke.speed, isGhost: stroke.isGhost))
+            }
             if index + 1 < strokes.count {
-                let next = strokes[index + 1]
-                if next.startTime > stroke.endTime + epsilon {
-                    spans.append(Span(kind: .hold, start: stroke.endTime, end: next.startTime,
-                                       speed: .medium, isGhost: stroke.isGhost))
-                }
+                appendHold(start: stroke.endTime,
+                           end: strokes[index + 1].startTime,
+                           isGhost: stroke.isGhost)
             }
         }
-        if let last = strokes.last, last.endTime < duration - epsilon {
-            spans.append(Span(kind: .hold, start: last.endTime, end: duration,
-                               speed: .medium, isGhost: last.isGhost))
+
+        if let last = strokes.last {
+            appendHold(start: last.endTime, end: duration, isGhost: last.isGhost)
         }
 
-        // 2. Raw boundary positions. A scratch oscillates the platter between
-        //    two rails: a forward push drives it to the high rail (+1), a
-        //    backward pull to the low rail (-1); a hold keeps it where it is.
-        //    The position is SET to a rail, never accumulated, so an uneven
-        //    pattern cannot drift — every push and pull is a full, centred
-        //    swing, and the visible window always uses the full range.
-        var raw: [CGFloat] = [0]
-        var position: CGFloat = 0
-        for span in spans {
-            switch span.kind {
-            case .stroke(.forward):  position = 1
-            case .stroke(.backward): position = -1
-            case .hold:              break
-            }
-            raw.append(position)
-        }
-
-        // 3. For a looping pattern, anchor the lead-in to where the path ends
-        //    so adjacent tiles meet seamlessly when the renderer wraps the
-        //    pattern — no rail-to-centre jump at the loop boundary.
-        if content.loops, raw.count > 1, let final = raw.last, final != raw[0] {
-            raw[0] = final
-        }
-
-        // 4. Normalize the raw curve into 0...1 — bounded, lane-fitting.
-        let low = raw.min() ?? 0
-        let high = raw.max() ?? 0
+        // 2. Normalize raw positions into 0...1. Because every stroke leaves
+        //    and returns to the centre, the path is naturally seamless when
+        //    tiled for a looping pattern — both ends sit at the centre — and
+        //    `content.loops` needs no extra closure step.
+        let allRaw = spans.flatMap { [$0.startPos, $0.endPos] }
+        let low = allRaw.min() ?? -1
+        let high = allRaw.max() ?? 1
         let range = high - low
         func normalized(_ value: CGFloat) -> CGFloat {
             range > epsilon ? (value - low) / range : 0.5
         }
 
-        let segments = spans.enumerated().map { index, span in
-            MotionSegment(kind: span.kind,
-                          startTime: span.start, endTime: span.end,
-                          startPosition: normalized(raw[index]),
-                          endPosition: normalized(raw[index + 1]),
-                          speed: span.speed, isGhost: span.isGhost)
+        let segments = spans.map {
+            MotionSegment(kind: $0.kind,
+                          startTime: $0.start, endTime: $0.end,
+                          startPosition: normalized($0.startPos),
+                          endPosition: normalized($0.endPos),
+                          speed: $0.speed, isGhost: $0.isGhost)
         }
         return MotionPath(segments: segments, timeRange: 0...duration)
     }
