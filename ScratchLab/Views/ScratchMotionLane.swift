@@ -40,7 +40,17 @@ struct ScratchMotionLane: View {
     var userEvents: [LaneUserEvent] = []
 
     /// The integrated platter-position curve, derived once from `content`.
+    /// Used by the **classified-stroke fallback** path. When the lane
+    /// renders via the raw integrated trace instead, this is computed
+    /// but unused — a small allocation cost we accept in Phase 2 to
+    /// keep the fallback init-side and pre-warmed.
     private let motionPath: MotionPath
+
+    /// Phase 2 — derived once from `content.faderEvents`. Empty events
+    /// yield an empty timeline; the renderer then draws nothing for
+    /// the ribbon, matching the pre-Phase-2 behaviour where the
+    /// crossfader never appeared on the lane at all.
+    private let crossfaderTimeline: CrossfaderStateTimeline
 
     init(content: LaneContent, clock: LaneClock, axis: LaneAxis,
          userEvents: [LaneUserEvent] = []) {
@@ -49,6 +59,16 @@ struct ScratchMotionLane: View {
         self.axis = axis
         self.userEvents = userEvents
         self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
+        // Coverage spans the lane's full timeline. `state(at:)` returns
+        // `.closed` for any time outside this — but the lane only ever
+        // queries within `[0, duration]`, so this is purely defensive.
+        let coverage: ClosedRange<TimeInterval>? = content.duration > 0
+            ? 0...content.duration
+            : nil
+        self.crossfaderTimeline = CrossfaderStateTimeline(
+            from: content.faderEvents,
+            coverage: coverage
+        )
     }
 
     // MARK: Tuning
@@ -70,11 +90,40 @@ struct ScratchMotionLane: View {
     private func secondsAhead(for axis: LaneAxis) -> TimeInterval {
         axis == .vertical ? 5.5 : 6.5
     }
+
+    /// Phase 2.2 — dedicated action-line fraction for the ribbon strip
+    /// below the motion canvas. The strip is **always** horizontal, so
+    /// "fraction" here is along the strip's x-axis.
+    ///
+    /// - Portrait: `0.5` (centered NOW marker). The motion canvas above
+    ///   uses a vertical scroll axis with action line at y = 0.85; the
+    ///   ribbon's horizontal NOW marker can't visually intersect that,
+    ///   so a centered ribbon-now reads as a clean independent timeline
+    ///   rather than a 85%-from-the-left past-dominated strip.
+    /// - Landscape: matches the motion's `actionLineFraction(for:)`
+    ///   (0.18 leading), so the ribbon's NOW indicator sits directly
+    ///   below the motion's action line — vertically aligned because
+    ///   both axes are horizontal.
+    ///
+    /// The motion canvas's own `actionLineFraction(for:)` is **NOT**
+    /// changed by this; only the ribbon strip uses the override.
+    private func ribbonActionLineFraction(for axis: LaneAxis) -> CGFloat {
+        axis == .vertical ? 0.5 : actionLineFraction(for: axis)
+    }
     /// Opacity of past notation at the far past edge of the lane. A linear
     /// gradient mask reaches this value at the trailing past edge so what
     /// has already played fades into a quiet tail rather than competing
     /// with the upcoming notation as a second, equal-weight cluster.
     private static let pastFadeOpacity: Double = 0.30
+
+    /// Phase 2.1 — height (in points) of the dedicated crossfader ribbon
+    /// strip rendered BELOW the motion canvas in a `VStack(spacing: 0)`
+    /// split. The strip only exists when `content.faderEvents` is
+    /// non-empty, so the no-events path collapses the VStack back to a
+    /// single full-height motion canvas (visually identical to
+    /// pre-Phase-2). The chosen height is enough to read open/closed
+    /// fills + tick marks without crowding the motion area above.
+    private static let ribbonStripHeight: CGFloat = 14
 
     // MARK: Palette — one shared language across both orientations
 
@@ -96,18 +145,64 @@ struct ScratchMotionLane: View {
             // The TimelineView is only a render-side ticker. `now` comes
             // solely from the clock, so no layout state feeds back into timing.
             TimelineView(.periodic(from: .now, by: Self.tickInterval)) { timeline in
-                let viewport = LaneViewport(
-                    size: geo.size,
-                    now: clock.now(at: timeline.date),
+                let now = clock.now(at: timeline.date)
+                // Phase 2.1: VStack split — motion canvas on top, dedicated
+                // ribbon strip below (only when fader events are present).
+                // When no events, the strip is omitted and the motion canvas
+                // fills the full geometry exactly as pre-Phase-2.
+                let hasRibbon = !content.faderEvents.isEmpty
+                let motionHeight = hasRibbon
+                    ? max(0, geo.size.height - Self.ribbonStripHeight)
+                    : geo.size.height
+                let motionSize = CGSize(width: geo.size.width, height: motionHeight)
+                let motionViewport = LaneViewport(
+                    size: motionSize,
+                    now: now,
                     axis: axis,
                     actionLineFraction: actionLineFraction(for: axis),
                     secondsAhead: secondsAhead(for: axis))
-                laneContent(viewport)
+
+                VStack(spacing: 0) {
+                    laneContent(motionViewport)
+                        .frame(width: motionSize.width, height: motionSize.height)
+                    if hasRibbon {
+                        ribbonStrip(width: geo.size.width, now: now)
+                            .frame(width: geo.size.width, height: Self.ribbonStripHeight)
+                    }
+                }
             }
         }
         .background(Self.background)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
+    }
+
+    /// Phase 2.1 — dedicated horizontal ribbon canvas below the motion
+    /// lane. Time always flows left → right, regardless of the motion
+    /// canvas's axis. The ribbon shares the motion's `secondsAhead`
+    /// (visible window length) but uses a strip-specific action-line
+    /// fraction via `ribbonActionLineFraction(for:)` — see Phase 2.2
+    /// docstring there. The strip is NOT subject to the motion's
+    /// past-fade mask: full opacity across the whole visible fader
+    /// history.
+    @ViewBuilder
+    private func ribbonStrip(width: CGFloat, now: TimeInterval) -> some View {
+        let viewport = LaneViewport(
+            size: CGSize(width: width, height: Self.ribbonStripHeight),
+            now: now,
+            axis: .horizontal,
+            actionLineFraction: ribbonActionLineFraction(for: axis),
+            secondsAhead: secondsAhead(for: axis))
+        Canvas { context, _ in
+            ScratchMotionRenderer.drawCrossfaderRibbon(
+                crossfaderTimeline, in: context, viewport: viewport,
+                style: .target
+            )
+            ScratchMotionRenderer.drawCrossfaderTicks(
+                content.faderEvents, in: context, viewport: viewport,
+                style: .target
+            )
+        }
     }
 
     /// One render frame — a pure function of `viewport`. The `Canvas` paints
@@ -234,11 +329,26 @@ struct ScratchMotionLane: View {
 
     // MARK: - Canvas: motion path
 
-    /// The platter-position curve — the heart of the lane. A non-looping Demo
-    /// path is drawn once; a looping scored pattern is tiled across every
-    /// visible period so it scrolls seamlessly. `ScratchMotionRenderer` does
-    /// the actual eased drawing.
+    /// The platter-position curve — the heart of the lane.
+    ///
+    /// Phase 2 routes through `LaneContent.shouldRenderRawTrace(...)`:
+    /// when the content carries a sufficiently dense raw
+    /// `PlatterPositionTimeline`, the renderer draws a single continuous
+    /// integrated trace. Otherwise it falls back to the existing
+    /// classified-stroke `MotionPath` path — pixel-identical to
+    /// pre-Phase-2 output when `content.platterTimeline == nil`, which
+    /// is every shipping call path today (no producer yet).
+    ///
+    /// The raw-trace path does NOT tile: a raw timeline is a recording
+    /// of one take and is not a loopable pattern. Looping content always
+    /// uses the classified fallback.
     private func drawMotionPath(in context: GraphicsContext, viewport: LaneViewport) {
+        if let rawTimeline = content.platterTimeline,
+           content.shouldRenderRawTrace() {
+            ScratchMotionRenderer.drawRawTrace(rawTimeline, in: context,
+                                                viewport: viewport, style: .target)
+            return
+        }
         guard !motionPath.isEmpty else { return }
         guard content.loops, content.duration > 0 else {
             ScratchMotionRenderer.draw(motionPath, in: context,

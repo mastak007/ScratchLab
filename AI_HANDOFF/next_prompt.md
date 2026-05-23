@@ -1,6 +1,6 @@
 Read `AI_HANDOFF.md` first.
 Read `SOUL.md` and `PROFILE.md`.
-Read the approved plan at `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md` (especially §7 — renderer selection logic).
+Read the approved plan at `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md` (especially §9 Phase 3 — live producer).
 Do not assume memory.
 Report `git status --short --branch`.
 Identify any pre-existing dirty files and do not stage them.
@@ -10,66 +10,74 @@ No `Co-Authored-By` trailer (per `feedback_no_coauthor_trailer.md`).
 
 ---
 
-# Phase 2 — Renderer fork (deferred, gated on Phase 1 commit + approval)
+# Phase 3 — Live producer (deferred, gated on Phase 2 commit + approval)
 
-**Pre-flight gates that must hold before starting Phase 2:**
+**Pre-flight gates that must hold before starting Phase 3:**
 
-1. Phase 1 (`PlatterPositionTimeline.swift` +
-   `PlatterPositionTimelineTests.swift`) is committed and pushed to
-   `origin/main`. The 15-case test suite passes.
-2. Karl has explicitly approved Phase 2 with a "go" message — not
-   inferred from Phase 1 approval.
-3. The render-style open decisions from the plan's §12 are answered:
-   - Crossfader ribbon edge (top / bottom / inset baseline)?
-   - Raw-trace stroke style (single hue + velocity width, OR
-     forward/backward dual hue matching
-     `ScratchMotionRenderer.Style.backwardColor`)?
-   - `minimumSampleDensity` floor (Phase 1 placeholder: ~10
-     samples/second).
+1. Phase 2 (renderer fork + crossfader ribbon in
+   `ScratchMotionRenderer.swift`, `TimingLane.swift`,
+   `ScratchMotionLane.swift`, plus
+   `ScratchLabDesktopTests/LaneRawTraceFallbackTests.swift`) is
+   committed and pushed to `origin/main`. The combined 24-case test
+   suite passes.
+2. Karl has explicitly approved Phase 3 with a "go" message — not
+   inferred from Phase 2 approval.
+3. The producer-side open decisions from the plan's §12 are answered:
+   - Sample rate of the recorder (~30 Hz from `activeHandPoseInterval`,
+     or a higher resampled rate)?
+   - Buffer cap during recording (bounded ring buffer matching the
+     audio envelope's 8192-frame pattern, OR unbounded with
+     end-of-take drain)?
+4. The Phase-2.1 ribbon-layout follow-up question is resolved (Karl
+   either accepts the cross-axis-edge placement or schedules a
+   layout-restructure slice).
 
 If any gate is unmet, **stop** and surface the missing gate. Do not
 start work.
 
-## Scope (per the plan §9 Phase 2)
+## Scope (per the plan §9 Phase 3)
 
-- `ScratchLab/Models/TimingLane.swift` — add optional
-  `platterTimeline: PlatterPositionTimeline?` to `LaneContent`, **and**
-  an optional slice of `[CaptureCore.DetectedNotationFaderEvent]` for
-  the crossfader ribbon adapter. Both default to `nil` so every
-  existing call site continues to compile and behave identically.
-- `ScratchLab/Models/ScratchMotionRenderer.swift` — add a new entry
-  point `drawRawTrace(_ timeline:, viewport:, style:)` that draws a
-  single continuous line from the raw `(t, position)` stream,
-  normalising through `positionRange` onto the lane's cross-axis 0…1.
-  Pure function — no state, no side effects beyond the
-  `GraphicsContext`.
-- `ScratchLab/Views/ScratchMotionLane.swift` — implement the selector
-  from §7:
-  ```
-  if let timeline = content.platterTimeline,
-     timeline.samples.count >= minimumSampleDensity,
-     timeline.endTime - timeline.startTime >= content.duration * 0.8 {
-      ScratchMotionRenderer.drawRawTrace(timeline, viewport: viewport, style: ...)
-  } else {
-      ScratchMotionRenderer.draw(ScratchStrokeGeometry.motionPath(for: content),
-                                 in: context, viewport: viewport, style: ...)
-  }
-  ```
-- Materialise `CrossfaderStateTimeline` inside the lane from the
-  optional fader-event slice and render the open/closed ribbon plus
-  cut/pulse/flare ticks at the lane's edge.
+- Add a new `PlatterPositionRecorder` (or equivalent) at
+  `ScratchLabDesktop/Services/PlatterPositionRecorder.swift` that
+  consumes the same `(rawPoint, time)` samples
+  `HandDirectionTracker.recordObservation(rawPoint:at:)` already
+  receives. The recorder writes into an unbounded
+  `[PlatterPositionSample]` buffer during recording.
+- The recorder is a **sibling consumer**, not a wrapper of
+  `HandDirectionTracker`. Its existence must not change the tracker's
+  hysteresis behaviour, sample history capacity, or direction
+  classification.
+- The recorder integrates raw position deltas into unbounded
+  revolutions (signed; forward positive). The tracker's existing
+  `(CGPoint, CFTimeInterval)` input is the source. Confidence = 1.0
+  for samples sourced directly from the tracker.
+- At end-of-take, the recorder is drained into the in-memory
+  `DetectedNotationSnapshot` sibling — **not** into the snapshot
+  itself (the snapshot's Codable shape stays unchanged so the v4
+  session export remains byte-stable). A parallel in-memory holder
+  (e.g. a property on `CaptureCore.ScratchLabRuntimeDiagnostics` or a
+  new `Phase3Diagnostics` namespace) carries the
+  `PlatterPositionTimeline` until something downstream consumes it.
+- A new test class
+  `ScratchLabDesktopTests/PlatterPositionRecorderTests.swift` (flat
+  path, matches Phase 1/2 convention) covers:
+  - Recorder integrates a synthetic position sequence into the
+    expected unbounded revolutions output.
+  - Recorder buffer is drained to a valid `PlatterPositionTimeline`
+    (timeline invariants from Phase 1 still hold).
+  - Recorder does not modify the `HandDirectionTracker` instance it
+    sits alongside (state-check before / after).
 
 ## Hard constraints
 
-- Existing classified-stroke render paths must remain pixel-identical
-  when `platterTimeline == nil`. Lock this with snapshot tests against
-  a `LaneContent` built without a raw timeline.
-- Do not modify `CaptureCore.swift`, `PracticeReelTimeline.swift`,
-  `SessionExportCoordinator.swift`, `HandDirectionTracker.swift`, or
-  `MacCaptureEngine.swift`. Phase 2 is renderer-only.
-- Do not change `scratchlab_session_export_v4` or
-  `scratchlab_detected_notation_v1`. Phase 2 does not persist the new
-  data — it only renders an in-memory timeline.
+- `HandDirectionTracker` must NOT be modified. The recorder is a
+  parallel consumer that observes the same upstream sample stream.
+- `CaptureCore.DetectedNotationSnapshot` Codable shape must NOT be
+  modified. No new fields on the snapshot itself.
+- `scratchlab_session_export_v4` and
+  `scratchlab_detected_notation_v1` constants must remain
+  byte-stable. Phase 3 does NOT persist the raw timeline (still
+  in-memory only).
 - No changes to Info.plist, PrivacyInfo.xcprivacy, signing, bundle ID,
   entitlements, or Copy Bundle Resources.
 - Do not stage `xcuserdata/.../xcschememanagement.plist`,
@@ -87,11 +95,8 @@ Per `feedback_verification_scope.md`:
    succeeds.
 3. `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
    succeeds.
-4. New snapshot tests assert pixel-identical lane output for the
-   no-timeline path, and a sanity-shape assertion for the raw-trace
-   path.
-5. Phase 1's `PlatterPositionTimelineTests` (15 cases) still pass
-   without modification.
+4. Phase 1 + Phase 2 + Phase 3 tests all pass via targeted
+   `-only-testing` runs (mind `project_test_runner_hang.md`).
 
 `Tools/TrainModels swift test` is NOT required (per
 `feedback_verification_scope.md`).
@@ -100,9 +105,9 @@ Per `feedback_verification_scope.md`:
 
 - Update `AI_HANDOFF.md` with: commit status (uncommitted, awaiting
   approval), files added/modified, build outcomes, test outcomes,
-  selector tuning notes.
-- Rewrite `AI_HANDOFF/next_prompt.md` to point at Phase 3 (live
-  producer) — or, if Phase 2 was rejected mid-flight, summarise the
-  rejection reason and stop.
+  any new producer-side tuning notes.
+- Rewrite `AI_HANDOFF/next_prompt.md` to point at Phase 4 (bundled
+  fixture + companion producer) — or, if Phase 3 was rejected
+  mid-flight, summarise the rejection reason and stop.
 - Report back with the exact `git status --short --branch` snapshot,
   the `git diff --stat`, and the verification command outputs.

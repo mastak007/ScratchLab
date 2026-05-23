@@ -129,6 +129,13 @@ struct LaneUserEvent: Equatable, Sendable {
 
 /// Everything the unified lane renders, decoupled from its source. Built by an
 /// adapter from a Demo `PracticeReelTimeline` or a scored `ScratchNotation`.
+///
+/// Phase 2 adds two **optional** channels — `platterTimeline` (a raw integrated
+/// `(t, position)` stream) and `faderEvents` (the captured crossfader event
+/// stream). Both default to nil/empty so every existing call site stays
+/// behaviourally identical: the renderer's classified-stroke fallback is used
+/// whenever the raw timeline is absent or fails `shouldRenderRawTrace(...)`,
+/// and the crossfader ribbon is omitted when no events are attached.
 struct LaneContent: Equatable, Sendable {
     /// Reference strokes plus any derived copy-window ghosts (`isGhost`).
     let strokes: [LaneStroke]
@@ -141,10 +148,81 @@ struct LaneContent: Equatable, Sendable {
     /// Whether the lane loops the timeline (scored preview modes) or plays it
     /// once through (Demo mode follows the demo audio).
     let loops: Bool
+    /// Optional raw platter-position timeline. When present AND dense enough
+    /// (see `shouldRenderRawTrace(minimumSampleDensity:)`), the renderer
+    /// draws a continuous integrated trace instead of the classified-stroke
+    /// `MotionPath`. Nil ⇒ classified fallback always used. Phase 2: there is
+    /// no producer yet; this stays nil on every shipping call path until
+    /// Phase 3 lands a live producer or Phase 4 ships a bundled fixture.
+    let platterTimeline: PlatterPositionTimeline?
+    /// Optional captured crossfader event stream. The lane materialises a
+    /// `CrossfaderStateTimeline` from this and draws the open/closed ribbon
+    /// + cut/pulse/flare ticks along the lane's bottom (portrait) or
+    /// trailing (landscape) edge. Empty ⇒ no ribbon drawn.
+    let faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+
+    /// Designated initialiser. The two Phase 2 fields default to nil/empty so
+    /// every existing call site (including `init(reel:)` and `init(notation:)`)
+    /// continues to behave identically without modification.
+    init(strokes: [LaneStroke],
+         segments: [LaneSegment],
+         beatsPerMinute: Double?,
+         duration: TimeInterval,
+         loops: Bool,
+         platterTimeline: PlatterPositionTimeline? = nil,
+         faderEvents: [CaptureCore.DetectedNotationFaderEvent] = []) {
+        self.strokes = strokes
+        self.segments = segments
+        self.beatsPerMinute = beatsPerMinute
+        self.duration = duration
+        self.loops = loops
+        self.platterTimeline = platterTimeline
+        self.faderEvents = faderEvents
+    }
 
     /// The segment active at `time`, if any.
     func segment(at time: TimeInterval) -> LaneSegment? {
         segments.first { $0.contains(time) }
+    }
+}
+
+extension LaneContent {
+    /// Default minimum sample density (samples/second) below which the
+    /// renderer falls back to the classified-stroke `MotionPath`. Karl's
+    /// Phase 2 decision: 10 samples/sec — matches the live hand-tracker's
+    /// idle-throttled rate (~30 Hz active, ~4 Hz idle).
+    static let defaultMinimumSampleDensity: Double = 10.0
+
+    /// Minimum fraction of `duration` the raw timeline must cover before
+    /// the renderer prefers it over the classified fallback.
+    static let minimumRawTraceCoverageFraction: Double = 0.8
+
+    /// Whether the renderer should prefer the raw integrated trace over the
+    /// classified-stroke `MotionPath` fallback. Returns `true` when **all**
+    /// gates pass:
+    ///
+    /// 1. `platterTimeline` is non-nil.
+    /// 2. Timeline span is positive.
+    /// 3. Sample density ≥ `minimumSampleDensity` samples/second.
+    /// 4. `duration` is positive (a degenerate content has no fallback to
+    ///    measure against either, so this gate is mostly defensive).
+    /// 5. Timeline span ≥ `duration * minimumRawTraceCoverageFraction`.
+    ///
+    /// The Phase 1 placeholder threshold is `10` samples/sec; Phase 3 may
+    /// tune this once real live capture exists.
+    func shouldRenderRawTrace(
+        minimumSampleDensity: Double = LaneContent.defaultMinimumSampleDensity
+    ) -> Bool {
+        guard let timeline = platterTimeline else { return false }
+        let span = timeline.endTime - timeline.startTime
+        guard span > 0 else { return false }
+        let density = Double(timeline.samples.count) / span
+        guard density >= minimumSampleDensity else { return false }
+        guard duration > 0 else { return false }
+        guard span >= duration * LaneContent.minimumRawTraceCoverageFraction else {
+            return false
+        }
+        return true
     }
 }
 

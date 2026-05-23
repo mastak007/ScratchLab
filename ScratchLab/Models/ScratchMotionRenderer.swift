@@ -59,6 +59,16 @@ enum ScratchMotionRenderer {
         /// against cyan — direction is still unambiguous, without the neon
         /// "synthwave" cast the louder pink read as.
         var backwardColor: Color = Color(red: 0.94, green: 0.55, blue: 0.66)
+        /// Phase 2 — crossfader-ribbon fill colour for `.closed` segments
+        /// drawn along the lane's bottom (portrait) / trailing (landscape)
+        /// edge. `.open` segments are transparent (no fill). A quiet
+        /// neutral by default so the ribbon supports the motion trace
+        /// without competing with it.
+        var crossfaderRibbonColor: Color = Color.white.opacity(0.18)
+        /// Phase 2 — colour for cut/pulse/flare tick marks rendered on top
+        /// of the ribbon. Slightly brighter than the ribbon fill so a tick
+        /// reads as a discrete event against a quiet open/closed bar.
+        var crossfaderTickColor: Color = Color.white.opacity(0.65)
 
         /// The solid reference path the learner follows.
         static let target = Style(color: Color(red: 0.34, green: 0.80, blue: 1.00))
@@ -87,6 +97,22 @@ enum ScratchMotionRenderer {
     /// Junction-node radius — small enough to read as a tick on a study
     /// chart, not a game-pad badge.
     private static let nodeRadius: CGFloat = 2.5
+    /// Phase 2 — crossfader ribbon thickness, in points, along the lane's
+    /// bottom (portrait) / trailing (landscape) edge.
+    static let crossfaderRibbonThickness: CGFloat = 6
+    /// Phase 2 — cut/pulse/flare tick height, in points. Slightly taller
+    /// than the ribbon so the tick is readable as a discrete event.
+    static let crossfaderTickHeight: CGFloat = 10
+    /// Phase 2 — cut/pulse/flare tick width, in points.
+    static let crossfaderTickWidth: CGFloat = 1.5
+    /// Phase 2 — raw-trace velocity-to-thickness mapping. `min` is the
+    /// hairline at zero speed; `max` is the cap at the fastest stroke.
+    /// `gain` scales |dp/dt| (revolutions/second) into the sqrt-based
+    /// thickness curve so a slow drag stays thin without disappearing
+    /// and a fast stab is heavy without ballooning.
+    private static let rawTraceMinWidthScale: CGFloat = 0.5
+    private static let rawTraceMaxWidthScale: CGFloat = 1.8
+    private static let rawTraceVelocityGain: Double = 3.0
     /// Junction-node opacity. The dots mark timing structure; the strokes
     /// carry the direction colour and stay the primary visual object, so
     /// the dots are a quiet neutral white rather than a popping accent.
@@ -195,6 +221,171 @@ enum ScratchMotionRenderer {
                           point: item.b)
             }
         }
+    }
+
+    // MARK: - Draw (Phase 2 — raw integrated trace)
+
+    /// Draws a raw integrated platter-position timeline as a single
+    /// continuous polyline. Pure — reads only its arguments, writes only
+    /// to the context.
+    ///
+    /// Sample positions are normalised onto the lane's cross-axis 0…1 via
+    /// `timeline.positionRange`. Each segment between consecutive samples
+    /// is drawn with **velocity-modulated thickness** (Karl's Phase 2
+    /// decision): line width scales with `sqrt(|dp/dt| * gain)`, clamped
+    /// between `rawTraceMinWidthScale` and `rawTraceMaxWidthScale`. Single
+    /// hue (`style.color`) — no forward/backward split, because the raw
+    /// trace's direction reads from the slope itself.
+    ///
+    /// Renders nothing when the timeline has fewer than two samples or
+    /// when `positionRange` collapses to zero span (no observed motion).
+    static func drawRawTrace(_ timeline: PlatterPositionTimeline,
+                             in context: GraphicsContext,
+                             viewport: LaneViewport,
+                             style: Style) {
+        guard timeline.samples.count >= 2,
+              let positionRange = timeline.positionRange else {
+            return
+        }
+        let span = positionRange.upperBound - positionRange.lowerBound
+
+        // Restrict to samples that touch the visible window — including
+        // one lead-in and one lead-out so the polyline meets the edge.
+        let visible = viewport.visibleTimeRange
+        let samples = timeline.samples
+        var firstIndex = 0
+        for i in 0..<samples.count where samples[i].time <= visible.lowerBound {
+            firstIndex = i
+        }
+        var lastIndex = samples.count - 1
+        for i in (0..<samples.count).reversed() where samples[i].time >= visible.upperBound {
+            lastIndex = i
+        }
+        guard lastIndex > firstIndex else { return }
+
+        var layer = context
+        layer.opacity = style.opacity
+
+        func point(for sample: PlatterPositionSample) -> CGPoint {
+            let normalised: CGFloat = span > 0
+                ? CGFloat((sample.position - positionRange.lowerBound) / span)
+                : 0.5
+            let cross = crossCoordinate(for: normalised, viewport: viewport)
+            return viewport.point(scroll: viewport.pos(for: sample.time), cross: cross)
+        }
+
+        for i in (firstIndex + 1)...lastIndex {
+            let prev = samples[i - 1]
+            let curr = samples[i]
+            let dt = curr.time - prev.time
+            let dp = abs(curr.position - prev.position)
+            let speed = dt > 0 ? dp / dt : 0
+            let scaled = sqrt(max(0, speed * rawTraceVelocityGain))
+            let factor = max(rawTraceMinWidthScale,
+                             min(rawTraceMaxWidthScale, CGFloat(scaled)))
+            let width = style.lineWidth * factor
+            var seg = Path()
+            seg.move(to: point(for: prev))
+            seg.addLine(to: point(for: curr))
+            layer.stroke(seg, with: .color(style.color),
+                         style: StrokeStyle(lineWidth: width, lineCap: .round))
+        }
+    }
+
+    /// Draws the crossfader open/closed ribbon along the lane's bottom
+    /// (portrait) / trailing (landscape) edge. Pure — reads only its
+    /// arguments, writes only to the context.
+    ///
+    /// `.closed` segments fill with `style.crossfaderRibbonColor`; `.open`
+    /// segments are transparent (no fill); `.transitioning(progress:)`
+    /// segments fill with reduced opacity proportional to `(1 - progress)`
+    /// so a closing ramp fades in and an opening ramp fades out across
+    /// the segment span. Cut / pulse / flare event marks are drawn
+    /// separately by `drawCrossfaderTicks`.
+    static func drawCrossfaderRibbon(_ timeline: CrossfaderStateTimeline,
+                                     in context: GraphicsContext,
+                                     viewport: LaneViewport,
+                                     style: Style) {
+        guard !timeline.segments.isEmpty else { return }
+
+        let (cross0, cross1) = ribbonCrossRange(viewport: viewport,
+                                                thickness: crossfaderRibbonThickness)
+
+        var layer = context
+        layer.opacity = style.opacity
+
+        for segment in timeline.segments
+        where viewport.isVisible(from: segment.startTime, to: segment.endTime) {
+            let pos0 = viewport.pos(for: segment.startTime)
+            let pos1 = viewport.pos(for: segment.endTime)
+            let rect = viewport.rect(scroll0: pos0, scroll1: pos1,
+                                     cross0: cross0, cross1: cross1)
+            switch segment.state {
+            case .open:
+                continue
+            case .closed:
+                layer.fill(Path(rect), with: .color(style.crossfaderRibbonColor))
+            case .transitioning(let target):
+                let opacity = max(0, min(1, 1 - target))
+                guard opacity > 0 else { continue }
+                layer.fill(Path(rect),
+                           with: .color(style.crossfaderRibbonColor.opacity(opacity)))
+            }
+        }
+    }
+
+    /// Draws cut / pulse / transform / flare event ticks on top of the
+    /// crossfader ribbon. Each event becomes a short vertical line
+    /// (perpendicular to the scroll axis) at the event's `startTime`.
+    /// Pure — reads only its arguments, writes only to the context.
+    ///
+    /// Only `.cut`, `.pulse`, `.transformPulse`, and `.flareClick` events
+    /// draw a tick; `.open`, `.closed`, and `.unknown` are handled by
+    /// the ribbon fill and produce no separate mark.
+    static func drawCrossfaderTicks(
+        _ events: [CaptureCore.DetectedNotationFaderEvent],
+        in context: GraphicsContext,
+        viewport: LaneViewport,
+        style: Style
+    ) {
+        guard !events.isEmpty else { return }
+
+        let (cross0, cross1) = ribbonCrossRange(viewport: viewport,
+                                                thickness: crossfaderTickHeight)
+
+        var layer = context
+        layer.opacity = style.opacity
+
+        for event in events
+        where viewport.isVisible(from: event.startTime, to: event.endTime) {
+            switch event.eventKind {
+            case .cut, .pulse, .transformPulse, .flareClick:
+                let pos = viewport.pos(for: event.startTime)
+                let rect = viewport.rect(scroll0: pos - crossfaderTickWidth / 2,
+                                         scroll1: pos + crossfaderTickWidth / 2,
+                                         cross0: cross0, cross1: cross1)
+                layer.fill(Path(rect), with: .color(style.crossfaderTickColor))
+            case .open, .closed, .unknown:
+                continue
+            }
+        }
+    }
+
+    /// Cross-axis `[start, end]` range for ribbon / tick elements.
+    ///
+    /// **Phase 2.1**: the ribbon now lives in its own dedicated Canvas
+    /// below the motion lane (see `ScratchMotionLane` VStack split), so
+    /// the renderer fills the **entire cross extent** of the viewport
+    /// it is given. The strip's physical thickness is decided by the
+    /// caller's viewport size, not by the renderer. This replaces the
+    /// pre-2.1 behaviour where the ribbon sat at the larger-cross-edge
+    /// of the motion lane itself (which placed it on the right side in
+    /// portrait — visually wrong per Karl's 2026-05-24 review).
+    private static func ribbonCrossRange(
+        viewport: LaneViewport,
+        thickness: CGFloat
+    ) -> (CGFloat, CGFloat) {
+        return (0, viewport.crossLength)
     }
 
     // MARK: - Marks

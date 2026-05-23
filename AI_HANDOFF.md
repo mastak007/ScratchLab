@@ -1,5 +1,287 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 2.2 ribbon time-alignment tune (still uncommitted)
+
+Karl's follow-up decision after reviewing 2.1: in portrait the
+85%-from-the-left ribbon NOW position was visually awkward (past
+dominated the strip). Tune the **ribbon strip viewport only** — the
+motion canvas's `actionLineFraction(for:)` stays untouched.
+
+- **Single edit** in `ScratchLab/Views/ScratchMotionLane.swift`:
+  - New private helper `ribbonActionLineFraction(for axis:)`:
+    - Portrait (`.vertical`) → returns `0.5` (centered NOW on the
+      horizontal strip).
+    - Landscape (`.horizontal`) → returns
+      `actionLineFraction(for: axis)` (i.e., `0.18` — matches the
+      motion's action line for direct vertical alignment).
+  - `ribbonStrip(width:now:)`'s `LaneViewport` now uses
+    `ribbonActionLineFraction(for: axis)` instead of
+    `actionLineFraction(for: axis)`.
+  - Docstrings on both helpers updated to reflect the Phase 2.2
+    decision.
+- **No changes to**: the motion canvas's `actionLineFraction(for:)`,
+  the renderer (`ScratchMotionRenderer.swift`), capture pipeline,
+  export schema (`scratchlab_session_export_v4`,
+  `scratchlab_detected_notation_v1` both byte-stable), resources, or
+  the test file.
+- **No-events fallback unchanged**: the new helper is only consulted
+  by `ribbonStrip(width:now:)`, which is only mounted when
+  `content.faderEvents` is non-empty. The no-events VStack still
+  collapses to a single full-height motion canvas — visually
+  identical to pre-Phase-2.
+- **Builds re-run** after the 2.2 tune:
+  - `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+- **Tests re-run** (Phase 1 + Phase 2, 24-case targeted):
+  - **24 / 24 passed**, 0 failures, total 0.011 s.
+
+---
+
+## 2026-05-24 — Phase 2.1 ribbon layout restructure (still uncommitted)
+
+Karl rejected the Phase-2 portrait side-ribbon placement during review.
+This 2.1 pass restructures the lane so the ribbon sits **visually below
+the motion canvas in both orientations** before commit.
+
+- **Change shape (delta from the pre-2.1 Phase-2 working tree)**:
+  - `ScratchLab/Views/ScratchMotionLane.swift` — `body` is now a
+    `VStack(spacing: 0)` of `laneContent(motionViewport)` on top and a
+    dedicated `ribbonStrip(width:now:)` Canvas below. The ribbon strip
+    height is a new `ribbonStripHeight: CGFloat = 14` constant. The
+    ribbon strip is only added when `content.faderEvents` is non-empty,
+    so the no-events path collapses the VStack back to a single
+    full-height motion canvas. The ribbon's viewport is
+    `axis: .horizontal` with the SAME `actionLineFraction` and
+    `secondsAhead` as the motion canvas — visible time window aligned
+    with motion. The old in-lane `drawCrossfaderLayer(in:viewport:)`
+    method and its call inside the motion Canvas closure are deleted.
+  - `ScratchLab/Models/ScratchMotionRenderer.swift` — `ribbonCrossRange`
+    now returns `(0, viewport.crossLength)` so the renderer fills the
+    full cross extent of whatever viewport it is given (the dedicated
+    strip canvas). The `thickness` parameter is kept on the signature
+    for source compatibility but is no longer consulted. Updated
+    docstring explains the Phase-2.1 rationale.
+- **No changes to**: `LaneContent` model fields, the selector predicate
+  (`shouldRenderRawTrace(...)`), `drawRawTrace`, fader-event capture,
+  schema constants, resources, or the test file's assertions.
+- **Time-alignment note for portrait**: the ribbon strip uses the
+  motion's `actionLineFraction = 0.85`, so the ribbon's NOW position is
+  at x = 85% from the left of the strip — past dominates the strip
+  width. This keeps the ribbon's visible-time window exactly matched
+  to the motion's; the quirk is that a portrait motion's time axis is
+  vertical while the ribbon below it is horizontal, so the NOW indicators
+  don't visually intersect (they're orthogonal). The ribbon is read as
+  a separate horizontal timeline that shares the motion's visible time
+  window. In landscape this works cleanly because both axes are already
+  horizontal (NOW at x = 18% from leading edge in both).
+- **No pixel-diff snapshot tests** (unchanged from Phase 2 limitation —
+  no image-comparison library in the repo).
+- **Attempted visual proof**:
+  - First attempt: added three `ImageRenderer`-based visual-proof tests
+    to `LaneRawTraceFallbackTests` (portrait-with-ribbon,
+    landscape-with-ribbon, portrait-no-ribbon → PNG to
+    `/tmp/scratchlab_phase21/`). Compilation failed because
+    `ScratchMotionLane` is iOS-only (`Views/` group is not in the
+    macOS test target's compilation unit, per
+    `project_demo_timing_slice.md`). Reverted the tests.
+  - Second attempt: built `ScratchLab.app` for the booted iPhone 17
+    simulator (id `53B855D2-2933-4A9C-BB75-1AC5D866701E`),
+    `simctl install` + `simctl launch`, captured launch screenshot at
+    `/tmp/scratchlab_phase21_main.png`. The screenshot proves the app
+    builds, installs, and launches cleanly. It does NOT demonstrate the
+    new ribbon because the visible main-menu surface (`MainMenuView`)
+    does not host `ScratchMotionLane`, and even reaching Practice →
+    Baby → Auto-cut would render the no-events fallback (no fader
+    events on any shipping call path).
+- **Honest visual-proof gap**: producing a feature-demo screenshot
+  showing the new ribbon strip below the motion canvas would require
+  either:
+  - A new iOS XCTest bundle (new pbxproj target — out of scope for a
+    polish pass), or
+  - Temporary debug-only synthetic fader-event injection in a Practice
+    surface (touches Practice/coaching code — out of scope per SOUL.md
+    "Do not change Practice/scoring/coaching unless explicitly asked"),
+    or
+  - An iOS SwiftUI Preview added to `ScratchMotionLane.swift` with
+    sample fader events (renderable in Xcode's canvas only —
+    cannot be captured non-interactively).
+  Pick any of those and I can produce a real visual; until then, the
+  ribbon-below-motion claim rests on the code structure (VStack split
+  with the ribbon as the second child, only added when events present),
+  the inline docstrings, and the existing 9 Phase-2 selector +
+  structural tests passing.
+- **Builds run** after the 2.1 restructure:
+  - `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build -scheme ScratchLab -destination 'platform=iOS Simulator,id=...'`
+    → **BUILD SUCCEEDED** (used for simulator install).
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+- **Tests run**: same 24-case suite as Phase 2 (15 Phase 1 + 9 Phase 2)
+  → **24 / 24 passed**, 0 failures, total 0.016 s.
+
+---
+
+## 2026-05-24 — Raw platter-position timeline Phase 2 (renderer fork + crossfader ribbon)
+
+- **Slice status: uncommitted, awaiting Karl's approval.** Working tree
+  has the slice's one new test file + four modified files. Nothing
+  staged. No commit, no push.
+- **Plan**: `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md`
+  (Phase 2 section). Three render-style decisions locked at the start
+  of the slice: ribbon edge = bottom/trailing; trace style = single hue
+  + velocity-modulated thickness; density floor = 10 samples/sec.
+- **Files added** (one new, untracked at slice end):
+  - `ScratchLabDesktopTests/LaneRawTraceFallbackTests.swift` — 9 XCTest
+    cases: 2 back-compat invariants (`LaneContent(notation:)` and
+    `LaneContent(reel:)` both produce nil `platterTimeline` + empty
+    `faderEvents`), 5 selector predicate cases (no-timeline,
+    dense+covers-80%, sparse, low-coverage, tunable floor), 2
+    structural smoke tests (drawRawTrace + drawCrossfaderRibbon/Ticks
+    via `ImageRenderer`).
+- **Files modified** (four):
+  - `ScratchLab/Models/TimingLane.swift` (+78 lines) — `LaneContent`
+    gains two optional fields: `platterTimeline: PlatterPositionTimeline?`
+    (default nil) and `faderEvents: [CaptureCore.DetectedNotationFaderEvent]`
+    (default []). Custom designated init with defaults preserves both
+    existing extension initialisers (`init(reel:)`, `init(notation:)`)
+    byte-identically. New extension method
+    `shouldRenderRawTrace(minimumSampleDensity: Double = 10.0)` gates
+    the renderer's substrate selection — requires timeline non-nil,
+    positive span, density ≥ floor, duration > 0, and span ≥
+    `duration * 0.8` (the 80% coverage threshold lives in
+    `minimumRawTraceCoverageFraction`).
+  - `ScratchLab/Models/ScratchMotionRenderer.swift` (+192 lines) —
+    `Style` gains `crossfaderRibbonColor` (default
+    `.white.opacity(0.18)`) and `crossfaderTickColor` (default
+    `.white.opacity(0.65)`). Three new pure static functions added;
+    existing `draw(_:in:viewport:style:)` is unchanged.
+    - `drawRawTrace(_:in:viewport:style:)` — single-hue polyline with
+      `sqrt(|dp/dt| * 3.0)` thickness curve clamped to
+      `[0.5, 1.8] * style.lineWidth`. Restricts to visible samples plus
+      one lead-in / lead-out for edge continuity. Normalises through
+      `timeline.positionRange` onto cross-axis 0…1.
+    - `drawCrossfaderRibbon(_:in:viewport:style:)` — fills `.closed`
+      segments with `style.crossfaderRibbonColor`. `.open` segments are
+      transparent. `.transitioning(progress: target)` segments fill at
+      opacity `(1 - target)` so a closing ramp fades in / an opening
+      ramp fades out.
+    - `drawCrossfaderTicks(_:in:viewport:style:)` — draws short
+      perpendicular ticks at every `.cut`, `.pulse`, `.transformPulse`,
+      and `.flareClick` event time.
+    - `ribbonCrossRange(viewport:thickness:)` is a private helper that
+      places both ribbon and ticks at the larger-cross-coordinate edge
+      of the lane (visual BOTTOM in landscape; visual RIGHT in
+      portrait — see "Ribbon edge convention deviation" below).
+  - `ScratchLab/Views/ScratchMotionLane.swift` (+65 lines) — `init`
+    now derives a `CrossfaderStateTimeline` from `content.faderEvents`
+    alongside the existing `motionPath`. `drawMotionPath(in:viewport:)`
+    branches at the top: if `content.shouldRenderRawTrace()` passes,
+    calls `ScratchMotionRenderer.drawRawTrace(...)` and returns; else
+    falls back to the existing tiled `MotionPath` rendering loop —
+    pixel-identical when both new fields are nil/empty. New
+    `drawCrossfaderLayer(in:viewport:)` is added to the Canvas closure
+    between `drawMotionPath` and `drawUserEvents`; it returns early
+    when `content.faderEvents.isEmpty`, so the no-events path is
+    visually identical to pre-Phase-2.
+  - `ScratchLab.xcodeproj/project.pbxproj` (+4 lines) — one new file
+    ref + one new build file + group + Sources phase entry, all using
+    prefix `LRT` (mirrors the Phase 1 `PPT` pattern).
+- **Ribbon edge convention deviation flagged**: the locked Phase 2
+  decision was "bottom / trailing edge", with an ASCII preview that
+  showed the ribbon as a HORIZONTAL strip below the motion area in
+  BOTH portrait and landscape. My implementation places the ribbon at
+  the larger-cross-coordinate edge — which is the visual BOTTOM in
+  landscape (correct, matches preview), but the visual RIGHT side in
+  portrait (NOT the bottom that the ASCII showed). Reason: a true
+  visual-bottom strip in portrait would require restructuring
+  `ScratchMotionLane`'s layout into a VStack (motion canvas + ribbon
+  canvas), which is a separate scope from "renderer-only Phase 2". The
+  current implementation sits cleanly inside the existing 12%
+  cross-axis margin (`crossInsetFraction = 0.12`) and never competes
+  with the motion trace. If Karl prefers the visual-bottom-in-portrait
+  variant, that's a layout-restructure follow-up (Phase 2.1). The
+  inline doc on `ribbonCrossRange` documents this explicitly.
+- **Constraints honoured**:
+  - No edits to `CaptureCore.swift`, `PracticeReelTimeline.swift`,
+    `SessionExportCoordinator.swift`, `HandDirectionTracker.swift`, or
+    `MacCaptureEngine.swift`. The renderer *reads*
+    `CaptureCore.DetectedNotationFaderEvent` as input (a Codable nested
+    struct in the `CaptureCore` enum namespace) but does not modify it.
+  - `scratchlab_session_export_v4` constant
+    (`SessionExportCoordinator.swift:23`) — byte-stable, unchanged.
+  - `scratchlab_detected_notation_v1` constant
+    (`SessionExportCoordinator.swift:379`) — byte-stable, unchanged.
+  - No `.mlmodel`, `.mlmodelc`, `.mlpackage` touched.
+  - No Info.plist, PrivacyInfo.xcprivacy, signing, bundle ID,
+    entitlements, or Copy Bundle Resources changes.
+  - `xcuserdata/.../xcschememanagement.plist`, `reference_frames/`,
+    `reference_videos/` left as pre-existing dirty / untracked.
+  - No `Co-Authored-By` trailer (per `feedback_no_coauthor_trailer.md`).
+- **Builds run** (per `feedback_verification_scope.md`):
+  - `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
+    → **BUILD SUCCEEDED**. (First attempt failed on the test file —
+    `ScratchNotation.loadBabyScratchFromBundle()` returns optional,
+    and SwiftUI `ImageRenderer` is main-actor-isolated. Fixed with
+    `try XCTUnwrap(...)` + `@MainActor` on the test class. Second
+    attempt clean.)
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+- **Tests run** (Phase 1 + Phase 2 classes, targeted to avoid
+  `project_test_runner_hang.md`):
+  - `xcodebuild test-without-building -scheme ScratchLabDesktop
+    -destination 'platform=macOS'
+    -only-testing:ScratchLabDesktopTests/PlatterPositionTimelineTests
+    -only-testing:ScratchLabDesktopTests/LaneRawTraceFallbackTests`
+    → **TEST EXECUTE SUCCEEDED**. **24 / 24 passed**, 0 failures, 0
+    unexpected. (15 Phase 1 + 9 Phase 2.) Total runtime 0.011 s.
+- **Working tree at slice end** (`git status --short --branch`):
+  ```
+  ## main...origin/main
+   M ScratchLab.xcodeproj/project.pbxproj
+   M ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+   M ScratchLab/Models/ScratchMotionRenderer.swift
+   M ScratchLab/Models/TimingLane.swift
+   M ScratchLab/Views/ScratchMotionLane.swift
+  ?? ScratchLabDesktopTests/LaneRawTraceFallbackTests.swift
+  ?? reference_frames/
+  ?? reference_videos/
+  ```
+  `git diff --stat` (Phase 2 scope only — plist is pre-existing dirty,
+  new file is untracked until staged):
+  ```
+  ScratchLab.xcodeproj/project.pbxproj           |   4 +
+  ScratchLab/Models/ScratchMotionRenderer.swift  | 192 +++++++++++++++++++++
+  ScratchLab/Models/TimingLane.swift             |  78 +++++++++
+  ScratchLab/Views/ScratchMotionLane.swift       |  65 ++++++-
+  ```
+- **Limitation surfaced — no pixel snapshot tests.** SwiftUI
+  `GraphicsContext` is opaque to XCTest; a true pixel-diff snapshot
+  test would need an image-comparison library (none in the repo). The
+  pixel-identical guarantee for the no-timeline fallback is therefore
+  argued from code structure (the `drawMotionPath` branch routes
+  through the identical `ScratchMotionRenderer.draw(motionPath:...)`
+  call as pre-Phase-2 when both new fields are defaulted) rather than
+  proven by image diff. The two structural smoke tests assert the new
+  renderer entry points produce a non-nil rendered CGImage via
+  `ImageRenderer`, but do not validate pixel content.
+- **Decision needed from Karl**:
+  1. Approve the slice for commit? Suggested commit message:
+     `Phase 2: raw-trace renderer fork + crossfader ribbon (no producer yet)`.
+  2. Approve the cross-axis-edge ribbon placement, or request the
+     Phase 2.1 layout restructure for a true visual-bottom ribbon in
+     portrait?
+  3. Approve `next_prompt.md` rewrite pointing at Phase 3 (live
+     producer)?
+
 ## 2026-05-24 — Raw platter-position timeline Phase 1 (models + tests)
 
 - **Slice status: uncommitted, awaiting Karl's approval.** Working tree
