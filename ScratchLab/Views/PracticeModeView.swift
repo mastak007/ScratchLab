@@ -54,7 +54,6 @@ struct PracticeModeView: View {
     let usesBackingTrack: Bool
     
     @Environment(\.dismiss) var dismiss
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
@@ -582,10 +581,17 @@ struct PracticeModeView: View {
     
     // The unified notation-first practice surface. The timing lane dominates
     // (~75% of the area); status, metrics and the beat control sit in two thin
-    // chip rows above and below it. Portrait runs the lane vertically,
-    // landscape horizontally — one hierarchy, one layout, both orientations.
+    // chip rows above and below it. Both orientations read TIME LEFT → RIGHT
+    // — portrait used to map time vertically, which fanned strokes left and
+    // right around a vertical centre column and read as bilateral symmetry
+    // (a "mirrored" lane) rather than a temporal flow. Horizontal time means
+    // the eye reads scroll direction as time first; the motion axis (up = push,
+    // down = pull) becomes a secondary articulation signal.
     private var centerFeedbackArea: some View {
-        let axis: LaneAxis = verticalSizeClass == .compact ? .horizontal : .vertical
+        // `LaneAxis.horizontal` regardless of size class. The lane itself is
+        // still axis-parametric (it can render vertical) — this is just the
+        // Practice surface's choice.
+        let axis: LaneAxis = .horizontal
         return VStack(spacing: 8) {
             practiceTopHUD
 
