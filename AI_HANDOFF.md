@@ -1,5 +1,105 @@
 # AI Handoff
 
+## 2026-05-24 — Raw platter-position timeline Phase 1 (models + tests)
+
+- **Slice status: uncommitted, awaiting Karl's approval.** Working tree
+  has the slice's two new files + a pbxproj membership edit. Nothing
+  staged. No commit, no push.
+- **Plan**: `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md`
+  (approved, with the verification amendment that excludes
+  `Tools/TrainModels` swift test from the gate). The Phase 1 coding
+  prompt lives at `AI_HANDOFF/next_prompt.md` (committed in `2a5ba2f`,
+  pushed to `origin/main`).
+- **Files added** (two new, both untracked at slice end):
+  - `ScratchLab/Models/PlatterPositionTimeline.swift` — defines
+    `PlatterPositionSample` (Codable), `PlatterPositionTimeline`
+    (Codable, with failing init enforcing sort + range invariants,
+    linear interpolation, `positionRange`), and `CrossfaderStateTimeline`
+    (NOT Codable — derived view over
+    `CaptureCore.DetectedNotationFaderEvent[]`, lerping
+    `.transitioning(progress:)` across event spans).
+  - `ScratchLabDesktopTests/PlatterPositionTimelineTests.swift` — 15
+    XCTest cases per the prompt: Codable round-trip, 3 invariant
+    rejections, 4 interpolation cases, 2 `positionRange` cases, 5
+    `CrossfaderStateTimeline` cases.
+- **Files modified** (one): `ScratchLab.xcodeproj/project.pbxproj` —
+  10 new entries mirroring the `TimingLane.swift` / `ScratchStrokeGeometry.swift`
+  shape:
+  - File ref `PPT0000000PPT001PPT00001` for the Swift file (+ ref
+    `PPT0010000PPT001PPT00001` for the test file).
+  - Build files for ScratchLab (iOS, suffix `00002`), ScratchLabDesktop
+    (macOS, suffix `00001`), and the test build file
+    (`PPT0011000PPT001PPT00001`) for ScratchLabDesktopTests.
+  - Group entries: Models group (line 560) for the Swift file;
+    ScratchLabDesktopTests group (line 423) for the test file.
+  - Sources phase entries for all three targets at the expected line
+    positions (901 / 978 / 1059).
+- **Convention deviation flagged**: the prompt specified the test path
+  as `ScratchLabDesktopTests/Models/PlatterPositionTimelineTests.swift`,
+  but the existing `ScratchLabDesktopTests/` directory is FLAT (no
+  `Models/` subgroup; 11 sibling test files live at the target root).
+  Honoured the flat convention to keep the pbxproj edit minimal — the
+  file ships at `ScratchLabDesktopTests/PlatterPositionTimelineTests.swift`.
+  If Karl prefers a nested `Models/` subgroup, a follow-up slice can
+  add it with a new PBXGroup entry; today the path is consistent with
+  every other test file in the target.
+- **Constraints honoured**:
+  - No edits to `CaptureCore.swift`, `TimingLane.swift`,
+    `ScratchStrokeGeometry.swift`, `ScratchMotionRenderer.swift`,
+    `ScratchMotionLane.swift`, `PracticeReelTimeline.swift`,
+    `SessionExportCoordinator.swift`, `HandDirectionTracker.swift`, or
+    `MacCaptureEngine.swift`. The new file *reads*
+    `CaptureCore.DetectedNotationFaderEvent` (a nested Codable struct
+    on the `CaptureCore` enum namespace) but does not modify it.
+  - `scratchlab_session_export_v4` constant
+    (`SessionExportCoordinator.swift:23`) — byte-stable, verified.
+  - `scratchlab_detected_notation_v1` constant
+    (`SessionExportCoordinator.swift:379`) — byte-stable, verified.
+  - No `.mlmodel`, `.mlmodelc`, `.mlpackage` touched.
+  - No Info.plist, PrivacyInfo.xcprivacy, signing, bundle ID,
+    entitlements, or Copy Bundle Resources changes.
+  - `xcuserdata/.../xcschememanagement.plist`, `reference_frames/`,
+    `reference_videos/` left as pre-existing dirty / untracked.
+  - No `Co-Authored-By` trailer (per `feedback_no_coauthor_trailer.md`).
+- **Builds run** (per `feedback_verification_scope.md` —
+  `Tools/TrainModels swift test` is explicitly NOT in the verification
+  gate for app-target-only slices):
+  - `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+- **Tests run** (nice-to-have, narrowed to the new class to avoid the
+  `project_test_runner_hang.md` test-host hang risk):
+  - `xcodebuild test-without-building -scheme ScratchLabDesktop
+    -destination 'platform=macOS'
+    -only-testing:ScratchLabDesktopTests/PlatterPositionTimelineTests`
+    → **TEST EXECUTE SUCCEEDED**. 15 / 15 passed, 0 failures, 0
+    unexpected. Total runtime 0.009 s (pure value-type tests).
+- **Working tree at slice end** (`git status --short --branch`):
+  ```
+  ## main...origin/main
+   M ScratchLab.xcodeproj/project.pbxproj
+   M ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+  ?? ScratchLab/Models/PlatterPositionTimeline.swift
+  ?? ScratchLabDesktopTests/PlatterPositionTimelineTests.swift
+  ?? reference_frames/
+  ?? reference_videos/
+  ```
+  `git diff --stat` (only the pbxproj diff is in scope — the new files
+  are untracked until staged; the plist is pre-existing dirty):
+  ```
+  ScratchLab.xcodeproj/project.pbxproj | 10 ++++++++++
+  ```
+- **Decision needed from Karl**:
+  1. Approve the slice for commit? Suggested commit message:
+     `Phase 1: PlatterPositionTimeline + CrossfaderStateTimeline models, tests only`.
+  2. Approve the flat test-file location, or move to a new
+     `ScratchLabDesktopTests/Models/` subgroup?
+  3. Approve `next_prompt.md` rewrite pointing at Phase 2 (renderer
+     fork)?
+
 ## 2026-05-24 — 2D Coach quarantine + integrated-trace decision
 
 - **`cb33837` pushed to `origin/main`** (`Quarantine the 2D Coach Rig from the
