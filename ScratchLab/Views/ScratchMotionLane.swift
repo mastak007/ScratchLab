@@ -53,14 +53,25 @@ struct ScratchMotionLane: View {
     private static let tickInterval: TimeInterval = 1.0 / 60.0
     private static let completionEpsilon: TimeInterval = 0.06
 
-    /// Action-line position along the scroll axis, per orientation.
+    /// Action-line position along the scroll axis, per orientation. The lane
+    /// is heavily skewed toward the FUTURE so the playhead reads as a
+    /// temporal divider — most of the visible area is upcoming notation,
+    /// with just a short tail of recently-played content on the past side.
+    /// A more centred line made the chart feel like two mirrored phrases
+    /// flanking a gameplay target; this asymmetry restores the "one
+    /// scrolling timeline" feel.
     private func actionLineFraction(for axis: LaneAxis) -> CGFloat {
-        axis == .vertical ? 0.70 : 0.28
+        axis == .vertical ? 0.85 : 0.18
     }
     /// Lookahead window — landscape is wider, so it can show a little more.
     private func secondsAhead(for axis: LaneAxis) -> TimeInterval {
         axis == .vertical ? 5.5 : 6.5
     }
+    /// Opacity of past notation at the far past edge of the lane. A linear
+    /// gradient mask reaches this value at the trailing past edge so what
+    /// has already played fades into a quiet tail rather than competing
+    /// with the upcoming notation as a second, equal-weight cluster.
+    private static let pastFadeOpacity: Double = 0.30
 
     // MARK: Palette — one shared language across both orientations
 
@@ -112,6 +123,10 @@ struct ScratchMotionLane: View {
                 drawUserEvents(in: context, viewport: viewport)
                 drawActionLine(in: context, viewport: viewport, segment: currentSegment)
             }
+            // Past content fades into a quiet tail. Future stays full
+            // opacity. The fade only masks the notation layer, so the
+            // chip and segment labels stay crisp on top.
+            .mask(pastFadeMask(for: viewport))
 
             segmentLabelOverlay(viewport)
             actionLineChip(viewport: viewport, segment: currentSegment)
@@ -119,6 +134,41 @@ struct ScratchMotionLane: View {
             if isComplete {
                 completionCard
             }
+        }
+    }
+
+    // MARK: - Past-fade mask
+
+    /// A linear gradient that runs along the scroll axis: full opacity on the
+    /// future side, fading to `pastFadeOpacity` at the far past edge, with
+    /// the transition starting exactly at the action line. Applied as a
+    /// `.mask(...)` on the notation `Canvas` only — segment labels and the
+    /// action-line chip keep their full visual weight on top.
+    private func pastFadeMask(for viewport: LaneViewport) -> LinearGradient {
+        let frac = actionLineFraction(for: viewport.axis)
+        let fadeColor = Color.white.opacity(Self.pastFadeOpacity)
+        switch viewport.axis {
+        case .vertical:
+            // Future = top, past = bottom. Fade starts at the action line
+            // (`frac` from the top) and reaches `pastFadeOpacity` at the
+            // very bottom.
+            return LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: .white,    location: 0.0),
+                    .init(color: .white,    location: frac),
+                    .init(color: fadeColor, location: 1.0),
+                ]),
+                startPoint: .top, endPoint: .bottom)
+        case .horizontal:
+            // Past = leading, future = trailing. Fade starts at the past
+            // edge and reaches full opacity at the action line.
+            return LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: fadeColor, location: 0.0),
+                    .init(color: .white,    location: frac),
+                    .init(color: .white,    location: 1.0),
+                ]),
+                startPoint: .leading, endPoint: .trailing)
         }
     }
 
@@ -299,9 +349,11 @@ struct ScratchMotionLane: View {
     // MARK: - Overlay: action-line status chip
 
     /// The label at the action line — names what is happening *now* in
-    /// instructional terms (TARGET / YOUR TURN / Watch & listen). A small,
-    /// quiet pill rather than a heavy game badge: smaller font, no shadow,
-    /// no white border, low-opacity accent fill.
+    /// instructional terms (TARGET / YOUR TURN / Watch & listen). Anchored
+    /// at the leading cross-edge of the lane, hugging the action line:
+    /// the chip reads as part of the HUD/timeline structure rather than a
+    /// game badge pasted over the chart. The chart's centre column stays
+    /// clear so the strokes themselves remain the primary visual object.
     private func actionLineChip(viewport: LaneViewport, segment: LaneSegment?) -> some View {
         let isCopy = segment?.kind == .copy
         let accent = isCopy ? Self.copyAccent : Self.demoAccent
@@ -315,22 +367,43 @@ struct ScratchMotionLane: View {
             subtitle = "Play it on the line"
         }
 
-        let chipPoint = viewport.point(scroll: viewport.actionLinePos - 22,
-                                       cross: viewport.crossLength / 2)
-
-        return VStack(spacing: 1) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.4)
-                .foregroundColor(.white.opacity(0.92))
-            Text(subtitle)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.white.opacity(0.65))
+        // Approximate chip size — used to anchor the chip above (portrait)
+        // or to the right of (landscape) the action line.
+        let chipApproxHeight: CGFloat = 30
+        let actionLineGap: CGFloat = 4
+        let leadingCrossInset: CGFloat = 12
+        let offset: CGPoint
+        switch viewport.axis {
+        case .vertical:
+            // Chip's bottom edge sits just above the action line at the
+            // leading cross-edge (lane's left side in portrait).
+            offset = CGPoint(
+                x: leadingCrossInset,
+                y: max(actionLineGap,
+                       viewport.actionLinePos - chipApproxHeight - actionLineGap))
+        case .horizontal:
+            // Chip's left edge sits just past the action line on the
+            // future side, at the leading cross-edge (lane's top in
+            // landscape).
+            offset = CGPoint(
+                x: viewport.actionLinePos + actionLineGap,
+                y: leadingCrossInset)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(accent.opacity(0.45)))
-        .position(chipPoint)
+
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.4)
+                .foregroundColor(.white.opacity(0.95))
+            Text(subtitle)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(.white.opacity(0.72))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(accent.opacity(0.55)))
+        .offset(x: offset.x, y: offset.y)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title). \(subtitle)")
