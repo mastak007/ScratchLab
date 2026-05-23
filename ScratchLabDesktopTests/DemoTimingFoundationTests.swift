@@ -1104,19 +1104,27 @@ struct ScratchMotionRendererTests {
                 != ScratchMotionRenderer.Style.target.backwardColor)
     }
 
-    @Test("Holds draw as a quiet solid centre-line rest — no dashing")
-    func holdsDrawAsQuietSolidRest() throws {
+    @Test("Holds draw no line — no visible centre spine across the lane")
+    func holdsRenderNoCentreSpine() throws {
         let source = try rendererSource()
-        // The hold branch of `draw` strokes a thin, low-opacity, continuous
-        // line — a rest the eye reads through, not a row of dashes that
-        // ticks the empty span between strokes.
-        let drawBody = try sliceBetween(source,
-            from: "if item.segment.isHold {",
-            to: "} else {")
-        #expect(!drawBody.contains("dash:"))
-        // Still rendered (a solid stroke), not omitted — the rest is felt,
-        // just no longer competing with the strokes themselves.
-        #expect(drawBody.contains("stroke"))
+        // The geometry still produces hold segments (lead-in, inter-stroke
+        // gaps, trailing rest) for time accounting and loop seam closure,
+        // but the renderer SKIPS them — concatenated holds at centre used
+        // to read as a continuous baseline running through the whole lane,
+        // visually splitting the chart into two notation half-lanes
+        // flanking a centre spine.
+        //
+        // The notation-line loop now filters out holds before drawing.
+        let lineLoop = try sliceBetween(source,
+            from: "// 2. The notation line",
+            to: "// 3.")
+        #expect(lineLoop.contains("where !item.segment.isHold"))
+        // No alternate hold-drawing branch remains.
+        #expect(!lineLoop.contains("if item.segment.isHold"))
+        // The renderer no longer needs the hold-only opacity / width-scale
+        // tuning constants that drove the old centre baseline.
+        #expect(!source.contains("holdOpacity"))
+        #expect(!source.contains("holdWidthScale"))
     }
 
     @Test("Junction nodes mark every timing endpoint — not just rail apexes")

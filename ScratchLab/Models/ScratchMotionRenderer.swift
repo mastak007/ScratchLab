@@ -11,12 +11,16 @@ import SwiftUI
 //
 // To keep tightly packed strokes from blending into one triangular wave, push
 // and pull are drawn in DIFFERENT colours — by default cyan for a forward push
-// and a contrasting muted rose-coral for a backward pull — and a hold at the
-// centre line is drawn as a quiet SOLID rest, clearly subordinate to the
-// strokes themselves. Every meaningful timing junction along the path
-// (stroke starts, rail apexes, centre returns, hold endpoints) is then
-// punctuated with a small neutral dot, so the chart reads as scratch
-// notation — push, pull, pause, articulation — rather than a smooth curve.
+// and a contrasting muted rose-coral for a backward pull. Holds (lead-in,
+// inter-stroke gaps, trailing rest) draw no visible line: with every hold
+// rendered, the geometry's centre-resting endpoints concatenated into a
+// continuous baseline across the lane and the chart read as two notation
+// half-lanes flanking a visible centre spine. Dropping the hold line
+// removes the spine; the path reads as one trace of angular stroke
+// triangles. Every stroke-endpoint junction (centre entry, rail apex,
+// centre return) is then punctuated with a small neutral dot — the
+// dot row at centre provides the trace-continuity hint the eye needs
+// without drawing a baseline.
 //
 // The renderer is presentation-agnostic: it reads only its arguments and draws
 // only into the supplied `GraphicsContext` — no state, no clock, no SwiftUI
@@ -78,13 +82,6 @@ enum ScratchMotionRenderer {
     /// cross length — a safe margin that keeps the curve, its junction dots
     /// and any glow clear of the lane edges. The motion fills the rest (~76%).
     static let crossInsetFraction: CGFloat = 0.12
-    /// Hold width relative to a stroke ramp — a pause is a thinner, quieter
-    /// line so it reads as subordinate to the strokes themselves.
-    private static let holdWidthScale: CGFloat = 0.5
-    /// Hold opacity — a quiet solid centre-line rest. Lower than the dashed
-    /// version it replaced, because a solid line reads heavier than dashes
-    /// at the same alpha; the line is meant to be felt, not noticed.
-    private static let holdOpacity: Double = 0.40
     /// Glow width relative to the stroke line — a tight edge, not a soft halo.
     private static let glowWidthScale: CGFloat = 1.6
     /// Junction-node radius — small enough to read as a tick on a study
@@ -107,11 +104,12 @@ enum ScratchMotionRenderer {
     /// Draws `path` into `context`, mapped through `viewport`, in `style`.
     /// Pure — reads only its arguments, writes only to the context.
     ///
-    /// Each segment is ONE straight line — a stroke ramp or a flat hold —
-    /// drawn in its direction colour; small junction dots mark every
-    /// meaningful timing point along the path (apexes, centre entries
-    /// and exits, hold endpoints), so the chart reads like scratch
-    /// notation rather than a smooth motion curve.
+    /// ONLY stroke segments draw a visible line; holds are skipped so the
+    /// chart reads as one continuous SXRATCH-style trace of angular
+    /// triangles rather than two notation half-lanes flanking a centre
+    /// baseline. Small junction dots mark every stroke endpoint (centre
+    /// entry, rail apex, centre return) so the dot row at centre carries
+    /// the trace-continuity hint without drawing a spine.
     static func draw(_ path: MotionPath,
                      in context: GraphicsContext,
                      viewport: LaneViewport,
@@ -144,24 +142,23 @@ enum ScratchMotionRenderer {
             }
         }
 
-        // 2. The notation line, per segment. A stroke is a bold angular ramp in
-        //    its direction colour; a hold is a thin, low-opacity, SOLID line
-        //    at the centre — a quiet rest the eye reads through, not a row
-        //    of dashes that tick the empty span.
-        for item in drawn {
+        // 2. The notation line. ONLY stroke segments draw a visible line —
+        //    holds (lead-in, gaps between strokes, trailing rest) are skipped
+        //    entirely. With every hold rendered, the geometry's centre-
+        //    resting endpoints concatenated into a continuous horizontal
+        //    line across the lane and the chart read as two notation
+        //    half-lanes flanking a visible centre spine. Dropping the hold
+        //    line removes the spine; the path reads as a series of angular
+        //    stroke triangles, and the Tier 3A junction dots at every
+        //    stroke endpoint provide the timing-continuity hint the eye
+        //    needs without drawing a baseline.
+        for item in drawn where !item.segment.isHold {
             let color = strokeColor(for: item.segment, style: style)
-            if item.segment.isHold {
-                let width = max(style.lineWidth * holdWidthScale, 1.2)
-                layer.stroke(segmentPath(item.a, item.b),
-                             with: .color(color.opacity(holdOpacity)),
-                             style: StrokeStyle(lineWidth: width, lineCap: .round))
-            } else {
-                let width = style.lineWidth * speedWeight(item.segment.speed)
-                let dash: [CGFloat] = style.dashed ? [width * 1.5, width * 1.4] : []
-                layer.stroke(segmentPath(item.a, item.b),
-                             with: .color(color),
-                             style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
-            }
+            let width = style.lineWidth * speedWeight(item.segment.speed)
+            let dash: [CGFloat] = style.dashed ? [width * 1.5, width * 1.4] : []
+            layer.stroke(segmentPath(item.a, item.b),
+                         with: .color(color),
+                         style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
         }
 
         // 3. Junction nodes — small neutral dots at every meaningful timing
