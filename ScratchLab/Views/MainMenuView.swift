@@ -383,7 +383,14 @@ private struct DemoModeView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     feedbackCard
-                    coachCard
+                    // 2D Coach Rig quarantined from the Try-Demo surface — the
+                    // rig's animation no longer matches the notation lane's
+                    // SXRATCH-style continuous timeline, so showing it here
+                    // makes the demo feel inconsistent. The `coachCard`
+                    // property and `ScratchCoachCardContent` view are kept
+                    // defined (no code deleted, so the rig can be brought
+                    // back into a different surface) — only the mount is
+                    // removed from this surface.
                     exportCard
                 }
                 .padding(.horizontal, 20)
