@@ -819,12 +819,79 @@ struct PracticeModeView: View {
                     notationStatusChip
                 }
 
+                notationInstructionalLine(content: lane.content, clock: lane.clock)
+
                 ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
             Spacer(minLength: 0)
         }
+    }
+
+    // What's happening *now* on the action line — used to live as an overlay
+    // chip inside the lane, dead-centre over the strokes. Lifted out into a
+    // small HUD line in the lane header so the notation graph contains only
+    // the graph and the instructional language reads as part of the header
+    // structure. Ticks at 4 Hz off the same clock the lane uses, which is
+    // far more often than segment boundaries change.
+    @ViewBuilder
+    private func notationInstructionalLine(content: LaneContent, clock: LaneClock) -> some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
+            instructionalLineContent(
+                content: content,
+                segment: content.segment(at: clock.now(at: timeline.date)))
+        }
+    }
+
+    @ViewBuilder
+    private func instructionalLineContent(content _: LaneContent,
+                                          segment: LaneSegment?) -> some View {
+        let isCopy = segment?.kind == .copy
+        let accent: Color = isCopy
+            ? Color(red: 0.96, green: 0.62, blue: 0.07)
+            : Color(red: 0.23, green: 0.51, blue: 0.96)
+        let title: String = {
+            if let segment {
+                return isCopy
+                    ? "YOUR TURN"
+                    : instructionalSegmentLabel(segment).uppercased()
+            }
+            return "TARGET"
+        }()
+        let subtitle: String = {
+            if segment != nil {
+                return isCopy ? "Copy what you heard" : "Watch & listen"
+            }
+            return "Play it on the line"
+        }()
+
+        HStack(spacing: 7) {
+            Circle()
+                .fill(accent)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.4)
+                .foregroundColor(.white.opacity(0.95))
+            Text("·")
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.35))
+            Text(subtitle)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.65))
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title). \(subtitle)")
+    }
+
+    private func instructionalSegmentLabel(_ segment: LaneSegment) -> String {
+        if let label = segment.label,
+           !label.trimmingCharacters(in: .whitespaces).isEmpty {
+            return label
+        }
+        return segment.kind == .copy ? "Your turn" : "Demo"
     }
 
     // Runtime status for the notation surface. Once a session is live the
