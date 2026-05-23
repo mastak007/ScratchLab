@@ -2,6 +2,16 @@ import SwiftUI
 
 // Static full-phrase notation chart — all strokes visible at once.
 // Replaces ScratchNotationCanvasView in non-animated contexts (capture, review).
+//
+// The TARGET case routes its strokes through the shared `ScratchMotionRenderer`
+// and `ScratchStrokeGeometry` — the same renderer the iOS practice lane uses —
+// so a Baby Scratch reference shown in macOS Review reads in exactly the same
+// visual language as the iOS lane: cyan forward push and hot pink backward
+// pull, deflect-and-return tent ramps with apex nodes on each rail, and a
+// dashed rest line between strokes. macOS-specific affordances (beat-number
+// labels, the CROSSFADER sub-lane, and the optional playhead) live around
+// the shared renderer's record-lane output. The CAPTURED / EMPTY cases are
+// unchanged.
 
 struct ScratchPhraseChartView: View {
 
@@ -16,13 +26,14 @@ struct ScratchPhraseChartView: View {
     var playheadTime: TimeInterval = 0
     var showPlayhead: Bool = false
 
-    // Palette matches ScratchNotationCanvasView
+    // Background and grid palette — shared across both target/captured paths.
     private let bgColor    = Color(white: 0.10)
     private let gridMajor  = Color(white: 0.22)
     private let gridMinor  = Color(white: 0.14)
+    // Captured-path stroke palette (kept; the captured path still draws its
+    // own single-diagonal record-events because they aren't authored strokes).
     private let forwardCol = Color(red: 0.20, green: 0.88, blue: 0.55)
     private let backCol    = Color(red: 1.00, green: 0.55, blue: 0.10)
-    private let holdCol    = Color(white: 0.40)
     private let dotCol     = Color(white: 0.82)
     private let faderOpenCol   = Color(red: 0.20, green: 0.88, blue: 0.55).opacity(0.55)
     private let faderClosedCol = Color(red: 1.00, green: 0.25, blue: 0.25).opacity(0.65)
@@ -58,64 +69,36 @@ struct ScratchPhraseChartView: View {
         let duration = max(notation.timelineDuration, 0.1)
         let pps = size.width / CGFloat(duration)
         let strokeRegionHeight = size.height * (1 - faderLaneFraction)
-        let midY = strokeRegionHeight / 2
 
         drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps,
                      labelBottomY: strokeRegionHeight - 2)
 
-        for i in 0..<notation.strokes.count {
-            let after = notation.strokes[i]
-            let before = i + 1 < notation.strokes.count ? notation.strokes[i + 1] : nil
-            drawHold(ctx: ctx, size: size, afterEnd: after.endTime, beforeStart: before?.startTime ?? duration,
-                     pps: pps, midY: midY)
-        }
-
-        for stroke in notation.strokes {
-            drawTargetStroke(ctx: ctx, size: size, stroke: stroke, pps: pps, midY: midY,
-                             strokeRegionHeight: strokeRegionHeight)
-        }
+        // Strokes + holds + apex nodes via the shared angular renderer — the
+        // identical language used by the iOS lane. The viewport is sized so
+        // the whole phrase fits the chart width at fixed pps (static, no
+        // scrolling). With actionLineFraction = 0, time `now = 0` lands at
+        // the left edge and the pattern stretches rightward; the renderer
+        // never draws a per-frame action line, so no "now" marker bleeds
+        // into this static reference.
+        let strokeRegion = CGSize(width: size.width, height: strokeRegionHeight)
+        let viewport = LaneViewport(
+            size: strokeRegion,
+            now: 0,
+            axis: .horizontal,
+            actionLineFraction: 0,
+            secondsAhead: duration)
+        let laneContent = LaneContent(notation: notation, beatsPerMinute: bpm)
+        let motionPath = ScratchStrokeGeometry.motionPath(for: laneContent)
+        ScratchMotionRenderer.draw(motionPath, in: ctx, viewport: viewport,
+                                    style: .target)
 
         drawLaneDivider(ctx: ctx, size: size, y: strokeRegionHeight)
         drawTargetCrossfaderLane(ctx: ctx, size: size, notation: notation,
                                   pps: pps, strokeRegionTop: strokeRegionHeight)
-        drawTargetAxisLabels(ctx: ctx, size: size, midY: midY,
-                             strokeRegionHeight: strokeRegionHeight)
 
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime) * pps)
         }
-    }
-
-    private func drawTargetStroke(ctx: GraphicsContext, size: CGSize,
-                                   stroke: ScratchNotation.Stroke, pps: CGFloat, midY: CGFloat,
-                                   strokeRegionHeight: CGFloat) {
-        let x1 = CGFloat(stroke.startTime) * pps
-        let x2 = CGFloat(stroke.endTime) * pps
-        guard x2 > x1 else { return }
-
-        let halfH = slopeHalfHeight(strokeRegionHeight: strokeRegionHeight,
-                                    fast: stroke.speedClassification == .fast,
-                                    slow: stroke.speedClassification == .slow)
-        let isForward = stroke.direction == .forward
-        let (y1, y2) = isForward ? (midY + halfH, midY - halfH) : (midY - halfH, midY + halfH)
-        let color = isForward ? forwardCol : backCol
-
-        var path = Path()
-        path.move(to: CGPoint(x: x1, y: y1))
-        path.addLine(to: CGPoint(x: x2, y: y2))
-        ctx.stroke(path, with: .color(color), lineWidth: 2.5)
-
-        drawDots(ctx: ctx, p1: CGPoint(x: x1, y: y1), p2: CGPoint(x: x2, y: y2))
-
-        let label = isForward ? "F" : "B"
-        let labelOffset: CGFloat = isForward ? -10 : 10
-        ctx.draw(
-            Text(label)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(color.opacity(0.9)),
-            at: CGPoint(x: (x1 + x2) / 2, y: (y1 + y2) / 2 + labelOffset),
-            anchor: .center
-        )
     }
 
     // MARK: - Captured (recordMovementEvents)
@@ -161,11 +144,6 @@ struct ScratchPhraseChartView: View {
 
     // MARK: - Helpers
 
-    private func slopeHalfHeight(strokeRegionHeight: CGFloat, fast: Bool, slow: Bool) -> CGFloat {
-        let fraction: CGFloat = fast ? 0.84 : slow ? 0.38 : 0.60
-        return strokeRegionHeight * 0.44 * fraction
-    }
-
     private func capturedHalfHeight(size: CGSize, kind: ScratchMovementKind) -> CGFloat {
         let fraction: Double = {
             switch kind {
@@ -176,18 +154,6 @@ struct ScratchPhraseChartView: View {
             }
         }()
         return size.height * 0.44 * CGFloat(fraction)
-    }
-
-    private func drawHold(ctx: GraphicsContext, size: CGSize,
-                           afterEnd: TimeInterval, beforeStart: TimeInterval,
-                           pps: CGFloat, midY: CGFloat) {
-        let x1 = CGFloat(afterEnd) * pps
-        let x2 = CGFloat(beforeStart) * pps
-        guard x2 > x1 else { return }
-        var path = Path()
-        path.move(to: CGPoint(x: x1, y: midY))
-        path.addLine(to: CGPoint(x: x2, y: midY))
-        ctx.stroke(path, with: .color(holdCol.opacity(0.40)), lineWidth: 1.2)
     }
 
     private func drawDots(ctx: GraphicsContext, p1: CGPoint, p2: CGPoint, alpha: Double = 1) {
@@ -271,24 +237,6 @@ struct ScratchPhraseChartView: View {
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color(white: 0.55)),
             at: CGPoint(x: 4, y: strokeRegionTop + laneHeight / 2),
-            anchor: .leading
-        )
-    }
-
-    private func drawTargetAxisLabels(ctx: GraphicsContext, size: CGSize, midY: CGFloat,
-                                       strokeRegionHeight: CGFloat) {
-        ctx.draw(
-            Text("FWD")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(forwardCol.opacity(0.55)),
-            at: CGPoint(x: 4, y: midY - strokeRegionHeight * 0.38),
-            anchor: .leading
-        )
-        ctx.draw(
-            Text("BACK")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(backCol.opacity(0.55)),
-            at: CGPoint(x: 4, y: midY + strokeRegionHeight * 0.30),
             anchor: .leading
         )
     }

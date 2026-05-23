@@ -2,10 +2,21 @@ import SwiftUI
 
 // MARK: - ScratchNotationCanvasView
 //
-// Detailed, ScratchLab-native notation renderer.
-// Shows the record-movement lane and a fader lane, inspired by standard
-// scratch notation conventions (forward = rising slope, back = falling slope,
-// fast = steep, slow = shallow, hold = flat, fader cuts = markers on fader lane).
+// Detailed, ScratchLab-native notation visualizer — the animated/looping
+// counterpart of `ScratchPhraseChartView`. Both go through the SAME shared
+// renderer (`ScratchMotionRenderer` + `ScratchStrokeGeometry`) the iOS
+// practice lane uses, so a Baby Scratch shown on macOS Review looks in
+// exactly the same visual language as on iOS Practice: cyan forward push
+// and hot pink backward pull, deflect-and-return tent ramps with
+// direction-coloured apex nodes on each rail, and a dashed rest line
+// between strokes.
+//
+// The view keeps the macOS-specific affordances around the shared
+// renderer's output: a fixed playhead at 30% from the left, a CROSSFADER
+// sub-lane that visualises fader state per stroke, and a beat-numbered
+// grid. Loop tiling is done with `MotionPath.shifted(by:)`, so the
+// curve is naturally seam-safe (both ends of the deflect-and-return path
+// rest at the centre).
 //
 // Owns no state and does no IO — all data is passed in at init.
 
@@ -15,17 +26,17 @@ struct ScratchNotationCanvasView: View {
     let playbackTime: TimeInterval
     let loopDuration: TimeInterval
 
-    // Optional: highlight a specific stroke index
+    // Optional: highlight a specific stroke index (currently unused by the
+    // shared renderer; kept for API stability with existing call sites).
     var selectedStrokeIndex: Int? = nil
 
     // Layout fractions (record lane : fader lane)
     private let recordLaneFraction: CGFloat = 0.72
     private let faderLaneFraction:  CGFloat = 0.18
-    private let labelWidth: CGFloat = 52
 
-    // Timing window: how many seconds are visible at once
+    // Timing window: how many seconds are visible at once.
     private let visibleSeconds: Double = 2.4
-    // Playhead sits 30% from the left
+    // Playhead sits 30% from the left — past on the left, future on the right.
     private let playheadFraction: Double = 0.30
 
     // Palette
@@ -34,11 +45,6 @@ struct ScratchNotationCanvasView: View {
     private let gridMajor   = Color(white: 0.22)
     private let gridMinor   = Color(white: 0.155)
     private let playheadCol = Color.white
-    private let forwardCol  = Color(red: 0.20, green: 0.88, blue: 0.55)
-    private let backCol     = Color(red: 1.00, green: 0.55, blue: 0.10)
-    private let holdCol     = Color(white: 0.45)
-    private let releaseCol  = Color(red: 0.55, green: 0.75, blue: 1.00)
-    private let dotCol      = Color(white: 0.82)
     private let faderOpenCol   = Color(red: 0.20, green: 0.88, blue: 0.55).opacity(0.7)
     private let faderClosedCol = Color(red: 1.00, green: 0.25, blue: 0.25).opacity(0.85)
     private let cutCol         = Color(white: 0.90)
@@ -66,29 +72,35 @@ struct ScratchNotationCanvasView: View {
             drawLaneLabel(ctx: ctx, text: "RECORD", y: recordH * 0.08, size: size)
             drawLaneLabel(ctx: ctx, text: "CROSSFADER",  y: faderY + faderH * 0.18, size: size)
 
-            let recordRect = CGRect(x: 0, y: 0, width: size.width, height: recordH)
             let faderRect  = CGRect(x: 0, y: faderY, width: size.width, height: faderH)
 
-            if let strokes = notation?.strokes {
-                // Draw 3 loop copies so the canvas fills seamlessly
+            if let notation = notation {
+                // Record-lane strokes via the SHARED angular renderer — the
+                // same path the iOS practice lane uses. `LaneViewport` is
+                // sized to the record-lane region; with `actionLineFraction`
+                // matching the playhead position and `secondsAhead` matching
+                // the future portion of the visible window, a stroke at time
+                // `t` lands at x = phX + (t − now) · pps. Loop tiling uses
+                // `MotionPath.shifted(by:)`; the deflect-and-return geometry
+                // is naturally seam-safe.
+                let recordSize = CGSize(width: size.width, height: recordH)
+                let viewport = LaneViewport(
+                    size: recordSize,
+                    now: now,
+                    axis: .horizontal,
+                    actionLineFraction: playheadFraction,
+                    secondsAhead: visibleSeconds * (1 - playheadFraction))
+                let content = LaneContent(notation: notation, beatsPerMinute: nil)
+                let motionPath = ScratchStrokeGeometry.motionPath(for: content)
                 for loopOffset in [-loop, 0, loop] {
-                    // Hold segments between strokes
-                    for i in 0..<strokes.count {
-                        let next = i + 1 < strokes.count ? strokes[i + 1] : nil
-                        drawHold(ctx: ctx, after: strokes[i], before: next,
-                                 loopOffset: loopOffset, loopDuration: loop,
-                                 now: now, phX: phX, pps: pps,
-                                 laneRect: recordRect, canvasWidth: size.width)
-                    }
-                    // Stroke traces
-                    for (i, stroke) in strokes.enumerated() {
-                        let isSelected = selectedStrokeIndex == i
-                        drawStroke(ctx: ctx, stroke: stroke,
-                                   loopOffset: loopOffset, now: now,
-                                   phX: phX, pps: pps,
-                                   laneRect: recordRect, canvasWidth: size.width,
-                                   selected: isSelected)
-                        // Fader marker
+                    ScratchMotionRenderer.draw(
+                        motionPath.shifted(by: loopOffset),
+                        in: ctx, viewport: viewport, style: .target)
+                }
+
+                // Crossfader sub-lane (macOS affordance, kept).
+                for loopOffset in [-loop, 0, loop] {
+                    for stroke in notation.strokes {
                         drawFaderMarker(ctx: ctx, stroke: stroke,
                                         loopOffset: loopOffset, now: now,
                                         phX: phX, pps: pps,
@@ -103,7 +115,8 @@ struct ScratchNotationCanvasView: View {
             div.addLine(to: CGPoint(x: size.width, y: faderY))
             ctx.stroke(div, with: .color(Color(white: 0.32)), lineWidth: 1)
 
-            // Playhead
+            // Playhead — sits on top of the strokes so the current time is
+            // immediately readable.
             var ph = Path()
             ph.move(to: CGPoint(x: phX, y: 0))
             ph.addLine(to: CGPoint(x: phX, y: size.height))
@@ -163,115 +176,6 @@ struct ScratchNotationCanvasView: View {
         )
     }
 
-    // MARK: - Stroke rendering
-
-    private func drawStroke(
-        ctx: GraphicsContext,
-        stroke: ScratchNotation.Stroke,
-        loopOffset: Double,
-        now: Double,
-        phX: CGFloat,
-        pps: CGFloat,
-        laneRect: CGRect,
-        canvasWidth: CGFloat,
-        selected: Bool
-    ) {
-        let x1 = phX + CGFloat(stroke.startTime + loopOffset - now) * pps
-        let x2 = phX + CGFloat(stroke.endTime   + loopOffset - now) * pps
-        guard x2 >= -60, x1 <= canvasWidth + 60 else { return }
-
-        let kind = stroke.movementKind
-        let isPast = x2 < phX
-
-        // Slope: fast=steep (full height), normal=medium, slow=shallow (40% height)
-        let heightFraction: CGFloat = {
-            switch kind {
-            case .fastPush, .fastPull: return 0.84
-            case .normalPush, .normalPull: return 0.60
-            case .slowDrag, .slowPullDrag: return 0.38
-            default: return 0.60
-            }
-        }()
-
-        let margin = laneRect.height * 0.08
-        let midY   = laneRect.midY
-        let halfH  = laneRect.height * heightFraction / 2
-
-        let (y1, y2): (CGFloat, CGFloat) = switch kind {
-        case .fastPush, .normalPush, .slowDrag:
-            (midY + halfH, midY - halfH)
-        case .fastPull, .normalPull, .slowPullDrag:
-            (midY - halfH, midY + halfH)
-        default:
-            (midY, midY)
-        }
-        _ = margin
-
-        let baseColor: Color = {
-            switch kind {
-            case .fastPush, .normalPush, .slowDrag:     return forwardCol
-            case .fastPull, .normalPull, .slowPullDrag: return backCol
-            case .releaseNormalPlayback:                return releaseCol
-            default: return holdCol
-            }
-        }()
-
-        let alpha: Double = isPast ? (selected ? 0.55 : 0.22) : (selected ? 1.0 : 0.95)
-        let lineWidth: CGFloat = isPast ? 1.5 : (selected ? 3.5 : 2.5)
-
-        // releaseNormalPlayback uses dashed stroke
-        if kind == .releaseNormalPlayback {
-            var ghostPath = Path()
-            ghostPath.move(to: CGPoint(x: x1, y: y1))
-            ghostPath.addLine(to: CGPoint(x: x2, y: y2))
-            ctx.stroke(
-                ghostPath,
-                with: .color(baseColor.opacity(alpha * 0.65)),
-                style: StrokeStyle(lineWidth: lineWidth, dash: [6, 4])
-            )
-        } else {
-            var path = Path()
-            path.move(to: CGPoint(x: x1, y: y1))
-            path.addLine(to: CGPoint(x: x2, y: y2))
-            ctx.stroke(path, with: .color(baseColor.opacity(alpha)), lineWidth: lineWidth)
-        }
-
-        // Endpoint dots
-        let dotR: CGFloat = isPast ? 3 : (selected ? 5.5 : 4)
-        drawDot(ctx: ctx, at: CGPoint(x: x1, y: y1), r: dotR, color: dotCol.opacity(alpha))
-        drawDot(ctx: ctx, at: CGPoint(x: x2, y: y2), r: dotR, color: dotCol.opacity(alpha))
-    }
-
-    // MARK: - Hold segment
-
-    private func drawHold(
-        ctx: GraphicsContext,
-        after stroke: ScratchNotation.Stroke,
-        before next: ScratchNotation.Stroke?,
-        loopOffset: Double,
-        loopDuration: Double,
-        now: Double,
-        phX: CGFloat,
-        pps: CGFloat,
-        laneRect: CGRect,
-        canvasWidth: CGFloat
-    ) {
-        let holdStart = stroke.endTime + loopOffset
-        let holdEnd   = (next?.startTime ?? loopDuration) + loopOffset
-        guard holdEnd > holdStart else { return }
-
-        let x1 = phX + CGFloat(holdStart - now) * pps
-        let x2 = phX + CGFloat(holdEnd   - now) * pps
-        guard x2 >= -60, x1 <= canvasWidth + 60 else { return }
-
-        let midY = laneRect.midY
-        var path = Path()
-        path.move(to: CGPoint(x: x1, y: midY))
-        path.addLine(to: CGPoint(x: x2, y: midY))
-        let isPast = x2 < phX
-        ctx.stroke(path, with: .color(holdCol.opacity(isPast ? 0.18 : 0.40)), lineWidth: 1.2)
-    }
-
     // MARK: - Fader lane marker
 
     private func drawFaderMarker(
@@ -314,13 +218,6 @@ struct ScratchNotationCanvasView: View {
                 ctx.stroke(cut, with: .color(cutCol.opacity(isPast ? 0.20 : 0.80)), lineWidth: 1.5)
             }
         }
-    }
-
-    // MARK: - Dot helper
-
-    private func drawDot(ctx: GraphicsContext, at point: CGPoint, r: CGFloat, color: Color) {
-        let dotRect = CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)
-        ctx.fill(Path(ellipseIn: dotRect), with: .color(color))
     }
 }
 

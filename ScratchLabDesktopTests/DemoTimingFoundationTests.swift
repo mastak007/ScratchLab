@@ -1033,3 +1033,111 @@ struct ScratchMotionRendererTests {
         #expect(source.contains("isAtRail("))
     }
 }
+
+// MARK: - Cross-platform notation parity (iOS / macOS share the renderer)
+
+@Suite("Cross-platform notation parity")
+struct CrossPlatformNotationParityTests {
+
+    private func phraseChartSource() throws -> String {
+        try reelSource("ScratchLabDesktop/Views/ScratchPhraseChartView.swift")
+    }
+
+    private func notationCanvasSource() throws -> String {
+        try reelSource("ScratchLabDesktop/Views/ScratchNotationCanvasView.swift")
+    }
+
+    private func motionLaneSource() throws -> String {
+        try reelSource("ScratchLab/Views/ScratchMotionLane.swift")
+    }
+
+    // MARK: - Both macOS notation views call the shared angular renderer
+
+    @Test("macOS static phrase chart routes .target through the shared renderer")
+    func phraseChartUsesSharedRenderer() throws {
+        let source = try phraseChartSource()
+        // The shared model adapter and renderer are what the iOS lane uses;
+        // the .target case must go through the SAME shared types so a Baby
+        // Scratch reads identically on iOS Practice and macOS Review.
+        #expect(source.contains("ScratchStrokeGeometry.motionPath("))
+        #expect(source.contains("ScratchMotionRenderer.draw("))
+        #expect(source.contains("LaneContent(notation:"))
+        #expect(source.contains("LaneViewport("))
+    }
+
+    @Test("macOS animated visualizer routes its record lane through the shared renderer")
+    func notationCanvasUsesSharedRenderer() throws {
+        let source = try notationCanvasSource()
+        #expect(source.contains("ScratchStrokeGeometry.motionPath("))
+        #expect(source.contains("ScratchMotionRenderer.draw("))
+        #expect(source.contains("LaneContent(notation:"))
+        #expect(source.contains("LaneViewport("))
+        // The looping pattern is tiled via the path's own shift, not by
+        // hand-mapping per-stroke offsets — the geometry's deflect-and-return
+        // ends both sides of the path at the centre, so tiles meet seamlessly.
+        #expect(source.contains("motionPath.shifted(by:"))
+    }
+
+    @Test("iOS practice lane uses the same shared renderer + geometry")
+    func iOSLaneUsesSharedRenderer() throws {
+        let source = try motionLaneSource()
+        #expect(source.contains("ScratchMotionRenderer.draw("))
+        #expect(source.contains("ScratchStrokeGeometry.motionPath("))
+    }
+
+    // MARK: - The old per-platform stroke renderers are gone for target notation
+
+    @Test("Static phrase chart no longer hand-rolls its own target strokes")
+    func phraseChartDoesNotDrawStrokesItself() throws {
+        let source = try phraseChartSource()
+        // The hand-rolled single-diagonal stroke renderer (drawTargetStroke,
+        // slopeHalfHeight) and the bespoke gap-hold renderer (drawHold)
+        // belonged to the green/orange "FWD/BACK"-labelled chart — they are
+        // retired now that the shared renderer draws the target's strokes.
+        #expect(!source.contains("drawTargetStroke"))
+        #expect(!source.contains("slopeHalfHeight"))
+        #expect(!source.contains("drawTargetAxisLabels"))
+    }
+
+    @Test("Animated canvas no longer hand-rolls its own record-lane strokes")
+    func notationCanvasDoesNotDrawStrokesItself() throws {
+        let source = try notationCanvasSource()
+        // The hand-rolled per-stroke / per-hold drawing for the record lane
+        // and its `releaseNormalPlayback` dashed special case are gone —
+        // the shared renderer now draws all record-lane strokes.
+        #expect(!source.contains("private func drawStroke("))
+        #expect(!source.contains("private func drawHold("))
+        #expect(!source.contains("releaseNormalPlayback"))
+    }
+
+    // MARK: - The shared metrics are the single source of truth
+
+    @Test("Shared renderer metrics are the single source of truth for both platforms")
+    func sharedRendererMetricsAreCanonical() {
+        // The cross-axis inset is a renderer-level constant; it applies to
+        // every viewport that calls into ScratchMotionRenderer regardless of
+        // the platform layout wrapping it.
+        #expect(ScratchMotionRenderer.crossInsetFraction >= 0.10)
+        #expect(ScratchMotionRenderer.crossInsetFraction <= 0.20)
+        // The `.target` style — used by both the iOS lane and both macOS
+        // notation views — carries distinct push (cyan) and pull colours so
+        // direction is colour-coded across platforms, not just per-platform.
+        #expect(ScratchMotionRenderer.Style.target.color
+                != ScratchMotionRenderer.Style.target.backwardColor)
+    }
+
+    @Test("Loop seam stays closed for looping notation content on either platform")
+    func loopSeamSurvivesParityRefactor() {
+        // Baby Scratch wrapped as looping LaneContent — the same content the
+        // macOS animated canvas tiles ±loopDuration. The geometry must close
+        // the seam so adjacent tiles meet at the same position (no visible
+        // step at the loop wrap).
+        guard let notation = ScratchNotation.babyScratch else { return }
+        let looping = LaneContent(notation: notation, beatsPerMinute: nil)
+        #expect(looping.loops)
+        let path = ScratchStrokeGeometry.motionPath(for: looping)
+        if let first = path.segments.first, let last = path.segments.last {
+            #expect(abs(first.startPosition - last.endPosition) < 1e-9)
+        }
+    }
+}
