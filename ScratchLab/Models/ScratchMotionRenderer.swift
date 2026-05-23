@@ -11,11 +11,12 @@ import SwiftUI
 //
 // To keep tightly packed strokes from blending into one triangular wave, push
 // and pull are drawn in DIFFERENT colours — by default cyan for a forward push
-// and a contrasting hot pink for a backward pull — and a hold at the centre
-// line is drawn as a DASHED rest line, clearly subordinate to the strokes.
-// Every stroke's peak (where it lands on its rail) is then punctuated with a
-// direction-coloured node dot, so each push, pull and pause reads as a
-// separate, deliberate mark.
+// and a contrasting muted rose-coral for a backward pull — and a hold at the
+// centre line is drawn as a quiet SOLID rest, clearly subordinate to the
+// strokes themselves. Every meaningful timing junction along the path
+// (stroke starts, rail apexes, centre returns, hold endpoints) is then
+// punctuated with a small neutral dot, so the chart reads as scratch
+// notation — push, pull, pause, articulation — rather than a smooth curve.
 //
 // The renderer is presentation-agnostic: it reads only its arguments and draws
 // only into the supplied `GraphicsContext` — no state, no clock, no SwiftUI
@@ -43,7 +44,9 @@ enum ScratchMotionRenderer {
         /// so future high-emphasis layers (e.g. captured-user overlay) can
         /// opt back in without changing the renderer.
         var glow: Bool = false
-        /// Node dots at every stroke apex — the notation's "cuts".
+        /// Small dots at every motion-path junction — the notation's
+        /// articulation ticks: stroke starts, rail apexes, centre returns,
+        /// hold endpoints.
         var showsNodes: Bool = true
         /// Layer opacity — dimmed for ghost / reference layers.
         var opacity: Double = 1
@@ -72,8 +75,8 @@ enum ScratchMotionRenderer {
     // MARK: - Tuning
 
     /// Inset of the motion band from each cross-axis edge, as a fraction of the
-    /// cross length — a safe margin that keeps the curve, its apex nodes and
-    /// its glow clear of the lane edges. The motion fills the rest (~76%).
+    /// cross length — a safe margin that keeps the curve, its junction dots
+    /// and any glow clear of the lane edges. The motion fills the rest (~76%).
     static let crossInsetFraction: CGFloat = 0.12
     /// Hold width relative to a stroke ramp — a pause is a thinner, quieter
     /// line so it reads as subordinate to the strokes themselves.
@@ -84,11 +87,20 @@ enum ScratchMotionRenderer {
     private static let holdOpacity: Double = 0.40
     /// Glow width relative to the stroke line — a tight edge, not a soft halo.
     private static let glowWidthScale: CGFloat = 1.6
-    /// Node-dot radius at every stroke apex (rail peak).
-    private static let nodeRadius: CGFloat = 3.6
-    /// A normalized position counts as "at a rail" within this tolerance.
-    /// Strokes terminate on the high (1) or low (0) rail; the centre is 0.5.
-    private static let railTolerance: CGFloat = 0.05
+    /// Junction-node radius — small enough to read as a tick on a study
+    /// chart, not a game-pad badge.
+    private static let nodeRadius: CGFloat = 2.5
+    /// Junction-node opacity. The dots mark timing structure; the strokes
+    /// carry the direction colour and stay the primary visual object, so
+    /// the dots are a quiet neutral white rather than a popping accent.
+    private static let nodeOpacity: Double = 0.55
+    /// Dedup tolerance for junction nodes. Consecutive segments share their
+    /// shared endpoint (the return-half's end IS the next hold's start; an
+    /// out-half's end IS its return-half's start), so the same junction can
+    /// be recorded twice within rounding noise. Drop the duplicate so a
+    /// junction never reads as a heavier blob than its neighbours.
+    private static let junctionTimeEpsilon: TimeInterval = 1e-4
+    private static let junctionPositionEpsilon: CGFloat = 0.005
 
     // MARK: - Draw
 
@@ -96,7 +108,10 @@ enum ScratchMotionRenderer {
     /// Pure — reads only its arguments, writes only to the context.
     ///
     /// Each segment is ONE straight line — a stroke ramp or a flat hold —
-    /// drawn in its direction colour; nodes punctuate the stroke peaks.
+    /// drawn in its direction colour; small junction dots mark every
+    /// meaningful timing point along the path (apexes, centre entries
+    /// and exits, hold endpoints), so the chart reads like scratch
+    /// notation rather than a smooth motion curve.
     static func draw(_ path: MotionPath,
                      in context: GraphicsContext,
                      viewport: LaneViewport,
@@ -149,18 +164,38 @@ enum ScratchMotionRenderer {
             }
         }
 
-        // 3. Apex nodes — direction-coloured dots at every stroke peak (the
-        //    point where the line lands on a rail). Centre-line transitions
-        //    between segments stay un-marked so the rest line remains uncluttered
-        //    and each stroke's peak reads as the visual "beat" of the notation.
+        // 3. Junction nodes — small neutral dots at every meaningful timing
+        //    junction along the path: stroke starts, rail apexes, returns
+        //    to centre, and hold endpoints. The dots are read as TIMING
+        //    marks, not direction marks, so they stay one quiet colour and
+        //    let the lines carry the push/pull split. Consecutive segments
+        //    share endpoints (return-half end == next hold start, etc.),
+        //    so each shared point is drawn once via a time+position dedupe.
+        //    Loop tiling is naturally seam-safe: two adjacent tiles each
+        //    draw the seam point at the centre, but the two dots overlap
+        //    pixel-for-pixel so the seam never reads as a heavier blob.
         if style.showsNodes {
-            if let first = drawn.first, isAtRail(first.segment.startPosition) {
-                let color = strokeColor(for: first.segment, style: style)
-                drawNode(at: first.a, color: color, in: layer)
+            var lastTime: TimeInterval = -.infinity
+            var lastPosition: CGFloat = -.infinity
+            func drawIfNew(time: TimeInterval, position: CGFloat,
+                           point: CGPoint) {
+                if abs(time - lastTime) < junctionTimeEpsilon
+                    && abs(position - lastPosition) < junctionPositionEpsilon {
+                    return
+                }
+                drawJunctionNode(at: point, in: layer)
+                lastTime = time
+                lastPosition = position
             }
-            for item in drawn where isAtRail(item.segment.endPosition) {
-                let color = strokeColor(for: item.segment, style: style)
-                drawNode(at: item.b, color: color, in: layer)
+            if let first = drawn.first {
+                drawIfNew(time: first.segment.startTime,
+                          position: first.segment.startPosition,
+                          point: first.a)
+            }
+            for item in drawn {
+                drawIfNew(time: item.segment.endTime,
+                          position: item.segment.endPosition,
+                          point: item.b)
             }
         }
     }
@@ -175,17 +210,17 @@ enum ScratchMotionRenderer {
         return path
     }
 
-    /// A boundary node — a filled disc with a bright white core, the clear
-    /// stroke mark that punctuates a push or a pull's apex.
-    private static func drawNode(at point: CGPoint, color: Color,
-                                 in context: GraphicsContext) {
-        let outer = CGRect(x: point.x - nodeRadius, y: point.y - nodeRadius,
-                           width: nodeRadius * 2, height: nodeRadius * 2)
-        context.fill(Path(ellipseIn: outer), with: .color(color))
-        let coreRadius = nodeRadius * 0.42
-        let core = CGRect(x: point.x - coreRadius, y: point.y - coreRadius,
-                          width: coreRadius * 2, height: coreRadius * 2)
-        context.fill(Path(ellipseIn: core), with: .color(.white.opacity(0.9)))
+    /// A junction node — a small filled disc that marks one timing point
+    /// along the motion path. Kept subtle and neutral: one quiet colour,
+    /// no popping white core, no glow halo — so the strokes themselves
+    /// stay the primary visual object and the dots act as articulation
+    /// ticks the eye reads as the chart's pulse.
+    private static func drawJunctionNode(at point: CGPoint,
+                                          in context: GraphicsContext) {
+        let rect = CGRect(x: point.x - nodeRadius, y: point.y - nodeRadius,
+                          width: nodeRadius * 2, height: nodeRadius * 2)
+        context.fill(Path(ellipseIn: rect),
+                     with: .color(.white.opacity(nodeOpacity)))
     }
 
     // MARK: - Geometry
@@ -209,12 +244,6 @@ enum ScratchMotionRenderer {
         case .vertical:   return inset + clamped * band
         case .horizontal: return (viewport.crossLength - inset) - clamped * band
         }
-    }
-
-    /// Whether a normalized position is at one of the rails (an apex), versus
-    /// resting on the lane's centre line.
-    private static func isAtRail(_ position: CGFloat) -> Bool {
-        position < railTolerance || position > 1 - railTolerance
     }
 
     /// The colour for a segment — its direction colour for strokes, the base

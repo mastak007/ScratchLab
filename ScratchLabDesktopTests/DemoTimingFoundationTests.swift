@@ -988,7 +988,7 @@ struct ScratchMotionRendererTests {
     @Test("Stroke boundaries are punctuated with node marks")
     func strokeBoundariesGetNodes() throws {
         let source = try rendererSource()
-        #expect(source.contains("drawNode"))
+        #expect(source.contains("drawJunctionNode"))
         #expect(source.contains("showsNodes"))
     }
 
@@ -1029,13 +1029,28 @@ struct ScratchMotionRendererTests {
         #expect(drawBody.contains("stroke"))
     }
 
-    @Test("Apex nodes punctuate stroke peaks — not every centre transition")
-    func nodesPunctuateApexes() throws {
+    @Test("Junction nodes mark every timing endpoint — not just rail apexes")
+    func nodesMarkEveryJunction() throws {
         let source = try rendererSource()
-        // The renderer asks each segment whether its endpoint sits on a rail
-        // (apex) before drawing a node — keeping centre-line transitions
-        // un-marked so the rest line stays uncluttered.
-        #expect(source.contains("isAtRail("))
+        // The node-drawing block lives between `if style.showsNodes {` and
+        // the next top-level "// MARK:" header. Slice that range so the
+        // assertions can't accidentally match unrelated mentions elsewhere
+        // in the file.
+        let block = try sliceBetween(source,
+            from: "if style.showsNodes {",
+            to: "// MARK: - Marks")
+        // Apex-only gating is gone — there is no rail test in the node block.
+        #expect(!block.contains("isAtRail("))
+        // The dedupe machinery from the new every-junction logic is in place.
+        #expect(block.contains("junctionTimeEpsilon"))
+        #expect(block.contains("junctionPositionEpsilon"))
+        // Each segment contributes both endpoints — start times AND end
+        // times are visited, so apexes, centre entries / exits and hold
+        // endpoints all get a mark.
+        #expect(block.contains("startTime"))
+        #expect(block.contains("endTime"))
+        // `isAtRail` is no longer needed anywhere in the renderer.
+        #expect(!source.contains("isAtRail("))
     }
 }
 
