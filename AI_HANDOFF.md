@@ -1,5 +1,40 @@
 # AI Handoff
 
+## 2026-05-24 — 2D Coach quarantine + integrated-trace decision
+
+- **`cb33837` pushed to `origin/main`** (`Quarantine the 2D Coach Rig from the
+  iOS Try-Demo surface`). Single-file change in
+  `ScratchLab/Views/MainMenuView.swift`. iOS Simulator build and macOS
+  ScratchLabDesktop build both passed before push.
+- **iOS "Try Demo" 2D Coach is quarantined.** The `coachCard` mount was
+  removed from `DemoModeView`'s VStack. The `coachCard` computed property,
+  `ScratchCoachCardTheme`, `demoControlButton`, `ScratchCoachCardContent`,
+  and the shared `ScratchCoachRigView` all remain defined — no coach code
+  was deleted. `PracticeModeView` already did not mount the 2D card
+  (test-enforced); macOS `MacAnalyzerView` untouched.
+- **Geometry / integrated-trace work was intentionally stopped.**
+  The SXRATCH-style continuous-trace fix in `ScratchStrokeGeometry` was
+  scoped, simulated against `ScratchLab/Resources/CoachDemoAudio/baby_reel.json`,
+  and **not applied**. The bundled reel stores classified directional cuts,
+  not raw platter-angle samples — naive integration drifts strongly negative
+  (Demo 1: 7 backwards vs 3 forwards, net Δ = −1.37; full reel net Δ = −1.94,
+  range entirely below the lead-in rest). Symmetric normalize collapses Baby
+  Scratch into the lower half of the lane; asymmetric normalize turns it
+  into a downward staircase. Karl's call: stop, don't tune blindly. Revisit
+  when raw platter-angle capture data exists. Plan file
+  (`/Users/karlwatson/.claude/plans/fluffy-yawning-sunset.md`) captures the
+  full analysis and three deferred options (A: sticks-only; B: spring-back
+  holds; C: integrate with synthetic recovery).
+- **`reference_frames/` and `reference_videos/` are local analysis
+  artifacts.** They live untracked in the working tree at the repo root.
+  They are the extracted SXRATCH-visualizer frames used to diagnose the
+  notation-lane vs continuous-trace gap. **Do not commit them unless
+  explicitly requested** — they are not bundled, not training data, and
+  not user-facing assets.
+- **Pre-existing dirty files preserved.** `xcuserdata/.../xcschememanagement.plist`
+  remains modified-but-unstaged. Per session policy it stays out of every
+  commit on this branch.
+
 ## Current task
 
 Slice U - export / ASC safety audit for beta readiness (audit-only).
