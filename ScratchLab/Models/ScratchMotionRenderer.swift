@@ -32,32 +32,40 @@ enum ScratchMotionRenderer {
     struct Style: Equatable {
         /// Forward (push) stroke colour — also the colour of holds.
         var color: Color
-        /// Base stroke-ramp width; each stroke scales it by its speed.
-        var lineWidth: CGFloat = 5
+        /// Base stroke-ramp width; each stroke scales it by its speed. The
+        /// default sits in the "technical study chart" range — thin enough
+        /// to read as a notation line rather than a neon trace.
+        var lineWidth: CGFloat = 2.8
         /// Dashed rather than solid — for reference / ghost layers.
         var dashed: Bool = false
-        /// A tight neon glow behind the stroke ramps — game-like, not a halo.
-        var glow: Bool = true
+        /// Optional tight glow behind the stroke ramps. OFF by default — the
+        /// notation reads cleaner as a hairline. Kept as a per-style switch
+        /// so future high-emphasis layers (e.g. captured-user overlay) can
+        /// opt back in without changing the renderer.
+        var glow: Bool = false
         /// Node dots at every stroke apex — the notation's "cuts".
         var showsNodes: Bool = true
         /// Layer opacity — dimmed for ghost / reference layers.
         var opacity: Double = 1
         /// Backward (pull) stroke colour. A contrasting hue from `color` so a
-        /// push and a pull read as visibly distinct events, not blurred into
-        /// one continuous wave. Defaults to a synthwave pink against cyan.
-        var backwardColor: Color = Color(red: 1.00, green: 0.42, blue: 0.78)
+        /// push and a pull read as visibly distinct events. A muted rose-coral
+        /// against cyan — direction is still unambiguous, without the neon
+        /// "synthwave" cast the louder pink read as.
+        var backwardColor: Color = Color(red: 0.94, green: 0.55, blue: 0.66)
 
         /// The solid reference path the learner follows.
         static let target = Style(color: Color(red: 0.34, green: 0.80, blue: 1.00))
         /// A copy-window ghost target (Demo mode) — dashed, dim, unmarked,
         /// single colour (no direction split).
         static let ghost = Style(color: .white,
-                                  lineWidth: 3, dashed: true,
+                                  lineWidth: 2, dashed: true,
                                   glow: false, showsNodes: false, opacity: 0.45,
                                   backwardColor: .white)
-        /// The captured user path (future overlay) — bright green, single colour.
+        /// The captured user path (future overlay) — bright green, single
+        /// colour, slightly heavier than the target with an opt-in glow so it
+        /// stands out when drawn alongside the reference curve.
         static let user = Style(color: Color(red: 0.30, green: 0.88, blue: 0.55),
-                                 lineWidth: 4,
+                                 lineWidth: 3, glow: true,
                                  backwardColor: Color(red: 0.30, green: 0.88, blue: 0.55))
     }
 
@@ -220,13 +228,15 @@ enum ScratchMotionRenderer {
         }
     }
 
-    /// Line-weight multiplier per stroke speed — a fast stab reads heavier and
-    /// more aggressive, a slow drag lighter and more controlled.
+    /// Line-weight multiplier per stroke speed — a slight differentiation,
+    /// not a dramatic one. With the base line dropped to a study-chart
+    /// hairline, the multipliers are compressed so a fast stab still reads
+    /// heavier than a slow drag without ballooning back into a neon trace.
     private static func speedWeight(_ speed: ScratchNotationSpeedClassification) -> CGFloat {
         switch speed {
-        case .slow:   return 0.85
-        case .medium: return 1.0
-        case .fast:   return 1.3
+        case .slow:   return 0.92
+        case .medium: return 1.00
+        case .fast:   return 1.15
         }
     }
 }

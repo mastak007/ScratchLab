@@ -64,8 +64,9 @@ struct ScratchMotionLane: View {
 
     // MARK: Palette — one shared language across both orientations
 
-    private static let backgroundTop = Color(red: 0.06, green: 0.07, blue: 0.10)
-    private static let backgroundBottom = Color(red: 0.03, green: 0.035, blue: 0.05)
+    /// Flat dark gray — a study-chart canvas, not a tinted gradient. Keeps the
+    /// notation as the only thing carrying colour information.
+    private static let background = Color(white: 0.10)
     /// Demo segments read cool; copy windows read warm/active.
     private static let demoAccent = Color(red: 0.23, green: 0.51, blue: 0.96)
     private static let copyAccent = Color(red: 0.96, green: 0.62, blue: 0.07)
@@ -88,9 +89,7 @@ struct ScratchMotionLane: View {
                 laneContent(viewport)
             }
         }
-        .background(
-            LinearGradient(colors: [Self.backgroundTop, Self.backgroundBottom],
-                           startPoint: .top, endPoint: .bottom))
+        .background(Self.background)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
     }
@@ -123,9 +122,12 @@ struct ScratchMotionLane: View {
 
     // MARK: - Canvas: region bands
 
-    /// Full-cross-width demo / copy bands. Demo bands are a cool tint; copy
-    /// windows get a warm tint plus a diagonal hatch so they never read as
-    /// empty space. Scored content has no segments — nothing is drawn.
+    /// Full-cross-width demo / copy bands. Both kinds are a near-invisible
+    /// tint (~0.04 alpha) — segment structure stays detectable without a
+    /// loud background block competing with the notation. Each band is
+    /// anchored by a 3 pt accent stripe at its leading cross-edge and a thin
+    /// white boundary line across the lane at its start. Scored content
+    /// has no segments — nothing is drawn.
     private func drawRegionBands(in context: GraphicsContext, viewport: LaneViewport) {
         for segment in content.segments
         where viewport.isVisible(from: segment.startTime, to: segment.endTime) {
@@ -136,11 +138,7 @@ struct ScratchMotionLane: View {
 
             let band = viewport.rect(scroll0: startPos, scroll1: endPos,
                                      cross0: 0, cross1: viewport.crossLength)
-            context.fill(Path(band), with: .color(accent.opacity(isCopy ? 0.13 : 0.09)))
-
-            if isCopy {
-                drawHatch(in: band, context: context, color: accent.opacity(0.16))
-            }
+            context.fill(Path(band), with: .color(accent.opacity(0.04)))
 
             // Accent stripe down the cross-start edge of the band.
             let edge = viewport.rect(scroll0: startPos, scroll1: endPos,
@@ -152,23 +150,6 @@ struct ScratchMotionLane: View {
             boundary.move(to: viewport.point(scroll: startPos, cross: 0))
             boundary.addLine(to: viewport.point(scroll: startPos, cross: viewport.crossLength))
             context.stroke(boundary, with: .color(.white.opacity(0.07)), lineWidth: 1)
-        }
-    }
-
-    /// Diagonal hatch clipped to `rect` — screen-space, so it reads the same
-    /// whatever the axis. A scoped copy of the context carries the clip.
-    private func drawHatch(in rect: CGRect, context: GraphicsContext, color: Color) {
-        var clipped = context
-        clipped.clip(to: Path(rect))
-        let spacing: CGFloat = 16
-        let reach = max(rect.width, rect.height)
-        var origin = rect.minX - reach
-        while origin < rect.maxX {
-            var line = Path()
-            line.move(to: CGPoint(x: origin, y: rect.maxY))
-            line.addLine(to: CGPoint(x: origin + reach, y: rect.maxY - reach))
-            clipped.stroke(line, with: .color(color), lineWidth: 1)
-            origin += spacing
         }
     }
 
@@ -249,9 +230,12 @@ struct ScratchMotionLane: View {
 
     // MARK: - Canvas: action line
 
-    /// The fixed "now" line — perpendicular to the scroll axis. It picks up the
-    /// active segment's accent: amber while the user is copying, blue while
-    /// watching the demo (blue too when there is no segment, e.g. scored modes).
+    /// The fixed "now" line — perpendicular to the scroll axis. A hairline,
+    /// not a glowing band: a 1.5 pt white line and two small accent-coloured
+    /// end dots are enough to read the playhead without taking over the lane.
+    /// The accent picks up the active segment: amber while copying, blue
+    /// while watching the demo (and blue when there's no segment, e.g.
+    /// scored modes).
     private func drawActionLine(in context: GraphicsContext, viewport: LaneViewport,
                                 segment: LaneSegment?) {
         let pos = viewport.actionLinePos
@@ -261,20 +245,17 @@ struct ScratchMotionLane: View {
         case nil:   Self.demoAccent
         }
 
-        // Soft glow band straddling the line.
-        let glow = viewport.rect(scroll0: pos - 7, scroll1: pos + 7,
-                                 cross0: 0, cross1: viewport.crossLength)
-        context.fill(Path(glow), with: .color(tint.opacity(0.22)))
-
         var line = Path()
         line.move(to: viewport.point(scroll: pos, cross: 0))
         line.addLine(to: viewport.point(scroll: pos, cross: viewport.crossLength))
-        context.stroke(line, with: .color(.white.opacity(0.9)), lineWidth: 2)
+        context.stroke(line, with: .color(.white.opacity(0.8)), lineWidth: 1.5)
 
+        let dotRadius: CGFloat = 2.5
         for cross in [CGFloat(0), viewport.crossLength] {
             let center = viewport.point(scroll: pos, cross: cross)
             context.fill(
-                Path(ellipseIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8)),
+                Path(ellipseIn: CGRect(x: center.x - dotRadius, y: center.y - dotRadius,
+                                       width: dotRadius * 2, height: dotRadius * 2)),
                 with: .color(tint))
         }
     }
