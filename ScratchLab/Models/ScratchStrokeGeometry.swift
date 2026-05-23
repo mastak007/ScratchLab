@@ -110,18 +110,34 @@ struct MotionPath: Equatable, Sendable {
 /// Turns lane content into its platter-position curve.
 enum ScratchStrokeGeometry {
 
+    /// Per-stroke amplitude — how far the platter deflects from centre.
+    /// A slow drag reads as a small bump; a medium push is mid-amplitude; a
+    /// fast stab hits the rail. The speed bucket is the only signal driving
+    /// this first amplitude pass — duration, direction sign, fader state and
+    /// confidence stay out of it. The centre / rest position is always raw
+    /// 0, so the loop seam (which sits at centre) closes regardless of how
+    /// the rail end is scaled.
+    private static func rawAmplitude(for stroke: LaneStroke) -> CGFloat {
+        switch stroke.speed {
+        case .slow:   return 0.55
+        case .medium: return 0.78
+        case .fast:   return 1.0
+        }
+    }
+
     /// Derives the platter-position curve for `content`. Each stroke is a
-    /// brief deflection from the resting centre to its rail and back: a
-    /// forward push rises to the high rail then returns, a backward pull dips
-    /// to the low rail then returns, both within the stroke's own
-    /// `[startTime, endTime]` window. The lead-in, the gaps between strokes
-    /// and the trailing tail stay flat at the centre — the platter's resting
-    /// position — so every scratched stroke shows as a distinct bump aligned
-    /// in time to its audio. There is no cumulative integration, so an
-    /// unbalanced pattern cannot drift; and consecutive same-direction
-    /// strokes each show as their own bump rather than collapsing into one
-    /// move followed by a long flat run. The raw curve is then normalized
-    /// into 0...1.
+    /// brief deflection from the resting centre toward its rail and back: a
+    /// forward push rises, a backward pull dips, both within the stroke's
+    /// own `[startTime, endTime]` window, and how far each one rises or dips
+    /// is driven by `rawAmplitude(for:)` — a fast stab reaches the rail, a
+    /// slow drag falls short of it. The lead-in, the gaps between strokes
+    /// and the trailing tail stay flat at the centre — the platter's
+    /// resting position — so every scratched stroke shows as a distinct
+    /// bump aligned in time to its audio and the loop seam still closes at
+    /// centre. There is no cumulative integration, so an unbalanced pattern
+    /// cannot drift; and consecutive same-direction strokes each show as
+    /// their own bump rather than collapsing into one move followed by a
+    /// long flat run. The raw curve is then normalized into 0...1.
     static func motionPath(for content: LaneContent) -> MotionPath {
         let duration = max(content.duration, 0.001)
         let strokes = content.strokes.sorted { $0.startTime < $1.startTime }
@@ -164,7 +180,13 @@ enum ScratchStrokeGeometry {
         appendHold(start: 0, end: strokes[0].startTime, isGhost: strokes[0].isGhost)
 
         for (index, stroke) in strokes.enumerated() {
-            let rail: CGFloat = (stroke.direction == .forward) ? 1 : -1
+            // Sign comes from direction; magnitude comes from the per-stroke
+            // amplitude. Centre / rest stays at raw 0, so out-halves leave
+            // centre, return-halves come back to centre, and the loop seam
+            // closes at centre regardless of which speed buckets are in the
+            // phrase.
+            let sign: CGFloat = (stroke.direction == .forward) ? 1 : -1
+            let rail: CGFloat = sign * rawAmplitude(for: stroke)
             let strokeDuration = stroke.endTime - stroke.startTime
             if strokeDuration <= epsilon {
                 // Degenerate zero-duration stroke — render as one

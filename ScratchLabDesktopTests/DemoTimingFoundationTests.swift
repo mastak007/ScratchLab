@@ -958,6 +958,96 @@ struct MotionPathTests {
             #expect(abs(nonLooping.endTime - looping.endTime) < 1e-9)
         }
     }
+
+    @Test("Stroke amplitude scales with speed — slow < medium < fast in each direction")
+    func strokeAmplitudeScalesWithSpeed() throws {
+        // Three forward strokes of equal duration but different speed
+        // buckets, and three backward strokes mirroring them. The fixture
+        // also carries a fast pair in each direction so normalization
+        // anchors the rails at ±1 — the slow and medium peaks then read
+        // as fractions of the rail rather than the rail itself.
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 10,
+                             [(.forward,  .slow,   0.5, 1.0),
+                              (.forward,  .medium, 1.5, 2.0),
+                              (.forward,  .fast,   2.5, 3.0),
+                              (.backward, .slow,   3.5, 4.0),
+                              (.backward, .medium, 4.5, 5.0),
+                              (.backward, .fast,   5.5, 6.0)]))
+
+        // Helper: the absolute deflection from the normalized centre (0.5)
+        // at this stroke's apex. The out-half ends at the rail end, so we
+        // can read it off any sub-segment of the matching speed+direction.
+        func peakOffset(_ direction: ScratchNotationDirection,
+                        _ speed: ScratchNotationSpeedClassification) throws -> CGFloat {
+            let matches = path.segments.filter {
+                if case .stroke(let d) = $0.kind { return d == direction && $0.speed == speed }
+                return false
+            }
+            let positions = matches.flatMap { [$0.startPosition, $0.endPosition] }
+            let maxOffset = try #require(positions.map { abs($0 - 0.5) }.max())
+            return maxOffset
+        }
+
+        let fwdSlow   = try peakOffset(.forward, .slow)
+        let fwdMedium = try peakOffset(.forward, .medium)
+        let fwdFast   = try peakOffset(.forward, .fast)
+        #expect(fwdSlow < fwdMedium)
+        #expect(fwdMedium < fwdFast)
+        // The fast stroke still reaches the rail (normalized to 0 or 1).
+        #expect(fwdFast >= 0.49)
+
+        let backSlow   = try peakOffset(.backward, .slow)
+        let backMedium = try peakOffset(.backward, .medium)
+        let backFast   = try peakOffset(.backward, .fast)
+        #expect(backSlow < backMedium)
+        #expect(backMedium < backFast)
+        #expect(backFast >= 0.49)
+    }
+
+    @Test("A slow stroke beside a fast one falls well short of the rail")
+    func slowStrokeDoesNotReachRail() throws {
+        // Pair a slow + fast forward stroke and a slow + fast backward
+        // stroke. After the asymmetric min/max normalization, the fast
+        // strokes peg the rails (0 and 1) and the slow strokes sit at
+        // roughly the 0.55 : 1.0 ratio inside the band — visibly short
+        // of the rail. A regression that re-pegged every stroke would
+        // push the slow peaks back to 0 / 1, which this test catches.
+        let path = ScratchStrokeGeometry.motionPath(
+            for: laneContent(duration: 6,
+                             [(.forward,  .slow, 0.5, 1.0),
+                              (.forward,  .fast, 1.5, 2.0),
+                              (.backward, .slow, 2.5, 3.0),
+                              (.backward, .fast, 3.5, 4.0)]))
+
+        func peakOffset(_ direction: ScratchNotationDirection,
+                        _ speed: ScratchNotationSpeedClassification) throws -> CGFloat {
+            let matches = path.segments.filter {
+                if case .stroke(let d) = $0.kind { return d == direction && $0.speed == speed }
+                return false
+            }
+            let positions = matches.flatMap { [$0.startPosition, $0.endPosition] }
+            return try #require(positions.map { abs($0 - 0.5) }.max())
+        }
+
+        let fwdSlow = try peakOffset(.forward, .slow)
+        let fwdFast = try peakOffset(.forward, .fast)
+        let backSlow = try peakOffset(.backward, .slow)
+        let backFast = try peakOffset(.backward, .fast)
+
+        // The fast stroke pegs the rail (offset from centre ≈ 0.5).
+        #expect(fwdFast >= 0.49)
+        #expect(backFast >= 0.49)
+        // The slow stroke sits visibly inside the band.
+        #expect(fwdSlow < 0.40)
+        #expect(backSlow < 0.40)
+        // The slow-to-fast peak ratio reflects the underlying amplitude
+        // ratio (0.55 / 1.0), within a small numerical slack.
+        #expect(fwdSlow / fwdFast >= 0.45)
+        #expect(fwdSlow / fwdFast <= 0.65)
+        #expect(backSlow / backFast >= 0.45)
+        #expect(backSlow / backFast <= 0.65)
+    }
 }
 
 // MARK: - Motion renderer — angular notation, not a waveform
