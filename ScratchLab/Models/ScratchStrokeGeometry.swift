@@ -180,7 +180,14 @@ enum ScratchStrokeGeometry {
             raw.append(position)
         }
 
-        // 3. Normalize the raw curve into 0...1 — bounded, lane-fitting.
+        // 3. For a looping pattern, anchor the lead-in to where the path ends
+        //    so adjacent tiles meet seamlessly when the renderer wraps the
+        //    pattern — no rail-to-centre jump at the loop boundary.
+        if content.loops, raw.count > 1, let final = raw.last, final != raw[0] {
+            raw[0] = final
+        }
+
+        // 4. Normalize the raw curve into 0...1 — bounded, lane-fitting.
         let low = raw.min() ?? 0
         let high = raw.max() ?? 0
         let range = high - low

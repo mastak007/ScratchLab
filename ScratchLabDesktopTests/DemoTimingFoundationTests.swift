@@ -840,6 +840,26 @@ struct MotionPathTests {
         // first stroke, so it never hugs an edge.
         #expect(abs((path.segments.first?.startPosition ?? 0) - 0.5) < 1e-6)
     }
+
+    @Test("A looping pattern closes the loop — tiles meet seamlessly at the wrap")
+    func loopingPatternClosesSeam() {
+        // A balanced alternating pattern with a trailing rest, set to loop.
+        // Under the renderer's tile-and-shift, tile k's last position must
+        // equal tile k+1's first position — otherwise the loop boundary
+        // shows as a visible vertical step in the curve.
+        let base = laneContent(duration: 4,
+                               [(.forward, .medium, 0.0, 0.5),
+                                (.backward, .medium, 0.5, 1.0),
+                                (.forward, .medium, 1.0, 1.5),
+                                (.backward, .medium, 1.5, 2.0)])
+        let looping = LaneContent(strokes: base.strokes, segments: base.segments,
+                                  beatsPerMinute: nil, duration: base.duration,
+                                  loops: true)
+        let path = ScratchStrokeGeometry.motionPath(for: looping)
+        if let first = path.segments.first, let last = path.segments.last {
+            #expect(abs(first.startPosition - last.endPosition) < 1e-9)
+        }
+    }
 }
 
 // MARK: - Motion renderer — angular notation, not a waveform
