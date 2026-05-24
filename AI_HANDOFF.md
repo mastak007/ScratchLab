@@ -1,5 +1,57 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3.1 MacCaptureEngine wiring smoke test PASSED
+
+Real macOS capture exercised the wiring end-to-end. Recording the
+result here so it survives `/clear` and future agents can find it
+without re-running the smoke test.
+
+- **What was tested**: Phase 3.1 wiring (commit `7e3286d` on
+  `origin/main`) — `PlatterPositionRecorder` mounted inside
+  `MacCaptureEngine`'s start / observe / drain lifecycle.
+- **How**: Karl ran the macOS `ScratchLab.app` manually, started a
+  routine recording via the Capture surface, moved a hand in front
+  of the camera, and stopped the recording. The drain block in
+  `finalizeRoutineRecording` executed and a temporary one-line
+  diagnostic print (since reverted) reported the drained timeline's
+  shape.
+- **Result**: `finalizeRoutineRecording` reached, drain hook fired,
+  `lastDrainedPlatterPositionTimeline` was **non-nil**. Exact
+  numbers from the run:
+  - `sampleCount` = **261**
+  - `timeRange` = **0.0 … 22.69094208333263** seconds
+  - `positionRange` = **−0.0806029886007309 … 0.7671469897031784**
+    (unbounded signed platter-axis displacement units, per the Phase
+    1 docstring on `PlatterPositionSample`)
+- **Derived sanity**: ~261 samples / 22.69 s ≈ **11.5 Hz** — above
+  the Phase 1 selector's 10 Hz floor with margin, consistent with
+  `activeHandPoseInterval` at the active routine-recording cadence.
+  The positionRange straddles zero with a non-trivial span, which
+  is direct evidence the `Δx` integration produces signed motion in
+  both directions (not a stuck-at-zero or one-sided integrator bug).
+- **State after smoke test**:
+  - Temporary diagnostic `print(...)` block has been **reverted**.
+  - `MacCaptureEngine.swift` is byte-identical to `origin/main`'s
+    Phase 3.1 commit (`7e3286d`).
+  - **No source-code changes remain** from the diagnostic.
+  - `git diff -- ScratchLabDesktop/Services/MacCaptureEngine.swift`
+    is empty.
+  - Remaining dirty / untracked files are only the same
+    pre-existing entries from earlier sessions:
+    `ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist`
+    (modified-unstaged), `reference_frames/` (untracked),
+    `reference_videos/` (untracked).
+- **Implication for future work**:
+  - The Phase 3 + Phase 3.1 producer side is **functionally
+    verified** against real camera input. Future consumer slices
+    (renderer overlay, fixture comparison, captured-user trace) can
+    rely on `MacCaptureEngine.lastDrainedPlatterPositionTimeline`
+    being populated after every successful routine recording.
+  - Phase 4 (companion loader + non-bundled fixture) remains
+    blocked on Karl-provided `baby_platter.json` — see entry below.
+
+---
+
 ## 2026-05-24 — Phase 4 BLOCKED — awaiting real `baby_platter.json` from Karl
 
 Phase 4 (companion loader + non-bundled fixture) is **paused**. No
