@@ -1,5 +1,71 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 4 BLOCKED — awaiting real `baby_platter.json` from Karl
+
+Phase 4 (companion loader + non-bundled fixture) is **paused**. No
+work — no code, no scaffolding, no placeholder JSON. Karl is the
+single source of truth for the fixture content and has not yet
+provided it.
+
+- **Why blocked**: I cannot author a meaningful raw-platter fixture
+  myself. I have no computer-vision capability, and the only
+  available reference material in the workspace
+  (`reference_frames/`, `reference_videos/`) is **off-limits for
+  bundling or for derived assets** per `SOUL.md` ("Do not use
+  YouTube/Ortofon material for training.") and the prior
+  `AI_HANDOFF.md` entry quarantining them as local-analysis-only.
+- **Karl's locked constraints**:
+  - Do **NOT** use `reference_frames/` or `reference_videos/` —
+    not as a source, not as a derivative, not as inspiration for a
+    synthetic surrogate.
+  - Do **NOT** bundle fixture data into any Copy Bundle Resources
+    phase. The fixture, when it exists, lives outside the app
+    bundle (e.g., `ScratchLabDesktopTests/Fixtures/baby_platter.json`
+    or similar test-only path).
+  - Do **NOT** create a placeholder JSON or synthesise content as a
+    substitute for the real fixture. An empty / fake fixture is
+    worse than no fixture because it would let tests pass on
+    contentless data.
+- **Unblock signal**: a real `baby_platter.json` (hand-authored or
+  commissioned) appears in the working tree at a non-bundled path,
+  AND Karl explicitly approves resuming Phase 4. Until then,
+  `AI_HANDOFF/next_prompt.md` gates the slice as DO-NOT-START.
+- **What still works after Phase 3.1**:
+  - The full `PlatterPositionRecorder` → `MacCaptureEngine` wiring
+    is live on `origin/main` (commit `7e3286d`). Every macOS
+    routine recording produces a `PlatterPositionTimeline` and
+    stashes it in `MacCaptureEngine.lastDrainedPlatterPositionTimeline`
+    (in-memory; v4 export schema unchanged).
+  - No consumer reads that property yet. Phase 4's loader + tests
+    would have been the first consumer-shaped slice; that's now
+    deferred along with the rest of Phase 4.
+- **Most useful manual smoke test available right now (no code
+  changes required from Claude)**:
+  1. Build and run `ScratchLabDesktop` on macOS.
+  2. Start a routine recording via the Mac Analyzer surface.
+  3. Move the tracked hand in front of the camera so
+     `HandDirectionTracker.recordObservation(...)` receives
+     non-trivial samples.
+  4. Stop the recording cleanly (so `fileOutput(...didFinishRecordingTo:)`
+     fires and `finalizeRoutineRecording` runs).
+  5. Inspect `MacCaptureEngine.lastDrainedPlatterPositionTimeline`
+     (via debugger, Xcode preview, or a temporary `print`):
+     - Expected: **non-nil** `PlatterPositionTimeline` with
+       `samples.count > 0`, `endTime > startTime`,
+       `positionRange` spanning a non-trivial range when the hand
+       actually moved.
+     - If nil after a real move: the wiring did not fire —
+       investigate `processVideoSampleBuffer`'s observe call site
+       or the `platterPositionRecorder.isRecording` gate.
+- **Reminder to anyone reopening Phase 4**: respect the prior
+  pre-flight gates in `AI_HANDOFF/next_prompt.md`. Do not start
+  without (a) a real fixture file from Karl, (b) Karl's explicit
+  "go" message, AND (c) acknowledgement that the
+  `reference_frames/` / `reference_videos/` material remains
+  off-limits.
+
+---
+
 ## 2026-05-24 — Phase 3.1 MacCaptureEngine wiring (uncommitted, awaiting approval)
 
 Karl's Phase 4 pre-flight pivot: Phase 4 (bundled fixture) is paused
