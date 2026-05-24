@@ -787,8 +787,25 @@ struct MacAnalyzerView: View {
     /// — the same @Published that drives the rest of the engine's
     /// recording-state UI.
     private var platterTimelineDebugCard: some View {
-        let timeline = captureEngine.lastDrainedPlatterPositionTimeline
+        // Phase 4 (Slice 1) — when the live capture pipeline hasn't drained
+        // a timeline this session, fall back to the local-only fixture
+        // pointed at by `BABY_PLATTER_FIXTURE_PATH` so the card still has
+        // something to render for developer/visualisation work. Live
+        // capture always wins; the fixture only fills the nil slot.
+        // DEBUG-only by construction — the entire enclosing function is
+        // inside `#if DEBUG` and `loadDebugPlatterFixture()` is also
+        // `#if DEBUG`. The fixture is never bundled; the bundle-absence
+        // guard in `BabyPlatterFixtureDecodeTests.testFixtureNotBundled`
+        // fails the test suite if it ever leaks into a loaded bundle.
+        // The Phase 3.3 mixed-state predicate
+        // `hasRawMotionWithoutClassifiedStrokes` deliberately reads
+        // `captureEngine.lastDrainedPlatterPositionTimeline` directly, so
+        // fixture-loaded data never reaches Review user-facing copy.
+        let liveTimeline = captureEngine.lastDrainedPlatterPositionTimeline
+        let fixtureTimeline = liveTimeline == nil ? Self.loadDebugPlatterFixture() : nil
+        let timeline = liveTimeline ?? fixtureTimeline
         let present = timeline != nil
+        let isFixture = (liveTimeline == nil) && (fixtureTimeline != nil)
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Raw platter timeline (debug)")
@@ -801,6 +818,14 @@ struct MacAnalyzerView: View {
                 .labelStyle(.titleAndIcon)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(present ? Color(nsColor: .systemGreen) : .secondary)
+            }
+
+            if isFixture {
+                Label("Source: fixture (debug)",
+                      systemImage: "doc.text.magnifyingglass")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
 
             if let timeline {
@@ -971,6 +996,74 @@ struct MacAnalyzerView: View {
         }
         return result
     }
+
+    /// Phase 4 (Slice 1) — DEBUG-only loader for a local
+    /// `PlatterPositionTimeline` JSON fixture pointed at by the
+    /// `BABY_PLATTER_FIXTURE_PATH` environment variable. Returns `nil`
+    /// when the env var is unset, the file is missing, the bytes are
+    /// unreadable, the JSON is malformed, or the decoded timeline has
+    /// zero samples. Never throws — every failure mode is logged at
+    /// `.debug` and collapsed to `nil` so the DEBUG raw-platter card
+    /// silently falls through to its existing "Missing" state.
+    ///
+    /// Intentionally `#if DEBUG` and `private static` so the symbol does
+    /// not exist in release builds. The fixture itself lives in
+    /// `Tests/Fixtures/LocalOnly/baby_platter.json` (gitignored,
+    /// non-bundled) and is validated separately by
+    /// `BabyPlatterFixtureDecodeTests`; the bundle-absence guard there
+    /// continues to fail the test suite if the fixture ever leaks into
+    /// any loaded bundle.
+    ///
+    /// Only consulted from `platterTimelineDebugCard` when
+    /// `captureEngine.lastDrainedPlatterPositionTimeline` is nil; live
+    /// capture always wins.
+    private static func loadDebugPlatterFixture() -> PlatterPositionTimeline? {
+        let env = ProcessInfo.processInfo.environment
+        guard let raw = env["BABY_PLATTER_FIXTURE_PATH"], !raw.isEmpty else {
+            return nil
+        }
+        let expanded = (raw as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            Self.debugFixtureLog.debug(
+                "BABY_PLATTER_FIXTURE_PATH set but file not found: \(expanded, privacy: .public)"
+            )
+            return nil
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            Self.debugFixtureLog.debug(
+                "BABY_PLATTER_FIXTURE_PATH read failed: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+        let timeline: PlatterPositionTimeline
+        do {
+            timeline = try JSONDecoder().decode(PlatterPositionTimeline.self, from: data)
+        } catch {
+            Self.debugFixtureLog.debug(
+                "BABY_PLATTER_FIXTURE_PATH decode failed: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+        guard !timeline.samples.isEmpty else {
+            Self.debugFixtureLog.debug(
+                "BABY_PLATTER_FIXTURE_PATH decoded but contains zero samples"
+            )
+            return nil
+        }
+        return timeline
+    }
+
+    /// Dedicated logger for the DEBUG fixture loader so its diagnostics
+    /// are filterable in Console.app. Subsystem matches the existing
+    /// `PerformerMonitorBroadcaster` logger in this file.
+    private static let debugFixtureLog = Logger(
+        subsystem: "com.machelpnz.scratchlab.mac",
+        category: "PlatterFixtureLoader"
+    )
     #endif
 
     private var advancedSidebar: some View {
