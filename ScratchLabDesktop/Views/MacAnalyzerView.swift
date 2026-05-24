@@ -804,6 +804,58 @@ struct MacAnalyzerView: View {
             }
 
             if let timeline {
+                // Phase 3.4 — mini trace preview, auto-scaled to the
+                // timeline's own positionRange (no zero baseline). DEBUG
+                // only; uses its own tiny Canvas rather than reusing
+                // `ScratchMotionRenderer.drawRawTrace` because that
+                // renderer is designed for a scrolling LaneViewport and
+                // would carry irrelevant geometry (action line, lookahead
+                // filter, velocity thickness). Decimated to ≤ 2000 points
+                // so long-take buffers stay snappy. Skipped silently for
+                // degenerate inputs (< 2 samples or zero-width range) —
+                // the "Present" badge alone is enough signal there.
+                if timeline.samples.count >= 2,
+                   let range = timeline.positionRange,
+                   range.upperBound > range.lowerBound,
+                   timeline.endTime > timeline.startTime {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Position over time (auto-scaled)")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Canvas { context, size in
+                            let samples = Self.decimatedSamples(
+                                timeline.samples, cap: 2000
+                            )
+                            let timeSpan = timeline.endTime - timeline.startTime
+                            let positionSpan = range.upperBound - range.lowerBound
+                            let inset: CGFloat = 4
+                            let drawHeight = max(size.height - 2 * inset, 1)
+                            var path = Path()
+                            for (i, sample) in samples.enumerated() {
+                                let xFrac = (sample.time - timeline.startTime) / timeSpan
+                                let yFrac = (sample.position - range.lowerBound) / positionSpan
+                                let x = CGFloat(xFrac) * size.width
+                                // Flip y so higher position reads higher
+                                // on screen (SwiftUI y grows downward).
+                                let y = inset + (1 - CGFloat(yFrac)) * drawHeight
+                                let point = CGPoint(x: x, y: y)
+                                if i == 0 {
+                                    path.move(to: point)
+                                } else {
+                                    path.addLine(to: point)
+                                }
+                            }
+                            context.stroke(
+                                path,
+                                with: .color(Color(nsColor: .systemGreen).opacity(0.85)),
+                                style: StrokeStyle(lineWidth: 1,
+                                                   lineCap: .round,
+                                                   lineJoin: .round)
+                            )
+                        }
+                        .frame(height: 40)
+                    }
+                }
                 VStack(spacing: 8) {
                     diagnosticRow(
                         title: "Sample count",
@@ -848,6 +900,31 @@ struct MacAnalyzerView: View {
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor),
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// Phase 3.4 — stride-decimate `samples` down to roughly `cap` points
+    /// for the mini trace preview. Always keeps the first and last
+    /// sample so the rendered polyline reaches both edges of the
+    /// canvas. Returns `samples` unchanged when already at or below the
+    /// cap (the common case — typical takes are 100s–1000s of samples).
+    /// DEBUG-only helper; not used by any production rendering path.
+    private static func decimatedSamples(
+        _ samples: [PlatterPositionSample],
+        cap: Int
+    ) -> [PlatterPositionSample] {
+        guard samples.count > cap, cap > 0 else { return samples }
+        let stride = max(1, samples.count / cap)
+        var result: [PlatterPositionSample] = []
+        result.reserveCapacity(cap + 2)
+        var index = 0
+        while index < samples.count {
+            result.append(samples[index])
+            index += stride
+        }
+        if let last = samples.last, result.last?.time != last.time {
+            result.append(last)
+        }
+        return result
     }
     #endif
 
