@@ -1708,17 +1708,33 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewDetectedScratchLabel: String {
-        // Friendly empty state — never surface "Unknown" as a primary label
-        // when no detection has happened yet.
-        currentRoutineArtifactStatus?.detectedLabel
-            ?? captureEngine.lastScratchDetection?.scratchName
-            ?? "Awaiting take"
+        // Two distinct empty states:
+        // - no take recorded yet → "Awaiting take" (pre-record copy
+        //   preserved for the Capture tab's Last Take card).
+        // - take recorded but the audio classifier hasn't produced a
+        //   label → "Not yet classified" (avoids the misleading
+        //   "Awaiting take" badge sitting under a ready Take N status
+        //   line). PROFILE.md keeps classifier labels out of Practice/
+        //   Review as truth, so the audio classifier doesn't auto-run
+        //   per-take and this state is the honest default.
+        if let label = currentRoutineArtifactStatus?.detectedLabel {
+            return label
+        }
+        if let label = captureEngine.lastScratchDetection?.scratchName {
+            return label
+        }
+        return hasRecordedTake ? "Not yet classified" : "Awaiting take"
     }
 
     private var reviewConfidenceLabel: String {
+        // Distinguish "no confidence value" (em-dash) from a real low
+        // rating (classifier produced a value < 45). Real-value branches
+        // are byte-identical; only the nil fallback changed. Color falls
+        // through `.secondary` in `reviewConfidenceColor`'s default case
+        // for the em-dash, matching the prior "Low"-when-nil greying.
         guard let confidence = currentRoutineArtifactStatus?.labelConfidence
             ?? captureEngine.lastScratchDetection?.confidence else {
-            return "Low"
+            return "—"
         }
         if confidence >= 75 {
             return "High"
