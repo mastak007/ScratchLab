@@ -886,6 +886,51 @@ struct MacAnalyzerView: View {
                         value: timeline.source.rawValue
                     )
                 }
+                // Phase 3.5 — mixed-state explanation. Renders only when
+                // raw motion was captured but the classifier produced
+                // no strokes (`hasRawMotionWithoutClassifiedStrokes`).
+                // Surfaces derived sample rate, position span, and an
+                // honest density-gate verdict against the production
+                // renderer's floor `LaneContent.defaultMinimumSampleDensity`
+                // (no magic number — reuses the constant Phase 2 set).
+                // The coverage gate
+                // (`LaneContent.minimumRawTraceCoverageFraction`) is
+                // NOT checked here because we don't have a `LaneContent`
+                // in scope to know what `content.duration` would be —
+                // the verdict copy is honest about that limit. DEBUG
+                // only. Static "did not promote" line is true by
+                // construction (the predicate requires
+                // `recordMovementEvents.isEmpty`).
+                if hasRawMotionWithoutClassifiedStrokes,
+                   let range = timeline.positionRange,
+                   timeline.endTime > timeline.startTime {
+                    let duration = timeline.endTime - timeline.startTime
+                    let sampleRate = Double(timeline.samples.count) / duration
+                    let positionSpan = range.upperBound - range.lowerBound
+                    let densityFloor = LaneContent.defaultMinimumSampleDensity
+                    let densityPasses = sampleRate >= densityFloor
+                    VStack(spacing: 8) {
+                        diagnosticRow(
+                            title: "Sample rate",
+                            value: String(format: "%.1f Hz", sampleRate)
+                        )
+                        diagnosticRow(
+                            title: "Position span",
+                            value: String(format: "%.4f", positionSpan)
+                        )
+                        diagnosticRow(
+                            title: "Renderer eligibility",
+                            value: densityPasses
+                                ? "✓ density passes; coverage gate not checked here"
+                                : "✗ density below raw-render floor — production renderer would fall back"
+                        )
+                        diagnosticRow(
+                            title: "Classifier outcome",
+                            value: "did not promote motion into strokes"
+                        )
+                    }
+                    .padding(.top, 8)
+                }
             } else {
                 Text("No drained timeline yet. Run a routine capture; this card refreshes when the recording ends.")
                     .font(.system(size: 11, weight: .medium))
