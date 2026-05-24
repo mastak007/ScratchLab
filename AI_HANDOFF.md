@@ -1,5 +1,274 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 4 Slice 1: DEBUG-only fixture loader LANDED (commit `421de18`, pushed)
+
+First consumer of the local-only `baby_platter.json` fixture pipeline.
+The Mac Analyzer's existing Phase 3.2/3.4 raw-platter DEBUG card now
+falls back to the local fixture when no live take has been drained,
+giving the developer/visualisation surface something to render in the
+empty-state slot. Live capture always wins; the fixture only fills
+`nil`.
+
+### Commit
+
+- **SHA**: `421de18`
+- **Subject**: `Phase 4: load debug platter fixture in Review card`
+- **Pushed to `origin/main`**: `bdf2a53..421de18  main -> main`
+- **Footprint**: **1 file changed, 94 insertions, 1 deletion** — entirely
+  inside `ScratchLabDesktop/Views/MacAnalyzerView.swift`. Zero new
+  files. Zero pbxproj edits.
+- **No `Co-Authored-By` trailer** (per `feedback_no_coauthor_trailer`
+  memory and `SOUL.md`).
+
+### Context (prior commits this slice builds on)
+
+- `78f321a` — local-only fixture pipeline (tooling + decode tests).
+  Produces `Tests/Fixtures/LocalOnly/baby_platter.json` from Karl's
+  owned `~/Downloads/demo_baby_scratch.mov`. Gitignored, non-bundled.
+- `bdf2a53` — handoff doc capturing the 78f321a pipeline and naming
+  Phase 4 as the next-recommended slice.
+- `421de18` (this entry) — first consumer of that fixture. Closes
+  the Phase 4 BLOCKED status recorded earlier in this file.
+
+### What the slice does
+
+Two additive edits in `MacAnalyzerView.swift`, both inside the existing
+`#if DEBUG ... #endif` block that spans lines **780 → 1067**:
+
+1. **`platterTimelineDebugCard`** (was line ~789) — replaces the single
+   `let timeline = captureEngine.lastDrainedPlatterPositionTimeline`
+   binding with a live-wins-fixture-fills pattern:
+
+   ```swift
+   let liveTimeline = captureEngine.lastDrainedPlatterPositionTimeline
+   let fixtureTimeline = liveTimeline == nil ? Self.loadDebugPlatterFixture() : nil
+   let timeline = liveTimeline ?? fixtureTimeline
+   let present = timeline != nil
+   let isFixture = (liveTimeline == nil) && (fixtureTimeline != nil)
+   ```
+
+   Adds a small `Label("Source: fixture (debug)", systemImage: "doc.text.magnifyingglass")`
+   under the existing "Present"/"Missing" badge when `isFixture` is true.
+
+2. **`loadDebugPlatterFixture()`** (new private static helper, added
+   right after `decimatedSamples()` at line ~996, before the closing
+   `#endif` at line 1067) — reads `BABY_PLATTER_FIXTURE_PATH` from
+   `ProcessInfo.processInfo.environment`, expands `~`, checks file
+   existence, reads bytes, decodes via the existing
+   `PlatterPositionTimeline.init(from:)`, and returns `nil` on any
+   failure. Every failure mode is logged at `.debug` via a dedicated
+   `Logger(subsystem: "com.machelpnz.scratchlab.mac", category: "PlatterFixtureLoader")`
+   (subsystem matches the pre-existing `PerformerMonitorBroadcaster`
+   logger in the same file). Empty `samples` collapsed to `nil` so the
+   card stays in its "Missing" state for that case.
+
+### How to use `BABY_PLATTER_FIXTURE_PATH` in Debug
+
+The env var must be visible to the running Debug `ScratchLabDesktop`
+process — Xcode launched from Finder does not inherit shell env. Two
+options:
+
+1. **Xcode scheme.** Product → Scheme → Edit Scheme… → Run → Arguments →
+   Environment Variables. Add:
+
+   ```
+   BABY_PLATTER_FIXTURE_PATH = $(PWD)/Tests/Fixtures/LocalOnly/baby_platter.json
+   ```
+
+   Build & Run the `ScratchLabDesktop` scheme (Debug config).
+
+2. **Shell-launched Xcode / `open`.** From a shell that has the env
+   exported, either:
+
+   ```sh
+   export BABY_PLATTER_FIXTURE_PATH="$PWD/Tests/Fixtures/LocalOnly/baby_platter.json"
+   open ScratchLab.xcodeproj
+   ```
+
+   or after building once, run the Debug binary directly:
+
+   ```sh
+   BABY_PLATTER_FIXTURE_PATH="$PWD/Tests/Fixtures/LocalOnly/baby_platter.json" \
+       open ~/Library/Developer/Xcode/DerivedData/Build/Products/Debug/ScratchLab.app
+   ```
+
+Expected UI (without recording any take):
+
+- Mac Analyzer → Review tab → scroll to **"Raw platter timeline (debug)"** card.
+- Badge: **Present** (green checkmark).
+- Below the badge: **Source: fixture (debug)** with a doc-magnifier icon.
+- Mini trace: 40 pt green polyline (auto-scaled to fixture's
+  `positionRange`).
+- Numeric rows: Sample count 637, Time range 0.0 – 26.5, Duration
+  ≈ 26.5 s, Source `coachAuthored`.
+
+### Live-capture preference order
+
+**Live capture always wins.** The fixture is only consulted when
+`captureEngine.lastDrainedPlatterPositionTimeline == nil`. Once a take
+drains a timeline this session:
+
+- The card switches to the live timeline.
+- The "Source: fixture (debug)" badge disappears.
+- The Source row reads `liveCapture`.
+
+The fixture cannot be re-shown without restarting the app (deliberate;
+keeping a "clear live timeline" affordance out of scope for Slice 1).
+
+### DEBUG-only / local-only / non-bundled guarantees
+
+- **DEBUG-only.** All seven `BABY_PLATTER_FIXTURE_PATH` references in
+  `MacAnalyzerView.swift` (lines 792, 1002, 1022, 1029, 1038, 1047,
+  1053) sit strictly inside the single `#if DEBUG ... #endif` block at
+  lines 780–1067. There are no nested `#if` directives in that range.
+  Awk gate (run during verification):
+
+  ```
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:792:…
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:1002:…
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:1022:…
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:1029:…
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:1038:…
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:1047:…
+  DEBUG-OK  ScratchLabDesktop/Views/MacAnalyzerView.swift:1053:…
+  ```
+
+  Zero `LEAK!` lines. Release builds compile no loader code.
+
+- **Local-only.** `Tests/Fixtures/LocalOnly/baby_platter.json` is
+  gitignored by `Tests/Fixtures/LocalOnly/.gitignore` (landed in
+  78f321a) and lives outside any Xcode source group.
+
+- **Non-bundled.** The Slice 1 commit added zero entries to any
+  `PBXResourcesBuildPhase` or `PBXCopyFilesBuildPhase` (no pbxproj
+  edits at all). The pre-existing
+  `BabyPlatterFixtureDecodeTests.testFixtureNotBundled` continues to
+  run on every `xcodebuild test` invocation and fails if
+  `baby_platter.json` ever appears in `Bundle.main`,
+  `Bundle.allBundles`, or `Bundle.allFrameworks` — verified green in
+  Slice 1's env-unset gate (1 of 5 passed, 4 skipped, 0 failures).
+
+- **Phase 3.3 Review user-facing copy untouched.** The mixed-state
+  predicate `hasRawMotionWithoutClassifiedStrokes` at
+  `MacAnalyzerView.swift:1469` still reads
+  `captureEngine.lastDrainedPlatterPositionTimeline` directly (not the
+  fixture), so fixture-loaded data cannot reach Review user-facing copy
+  in any build configuration.
+
+### Verification results (all gates green)
+
+| # | Gate | Command | Result |
+|---|---|---|---|
+| 1 | iOS build | `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'` | `** BUILD SUCCEEDED **` ✓ |
+| 2 | macOS build | `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'` | `** BUILD SUCCEEDED **` ✓ |
+| 3 | macOS build-for-testing | `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'` | `** TEST BUILD SUCCEEDED **` ✓ |
+| 4 | rpath symlink (DerivedData, not repo) | `ln -sf ../../../../MacOS/ScratchLab.debug.dylib …/ScratchLabDesktopTests.xctest/Contents/Frameworks/ScratchLab.debug.dylib` | symlink in place ✓ |
+| 5 | Tests, `BABY_PLATTER_FIXTURE_PATH` UNSET | `env -u BABY_PLATTER_FIXTURE_PATH xcrun xctest -XCTest ScratchLabDesktopTests.BabyPlatterFixtureDecodeTests <bundle>` | **5 executed, 4 skipped, 1 passed (`testFixtureNotBundled`), 0 failures** in 0.538 s ✓ |
+| 6 | Tests, env SET | same invocation with env exported | **5 / 5 passed, 0 failures** in 0.204 s ✓ |
+| 7 | grep DEBUG-gate | awk script above against `MacAnalyzerView.swift` | 7 / 7 hits inside `#if DEBUG`, zero leaks ✓ |
+
+`xcrun xctest` invocation pattern uses the **dot** form
+(`ScratchLabDesktopTests.BabyPlatterFixtureDecodeTests`), not the
+slash form (which is `xcodebuild -only-testing` syntax) — Slice 1's
+first env-unset attempt used the slash form and silently reported
+"Executed 0 tests"; the fix was documented in
+`/Users/karlwatson/.claude/plans/virtual-imagining-sunrise.md` and
+verified above.
+
+`xcodebuild test` still hangs at test-host install on this machine per
+`project_test_runner_hang`; the `xcrun xctest` + DerivedData symlink
+workaround documented in `Tools/Fixtures/README.md` remains the
+verified path.
+
+### Files intentionally NOT touched by Slice 1
+
+| Path | Why |
+|---|---|
+| `ScratchLab/Models/PlatterPositionTimeline.swift` | Schema reused as-is. No changes to the Codable surface. |
+| `ScratchLabDesktop/Services/MacCaptureEngine.swift` | Capture lifecycle unchanged. Drain hook from Phase 3.1 still the sole producer of `lastDrainedPlatterPositionTimeline`. |
+| `ScratchLabDesktop/Services/PlatterPositionRecorder.swift` | Producer untouched. |
+| `ScratchLabDesktop/Services/ScratchMotionRenderer.swift` | Renderer untouched. |
+| `ScratchLabDesktop/Views/NotationVisualizerView.swift` | Review user-facing copy fork (Phase 3.3) unchanged. Advanced-tab call site preserved. |
+| `ScratchLab.xcodeproj/project.pbxproj` | Zero edits. No new file refs, no build phases, no Resources entries. |
+| Copy Bundle Resources phases | None modified anywhere. |
+| `Info.plist`, `PrivacyInfo.xcprivacy`, signing, bundle IDs, entitlements | None modified. |
+| `Tools/Fixtures/*`, `Tests/Fixtures/LocalOnly/*`, `.gitignore` | None modified. |
+| Practice / Coach / scoring / classifier / export pipeline | None modified. |
+
+### Remaining dirty items in the working tree (untouched by this slice)
+
+Per `SOUL.md` "preserve unrelated dirty":
+
+```
+ M  ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+ ?? reference_frames/
+ ?? reference_videos/
+```
+
+- `xcschememanagement.plist` — Xcode scheme-management drift, pre-existing
+  since before Slice 1 started.
+- `reference_frames/` and `reference_videos/` — pre-existing untracked,
+  remain **off-limits** per `SOUL.md` ("Do not use YouTube/Ortofon
+  material for training") and the prior `AI_HANDOFF.md`
+  reference-material quarantine. Slice 1 did not touch either directory.
+
+This `AI_HANDOFF.md` update itself is dirty (this edit). Not staged.
+Not committed. Awaiting Karl's review per the constraint below.
+
+### Slice ledger (for traceability)
+
+- **Plan** (`/Users/karlwatson/.claude/plans/virtual-imagining-sunrise.md`)
+  — written after plan mode activated mid-execution; captured remaining
+  verification gates and the dot-vs-slash selector fix.
+- **Slice 1** — single-file additive edit to
+  `ScratchLabDesktop/Views/MacAnalyzerView.swift` (+94 / -1). All three
+  Karl-approved decisions honoured: existing env var
+  (`BABY_PLATTER_FIXTURE_PATH`) reused; live-capture-wins preference
+  order; Slice 1 only (no Slice 2 standalone loader file).
+- **Push gate** — auto-mode classifier blocked the direct-to-main push
+  initially; Karl ran `! git push origin main` from his own shell.
+  Result: `bdf2a53..421de18  main -> main`. `origin/main` HEAD is now
+  `421de18`. Verified via `git fetch origin main` + `git log origin/main`.
+
+### Suggested next steps (none in flight)
+
+Phase 4 Slice 1 fully delivers the design goals from the original Phase
+4 plan: load `baby_platter.json` only in DEBUG, never ship it, keep the
+path explicit and opt-in, preserve production behaviour when the env
+var is absent, leave the implementation slice extremely small and
+reversible, and allow for future local fixtures by parameterising the
+env-var name in a later slice if a second fixture appears.
+
+Possible future slices (each its own approval, **not in scope now**):
+
+- **Slice 2 (deferred).** Extract `loadDebugPlatterFixture()` into a
+  standalone file `ScratchLabDesktop/Services/Debug/PlatterFixtureLoader.swift`
+  with its own `PlatterFixtureLoaderTests`. Costs 2 new files + 4
+  pbxproj inserts (Sources phase only, never Resources). Only worth it
+  when a second consumer or a second fixture appears.
+- **Slice 3 (deferred).** Generalise the env-var name to
+  `SCRATCHLAB_DEBUG_PLATTER_FIXTURE_PATH` with `BABY_PLATTER_FIXTURE_PATH`
+  as a backward-compat alias, once a second fixture (e.g. scribble,
+  transformer) is authored.
+- **Hidden debug UI (deferred).** A DEBUG-only menu / file picker so
+  fixtures can be swapped at runtime without scheme edits. Bigger
+  slice; only justified if Karl wants interactive fixture-switching.
+
+### Constraints still active
+
+- No app code changes pending review (other than the AI_HANDOFF.md
+  edit producing this entry).
+- No model training. No model bundling.
+- No export-schema changes.
+- No scoring / Practice / coaching changes.
+- No signing / bundle ID / entitlements / `Info.plist` /
+  `PrivacyInfo.xcprivacy` / `Copy Bundle Resources` changes.
+- No `Co-Authored-By` trailers.
+- **Do not stage or commit anything — including this `AI_HANDOFF.md`
+  update — without Karl's explicit approval after review.**
+
+---
+
 ## 2026-05-24 — Local-only `baby_platter.json` fixture pipeline LANDED (commit `78f321a`, pushed)
 
 Pipeline to generate a real-motion `PlatterPositionTimeline` JSON
