@@ -766,6 +766,9 @@ struct MacAnalyzerView: View {
                     reviewSessionListCard
                     reviewTakeCard
                     reviewExportCard
+                    #if DEBUG
+                    platterTimelineDebugCard
+                    #endif
                 }
                 .padding(.bottom, 24)
             }
@@ -773,6 +776,80 @@ struct MacAnalyzerView: View {
         .padding(.horizontal, 24)
         .padding(.top, 24)
     }
+
+    #if DEBUG
+    /// Debug-only inspector for the Phase 3.1 raw platter-position
+    /// timeline. Reads `MacCaptureEngine.lastDrainedPlatterPositionTimeline`
+    /// and shows whether a timeline was produced by the most-recent
+    /// routine recording, plus its shape. macOS-only (this view file
+    /// is in the ScratchLabDesktop target only). Auto-refreshes when
+    /// `captureEngine.isRoutineRecording` flips to false at end-of-take
+    /// — the same @Published that drives the rest of the engine's
+    /// recording-state UI.
+    private var platterTimelineDebugCard: some View {
+        let timeline = captureEngine.lastDrainedPlatterPositionTimeline
+        let present = timeline != nil
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Raw platter timeline (debug)")
+                    .font(.headline)
+                Spacer(minLength: 8)
+                Label(
+                    present ? "Present" : "Missing",
+                    systemImage: present ? "checkmark.circle.fill" : "circle.dashed"
+                )
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(present ? Color(nsColor: .systemGreen) : .secondary)
+            }
+
+            if let timeline {
+                VStack(spacing: 8) {
+                    diagnosticRow(
+                        title: "Sample count",
+                        value: "\(timeline.samples.count)"
+                    )
+                    diagnosticRow(
+                        title: "Time range",
+                        value: "\(timeline.startTime) – \(timeline.endTime)"
+                    )
+                    diagnosticRow(
+                        title: "Duration",
+                        value: String(format: "%.3fs",
+                                      timeline.endTime - timeline.startTime)
+                    )
+                    if let range = timeline.positionRange {
+                        diagnosticRow(
+                            title: "Position range",
+                            value: "\(range.lowerBound) – \(range.upperBound)"
+                        )
+                    } else {
+                        diagnosticRow(
+                            title: "Position range",
+                            value: "nil (empty samples)"
+                        )
+                    }
+                    diagnosticRow(
+                        title: "Source",
+                        value: timeline.source.rawValue
+                    )
+                }
+            } else {
+                Text("No drained timeline yet. Run a routine capture; this card refreshes when the recording ends.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Internal diagnostic. Not exported, not part of any user-facing notation. Removed from release builds.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+    #endif
 
     private var advancedSidebar: some View {
         // Header + section picker stay pinned. The right-hand cards are gated
