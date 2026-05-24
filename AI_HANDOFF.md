@@ -1,5 +1,67 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 4 CLOSED at Slice 1 (manual smoke passed, no further slices in flight)
+
+Audit decision after Slice 1: **stop Phase 4 here.** Slice 1 (commit
+`421de18`) fully delivers the original Phase 4 design goal — a
+DEBUG-only, opt-in, non-bundled `PlatterPositionTimeline` JSON loader
+gated by `BABY_PLATTER_FIXTURE_PATH`. No further slices are in flight.
+This entry records the closure decision and the manual smoke result so
+both survive `/clear` and any future agent search for "Phase 4".
+
+### Manual smoke result (this session, Karl)
+
+Mac Analyzer → Review tab → "Raw platter timeline (debug)" card behaved
+exactly as the Slice 1 entry's `Expected UI (without recording any
+take)` section predicted:
+
+- **Fixture fallback.** With no live take drained, the card rendered
+  the local-only `baby_platter.json` fixture (env var
+  `BABY_PLATTER_FIXTURE_PATH` exported to the running
+  `ScratchLabDesktop` Debug process).
+- **Live-wins behaviour.** Once a take was recorded, the card swapped
+  to the live timeline. The `Source: fixture (debug)` badge under the
+  Present chip disappeared and the Source row changed from
+  `coachAuthored` to `liveCapture`.
+
+Together these confirm the live-wins / fixture-fills branch in
+`MacAnalyzerView.swift:804-808` and the `isFixture` gate at
+`MacAnalyzerView.swift:823-829`.
+
+### Deferral conditions (locked in)
+
+- **Slice 2 (standalone loader file + tests).** Deferred until a
+  **second consumer** of the loader appears OR a **second fixture**
+  (e.g. scribble, transformer) is authored. Today: 1 consumer
+  (`platterTimelineDebugCard`), 1 fixture (`baby_platter.json`).
+  Extracting `loadDebugPlatterFixture()` now would cost 2 new files +
+  4 pbxproj inserts (Sources phase only) for zero behaviour change.
+- **Slice 3 (env-var rename to `SCRATCHLAB_DEBUG_PLATTER_FIXTURE_PATH`
+  with backward-compat alias).** Deferred until either a **second
+  fixture exists** (i.e. a generic env-var name is actually warranted)
+  OR a **runtime fixture-switching surface** is built. Renaming now
+  would add a permanent backward-compat alias for zero current user
+  benefit, and the right generic name depends on what the second
+  fixture's contract turns out to be.
+- **Hidden debug UI (DEBUG-only file picker / menu for runtime
+  fixture switching).** Deferred until Karl explicitly asks for
+  interactive runtime fixture switching; the Xcode-scheme env-var
+  workflow documented under "How to use `BABY_PLATTER_FIXTURE_PATH`
+  in Debug" in the Slice 1 entry below is sufficient for the current
+  single-developer case.
+
+### Audit footprint
+
+- No app code touched.
+- No commit, no push.
+- No pbxproj / fixture files / `reference_frames/` / `reference_videos/`
+  / `xcschememanagement.plist` touched.
+- No `Co-Authored-By` trailer.
+- The only working-tree change from the audit is this `AI_HANDOFF.md`
+  edit; it is **not staged** pending Karl's review.
+
+---
+
 ## 2026-05-24 — Phase 4 Slice 1: DEBUG-only fixture loader LANDED (commit `421de18`, pushed)
 
 First consumer of the local-only `baby_platter.json` fixture pipeline.
