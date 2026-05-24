@@ -1792,6 +1792,17 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.mixerMidiEvents.count ?? 0
     }
 
+    /// Count of raw platter-position samples drained from the most-recent
+    /// routine recording. Surfaced as a Review evidentiary count alongside
+    /// the classified-stroke / audio / fader / MIDI counts so users have
+    /// concrete proof that motion was (or wasn't) captured. Reads the same
+    /// `@Published` accessor the DEBUG platter card consumes; not routed
+    /// into Practice, scoring, or export — captured notation remains the
+    /// source of truth per PROFILE.md.
+    private var reviewMotionSampleCount: Int {
+        captureEngine.lastDrainedPlatterPositionTimeline?.samples.count ?? 0
+    }
+
     /// Slice S — bundles the source-resolved preview state needed by
     /// both the Audio Onset Preview card and the captured-empty pane's
     /// "preview-will-render" decision. Computed each render — the cost
@@ -3317,6 +3328,7 @@ struct MacAnalyzerView: View {
                         testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
                         testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
                         testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
+                        testLabMetricBadge(title: "Motion samples", value: "\(reviewMotionSampleCount)", color: reviewMotionSampleCount == 0 ? .secondary : .green)
                     }
                     .padding(.top, 8)
                 } label: {
