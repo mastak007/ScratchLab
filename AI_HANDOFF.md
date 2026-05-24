@@ -1,5 +1,123 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3.1 MacCaptureEngine wiring (uncommitted, awaiting approval)
+
+Karl's Phase 4 pre-flight pivot: Phase 4 (bundled fixture) is paused
+because the slice as written required manual angle extraction from a
+reference video — which I can't do (no vision) and which would also
+violate `SOUL.md` (`reference_frames/` + `reference_videos/` are
+local-analysis-only, not shippable). Instead we ship the Phase 3
+wiring follow-up first — mounting `PlatterPositionRecorder` inside
+`MacCaptureEngine` so live takes actually produce a raw timeline.
+
+- **Slice status: uncommitted, awaiting Karl's approval.** Working
+  tree has one modified file (`MacCaptureEngine.swift`). Nothing
+  staged. No commit, no push.
+- **Pre-flight decisions captured for future Phase 4 (when it resumes)**:
+  - Fixture source: defer — when Phase 4 resumes, Karl will hand-author
+    or commission the JSON externally; I add only the loader + tests.
+  - Fixture bundle membership: NOT bundled — keep as a test fixture
+    only until a future slice promotes it.
+  - Fixture sample rate (when authored): 30 Hz matching live producer.
+- **File modified** (one): `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+  (+52 lines). Four small additions, all in `ScratchLabDesktop` target:
+  1. **Property declaration block** (next to `handDirectionTracker` at
+     line ~1736): adds `platterPositionRecorder` (sibling
+     `PlatterPositionRecorder` instance), `platterRecordingStartTime`
+     (`CFTimeInterval` host-time anchor for the active take),
+     `lastDrainedPlatterPositionTimeline` (`PlatterPositionTimeline?`,
+     `private(set)` so it's readable from `@testable import` callers
+     but only mutable internally), and `platterRecorderLock`
+     (`NSLock` — funnels all recorder access through one lock
+     because the recorder is touched by `sessionQueue` (start),
+     `videoQueue` (observe), and the `AVCaptureFileOutput` delegate
+     queue (drain); mirrors the existing `midiCaptureLock` pattern).
+  2. **Start hook** (inside `startRoutineRecording`'s sessionQueue
+     block, just before `movieOutput.startRecording(...)` at line
+     ~2241): under the lock, clears `lastDrainedPlatterPositionTimeline`,
+     captures `platterRecordingStartTime = CACurrentMediaTime()`,
+     and calls `platterPositionRecorder.startRecording(at: 0)`.
+  3. **Observe hook** (inside `processVideoSampleBuffer` immediately
+     after the existing `handDirectionTracker.recordObservation(rawPoint:, at: now)`
+     call at line ~3230): under the lock, if `platterPositionRecorder.isRecording`,
+     computes take-relative time as `max(0, now - platterRecordingStartTime)`
+     and calls `platterPositionRecorder.observe(point: rawTrackedPoint, at: ...)`.
+     The `isRecording` gate is a perf optimisation — `observe(...)` is
+     itself a no-op when not recording per Phase 3 design.
+  4. **Drain hook** (inside `finalizeRoutineRecording` immediately
+     after the existing `drainCapturedMidiCCEvents()` call at line
+     ~2923): under the lock, computes `platterEndRelative = max(0, CACurrentMediaTime() - platterRecordingStartTime)`,
+     calls `platterPositionRecorder.finishRecording(at: platterEndRelative)`,
+     stores the result in `lastDrainedPlatterPositionTimeline`, and
+     resets `platterRecordingStartTime = 0`.
+- **Constraints honoured**:
+  - `HandDirectionTracker` — NOT modified. The recorder runs in
+    parallel; the existing tracker call at line 3230 is unchanged.
+  - `PlatterPositionRecorder` (Phase 3 artefact) — NOT modified.
+  - `CaptureCore.DetectedNotationSnapshot` — NOT modified. Codable
+    shape unchanged; v4 export schema byte-stable.
+  - `scratchlab_session_export_v4` and `scratchlab_detected_notation_v1`
+    constants — verified byte-stable.
+  - No Practice/scoring/coaching code touched. The wiring is purely
+    capture-side instrumentation. The drained timeline lives
+    in-memory on the engine and is read by no consumer today.
+  - No new files added. No pbxproj edits.
+  - No Info.plist, PrivacyInfo.xcprivacy, signing, bundle ID, or
+    entitlements changes.
+  - `xcuserdata/.../xcschememanagement.plist`, `reference_frames/`,
+    `reference_videos/` preserved as pre-existing dirty / untracked.
+  - No `Co-Authored-By` trailer.
+- **Concurrency**: the new lock (`platterRecorderLock`) serialises
+  every recorder access — start, observe, drain — across the three
+  queues that touch it. Mirrors the existing `midiCaptureLock`
+  pattern used for `capturedMidiCCEvents` / `midiRecordingStartTime`.
+- **No dedicated wiring test** (limitation): a true wiring test would
+  need an AVCaptureSession + camera permission + mocked video output —
+  large test surface for low marginal value, since Phase 3 already
+  proved the recorder's contract with 8 unit cases (including
+  sibling-tracker non-interference). Phase 3.1 ships the call-site
+  additions only; verification is via macOS build + the full Phase 3
+  test suite still passing + manual smoke-testing on a live capture
+  session when Karl exercises it.
+- **Builds run**:
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+  - `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
+    → NOT re-run this slice. The Phase 3 commit's iOS blockage
+    (CoreSimulator service stuck) likely persists; in any case the
+    wiring change is in `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+    which is macOS-target-only, so iOS behaviour is unchanged.
+- **Tests run** (Phase 1 + Phase 2 + Phase 3 + HandDirectionTracker):
+  - `xcodebuild test-without-building -scheme ScratchLabDesktop
+    -destination 'platform=macOS' -only-testing:<four classes>`
+    → **TEST EXECUTE SUCCEEDED**. **48 / 48 passed**, 0 failures.
+    (16 HandDirectionTracker + 15 Phase 1 + 9 Phase 2 + 8 Phase 3.)
+    Including the existing `HandDirectionTrackerTests` re-run is the
+    runtime-level evidence that the wiring did not perturb tracker
+    behaviour, complementing Phase 3's unit-level non-interference
+    assertion.
+- **Working tree at slice end** (`git status --short --branch`):
+  ```
+  ## main...origin/main
+   M ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+   M ScratchLabDesktop/Services/MacCaptureEngine.swift
+  ?? reference_frames/
+  ?? reference_videos/
+  ```
+  `git diff --stat` (Phase 3.1 scope only — plist is pre-existing dirty):
+  ```
+  ScratchLabDesktop/Services/MacCaptureEngine.swift | 52 ++++++++++++++++++++++
+  ```
+- **Decision needed from Karl**:
+  1. Approve the slice for commit? Suggested commit message:
+     `Phase 3.1: wire PlatterPositionRecorder into MacCaptureEngine lifecycle`.
+  2. Approve `next_prompt.md` rewrite pointing at Phase 4 (bundled
+     fixture), now that the wiring follow-up is resolved?
+
+---
+
 ## 2026-05-24 — Phase 3 live producer (uncommitted, awaiting approval)
 
 - **Slice status: uncommitted, awaiting Karl's approval.** Working tree

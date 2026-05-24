@@ -1734,6 +1734,26 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let scratchDetector = MacScratchDetector()
     private let rigLayoutDetector = DJRigLayoutDetector()
     private let handDirectionTracker = HandDirectionTracker()
+    /// Phase 3.1 — sibling raw-platter producer. Observes the same
+    /// `(rawPoint, time)` samples `handDirectionTracker.recordObservation`
+    /// receives, integrates them into a `PlatterPositionTimeline`, and
+    /// drains the timeline at end-of-take. Does NOT modify the tracker.
+    /// In-memory only — the v4 export schema is unchanged.
+    private let platterPositionRecorder = PlatterPositionRecorder()
+    /// Host-time anchor for the active routine recording. Set in
+    /// `startRoutineRecording`, reset on drain in `finalizeRoutineRecording`.
+    /// Take-relative time for each platter sample = `now - platterRecordingStartTime`.
+    private var platterRecordingStartTime: CFTimeInterval = 0
+    /// Most recently drained raw-platter timeline. Cleared at the start
+    /// of each new routine recording so a stale value never appears
+    /// alongside a fresh capture's classified events.
+    private(set) var lastDrainedPlatterPositionTimeline: PlatterPositionTimeline?
+    /// Funnels every recorder access through a single lock — the
+    /// recorder itself is not thread-safe and gets touched by
+    /// `sessionQueue` (start), `videoQueue` (observe), and the
+    /// AVCaptureFileOutput delegate queue (drain). Mirrors the
+    /// `midiCaptureLock` pattern already used for raw MIDI events.
+    private let platterRecorderLock = NSLock()
 
     private let videoOutput = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -2238,6 +2258,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     self.routineRecordingStatus = "Starting routine recording"
                 }
                 self.openMIDIInputForRecording()
+                // Phase 3.1 — arm the raw-platter recorder just before
+                // movieOutput starts, so the first hand-tracker sample
+                // after this point lands in the buffer with a
+                // take-relative time near zero. The clear+start pair
+                // also discards any stale timeline from a previous
+                // take.
+                self.platterRecorderLock.lock()
+                self.lastDrainedPlatterPositionTimeline = nil
+                self.platterRecordingStartTime = CACurrentMediaTime()
+                self.platterPositionRecorder.startRecording(at: 0)
+                self.platterRecorderLock.unlock()
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
                 self.reconnectSelectedMIDIInput()
@@ -2922,6 +2953,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         let capturedMidi = drainCapturedMidiCCEvents()
         reconnectSelectedMIDIInput()
+        // Phase 3.1 — drain the sibling raw-platter recorder. The
+        // timeline is stored in-memory only; `DetectedNotationSnapshot`
+        // and the v4 session export schema are NOT modified. Future
+        // consumers (renderer overlay, fixture comparison) can read
+        // `lastDrainedPlatterPositionTimeline` directly.
+        platterRecorderLock.lock()
+        let platterEndRelative = max(0, CACurrentMediaTime() - platterRecordingStartTime)
+        lastDrainedPlatterPositionTimeline = platterPositionRecorder
+            .finishRecording(at: platterEndRelative)
+        platterRecordingStartTime = 0
+        platterRecorderLock.unlock()
         let normalizeID = ScratchLabPerformanceSignpost.begin("MovementNormalize")
         let notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
@@ -3228,6 +3270,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             // Feed the raw point into the tracker (unsmoothed = accurate velocity).
             let direction = handDirectionTracker.recordObservation(rawPoint: rawTrackedPoint, at: now)
+            // Phase 3.1 — also feed the same raw point into the
+            // sibling raw-platter recorder. `observe(...)` is a no-op
+            // when `isRecording == false`, so this safely covers
+            // pre-recording / post-recording video frames too.
+            platterRecorderLock.lock()
+            if platterPositionRecorder.isRecording {
+                let takeRelativeTime = max(0, now - platterRecordingStartTime)
+                platterPositionRecorder.observe(point: rawTrackedPoint, at: takeRelativeTime)
+            }
+            platterRecorderLock.unlock()
             let movementState = handMotionState(from: direction)
 
             #if DEBUG
