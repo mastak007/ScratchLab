@@ -1,5 +1,216 @@
 # AI Handoff
 
+## 2026-05-24 — Local-only `baby_platter.json` fixture pipeline LANDED (commit `78f321a`, pushed)
+
+Pipeline to generate a real-motion `PlatterPositionTimeline` JSON
+fixture from Karl's own owned demo video, for **test use only**. The
+fixture itself is **not** in the commit — only the tooling that
+generates it and the validation test that checks it. The fixture is
+gitignored, non-bundled, and gated behind the
+`BABY_PLATTER_FIXTURE_PATH` env var. Unblocks the Phase 4 BLOCKED
+entry below (in this same file).
+
+### Commit
+
+- **SHA**: `78f321a`
+- **Subject**: `Add local-only baby platter fixture pipeline`
+- **Pushed to `origin/main`**: `14aeace..78f321a  main -> main`
+- **Footprint**: 8 files changed, 1065 insertions, 0 deletions.
+- **No `Co-Authored-By` trailer** (per `feedback_no_coauthor_trailer`
+  memory and `SOUL.md`).
+
+### Purpose
+
+Produce a real, auditable `PlatterPositionTimeline` JSON fixture
+from Karl-owned material, on demand, without:
+
+- using `reference_frames/` or `reference_videos/` (off-limits per
+  `SOUL.md`);
+- using any CV / AI / classifier output;
+- bundling any of it into a build product;
+- committing the fixture itself;
+- touching the production renderer, classifier, scoring, capture
+  pipeline, or export schema.
+
+The fixture is intended as the first real consumer-shaped artifact
+for Phase 4-style non-bundled loader work.
+
+### Files added (committed)
+
+| Path | Purpose |
+|---|---|
+| `Tools/Fixtures/extract_frames.sh` | ffmpeg + ffprobe wrapper: PNG frames + per-frame PTS sidecar. Idempotent re-runs. |
+| `Tools/Fixtures/click_baby_platter.py` | Python tkinter axis setup + per-frame marker click loop. Includes 20-px min-distance guard and degenerate-axis auto-discard (Slice 2.1 retrofit caught a real bug). |
+| `Tools/Fixtures/click_to_platter_timeline.py` | Converter: projects clicks onto axis, normalises by image width, linear interpolation between clicked frames. Refuses to run on a degenerate axis (no auto-derivation; PCA fallback was proposed, rejected by Karl, removed). |
+| `Tools/Fixtures/README.md` | Six-step runbook + "what this is not" boundaries + `xcrun xctest` workaround callout. |
+| `Tests/Fixtures/LocalOnly/.gitignore` | Local-only safety: gitignores `*.mov`, `*.mp4`, `frames/`, `baby_platter.json`. |
+| `ScratchLabDesktopTests/BabyPlatterFixtureDecodeTests.swift` | Five tests; four env-gated, one always-runs bundle-absence guard. |
+
+### Files modified (committed)
+
+- `.gitignore` — added `.scratch_fixture_work/` for extracted frames
+  and per-frame timestamps under the existing "Local / offline scratch
+  training data" section.
+- `ScratchLab.xcodeproj/project.pbxproj` — **4 line insertions**, all
+  inside the `ScratchLabDesktopTests` test target only:
+  - `PBXBuildFile` entry (line ~151) for the new test
+  - `PBXFileReference` entry (line ~345)
+  - `PBXGroup` child under `ScratchLabDesktopTests` (line ~434)
+  - Sources build phase `F9TESTSRC10AA0010AA10AA` (line ~1075)
+  - New UUIDs: `BPF0010000BPF001BPF00001` (file ref) and
+    `BPF0011000BPF001BPF00001` (build file). Zero collisions.
+  - **No** entries added to any `PBXResourcesBuildPhase`, Copy Bundle
+    Resources phase, or non-test target. Confirmed via grep.
+
+### Validation results
+
+| Gate | Command | Result |
+|---|---|---|
+| iOS build | `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'` | exit 0 ✓ |
+| macOS build-for-testing | `xcodebuild build-for-testing -scheme ScratchLab -destination 'platform=macOS'` | `** TEST BUILD SUCCEEDED **` ✓ |
+| Test symbols linked | `nm` on built `.xctest` | `BabyPlatterFixtureDecodeTests` Swift symbols present ✓ |
+| Test run, no env var | `xcrun xctest -XCTest …BabyPlatterFixtureDecodeTests <bundle>` | 4 skipped + 1 passed (`testFixtureNotBundled` always runs) ✓ |
+| Test run, env var set | same, with `BABY_PLATTER_FIXTURE_PATH=$PWD/Tests/Fixtures/LocalOnly/baby_platter.json` | **5 passed, 0 failures** in 0.169 s ✓ |
+| Swift Codable round-trip | `swift` one-shot using the production `PlatterPositionTimeline` (lines 1-172 extracted to avoid pulling in `CaptureCore`) | decode → re-encode → decode → Equatable equality ✓; all values finite; samples monotonic by time; confidences in `[0, 1]` ✓ |
+
+Per `project_test_runner_hang` memory, `xcodebuild test` hangs on the
+macOS test-host install on this machine. Both runtime test runs above
+used `xcrun xctest` on the built `.xctest` bundle, with a
+DerivedData-scoped symlink
+(`xctest/Contents/Frameworks/ScratchLab.debug.dylib →
+../../../../MacOS/ScratchLab.debug.dylib`) to bridge the `@rpath`
+gap. **That symlink lives inside `~/Library/Developer/Xcode/DerivedData/`
+and is not part of the commit.** The README documents the workaround
+in a "Known macOS workaround" callout.
+
+Fixture characteristics on Karl's first valid generation:
+
+- **Source**: `~/Downloads/demo_baby_scratch.mov`, 3840×2160 @ 24 fps,
+  26.75 s, 642 frames.
+- **Axis**: `axis_start = (1657.6, 1228.8)`, `axis_end = (195.2, 931.2)`,
+  unit vector `(-0.9799, -0.1994)` (left-to-right platter travel).
+- **Samples**: 637 (190 confidence-1.0 clicked, 447 confidence-0.75
+  interpolated).
+- **Time span**: `0.000 … 26.500 s`.
+- **Position range**: `0.086 … 0.389` (span 0.303 of normalised image
+  width), 9 midpoint sign-flips — confirms back-and-forth baby-scratch
+  motion.
+
+### What is intentionally NOT committed / NOT bundled
+
+| Path | State | Why |
+|---|---|---|
+| `Tests/Fixtures/LocalOnly/baby_platter.json` | On disk 63 KB, gitignored | Each developer (currently just Karl) regenerates from their own owned source. Never ships. |
+| `.scratch_fixture_work/baby_platter/frames/*.png` | On disk ~2.6 GB, gitignored | Intermediate; can be regenerated by `extract_frames.sh`. |
+| `.scratch_fixture_work/baby_platter/frames/timestamps.csv` | On disk, gitignored | Per-frame PTS sidecar; regenerated. |
+| `.scratch_fixture_work/baby_platter/axis.json` | On disk, gitignored | Provenance for the manual axis setup; regenerated per session. |
+| `.scratch_fixture_work/baby_platter/clicks.csv` | On disk, gitignored | Raw click coordinates; regenerated per session. |
+| `~/Downloads/demo_baby_scratch.mov` | Outside the repo entirely | Source media; referenced only via `BABY_PLATTER_VIDEO_PATH`. |
+| Anything under `Tests/Fixtures/LocalOnly/` | Outside any Xcode source group | Verified: zero hits for `baby_platter*` in any `PBXResourcesBuildPhase` in `project.pbxproj`. |
+| Training-data status | Not training data | Lives under `Tests/Fixtures/LocalOnly/`; `TrainModels` and dataset loaders do not scan this path. |
+
+The `testFixtureNotBundled` test runs on every `xcodebuild test`
+invocation (including `nil` env-var) and **fails** if
+`baby_platter.json` ever appears in `Bundle.main`, `Bundle.allBundles`,
+or `Bundle.allFrameworks` — the bundle-safety net for any future PR.
+
+### Remaining dirty items in the working tree (untouched by this work)
+
+Per `SOUL.md` "preserve unrelated dirty":
+
+```
+ M  ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+ ?? reference_frames/
+ ?? reference_videos/
+```
+
+- `xcschememanagement.plist` — Xcode scheme-management drift, pre-existing
+  at session start.
+- `reference_frames/` and `reference_videos/` — pre-existing untracked,
+  remain **off-limits** per `SOUL.md` ("Do not use YouTube/Ortofon
+  material for training") and the prior `AI_HANDOFF.md`
+  reference-material quarantine. The fixture pipeline did not touch
+  either directory.
+
+This `AI_HANDOFF.md` itself is also dirty (this edit). Not staged. Not
+committed. Awaiting Karl's review per the constraint below.
+
+### Slice ledger (for traceability)
+
+- **Slice 1** — `Tools/Fixtures/extract_frames.sh` + repo-root
+  `.gitignore` edit. Verified end-to-end: 642 PNGs + 642-line
+  `timestamps.csv` produced in 1m50s.
+- **Slice 2** — `Tools/Fixtures/click_baby_platter.py`. Parse helpers
+  smoke-tested headlessly; GUI walked by Karl.
+- **Slice 2.1 (retrofit)** — min-distance axis guard + degenerate-axis
+  auto-discard. **Caught a real degenerate-axis bug Karl hit during
+  initial use** (saved axis was `(681.6, 1670.4)` twice; subsequent
+  relaunches silently reused the bad axis until the auto-discard logic
+  landed).
+- **Slice 3** — `Tools/Fixtures/click_to_platter_timeline.py` +
+  `Tests/Fixtures/LocalOnly/.gitignore`. Initial PCA fallback proposed,
+  **rejected by Karl mid-slice** ("Do not use PCA fallback for the real
+  fixture yet … was user setup error"), removed; converter now exits
+  non-zero on a degenerate axis with a clear redo-axis-setup message.
+- **Slice 4** — `BabyPlatterFixtureDecodeTests.swift` + 4 pbxproj
+  inserts. Both env-states verified pass.
+- **Slice 5** — `Tools/Fixtures/README.md`.
+
+### Next recommended step
+
+**Phase 4 planning ONLY**, using the local fixture via
+`BABY_PLATTER_FIXTURE_PATH`. The "Phase 4 BLOCKED" entry further down
+this file (also dated 2026-05-24) lists three gates:
+
+| Gate | Status now |
+|---|---|
+| (a) a real fixture file from Karl | ✓ now produced on demand by this pipeline |
+| (b) Karl's explicit "go" message for Phase 4 specifically | **not yet given** |
+| (c) `reference_frames/` / `reference_videos/` remain off-limits | ✓ confirmed; today's work did not touch either |
+
+Suggested next prompt when Karl is ready (paste verbatim into a fresh
+session or into ChatGPT for an architect-side plan):
+
+```
+Plan only. Do not modify app code.
+
+Phase 4: design a non-bundled in-app loader path that can read a
+PlatterPositionTimeline JSON from a developer-supplied URL gated by
+the BABY_PLATTER_FIXTURE_PATH env var (or an equivalent #if DEBUG
+mechanism), without touching:
+  - the live capture pipeline (PlatterPositionRecorder, MacCaptureEngine)
+  - the v4 session export schema
+  - Practice / coaching / scoring
+  - Copy Bundle Resources phases
+  - signing / bundle IDs / Info.plist / PrivacyInfo.xcprivacy
+  - the production renderer (ScratchMotionRenderer)
+
+The fixture format is exactly the schema in
+ScratchLab/Models/PlatterPositionTimeline.swift:20-172 and the test
+fixture lives at Tests/Fixtures/LocalOnly/baby_platter.json
+(gitignored, generated by Tools/Fixtures/click_to_platter_timeline.py).
+The validation harness in
+ScratchLabDesktopTests/BabyPlatterFixtureDecodeTests.swift already
+guards bundle-absence and basic shape.
+
+Output: file paths to touch, smallest-safe slice recommendation,
+risk analysis, and explicit STOP for approval before any code.
+```
+
+### Constraints still active
+
+- No app code changes pending review.
+- No model training. No model bundling.
+- No export-schema changes.
+- No scoring / Practice / coaching changes.
+- No signing / bundle ID / entitlements / `Info.plist` /
+  `PrivacyInfo.xcprivacy` / `Copy Bundle Resources` changes.
+- No `Co-Authored-By` trailers.
+- **Do not stage or commit anything — including this `AI_HANDOFF.md`
+  update — without Karl's explicit approval after review.**
+
+---
+
 ## 2026-05-24 — Phase 3.4 DEBUG mini trace preview VISUALLY CONFIRMED
 
 Smoke-test pass on a fresh take. The DEBUG raw-platter card now
