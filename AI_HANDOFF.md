@@ -1,5 +1,61 @@
 # AI Handoff
 
+## 2026-05-24 — iOS Phase 3.1 equivalent NOT NEEDED (investigation only)
+
+Read-only investigation of whether iOS needs its own `PlatterPositionRecorder`
+wiring. Recording here so future agents searching for "iOS Phase 3.1" find
+the rationale without re-investigating.
+
+- **Finding**: no iOS Phase 3.1 equivalent is needed right now.
+- **Reason**: iOS does not have a local hand-tracking / Vision /
+  `(rawPoint, time)` sample pipeline at all.
+  - `CompanionCameraBroadcaster.captureOutput(_:didOutput:from:)`
+    (line ~863 in `ScratchLab/Services/CompanionCameraBroadcaster.swift`)
+    only forwards / JPEG-encodes frames for broadcast to macOS over
+    MultipeerConnectivity. It does NOT run Vision and does NOT
+    produce platter-position samples.
+  - `PracticeModeView.CameraPreviewView`
+    (`ScratchLab/Views/PracticeModeView.swift:1372`) is a bare
+    `AVCaptureSession` + `AVCaptureVideoPreviewLayer` for visual
+    reference only. No `AVCaptureVideoDataOutput`, no sample-buffer
+    delegate, no Vision, no recorder path.
+  - Zero iOS-target references to `HandDirectionTracker`,
+    `VNDetectHumanHandPoseRequest`, or any of the sample-stream
+    types Phase 3.1 consumes.
+- **Therefore**: `PlatterPositionRecorder.observe(point:at:)` has
+  nowhere safe to mount on iOS today. There is no producer to feed
+  it, no recording lifecycle (`startRoutineRecording` /
+  `finalizeRoutineRecording` don't exist on iOS) to bracket it
+  with, and no `lastDrainedPlatterPositionTimeline` consumer to
+  read it.
+- **iOS debug UI implication**: a Phase 3.2-equivalent card on iOS
+  would only ever show "Missing" until either (a) macOS relays raw
+  timeline data back over MultipeerConnectivity, or (b) iOS gains
+  its own Vision pipeline. Neither change is in scope.
+- **Current recommendation: zero iOS code changes.** macOS Phase 3.1
+  (commit `7e3286d`) and Phase 3.2 (commit `09a7d53`) ship as the
+  full producer + DEBUG inspector surface. iOS remains a passive
+  camera/audio source streaming to macOS.
+- **Future options if Karl ever decides iOS needs a raw timeline**
+  (NOT in scope now — each is its own planning slice):
+  1. Add a full iOS Vision / hand-tracking pipeline (heavy:
+     duplicates the macOS Vision loop, doubles maintenance,
+     device-CPU/thermal budget needs validation).
+  2. Relay macOS raw samples / timeline back to iOS via the
+     existing `MCSession` (medium: new packet type, end-to-end
+     latency, iOS card renders second-hand data).
+  3. Promote / tune `HandDirectionTracker` for shared use across
+     both targets (conceptually clean but its history + hysteresis
+     are tuned for macOS capture cadence; iOS may need different
+     parameters, risking Phase 1 invariants).
+- **Constraints honoured by this finding**: no app code touched,
+  no project file touched, no fixtures, no `reference_*`, no
+  `xcschememanagement.plist`. Plan file lives at
+  `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md`
+  with the full per-question breakdown.
+
+---
+
 ## 2026-05-24 — Phase 3.1 MacCaptureEngine wiring smoke test PASSED
 
 Real macOS capture exercised the wiring end-to-end. Recording the
