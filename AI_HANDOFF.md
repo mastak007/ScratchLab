@@ -1,5 +1,66 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3.4 DEBUG mini trace preview VISUALLY CONFIRMED
+
+Smoke-test pass on a fresh take. The DEBUG raw-platter card now
+carries a visual shape preview alongside its numeric rows.
+
+- **Commit verified**: `e34325c` (`Phase 3.4: add DEBUG mini trace
+  preview to Review platter card`).
+- **Screenshots**:
+  - `/Users/karlwatson/Desktop/Screenshot 2026-05-24 at 4.27.02 PM.jpeg`
+    (Karl's capture — primary evidence)
+  - `/tmp/scratchlab_phase34_trace.png` (Claude's mirror capture)
+- **Review card showed (new Phase 3.4 elements)**:
+  - Header: **"Raw platter timeline (debug)"** with **Present** badge
+  - Label: **"Position over time (auto-scaled)"** (9 pt secondary text)
+  - Visible **green mini trace / polyline** in a 40 pt canvas,
+    auto-scaled to the timeline's own positionRange (no zero
+    baseline). Multiple peaks and valleys visible — consistent with
+    a take whose position straddles zero.
+- **Visible raw timeline values from this take**:
+  - Sample count: **63**
+  - Time range: **0.0 – 8.23581362501136**
+  - Duration: **8.236 s**
+  - Position range: **−0.0668904185295105 – 0.1155923389434814**
+  - Source: **liveCapture**
+- **Selector-floor honesty note**: derived sample rate ≈
+  `63 / 8.236 ≈ 7.7 Hz`, which is **below** the Phase 2
+  `shouldRenderRawTrace` 10 Hz selector floor (see
+  `LaneContent.defaultMinimumSampleDensity`). If/when a future
+  consumer routes this timeline through the production renderer
+  fork, it would fall back to the classified-stroke path for this
+  take. The Phase 3.2 / 3.4 DEBUG diagnostic card is independent
+  of that gate — it shows the captured raw data regardless of
+  selector eligibility, which is the right behaviour for a
+  developer diagnostic.
+- **Phase 3.3 mixed-state copy also still visible on this fresh
+  take** (architecture is robust across different capture
+  characteristics, not just the Take 002 case from the Phase 3.3
+  smoke test):
+  - Stage card header: `Raw motion · no classified strokes`
+  - Stage card subtitle: `Raw platter motion was captured but
+    couldn't be converted into notation.` / `Motion captured for
+    diagnostics only.`
+  - Sidebar availability label: `No classified strokes — raw
+    motion was captured but couldn't be converted into notation.
+    Diagnostics only.`
+  - Pills: `Record movement 0` / `Audio 1` / `Fader 0` /
+    `Mixer MIDI 0`
+- **Conclusion**: the Review diagnostic surface now shows both raw
+  motion status (Phase 3.2 numeric rows + Phase 3.3 mixed-state
+  copy) AND a visual shape preview (Phase 3.4 trace), independent
+  of classified-stroke success. Developers can see what the
+  producer captured at a glance, with no risk of the diagnostic
+  leaking into user-facing notation (still `#if DEBUG` only,
+  stripped from release builds, never exported, never scored).
+- **Constraints honoured during the smoke test**: no app code
+  touched, no commit, no push, no fixture work, no
+  `reference_frames/` / `reference_videos/` / `xcschememanagement.plist`
+  touched.
+
+---
+
 ## 2026-05-24 — Phase 3.3 mixed-state Review copy VISUALLY CONFIRMED
 
 Smoke-test pass on a real take. Recording the evidence here so the
