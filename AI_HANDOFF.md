@@ -1,5 +1,83 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3.2 Review debug card VISUALLY CONFIRMED + raw / classified mismatch surfaced
+
+The DEBUG raw-platter-timeline card shipped in `09a7d53` rendered
+correctly in the Mac Review tab on a real capture, AND surfaced an
+important architectural finding: the new raw pipeline saw motion
+that the old classified-stroke pipeline missed.
+
+- **What was tested**: the Phase 3.2 inspector card on the Mac
+  Review tab, after running a real macOS routine recording with a
+  hand in front of the camera.
+- **Card display (raw pipeline output)**:
+  - Status: **Present** (green checkmark)
+  - Sample count: **152**
+  - Time range: **0.0 – 11.844481916668883** seconds
+  - Duration: **11.844 s**
+  - Position range: **−0.646200031042099 – 0.0**
+  - Source: **liveCapture**
+  - Derived sample rate: ≈ **12.8 Hz** — above the Phase 1
+    selector's 10 Hz floor.
+  - Position range is **entirely negative** — the integrator never
+    crossed zero. Consistent with a clean sustained backward push
+    or a sequence of backward strokes; signed integration is
+    producing meaningful directional data.
+- **Same Review screen, classified-stroke pipeline output (existing
+  notation detector)**:
+  - "**Audio-only take. Hand motion wasn't detected — review
+    timing only.**"
+  - Stroke count: **0**
+  - Audio event count: **1**
+  - Fader event count: **0**
+  - Mixer MIDI count: **0**
+  - Captured evidence pills: `Record movement 0`, `Audio 1`,
+    `Fader 0`, `Mixer MIDI 0`
+  - Confidence chip: `45% confidence` / `audio` / `Audio
+    inferred`.
+- **Architectural conclusion**: the raw platter-position pipeline
+  (Phase 1/2/3/3.1) can capture live hand motion **independently
+  of** the classified-stroke detector (`RoutineDetectedNotationBuilder`
+  → `DetectedNotationRecordMovementEvent`s → `recordMovementEvents`).
+  The classified detector's hysteresis + confidence + semantic-
+  direction-change gates rejected the take's motion entirely, but
+  the raw `Δx`-integration in `PlatterPositionRecorder` retained
+  152 honest samples spanning a non-trivial signed range. This is
+  direct evidence that:
+  1. The two pipelines have **different failure modes**. The raw
+     channel is more forgiving and produces signal even when the
+     classified channel produces nothing.
+  2. The classified detector's "Hand motion wasn't detected" claim
+     is now demonstrably **incomplete** when raw samples exist.
+  3. Future Practice / Review / Coach surfaces should not treat
+     "no classified strokes" as equivalent to "no motion captured"
+     — the two can disagree.
+- **Implication for the existing user-facing copy**: the Review
+  Captured-evidence card today reads as "no motion" in this exact
+  case. With Phase 3.2 in DEBUG only, only developers see the
+  raw-timeline contradiction. End-users would see only the
+  misleading "Audio-only take" message.
+- **Recommended next slice — Phase 3.3 — make Review explain this
+  mixed state cleanly** (planning only, NOT scoped in this entry):
+  - Surface the raw-timeline presence in a way that doesn't claim
+    classified-stroke data exists.
+  - Decide whether the "Hand motion wasn't detected" copy should
+    soften / change when a non-empty raw timeline is present
+    (e.g., "No classified strokes — raw motion captured for
+    diagnostics only").
+  - Decide whether the raw timeline should EVER feed into anything
+    user-facing (scoring? Coach feedback? export?) or stay
+    strictly diagnostic. Default per `PROFILE.md` is strictly
+    diagnostic until calibration + accuracy are proven.
+  - Scope must respect SOUL.md / PROFILE.md constraints: no
+    scoring changes, no Practice/coaching changes, no export
+    schema changes unless explicitly approved.
+- **Constraints honoured by this finding**: no app code touched,
+  no project file touched, no fixtures, no `reference_*`, no
+  `xcschememanagement.plist`. This is documentation only.
+
+---
+
 ## 2026-05-24 — iOS Phase 3.1 equivalent NOT NEEDED (investigation only)
 
 Read-only investigation of whether iOS needs its own `PlatterPositionRecorder`
