@@ -951,12 +951,13 @@ struct CapturedNotationDisplayView: View {
         }
     }
 
-    // Shared timeline scale — recomputed once from the widest lane
+    // Shared timeline scale — derived from the canonical
+    // `capturedEvidenceEndTime` helper on the snapshot so the Review
+    // target-chart viewport and the D1 captured diagnostic share the
+    // exact same right edge. The 1.0s floor stays here as a divide-by-
+    // zero guard for the chart's `scale = laneWidth / duration` math.
     private var totalDuration: Double {
-        let movEnd = snapshot.recordMovementEvents.map(\.endTime).max() ?? 0
-        let audEnd = snapshot.audioEvents.map(\.endTime).max() ?? 0
-        let fadEnd = snapshot.faderEvents.map(\.endTime).max() ?? 0
-        return max(movEnd, audEnd, fadEnd, 1.0)
+        max(snapshot.capturedEvidenceEndTime ?? 0, 1.0)
     }
 
     var body: some View {

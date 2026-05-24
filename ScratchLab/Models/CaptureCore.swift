@@ -4771,6 +4771,24 @@ enum CaptureCore {
             !audioEvents.isEmpty
         }
 
+        /// Latest end-time across the lanes the captured-evidence chart
+        /// actually renders as time intervals (movement / audio / fader).
+        /// `nil` when none of those lanes have events. Mixer MIDI is
+        /// represented here via the derived `faderEvents`; raw
+        /// `RawMixerMIDIEvent` exposes only point-in-time samples and is
+        /// not a duration source. Single source of truth for the captured
+        /// chart, the Review target-chart viewport, and the D1 captured-
+        /// chart diagnostic so the three cannot disagree about where the
+        /// take ends. Computed only — no Codable / export-schema impact.
+        var capturedEvidenceEndTime: Double? {
+            let candidates = [
+                recordMovementEvents.map(\.endTime).max(),
+                audioEvents.map(\.endTime).max(),
+                faderEvents.map(\.endTime).max()
+            ].compactMap { $0 }
+            return candidates.max()
+        }
+
         var effectiveDetectedLabel: String? {
             guard hasDetectedEvents else { return nil }
             let trimmed = detectedLabel?.trimmingCharacters(in: .whitespacesAndNewlines)

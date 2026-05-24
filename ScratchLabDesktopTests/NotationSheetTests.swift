@@ -506,6 +506,67 @@ struct NotationSheetTests {
         }
     }
 
+    // MARK: capturedEvidenceEndTime — canonical span helper
+    //
+    // Locks in the contract behind the Review target-chart viewport, the
+    // captured chart's `totalDuration`, and the D1 captured diagnostic
+    // chip. All three must derive their right edge from this helper so
+    // they cannot drift apart (the bug that motivated unifying this
+    // basis: target window stopped at the last movement endTime while
+    // the captured chart extended to the last audio/fader endTime).
+
+    @Test("capturedEvidenceEndTime is nil when no movement / audio / fader events exist")
+    func capturedEvidenceEndTimeNilWhenEmpty() {
+        let snap = makeSnapshot(source: "unavailable")
+        #expect(snap.capturedEvidenceEndTime == nil)
+    }
+
+    @Test("capturedEvidenceEndTime equals movement endTime when only movement is present")
+    func capturedEvidenceEndTimeMovementOnly() {
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [
+                makeMovementEvent(start: 0.0, end: 0.4),
+                makeMovementEvent(start: 0.6, end: 1.2)
+            ]
+        )
+        #expect(snap.capturedEvidenceEndTime == 1.2)
+    }
+
+    @Test("capturedEvidenceEndTime tracks audio endTime when audio extends past movement")
+    func capturedEvidenceEndTimeAudioPastMovement() {
+        // Mirrors the smoke that motivated this fix (movement ends earlier
+        // than the last audio/fader event so the target viewport must not
+        // silently clip).
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [makeMovementEvent(start: 0.0, end: 14.48)],
+            audio:     [makeAudioEvent(start: 0.0,  end: 17.49)]
+        )
+        #expect(snap.capturedEvidenceEndTime == 17.49)
+    }
+
+    @Test("capturedEvidenceEndTime tracks fader endTime when fader extends past movement and audio")
+    func capturedEvidenceEndTimeFaderPastOthers() {
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [makeMovementEvent(start: 0.0, end: 10.0)],
+            audio:     [makeAudioEvent(start: 0.0,  end: 12.0)],
+            fader:     [makeFaderEvent(start: 0.0,  end: 18.5)]
+        )
+        #expect(snap.capturedEvidenceEndTime == 18.5)
+    }
+
+    @Test("capturedEvidenceEndTime is nil for a mixer-MIDI-only snapshot (no fader derived)")
+    func capturedEvidenceEndTimeIgnoresRawMixerMIDI() {
+        // Raw `RawMixerMIDIEvent` is point-in-time data and intentionally
+        // does not contribute. The helper documents this; this test pins
+        // it so a future change cannot quietly include MIDI samples.
+        let snap = makeSnapshot(source: "partial")
+        #expect(snap.mixerMidiEvents.isEmpty)
+        #expect(snap.capturedEvidenceEndTime == nil)
+    }
+
     // MARK: Bonus: movement kind slope encoding
 
     @Test("Fast push/pull have higher height fraction than slow drag")

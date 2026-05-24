@@ -1821,18 +1821,19 @@ struct MacAnalyzerView: View {
 
     /// Slice F-B — Review-only render-time window for the target notation
     /// chart. When a captured snapshot exists, the window is
-    /// `[0, capturedLast]` so the target chart shares a seconds-per-pixel
-    /// scale with the captured chart beside it. Without a snapshot, falls
-    /// back to a 12s preview window. Clamped to a 4s minimum span and to
-    /// the phrase end so the chart never collapses or overruns the bundled
-    /// notation. The bundled `baby_scratch.json` is never mutated; this
-    /// only narrows what `ScratchPhraseChartView` chooses to render.
+    /// `[0, capturedEvidenceEndTime]` (the canonical span shared with the
+    /// captured chart's `totalDuration` and the D1 captured diagnostic) so
+    /// the target chart shares a seconds-per-pixel scale with the captured
+    /// chart beside it. Without a snapshot, falls back to a 12s preview
+    /// window. Clamped to a 4s minimum span and to the phrase end so the
+    /// chart never collapses or overruns the bundled notation. The bundled
+    /// `baby_scratch.json` is never mutated; this only narrows what
+    /// `ScratchPhraseChartView` chooses to render.
     private func reviewTargetNotationWindow(for notation: ScratchNotation) -> ClosedRange<TimeInterval> {
         let phraseSpan = max(0.1, notation.timelineDuration)
         let fallbackSpan: TimeInterval = 12
         let minSpan: TimeInterval = 4
-        let capturedSpan = currentRoutineNotationSnapshot
-            .flatMap { $0.recordMovementEvents.map(\.endTime).max() }
+        let capturedSpan = currentRoutineNotationSnapshot?.capturedEvidenceEndTime
         let rawSpan = capturedSpan ?? fallbackSpan
         let span = min(phraseSpan, max(minSpan, rawSpan))
         return 0 ... span
@@ -1878,11 +1879,11 @@ struct MacAnalyzerView: View {
         let firstCandidates = snapshot.recordMovementEvents.map(\.startTime)
             + snapshot.audioEvents.map(\.startTime)
             + snapshot.faderEvents.map(\.startTime)
-        let lastCandidates = snapshot.recordMovementEvents.map(\.endTime)
-            + snapshot.audioEvents.map(\.endTime)
-            + snapshot.faderEvents.map(\.endTime)
         let firstTime = firstCandidates.min() ?? .nan
-        let lastTime = lastCandidates.max() ?? .nan
+        // `dur`/`last` flow from the canonical `capturedEvidenceEndTime`
+        // helper so this chip can never disagree with the captured chart's
+        // `totalDuration` or the target-chart viewport upper bound.
+        let lastTime = snapshot.capturedEvidenceEndTime ?? .nan
         let src = snapshot.notationSource.isEmpty ? "-" : snapshot.notationSource
         return "dur=\(fmtSec(lastTime)) first=\(fmtSec(firstTime)) last=\(fmtSec(lastTime)) movs=\(movs) audio=\(audio) fader=\(fader) midi=\(midi) src=\(src)"
     }
