@@ -1003,7 +1003,7 @@ struct CapturedNotationDisplayView: View {
             if isDetected            { return "Detected notation" }
             if isAudioOnlyPartial {
                 return mixedStateHint
-                    ? "Raw motion · no classified strokes"
+                    ? "Motion captured · no strokes recognized"
                     : "Audio-only take"
             }
             if isPartial             { return "Partial notation" }
@@ -1045,10 +1045,10 @@ struct CapturedNotationDisplayView: View {
             if isAudioOnlyPartial {
                 VStack(alignment: .leading, spacing: 5) {
                     if mixedStateHint {
-                        Text("Raw platter motion was captured but couldn't be converted into notation.")
+                        Text("Motion was captured, but no scratch strokes were recognized for this take.")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
-                        Text("Motion captured for diagnostics only.")
+                        Text("Notation preview isn't available.")
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(labelColor)
                     } else {
@@ -1284,13 +1284,13 @@ struct CapturedNotationDisplayView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 if mixedStateHint {
-                    Text("No classified strokes")
+                    Text("Motion captured")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("Raw motion captured for diagnostics only.")
+                    Text("No scratch strokes recognized for this take.")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(audioColor)
-                    Text("Review timing and motion diagnostics.")
+                    Text("Notation preview isn't available.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(labelColor)
                 } else {

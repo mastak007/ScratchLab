@@ -1749,7 +1749,7 @@ struct MacAnalyzerView: View {
         }
         if hasPartialReviewNotation {
             if hasRawMotionWithoutClassifiedStrokes {
-                return "No classified strokes · Raw motion captured for diagnostics only"
+                return "Motion captured · No scratch strokes recognized"
             }
             return "Audio-only take · No record movement detected."
         }
@@ -1897,7 +1897,7 @@ struct MacAnalyzerView: View {
     private var reviewNotationAvailabilityMessage: String {
         if hasPartialReviewNotation {
             if hasRawMotionWithoutClassifiedStrokes {
-                return "No classified strokes — raw motion was captured but couldn't be converted into notation. Diagnostics only."
+                return "Motion was captured, but no scratch strokes were recognized for this take. Notation preview isn't available."
             }
             return "Audio-only take. Hand motion wasn't detected — review timing only."
         }
@@ -5880,13 +5880,13 @@ struct MacAnalyzerView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if hasPartialReviewNotation {
                         if hasRawMotionWithoutClassifiedStrokes {
-                            Text("No classified strokes")
+                            Text("Motion captured")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(.primary)
-                            Text("Raw motion captured for diagnostics only.")
+                            Text("No scratch strokes recognized for this take.")
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(.secondary)
-                            Text("Review timing and motion diagnostics.")
+                            Text("Notation preview isn't available.")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
                         } else {
