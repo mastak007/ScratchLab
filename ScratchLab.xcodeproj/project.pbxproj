@@ -148,6 +148,7 @@
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
+		BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -341,6 +342,7 @@
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
 		PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorderTests.swift; sourceTree = "<group>"; };
+		BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabyPlatterFixtureDecodeTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -429,6 +431,7 @@
 				PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */,
 				LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */,
 				PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */,
+				BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1069,6 +1072,7 @@
 				PPT0011000PPT001PPT00001 /* PlatterPositionTimelineTests.swift in Sources */,
 				LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */,
 				PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */,
+				BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

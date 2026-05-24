@@ -1,0 +1,8 @@
+# LOCAL-ONLY fixture workspace. Nothing under this folder ships in any
+# build product. Per the approved plan, baby_platter.json is generated
+# from Karl's owned demo video on his machine and must never be
+# committed, bundled, or trained on.
+*.mov
+*.mp4
+frames/
+baby_platter.json

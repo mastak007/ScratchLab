@@ -72,3 +72,7 @@ training_runs_*/
 local_dataset_cache/
 local_dataset_cache_*/
 offline_eval_outputs/
+
+# Local-only fixture-generation scratch dir (frames, timestamps, axis, clicks).
+# Drives Tools/Fixtures/* and Tests/Fixtures/LocalOnly/*; never bundled.
+.scratch_fixture_work/
