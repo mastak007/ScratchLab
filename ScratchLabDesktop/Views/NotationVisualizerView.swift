@@ -915,6 +915,16 @@ struct NotationTimelineCanvas: View {
 struct CapturedNotationDisplayView: View {
 
     let snapshot: CaptureCore.DetectedNotationSnapshot
+    /// Phase 3.3 — Review-only opt-in. When `true`, the audio-only
+    /// fork (`isAudioOnlyPartial`) replaces its "Audio-only take /
+    /// Hand motion wasn't detected" copy with a mixed-state notice
+    /// that honestly says raw motion WAS captured but the classifier
+    /// produced no strokes. Defaults to `false` so the existing
+    /// Advanced-tab call site at `NotationVisualizerView.swift:348`
+    /// keeps its pre-Phase-3.3 wording byte-identically. The Review
+    /// call site (`MacAnalyzerView.reviewCapturedNotationStageCard`)
+    /// passes `MacAnalyzerView.hasRawMotionWithoutClassifiedStrokes`.
+    var mixedStateHint: Bool = false
 
     // Palette
     private let forwardColor = Color(red: 0.25, green: 0.88, blue: 0.55)
@@ -991,7 +1001,11 @@ struct CapturedNotationDisplayView: View {
         let hasAudioOnly     = !isDetected && !isPartial && !hasMovementEvents && hasAudioEvents
         let sourceLabel: String = {
             if isDetected            { return "Detected notation" }
-            if isAudioOnlyPartial    { return "Audio-only take" }
+            if isAudioOnlyPartial {
+                return mixedStateHint
+                    ? "Raw motion · no classified strokes"
+                    : "Audio-only take"
+            }
             if isPartial             { return "Partial notation" }
             if hasMovementOnly       { return "Movement recorded" }
             if hasAudioOnly          { return "Audio-inferred" }
@@ -1030,12 +1044,21 @@ struct CapturedNotationDisplayView: View {
 
             if isAudioOnlyPartial {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Hand motion wasn't detected — review timing only.")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text("No record movement detected.")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(labelColor)
+                    if mixedStateHint {
+                        Text("Raw platter motion was captured but couldn't be converted into notation.")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text("Motion captured for diagnostics only.")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(labelColor)
+                    } else {
+                        Text("Hand motion wasn't detected — review timing only.")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text("No record movement detected.")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(labelColor)
+                    }
                 }
             } else if hasAudioOnly {
                 VStack(alignment: .leading, spacing: 5) {
@@ -1260,15 +1283,27 @@ struct CapturedNotationDisplayView: View {
                 .foregroundStyle(audioColor)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Audio-only take")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text("No record movement detected.")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(audioColor)
-                Text("Hand motion wasn't detected — review timing only.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(labelColor)
+                if mixedStateHint {
+                    Text("No classified strokes")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Raw motion captured for diagnostics only.")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(audioColor)
+                    Text("Review timing and motion diagnostics.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(labelColor)
+                } else {
+                    Text("Audio-only take")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("No record movement detected.")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(audioColor)
+                    Text("Hand motion wasn't detected — review timing only.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(labelColor)
+                }
             }
             Spacer(minLength: 0)
         }

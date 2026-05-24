@@ -1,5 +1,154 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3.3 Review mixed-state UX (uncommitted, awaiting approval)
+
+Direct follow-up to the Phase 3.2 visual-confirmation finding. The Review
+surface now stops claiming "no motion happened" when the raw platter
+pipeline captured signal that the classified-stroke pipeline missed.
+
+- **Slice status: uncommitted, awaiting Karl's approval.** Working
+  tree has two modified files. Nothing staged. No commit, no push.
+- **Scope honoured**:
+  - macOS only.
+  - Only the Review surface changes user-visible behaviour. Practice,
+    Capture, Advanced, Coach, scoring, exports, schema, renderer,
+    fixtures, PlatterPositionRecorder, HandDirectionTracker,
+    classifier thresholds: all untouched.
+  - No new persistence. No networking. No iOS changes. No pbxproj
+    edits.
+  - `xcuserdata/.../xcschememanagement.plist`, `reference_frames/`,
+    `reference_videos/` preserved as pre-existing dirty / untracked.
+  - No `Co-Authored-By` trailer.
+- **Files modified** (two):
+  - `ScratchLabDesktop/Views/MacAnalyzerView.swift` (+59 / −10):
+    - New private predicate
+      `hasRawMotionWithoutClassifiedStrokes`: `Bool` (placed next to
+      `hasPartialReviewNotation`). Returns `true` iff
+      `captureEngine.lastDrainedPlatterPositionTimeline` is non-nil
+      with `!samples.isEmpty` AND
+      `currentRoutineNotationSnapshot?.recordMovementEvents` is
+      empty (or the snapshot itself is nil). Strictly Review-side
+      diagnostic; does NOT feed scoring/export/notation.
+    - Four mixed-state-aware copy adjustments, all of which only
+      change wording when both `hasPartialReviewNotation` AND
+      `hasRawMotionWithoutClassifiedStrokes` are true; the
+      true-audio-only fork keeps its existing wording byte-identically:
+      1. `reviewDecisionSummary` (line ~1518): adds
+         `"No classified strokes · Raw motion captured for diagnostics only"`.
+      2. `reviewNotationAvailabilityMessage` (line ~1663): adds
+         `"No classified strokes — raw motion was captured but couldn't be converted into notation. Diagnostics only."`.
+      3. `miniNotationTimeline` (line ~5640): replaces the three
+         existing Text lines with mixed-state-aware variants:
+         `"No classified strokes"` / `"Raw motion captured for diagnostics only."`
+         / `"Review timing and motion diagnostics."`.
+      4. `reviewCapturedNotationStageCard` call to
+         `CapturedNotationDisplayView(snapshot:)` (line ~3435): now
+         passes `mixedStateHint: hasRawMotionWithoutClassifiedStrokes`.
+  - `ScratchLabDesktop/Views/NotationVisualizerView.swift` (+50 / −16):
+    - `CapturedNotationDisplayView` gains one new property:
+      `var mixedStateHint: Bool = false`. Default false preserves
+      the Advanced-tab call site
+      (`NotationVisualizerView.swift:348`) byte-identically; only
+      the Review call site (`MacAnalyzerView.swift:3435`) passes
+      `true` when the mixed state is detected.
+    - Two `isAudioOnlyPartial` forks rewritten to branch on
+      `mixedStateHint`:
+      - `summaryHeader`'s `sourceLabel` (line ~994): "Audio-only
+        take" → `"Raw motion · no classified strokes"` when
+        mixed-state.
+      - `summaryHeader`'s subtitle block (line ~1031): swaps "Hand
+        motion wasn't detected — review timing only." /
+        "No record movement detected." for "Raw platter motion was
+        captured but couldn't be converted into notation." /
+        "Motion captured for diagnostics only."
+      - `partialMovementPlaceholder` (line ~1256): swaps the same
+        misleading-pair for the mixed-state copy used in
+        `miniNotationTimeline`.
+- **Why two files instead of one**: the visible "Audio-only take"
+  copy in the Review tab's right-hand `Captured evidence` card lives
+  in `CapturedNotationDisplayView` inside `NotationVisualizerView.swift`,
+  which is also rendered by the Advanced tab. To avoid changing
+  Advanced behaviour, the parameter is opt-in and defaults to false.
+  This satisfies the "Modify only the Review surface" constraint at
+  the behaviour level: Advanced is the ONLY other caller and it
+  doesn't pass the parameter, so its rendered output is unchanged.
+- **Mixed-state-aware copy (only fires when predicate is true)**:
+  - **Sidebar mini-timeline**: `No classified strokes` / `Raw motion
+    captured for diagnostics only.` / `Review timing and motion
+    diagnostics.`
+  - **Decision summary**: `No classified strokes · Raw motion
+    captured for diagnostics only`
+  - **Availability label**: `No classified strokes — raw motion was
+    captured but couldn't be converted into notation. Diagnostics
+    only.`
+  - **Captured-evidence stage card header**: `Raw motion · no
+    classified strokes`
+  - **Captured-evidence stage subtitle**: `Raw platter motion was
+    captured but couldn't be converted into notation.` / `Motion
+    captured for diagnostics only.`
+  - **Captured-evidence partial-placeholder**: `No classified
+    strokes` / `Raw motion captured for diagnostics only.` /
+    `Review timing and motion diagnostics.`
+- **True-audio-only behaviour unchanged**: when no raw timeline was
+  drained (or drained empty) AND classified strokes are empty, the
+  Review still says "Audio-only take" / "Hand motion wasn't detected"
+  exactly as before. Only the new mixed state gets the new copy.
+- **Phase 3.2 DEBUG raw-platter card unchanged**: still present in
+  `reviewSidebar` under `#if DEBUG`, still reads
+  `captureEngine.lastDrainedPlatterPositionTimeline` directly, still
+  shows sample count / time range / duration / position range /
+  source.
+- **Builds run**:
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+  - iOS build NOT re-run (no iOS code changed; the two modified
+    files are both in the ScratchLabDesktop target only).
+- **Tests run**:
+  - `xcodebuild test-without-building -scheme ScratchLabDesktop
+    -destination 'platform=macOS' -only-testing:<three platter classes>`
+    → **TEST EXECUTE SUCCEEDED**. **32 / 32 passed**, 0 failures.
+    No new tests added (this is a UI copy slice; the predicate is a
+    pure boolean and its inputs are already covered by existing
+    PlatterPositionRecorder + LaneRawTrace + PlatterPositionTimeline
+    tests). If Karl wants formal coverage of the predicate, a small
+    follow-up test against a synthetic snapshot + synthetic timeline
+    would be one assertion.
+- **Manual visual verification gap**: I could not screenshot the
+  Review tab with the new copy rendered — automation-driven tab
+  switching needs Accessibility permission I don't have. The app
+  built, launched, and didn't crash, but rendered output of the
+  Review-tab Captured-evidence card with the new mixed-state copy
+  has NOT been visually confirmed by me. Karl can verify by
+  launching the rebuilt app and inspecting the same take that
+  produced the Phase 3.2 mismatch (sample count: 152, source:
+  liveCapture, classified strokes: 0). Expected: the right-side
+  "Captured evidence" card now reads `Raw motion · no classified
+  strokes` instead of `Audio-only take`.
+- **Working tree at slice end** (`git status --short --branch`):
+  ```
+  ## main...origin/main
+   M ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+   M ScratchLabDesktop/Views/MacAnalyzerView.swift
+   M ScratchLabDesktop/Views/NotationVisualizerView.swift
+  ?? reference_frames/
+  ?? reference_videos/
+  ```
+  `git diff --stat` (Phase 3.3 scope only — plist pre-existing dirty):
+  ```
+  ScratchLabDesktop/Views/MacAnalyzerView.swift          | 59 +++++++++++++++----
+  ScratchLabDesktop/Views/NotationVisualizerView.swift   | 67 ++++++++++++++++------
+  ```
+- **Decision needed from Karl**:
+  1. Approve for commit? Suggested commit message:
+     `Phase 3.3: distinguish raw motion vs classified strokes in Review`.
+  2. Approve `next_prompt.md` rewrite pointing back at Phase 4
+     (still blocked on the real fixture), with the Phase 3 / 3.1 /
+     3.2 / 3.3 chain now fully on `origin/main` once committed?
+
+---
+
 ## 2026-05-24 — Phase 3.2 Review debug card VISUALLY CONFIRMED + raw / classified mismatch surfaced
 
 The DEBUG raw-platter-timeline card shipped in `09a7d53` rendered

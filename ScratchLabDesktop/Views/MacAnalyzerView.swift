@@ -1335,6 +1335,24 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.audioEvents.isEmpty == false && !hasReviewNotationPreview
     }
 
+    /// Phase 3.3 — true when the raw platter-position pipeline captured
+    /// non-empty motion samples for the current take BUT the classified
+    /// stroke detector produced no `recordMovementEvents`. In that mixed
+    /// state, Review copy must not claim "no motion happened" — raw
+    /// motion was honestly captured, the classifier just couldn't
+    /// convert it into notation. Strictly Review-only diagnostic; this
+    /// predicate does NOT feed scoring, exports, or any user-facing
+    /// notation surface.
+    private var hasRawMotionWithoutClassifiedStrokes: Bool {
+        guard let timeline = captureEngine.lastDrainedPlatterPositionTimeline,
+              !timeline.samples.isEmpty else {
+            return false
+        }
+        let classifiedStrokesEmpty =
+            currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty ?? true
+        return classifiedStrokesEmpty
+    }
+
     private var lastRoutineTakeDisplayName: String {
         guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
             return fallbackTakeDisplayName()
@@ -1515,6 +1533,9 @@ struct MacAnalyzerView: View {
             return "Review label: \(decision.rawValue)"
         }
         if hasPartialReviewNotation {
+            if hasRawMotionWithoutClassifiedStrokes {
+                return "No classified strokes · Raw motion captured for diagnostics only"
+            }
             return "Audio-only take · No record movement detected."
         }
         return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
@@ -1660,6 +1681,9 @@ struct MacAnalyzerView: View {
 
     private var reviewNotationAvailabilityMessage: String {
         if hasPartialReviewNotation {
+            if hasRawMotionWithoutClassifiedStrokes {
+                return "No classified strokes — raw motion was captured but couldn't be converted into notation. Diagnostics only."
+            }
             return "Audio-only take. Hand motion wasn't detected — review timing only."
         }
         return "Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved."
@@ -3432,7 +3456,10 @@ struct MacAnalyzerView: View {
             }
             if let snapshot = currentRoutineNotationSnapshot,
                snapshot.hasDetectedEvents {
-                CapturedNotationDisplayView(snapshot: snapshot)
+                CapturedNotationDisplayView(
+                    snapshot: snapshot,
+                    mixedStateHint: hasRawMotionWithoutClassifiedStrokes
+                )
                     .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 520)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else if hasReviewNotationPreview {
@@ -5637,15 +5664,27 @@ struct MacAnalyzerView: View {
             } else if hasTake {
                 VStack(alignment: .leading, spacing: 6) {
                     if hasPartialReviewNotation {
-                        Text("Audio-only take")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Text("No record movement detected.")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Text("Hand motion wasn't detected — review timing only.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
+                        if hasRawMotionWithoutClassifiedStrokes {
+                            Text("No classified strokes")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("Raw motion captured for diagnostics only.")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text("Review timing and motion diagnostics.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Audio-only take")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("No record movement detected.")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text("Hand motion wasn't detected — review timing only.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         Text("Notation unavailable for this take.")
                             .font(.system(size: 12, weight: .medium))
