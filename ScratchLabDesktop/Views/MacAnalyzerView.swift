@@ -1819,6 +1819,89 @@ struct MacAnalyzerView: View {
         captureEngine.lastDrainedPlatterPositionTimeline?.samples.count ?? 0
     }
 
+    /// Slice F-B — Review-only render-time window for the target notation
+    /// chart. When a captured snapshot exists, the window is
+    /// `[0, capturedLast]` so the target chart shares a seconds-per-pixel
+    /// scale with the captured chart beside it. Without a snapshot, falls
+    /// back to a 12s preview window. Clamped to a 4s minimum span and to
+    /// the phrase end so the chart never collapses or overruns the bundled
+    /// notation. The bundled `baby_scratch.json` is never mutated; this
+    /// only narrows what `ScratchPhraseChartView` chooses to render.
+    private func reviewTargetNotationWindow(for notation: ScratchNotation) -> ClosedRange<TimeInterval> {
+        let phraseSpan = max(0.1, notation.timelineDuration)
+        let fallbackSpan: TimeInterval = 12
+        let minSpan: TimeInterval = 4
+        let capturedSpan = currentRoutineNotationSnapshot
+            .flatMap { $0.recordMovementEvents.map(\.endTime).max() }
+        let rawSpan = capturedSpan ?? fallbackSpan
+        let span = min(phraseSpan, max(minSpan, rawSpan))
+        return 0 ... span
+    }
+
+    #if DEBUG
+    // D1 diagnostic — never compiled into Release. Single-line, mono,
+    // low-emphasis chip rendered under the Review target notation chart so
+    // we can read the actual render assumptions (phrase/demo durations,
+    // stroke count, BPM source, reference audio/phrase durations,
+    // timingBasis, and the F-B render-time window) without changing any
+    // user-facing copy or behavior.
+    private var debugTargetNotationChipText: String {
+        let notation = ScratchNotation.babyScratch
+        let phrase = notation?.timelineDuration ?? .nan
+        let phraseEnd = notation?.phraseEnd ?? .nan
+        let demoEnd = notation?.demoEnd ?? .nan
+        let strokes = notation?.strokes.count ?? 0
+        let bpm = routineSessionSetup.bpmValue ?? 90
+        let refAudio = BabyScratchDemoPlaybackCoordinator.audioDuration
+        let refPhrase = BabyScratchDemoPlaybackCoordinator.phraseDuration
+        let basis = notation?.timingBasis ?? "-"
+        let windowText: String = {
+            guard let notation else { return "-" }
+            let window = reviewTargetNotationWindow(for: notation)
+            return "\(fmtSec(window.lowerBound))–\(fmtSec(window.upperBound))"
+        }()
+        return "phrase=\(fmtSec(phrase)) phraseEnd=\(fmtSec(phraseEnd)) demoEnd=\(fmtSec(demoEnd)) strokes=\(strokes) BPM=\(bpm) refAudio=\(fmtSec(refAudio)) refPhrase=\(fmtSec(refPhrase)) basis=\(basis) win=\(windowText)"
+    }
+
+    // D1 diagnostic — never compiled into Release. Surfaces captured-render
+    // duration, H6 first/last event timestamps (to reveal whether captured
+    // event times are take-relative or carry an offset), and the per-lane
+    // event counts the captured-notation chart actually consumes.
+    private var debugCapturedNotationChipText: String {
+        guard let snapshot = currentRoutineNotationSnapshot else {
+            return "no snapshot"
+        }
+        let movs = snapshot.recordMovementEvents.count
+        let audio = snapshot.audioEvents.count
+        let fader = snapshot.faderEvents.count
+        let midi = snapshot.mixerMidiEvents.count
+        let firstCandidates = snapshot.recordMovementEvents.map(\.startTime)
+            + snapshot.audioEvents.map(\.startTime)
+            + snapshot.faderEvents.map(\.startTime)
+        let lastCandidates = snapshot.recordMovementEvents.map(\.endTime)
+            + snapshot.audioEvents.map(\.endTime)
+            + snapshot.faderEvents.map(\.endTime)
+        let firstTime = firstCandidates.min() ?? .nan
+        let lastTime = lastCandidates.max() ?? .nan
+        let src = snapshot.notationSource.isEmpty ? "-" : snapshot.notationSource
+        return "dur=\(fmtSec(lastTime)) first=\(fmtSec(firstTime)) last=\(fmtSec(lastTime)) movs=\(movs) audio=\(audio) fader=\(fader) midi=\(midi) src=\(src)"
+    }
+
+    private func fmtSec(_ value: Double) -> String {
+        value.isFinite ? String(format: "%.2fs", value) : "-"
+    }
+
+    private func debugNotationDiagnosticChip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .regular, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.55))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityHidden(true)
+    }
+    #endif
+
     /// Slice S — bundles the source-resolved preview state needed by
     /// both the Audio Onset Preview card and the captured-empty pane's
     /// "preview-will-render" decision. Computed each render — the cost
@@ -3658,7 +3741,8 @@ struct MacAnalyzerView: View {
                 if let notation {
                     ScratchPhraseChartView(
                         source: .target(notation),
-                        bpm: Double(routineSessionSetup.bpmValue ?? 90)
+                        bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                        targetWindow: reviewTargetNotationWindow(for: notation)
                     )
                     .frame(height: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -3671,6 +3755,9 @@ struct MacAnalyzerView: View {
                         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
+            #if DEBUG
+            debugNotationDiagnosticChip(debugTargetNotationChipText)
+            #endif
             Text("Reference pattern. Stays visible even when no captured notation is available.")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
@@ -3732,6 +3819,9 @@ struct MacAnalyzerView: View {
                 .padding(20)
                 .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            #if DEBUG
+            debugNotationDiagnosticChip(debugCapturedNotationChipText)
+            #endif
         }
         .padding(16)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))

@@ -23,6 +23,12 @@ struct ScratchPhraseChartView: View {
 
     let source: ChartSource
     var bpm: Double = 90
+    /// Review-only render-time window for the `.target` source. When `nil`,
+    /// the chart renders the full notation timeline (Practice/iOS/preview
+    /// behaviour preserved). When set, the chart maps `[lowerBound, upperBound]`
+    /// onto the full chart width; the bundled notation JSON is never mutated.
+    /// Ignored by `.captured` and `.empty` sources.
+    var targetWindow: ClosedRange<TimeInterval>? = nil
     var playheadTime: TimeInterval = 0
     var showPlayhead: Bool = false
 
@@ -66,24 +72,31 @@ struct ScratchPhraseChartView: View {
     // MARK: - Target (ScratchNotation)
 
     private func drawTarget(ctx: GraphicsContext, size: CGSize, notation: ScratchNotation) {
-        let duration = max(notation.timelineDuration, 0.1)
+        let full = max(notation.timelineDuration, 0.1)
+        // Resolve render-time window. Nil = full phrase (existing behaviour).
+        // Clamp to the phrase and guarantee a minimum 0.1s span so pps is finite.
+        let windowStart = max(0, min(full, targetWindow?.lowerBound ?? 0))
+        let windowEnd = max(windowStart + 0.1, min(full, targetWindow?.upperBound ?? full))
+        let duration = windowEnd - windowStart
         let pps = size.width / CGFloat(duration)
         let strokeRegionHeight = size.height * (1 - faderLaneFraction)
 
-        drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps,
+        drawBeatGrid(ctx: ctx, size: size,
+                     startTime: windowStart, duration: duration, pps: pps,
                      labelBottomY: strokeRegionHeight - 2)
 
         // Strokes + holds + apex nodes via the shared angular renderer — the
-        // identical language used by the iOS lane. The viewport is sized so
-        // the whole phrase fits the chart width at fixed pps (static, no
-        // scrolling). With actionLineFraction = 0, time `now = 0` lands at
-        // the left edge and the pattern stretches rightward; the renderer
-        // never draws a per-frame action line, so no "now" marker bleeds
-        // into this static reference.
+        // identical language used by the iOS lane. The viewport spans the
+        // chosen `[windowStart, windowEnd]` slice at fixed pps (static, no
+        // scrolling). With actionLineFraction = 0, time `now = windowStart`
+        // lands at the left edge and the pattern stretches rightward; the
+        // renderer never draws a per-frame action line, so no "now" marker
+        // bleeds into this static reference. Strokes outside the window are
+        // skipped by `LaneViewport.isVisible(from:to:)` inside the renderer.
         let strokeRegion = CGSize(width: size.width, height: strokeRegionHeight)
         let viewport = LaneViewport(
             size: strokeRegion,
-            now: 0,
+            now: windowStart,
             axis: .horizontal,
             actionLineFraction: 0,
             secondsAhead: duration)
@@ -94,10 +107,12 @@ struct ScratchPhraseChartView: View {
 
         drawLaneDivider(ctx: ctx, size: size, y: strokeRegionHeight)
         drawTargetCrossfaderLane(ctx: ctx, size: size, notation: notation,
+                                  windowStart: windowStart, windowEnd: windowEnd,
                                   pps: pps, strokeRegionTop: strokeRegionHeight)
 
         if showPlayhead {
-            drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime) * pps)
+            drawPlayhead(ctx: ctx, size: size,
+                         x: CGFloat(playheadTime - windowStart) * pps)
         }
     }
 
@@ -164,7 +179,9 @@ struct ScratchPhraseChartView: View {
                  with: .color(dotCol.opacity(alpha)))
     }
 
-    private func drawBeatGrid(ctx: GraphicsContext, size: CGSize, duration: Double, pps: CGFloat,
+    private func drawBeatGrid(ctx: GraphicsContext, size: CGSize,
+                              startTime: Double = 0,
+                              duration: Double, pps: CGFloat,
                               labelBottomY: CGFloat) {
         let beatInterval = 60.0 / max(bpm, 1)
 
@@ -178,24 +195,30 @@ struct ScratchPhraseChartView: View {
         let minLabelGap: CGFloat = 26
         let labelStride = max(1, Int((minLabelGap / max(beatSpacing, 0.5)).rounded(.up)))
 
-        var t = 0.0
-        var beat = 0
-        while t <= duration + beatInterval * 0.5 {
-            let x = CGFloat(t) * pps
-            let isMajor = beat % 4 == 0
-            var line = Path()
-            line.move(to: CGPoint(x: x, y: 0))
-            line.addLine(to: CGPoint(x: x, y: size.height))
-            ctx.stroke(line, with: .color(isMajor ? gridMajor : gridMinor),
-                       lineWidth: isMajor ? 0.8 : 0.35)
-            if beat > 0 && beat % labelStride == 0 {
-                ctx.draw(
-                    Text("\(beat)")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.55)),
-                    at: CGPoint(x: x + 2, y: labelBottomY),
-                    anchor: .bottomLeading
-                )
+        // Beat numbering tracks absolute timeline beats, so a windowed
+        // target chart shows the same beat indices as the un-windowed full
+        // phrase (and matches the captured chart for a window starting at 0).
+        let endTime = startTime + duration
+        var beat = Int((startTime / beatInterval).rounded(.down))
+        var t = Double(beat) * beatInterval
+        while t <= endTime + beatInterval * 0.5 {
+            let x = CGFloat(t - startTime) * pps
+            if x >= 0 && x <= size.width {
+                let isMajor = beat % 4 == 0
+                var line = Path()
+                line.move(to: CGPoint(x: x, y: 0))
+                line.addLine(to: CGPoint(x: x, y: size.height))
+                ctx.stroke(line, with: .color(isMajor ? gridMajor : gridMinor),
+                           lineWidth: isMajor ? 0.8 : 0.35)
+                if beat > 0 && beat % labelStride == 0 {
+                    ctx.draw(
+                        Text("\(beat)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Color(white: 0.55)),
+                        at: CGPoint(x: x + 2, y: labelBottomY),
+                        anchor: .bottomLeading
+                    )
+                }
             }
             t += beatInterval
             beat += 1
@@ -211,6 +234,8 @@ struct ScratchPhraseChartView: View {
 
     private func drawTargetCrossfaderLane(ctx: GraphicsContext, size: CGSize,
                                            notation: ScratchNotation,
+                                           windowStart: Double,
+                                           windowEnd: Double,
                                            pps: CGFloat,
                                            strokeRegionTop: CGFloat) {
         let laneHeight = size.height - strokeRegionTop
@@ -220,9 +245,14 @@ struct ScratchPhraseChartView: View {
 
         // Each stroke contributes a colored bar over its time interval.
         // Color reflects the crossfader state on that stroke (open vs. closed).
+        // Strokes fully outside the render-time window are skipped; partially
+        // overlapping strokes are clipped to the window edges.
         for stroke in notation.strokes {
-            let x1 = CGFloat(stroke.startTime) * pps
-            let x2 = CGFloat(stroke.endTime) * pps
+            guard stroke.endTime > windowStart, stroke.startTime < windowEnd else { continue }
+            let clampedStart = max(stroke.startTime, windowStart)
+            let clampedEnd = min(stroke.endTime, windowEnd)
+            let x1 = CGFloat(clampedStart - windowStart) * pps
+            let x2 = CGFloat(clampedEnd - windowStart) * pps
             guard x2 > x1, barHeight > 0 else { continue }
 
             let rect = CGRect(x: x1, y: barTop, width: x2 - x1, height: barHeight)
