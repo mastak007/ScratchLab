@@ -107,7 +107,8 @@ enum ScratchMotionRenderer {
     static let crossfaderTickWidth: CGFloat = 1.5
     /// Phase 2 — raw-trace velocity-to-thickness mapping. `min` is the
     /// hairline at zero speed; `max` is the cap at the fastest stroke.
-    /// `gain` scales |dp/dt| (revolutions/second) into the sqrt-based
+    /// `gain` scales |dp/dt| (platter-axis displacement units / second
+    /// — see `PlatterPositionSample.position`) into the sqrt-based
     /// thickness curve so a slow drag stays thin without disappearing
     /// and a fast stab is heavy without ballooning.
     private static let rawTraceMinWidthScale: CGFloat = 0.5

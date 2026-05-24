@@ -1,6 +1,6 @@
 Read `AI_HANDOFF.md` first.
 Read `SOUL.md` and `PROFILE.md`.
-Read the approved plan at `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md` (especially §9 Phase 3 — live producer).
+Read the approved plan at `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md` (especially §9 Phase 4 — bundled fixture + companion producer).
 Do not assume memory.
 Report `git status --short --branch`.
 Identify any pre-existing dirty files and do not stage them.
@@ -10,76 +10,73 @@ No `Co-Authored-By` trailer (per `feedback_no_coauthor_trailer.md`).
 
 ---
 
-# Phase 3 — Live producer (deferred, gated on Phase 2 commit + approval)
+# Phase 4 — Bundled-demo producer + first fixture (deferred, gated on Phase 3 commit + approval)
 
-**Pre-flight gates that must hold before starting Phase 3:**
+**Pre-flight gates that must hold before starting Phase 4:**
 
-1. Phase 2 (renderer fork + crossfader ribbon in
-   `ScratchMotionRenderer.swift`, `TimingLane.swift`,
-   `ScratchMotionLane.swift`, plus
-   `ScratchLabDesktopTests/LaneRawTraceFallbackTests.swift`) is
-   committed and pushed to `origin/main`. The combined 24-case test
-   suite passes.
-2. Karl has explicitly approved Phase 3 with a "go" message — not
-   inferred from Phase 2 approval.
-3. The producer-side open decisions from the plan's §12 are answered:
-   - Sample rate of the recorder (~30 Hz from `activeHandPoseInterval`,
-     or a higher resampled rate)?
-   - Buffer cap during recording (bounded ring buffer matching the
-     audio envelope's 8192-frame pattern, OR unbounded with
-     end-of-take drain)?
-4. The Phase-2.1 ribbon-layout follow-up question is resolved (Karl
-   either accepts the cross-axis-edge placement or schedules a
-   layout-restructure slice).
+1. Phase 3 (`ScratchLabDesktop/Services/PlatterPositionRecorder.swift`
+   + `ScratchLabDesktopTests/PlatterPositionRecorderTests.swift`) is
+   committed and pushed to `origin/main`. The combined 32-case test
+   suite passes (15 Phase 1 + 9 Phase 2 + 8 Phase 3).
+2. Karl has explicitly approved Phase 4 with a "go" message — not
+   inferred from Phase 3 approval.
+3. The fixture-side open decisions are answered:
+   - Which reference video drives the fixture? (Default candidate:
+     the SXRATCH reference frames already in `reference_frames/` from
+     the `fluffy-yawning-sunset.md` analysis — but those are local
+     analysis artefacts NOT bundled into the app.)
+   - Sample rate for the authored fixture (30 Hz to match the live
+     producer, or higher for a smoother reference)?
+   - Bundle membership: `ScratchLab/Resources/CoachDemoMotion/baby_platter.json`
+     mounted in both iOS + macOS app Resources groups, or a separate
+     coach-only resource path?
+4. The Phase 3 wiring follow-up — mounting `PlatterPositionRecorder`
+   inside `MacCaptureEngine` so live takes actually produce a raw
+   timeline — has either landed OR been explicitly deferred.
 
 If any gate is unmet, **stop** and surface the missing gate. Do not
 start work.
 
-## Scope (per the plan §9 Phase 3)
+## Scope (per the plan §9 Phase 4)
 
-- Add a new `PlatterPositionRecorder` (or equivalent) at
-  `ScratchLabDesktop/Services/PlatterPositionRecorder.swift` that
-  consumes the same `(rawPoint, time)` samples
-  `HandDirectionTracker.recordObservation(rawPoint:at:)` already
-  receives. The recorder writes into an unbounded
-  `[PlatterPositionSample]` buffer during recording.
-- The recorder is a **sibling consumer**, not a wrapper of
-  `HandDirectionTracker`. Its existence must not change the tracker's
-  hysteresis behaviour, sample history capacity, or direction
-  classification.
-- The recorder integrates raw position deltas into unbounded
-  revolutions (signed; forward positive). The tracker's existing
-  `(CGPoint, CFTimeInterval)` input is the source. Confidence = 1.0
-  for samples sourced directly from the tracker.
-- At end-of-take, the recorder is drained into the in-memory
-  `DetectedNotationSnapshot` sibling — **not** into the snapshot
-  itself (the snapshot's Codable shape stays unchanged so the v4
-  session export remains byte-stable). A parallel in-memory holder
-  (e.g. a property on `CaptureCore.ScratchLabRuntimeDiagnostics` or a
-  new `Phase3Diagnostics` namespace) carries the
-  `PlatterPositionTimeline` until something downstream consumes it.
-- A new test class
-  `ScratchLabDesktopTests/PlatterPositionRecorderTests.swift` (flat
-  path, matches Phase 1/2 convention) covers:
-  - Recorder integrates a synthetic position sequence into the
-    expected unbounded revolutions output.
-  - Recorder buffer is drained to a valid `PlatterPositionTimeline`
-    (timeline invariants from Phase 1 still hold).
-  - Recorder does not modify the `HandDirectionTracker` instance it
-    sits alongside (state-check before / after).
+- Author one bundled raw-platter fixture at
+  `ScratchLab/Resources/CoachDemoMotion/baby_platter.json` — manual
+  angle extraction at ~30 Hz from a known-good reference video. Use
+  `PlatterPositionTimeline.Source.bundledDemo` (or
+  `.coachAuthored` if a hand-curated subset is preferred — call this
+  out in the fixture's docstring/header).
+- Add a small companion loader alongside `PracticeReelTimeline` (e.g.,
+  `PlatterPositionTimelineResource` or extend `PracticeReelTimeline`
+  with a sibling `platterTimeline` accessor) that decodes the fixture
+  and surfaces it to a future Demo-mode wiring slice.
+- Add fixture-decode + integrity tests at
+  `ScratchLabDesktopTests/BabyPlatterFixtureTests.swift` (flat path,
+  matches Phase 1/2/3 convention):
+  - Fixture JSON decodes without error.
+  - Sample count ≥ `LaneContent.defaultMinimumSampleDensity` × span
+    (so `shouldRenderRawTrace()` would pass when the fixture is
+    attached to a LaneContent).
+  - Sample positions form a non-trivial trajectory (positionRange
+    span > some small epsilon — fixture has actual motion).
+- Bundle the fixture in the iOS + macOS app targets via the same Copy
+  Bundle Resources pattern already used for `baby_reel.json` and
+  `baby_scratch.json`.
 
 ## Hard constraints
 
-- `HandDirectionTracker` must NOT be modified. The recorder is a
-  parallel consumer that observes the same upstream sample stream.
-- `CaptureCore.DetectedNotationSnapshot` Codable shape must NOT be
-  modified. No new fields on the snapshot itself.
+- The fixture MUST be authored from a permitted source. Per `SOUL.md`:
+  "Do not use YouTube/Ortofon material for training." The fixture is
+  not training data per se, but to stay clear of the banned-string
+  guard (`ScratchLabDesktop/Services/ScratchTypeMetadataSafety.swift`)
+  it must not carry any banned tokens in its JSON or filename.
 - `scratchlab_session_export_v4` and
-  `scratchlab_detected_notation_v1` constants must remain
-  byte-stable. Phase 3 does NOT persist the raw timeline (still
-  in-memory only).
+  `scratchlab_detected_notation_v1` must remain byte-stable. Phase 4
+  does NOT persist anything new into the export; it adds a bundled
+  resource only.
+- The fixture is bundled but must NOT appear under model-bundling
+  paths (`.mlmodel`, `.mlmodelc`, `.mlpackage`).
 - No changes to Info.plist, PrivacyInfo.xcprivacy, signing, bundle ID,
-  entitlements, or Copy Bundle Resources.
+  or entitlements.
 - Do not stage `xcuserdata/.../xcschememanagement.plist`,
   `reference_frames/`, or `reference_videos/`.
 - No `Co-Authored-By` trailer.
@@ -90,13 +87,14 @@ start work.
 Per `feedback_verification_scope.md`:
 
 1. `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
-   succeeds.
+   succeeds. (Re-run after CoreSimulator service recovery if
+   Phase 3's iOS build blockage is still active.)
 2. `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
    succeeds.
 3. `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
    succeeds.
-4. Phase 1 + Phase 2 + Phase 3 tests all pass via targeted
-   `-only-testing` runs (mind `project_test_runner_hang.md`).
+4. Phase 1 + Phase 2 + Phase 3 + Phase 4 tests all pass via targeted
+   `-only-testing` runs.
 
 `Tools/TrainModels swift test` is NOT required (per
 `feedback_verification_scope.md`).
@@ -104,10 +102,10 @@ Per `feedback_verification_scope.md`:
 ## On completion
 
 - Update `AI_HANDOFF.md` with: commit status (uncommitted, awaiting
-  approval), files added/modified, build outcomes, test outcomes,
-  any new producer-side tuning notes.
-- Rewrite `AI_HANDOFF/next_prompt.md` to point at Phase 4 (bundled
-  fixture + companion producer) — or, if Phase 3 was rejected
+  approval), files added, build outcomes, test outcomes, fixture-
+  authoring methodology notes.
+- Rewrite `AI_HANDOFF/next_prompt.md` to point at the captured-user
+  overlay slice (per plan §13 ordering) — or, if Phase 4 was rejected
   mid-flight, summarise the rejection reason and stop.
 - Report back with the exact `git status --short --branch` snapshot,
   the `git diff --stat`, and the verification command outputs.

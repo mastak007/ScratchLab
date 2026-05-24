@@ -1,5 +1,145 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3 live producer (uncommitted, awaiting approval)
+
+- **Slice status: uncommitted, awaiting Karl's approval.** Working tree
+  has 2 new files + 3 modified files (incl. pbxproj). Nothing staged.
+  No commit, no push.
+- **Plan**: `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md`
+  (Phase 3 section). Karl's 2026-05-24 pre-flight decisions:
+  - Ribbon layout (Phase 2.1/2.2): **settled** — proceed.
+  - Sample rate: **tracker-native** (~30 Hz active / ~4 Hz idle).
+  - Buffer strategy: **unbounded with end-of-take drain**.
+  - Position unit: **raw integrated platter-axis units** (NOT
+    revolutions). Phase 1 docstring relaxed to remove the "revolutions"
+    claim — exact wording per Karl: *"Unbounded signed platter-axis
+    displacement units, produced by integrating normalized tracker
+    deltas. Not calibrated to revolutions yet; calibration is deferred
+    to a future slice."*
+- **Files added** (2 new, untracked at slice end):
+  - `ScratchLabDesktop/Services/PlatterPositionRecorder.swift` —
+    sibling consumer of `(rawPoint, time)` tracker samples. API:
+    `init(source:)`, `startRecording(at:)`, `observe(point:at:)`,
+    `finishRecording(at:) -> PlatterPositionTimeline?`,
+    `isRecording: Bool`, `sampleCount: Int`. Integration: each
+    `observe` accumulates `Δx = point.x - lastPoint.x` into a signed
+    running position; the first sample of a recording lands at
+    `position = 0`. Confidence = 1.0 for every sample (direct sensor
+    reading). Buffer is unbounded; drained + cleared on `finishRecording`.
+    Sample times clamped into `[startTime, +∞)` so the Phase 1
+    `samples.first.time >= startTime` invariant always holds. End time
+    widened on drain if the last sample overshoots the requested
+    `endTime` (keeps `samples.last.time <= endTime` invariant).
+    Reference type. Single-threaded usage assumed (Phase 3 ships the
+    isolated recorder; future wiring slice will mount it inside
+    `MacCaptureEngine`).
+  - `ScratchLabDesktopTests/PlatterPositionRecorderTests.swift` — 8
+    XCTest cases:
+    1. Fresh recorder: `!isRecording`, zero samples, drain returns nil.
+    2. Integration produces signed running sum from a 4-sample
+       deterministic input.
+    3. Drained timeline satisfies Phase 1 invariants (sorted samples,
+       in-range times, source label preserved).
+    4. `finishRecording` widens `endTime` when the last sample
+       overshoots the requested value.
+    5. State resets between consecutive recordings (running integration
+       cleared, new recording starts at position 0).
+    6. `observe(...)` outside an active recording is silently ignored.
+    7. Empty recording (start without observe) drains to nil.
+    8. **Sibling `HandDirectionTracker` non-interference**: a tracker
+       running alongside the recorder produces the EXACT same Direction
+       sequence as a tracker running alone with the same input. This
+       is the strongest single test of "recorder does not modify the
+       tracker".
+- **Files modified** (3):
+  - `ScratchLab/Models/PlatterPositionTimeline.swift` — Phase 1
+    docstring on `PlatterPositionSample` relaxed per Karl's wording.
+    Inline `positionRange` docstring also updated ("platter-axis
+    displacement units" instead of "revolutions"). No API change; no
+    Codable shape change.
+  - `ScratchLab/Models/ScratchMotionRenderer.swift` — one docstring
+    line on the raw-trace velocity-to-thickness mapping updated to
+    say "platter-axis displacement units / second" instead of
+    "revolutions/second". No code change.
+  - `ScratchLab.xcodeproj/project.pbxproj` (+8 lines) — file refs +
+    build files for both new files + group entries. UUID prefix `PPR`.
+    `PlatterPositionRecorder.swift` mounted in the
+    `ScratchLabDesktop/Services` group (next to `HandDirectionTracker.swift`)
+    and the ScratchLabDesktop target's Sources phase only.
+    `PlatterPositionRecorderTests.swift` mounted in the flat
+    `ScratchLabDesktopTests` group + Sources phase (matches Phase 1/2
+    convention).
+- **Constraints honoured**:
+  - `HandDirectionTracker` — NOT modified. The recorder is an
+    independent class; test #8 proves non-interference behaviourally.
+  - `CaptureCore.DetectedNotationSnapshot` — NOT modified. Codable
+    shape unchanged.
+  - `scratchlab_session_export_v4` (line 23) — byte-stable, verified.
+  - `scratchlab_detected_notation_v1` (line 379) — byte-stable, verified.
+  - `MacCaptureEngine` — NOT modified. The recorder is shipped in
+    isolation; future wiring slice will mount it in the capture engine.
+  - No `.mlmodel` / `.mlmodelc` / `.mlpackage` / resource / Info.plist /
+    PrivacyInfo / signing / Copy Bundle Resources changes.
+  - `xcuserdata/.../xcschememanagement.plist`, `reference_frames/`,
+    `reference_videos/` preserved as pre-existing dirty / untracked.
+  - No `Co-Authored-By` trailer.
+- **Builds run**:
+  - `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **BUILD SUCCEEDED**.
+  - `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
+    → **TEST BUILD SUCCEEDED**.
+  - `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
+    → **BLOCKED** by a system-side CoreSimulator service issue that
+    surfaced mid-slice ("CoreSimulator is out of date. Current version
+    (1051.50.0) is older than build version (1051.54.0). Simulator
+    device support disabled."). `xcrun simctl list devices booted`
+    still shows the iPhone 17 simulator alive, but `xcodebuild
+    -showdestinations` can't see it — xcodebuild's connection to the
+    CoreSimulator service is stuck. Recovery typically requires either
+    an Xcode restart or `sudo killall -9
+    com.apple.CoreSimulator.CoreSimulatorService`, neither of which
+    I performed without explicit permission. **Phase 3 only touches
+    the ScratchLabDesktop target — no iOS code was modified — so iOS
+    behaviour is unchanged by this slice.** Re-run the iOS build
+    after Xcode restart to confirm.
+- **Tests run** (Phase 1 + Phase 2 + Phase 3 targeted run):
+  - `xcodebuild test-without-building -scheme ScratchLabDesktop
+    -destination 'platform=macOS'
+    -only-testing:ScratchLabDesktopTests/PlatterPositionTimelineTests
+    -only-testing:ScratchLabDesktopTests/LaneRawTraceFallbackTests
+    -only-testing:ScratchLabDesktopTests/PlatterPositionRecorderTests`
+    → **TEST EXECUTE SUCCEEDED**. **32 / 32 passed**, 0 failures, 0
+    unexpected. (15 Phase 1 + 9 Phase 2 + 8 Phase 3.) Total ~0.027 s.
+- **Working tree at slice end** (`git status --short --branch`):
+  ```
+  ## main...origin/main
+   M ScratchLab.xcodeproj/project.pbxproj
+   M ScratchLab.xcodeproj/xcuserdata/karlwatson.xcuserdatad/xcschemes/xcschememanagement.plist
+   M ScratchLab/Models/PlatterPositionTimeline.swift
+   M ScratchLab/Models/ScratchMotionRenderer.swift
+  ?? ScratchLabDesktop/Services/PlatterPositionRecorder.swift
+  ?? ScratchLabDesktopTests/PlatterPositionRecorderTests.swift
+  ?? reference_frames/
+  ?? reference_videos/
+  ```
+  `git diff --stat` (Phase 3 scope — plist is pre-existing dirty, new
+  files are untracked until staged):
+  ```
+  ScratchLab.xcodeproj/project.pbxproj             | 8 +
+  ScratchLab/Models/PlatterPositionTimeline.swift  | 18 +++++++++-------
+  ScratchLab/Models/ScratchMotionRenderer.swift    | 3 ++-
+  ```
+- **Decision needed from Karl**:
+  1. Approve the slice for commit? Suggested commit message:
+     `Phase 3: PlatterPositionRecorder live producer (unwired, tests-only)`.
+  2. Accept macOS-only verification given the system-side iOS build
+     blockage, or do you want me to attempt a CoreSimulator service
+     restart (requires sudo) before commit?
+  3. Approve `next_prompt.md` rewrite pointing at Phase 4 (bundled
+     fixture + companion producer)?
+
+---
+
 ## 2026-05-24 — Phase 2.2 ribbon time-alignment tune (still uncommitted)
 
 Karl's follow-up decision after reviewing 2.1: in portrait the

@@ -2,12 +2,16 @@ import Foundation
 
 // MARK: - PlatterPositionSample
 
-/// A single timestamped platter-angle sample.
+/// A single timestamped platter-position sample.
 ///
-/// `position` is the unbounded integrated platter angle (in revolutions,
-/// signed — forward positive, backward negative). The renderer normalises
-/// into the lane's cross-axis 0…1 range at draw time using the
-/// timeline-wide min/max envelope (`PlatterPositionTimeline.positionRange`).
+/// `position` carries **unbounded signed platter-axis displacement
+/// units**, produced by integrating normalized tracker deltas. Not
+/// calibrated to revolutions yet; calibration is deferred to a future
+/// slice. Forward motion is positive, backward is negative. The
+/// renderer normalises into the lane's cross-axis 0…1 range at draw
+/// time using the timeline-wide min/max envelope
+/// (`PlatterPositionTimeline.positionRange`), so the absolute unit
+/// does not affect visual output.
 ///
 /// `confidence` is `1.0` when the sample is sourced directly from the
 /// hand tracker, and `< 1` when interpolated, hand-authored, or
@@ -136,8 +140,8 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
     }
 
     /// Min / max position across the sample span. Nil when samples are
-    /// empty. The renderer uses this to map unbounded revolutions onto
-    /// the lane's cross-axis 0…1.
+    /// empty. The renderer uses this to map unbounded platter-axis
+    /// displacement units onto the lane's cross-axis 0…1.
     var positionRange: ClosedRange<Double>? {
         guard let first = samples.first else { return nil }
         var lo = first.position
