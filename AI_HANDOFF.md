@@ -1,5 +1,56 @@
 # AI Handoff
 
+## 2026-05-24 — Phase 3.3 mixed-state Review copy VISUALLY CONFIRMED
+
+Smoke-test pass on a real take. Recording the evidence here so the
+Phase 3.3 result survives `/clear` and future agents can find the
+proof without re-running the smoke test.
+
+- **Commit verified**: `2d42ef5` (`Phase 3.3: distinguish raw motion
+  vs classified strokes in Review`).
+- **Screenshot**: `/tmp/scratchlab_phase33_observe.png` — full Review
+  tab on Take 002, mixed-state copy rendered.
+- **Review tab showed (new Phase 3.3 mixed-state copy)**:
+  - Stage-card header: **"Raw motion · no classified strokes"**
+  - Stage-card subtitle line 1: **"Raw platter motion was captured
+    but couldn't be converted into notation."**
+  - Stage-card subtitle line 2: **"Motion captured for diagnostics
+    only."**
+  - Sidebar availability label: **"No classified strokes — raw
+    motion was captured but couldn't be converted into notation.
+    Diagnostics only."**
+- **Old misleading copy was ABSENT** (confirms the gate is
+  branching correctly):
+  - "Audio-only take" — not present
+  - "Hand motion wasn't detected" — not present
+  - "No record movement detected." — not present
+- **Captured-evidence counts remained accurate** (pills in the
+  stage card, unchanged from pre-Phase-3.3):
+  - Record movement **0**
+  - Audio **1**
+  - Fader **0**
+  - Mixer MIDI **0**
+- **Implicit predicate evidence**: the mixed-state copy ONLY fires
+  when `MacAnalyzerView.hasRawMotionWithoutClassifiedStrokes`
+  evaluates true. Its appearance in the rendered UI is direct
+  evidence that:
+  - `captureEngine.lastDrainedPlatterPositionTimeline != nil`
+  - `timeline.samples.isEmpty == false`
+  - `currentRoutineNotationSnapshot.recordMovementEvents.isEmpty`
+- **Conclusion**: the Review surface now correctly distinguishes
+  raw motion evidence (`PlatterPositionRecorder` output) from
+  classified-stroke evidence (the legacy `RoutineDetectedNotationBuilder`
+  → `recordMovementEvents` pipeline). The Phase 3.2 architectural
+  mismatch ("Audio-only take" claimed when raw motion was present)
+  is no longer surfaced to users; the new copy honestly explains
+  the state.
+- **Constraints honoured during the smoke test**: no app code
+  touched, no commit, no push, no fixture work, no
+  `reference_frames/` / `reference_videos/` / `xcschememanagement.plist`
+  touched.
+
+---
+
 ## 2026-05-24 — Phase 3.3 Review mixed-state UX (uncommitted, awaiting approval)
 
 Direct follow-up to the Phase 3.2 visual-confirmation finding. The Review
