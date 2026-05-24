@@ -76,3 +76,9 @@ offline_eval_outputs/
 # Local-only fixture-generation scratch dir (frames, timestamps, axis, clicks).
 # Drives Tools/Fixtures/* and Tests/Fixtures/LocalOnly/*; never bundled.
 .scratch_fixture_work/
+
+# Local-only reference / evaluation media (YouTube / external notation
+# references, frame extracts, source clips). Off-limits for training per
+# SOUL.md / PROFILE.md; never bundled, never scored, never committed.
+reference_frames/
+reference_videos/
