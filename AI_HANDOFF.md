@@ -1,5 +1,83 @@
 # AI Handoff
 
+## 2026-05-25 — Review notation viewport/duration chain LANDED (commits `2163916`, `13c1f89`; manual smoke passed)
+
+Two Review-only fixes that together correct the captured-vs-target
+notation comparison surface. The dominant defect was the **target
+viewport** compressing the lane to a stale window while the captured
+chip's duration was computed against a different basis, so the two
+chips visually disagreed even when the underlying data matched.
+
+### Commits (both on `main`, already pushed before this entry)
+
+- **`2163916`** — `Review: add notation diagnostics and target
+  viewport windowing`. Adds the per-chip diagnostics line and applies
+  windowing to the target viewport so it matches the captured take's
+  time span instead of using a stale / wider window.
+- **`13c1f89`** — `Review: unify captured evidence duration basis`.
+  Brings the captured chip's `dur` onto the same duration basis as the
+  target window, so `win` and `dur` agree end-for-end.
+
+### Manual smoke (this session, Karl — after fresh relaunch)
+
+After a clean Cmd-Q + relaunch of the fresh build:
+
+- **Target D1 chip**: `win=0.00s–17.49s`
+- **Captured D1 chip**: `dur=17.49s` `first=0.00s` `last=17.49s`
+  `movs=9` `audio=1` `fader=0` `midi=0` `src=partial`
+
+Both chips agree on the 17.49 s span; captured-side counters are
+non-zero where expected (`movs=9`, `audio=1`); source classification
+reads `partial` as expected for this take.
+
+### Stale-screenshot trap (resolved)
+
+The first verification screenshot showed the old `win=0.00s–14.48s`
+on the target chip. Root cause: an **8-hour-old `ScratchLabDesktop`
+process** was still running and intercepted the `open` call, so the
+freshly built binary never came to the foreground. After `Cmd-Q` of
+the stale instance and a clean relaunch, the new build rendered
+`win=0.00s–17.49s` correctly.
+
+Operational note for future Review smoke tests on this machine:
+**confirm the running PID matches the just-built bundle** (or just
+Cmd-Q before `open`) before trusting the on-screen chip values.
+
+### Alternative hypothesis ruled out
+
+An **H6 / event-timestamp-offset** hypothesis (the chip showing a
+non-zero `first=` because event timestamps were offset from the take
+origin) was considered and rejected by the diagnostics: `first=0.00s`
+on the captured chip confirms event timestamps share the take origin,
+so the visible compression was viewport/duration-basis, not an event
+offset.
+
+### Conclusion
+
+The dominant issue was **target viewport compression / duration-basis
+mismatch**, now fixed in Review by the two commits above. The
+captured and target chips now read consistent windows for the same
+take, and the per-chip diagnostics line is in place for future
+debugging.
+
+### iOS parity audit
+
+Audited whether an iOS mirror slice was needed. Conclusion: **no
+additional iOS mirror needed now.** The shared renderer/model changes
+underneath these Review-only fixes are already compiled into the iOS
+target and are inert by default (no iOS call site exercises the
+windowed/unified path that the macOS Review surface now uses). Revisit
+only if/when an iOS Review-equivalent surface is built.
+
+### Scope honoured by this handoff edit
+
+- Touched ONLY `AI_HANDOFF.md`.
+- No app code, no pbxproj, no fixtures, no tests.
+- No stage, no commit, no push.
+- No `Co-Authored-By` trailer.
+
+---
+
 ## 2026-05-24 — Phase 4 CLOSED at Slice 1 (manual smoke passed, no further slices in flight)
 
 Audit decision after Slice 1: **stop Phase 4 here.** Slice 1 (commit
