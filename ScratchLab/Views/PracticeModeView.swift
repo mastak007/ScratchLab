@@ -106,7 +106,15 @@ struct PracticeModeView: View {
     @State private var attemptCount: Int = 0
     @State private var currentStreak: Int = 0
     @State private var bestStreak: Int = 0
-    
+
+    // Practice timing preview — supplementary aggregates derived from the
+    // live `ScratchAnalysisResult.timing` stream. Used only by the
+    // post-take preview card; never saved, scored, or exported. PROFILE.md
+    // keeps classifier labels/confidence off this surface.
+    @State private var onBeatHitCount: Int = 0
+    @State private var cumulativeAbsoluteBeatOffsetMs: Double = 0
+    @State private var sessionStartedAt: Date?
+
     // Feedback
     @State private var lastFeedback: [String] = []
     @State private var showFeedback = false
@@ -390,6 +398,7 @@ struct PracticeModeView: View {
                         attempts: attemptCount,
                         bestStreak: bestStreak,
                         detailNote: comboResultDetail,
+                        takeEvidence: practiceTimingPreviewSummary,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
                         onContinue: { showingResults = false; resetSession() },
                         onExit: { dismiss() }
@@ -954,6 +963,9 @@ struct PracticeModeView: View {
         attemptCount = 0
         currentStreak = 0
         bestStreak = 0
+        onBeatHitCount = 0
+        cumulativeAbsoluteBeatOffsetMs = 0
+        sessionStartedAt = Date()
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
@@ -1065,6 +1077,9 @@ struct PracticeModeView: View {
         attemptCount = 0
         currentStreak = 0
         bestStreak = 0
+        onBeatHitCount = 0
+        cumulativeAbsoluteBeatOffsetMs = 0
+        sessionStartedAt = nil
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
@@ -1106,7 +1121,15 @@ struct PracticeModeView: View {
     
     private func handleScratchDetected(_ result: ScratchAnalysisResult) {
         attemptCount += 1
-        
+
+        // Practice timing preview — running aggregates only. Does not feed
+        // scoring, capture, export, or any retained notation; surfaces only
+        // through the post-take preview card.
+        if result.timing.isOnBeat {
+            onBeatHitCount += 1
+        }
+        cumulativeAbsoluteBeatOffsetMs += abs(result.timing.beatOffset)
+
         // Update accuracy (running average)
         if currentAccuracy == 0 {
             currentAccuracy = result.accuracy
@@ -1280,6 +1303,25 @@ struct PracticeModeView: View {
         }
 
         sessionProgressPersisted = true
+    }
+
+    // Builds the post-take preview-card payload from the live aggregates.
+    // Returns `nil` for Demo (which never reaches the results overlay) and
+    // for any session that produced zero mic attempts, so the card stays
+    // absent rather than rendering "0 / 0". PROFILE.md keeps classifier
+    // labels/confidence out of this surface — only timing aggregates flow
+    // through.
+    private var practiceTimingPreviewSummary: TakeEvidenceSummary? {
+        guard practiceAssistMode != .demo else { return nil }
+        guard attemptCount > 0 else { return nil }
+        let elapsed = sessionStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let avgOffset = cumulativeAbsoluteBeatOffsetMs / Double(attemptCount)
+        return TakeEvidenceSummary(
+            takeLengthSeconds: max(0, elapsed),
+            attempts: attemptCount,
+            onBeatCount: onBeatHitCount,
+            averageAbsoluteBeatOffsetMs: avgOffset
+        )
     }
 
     private func registerComboHitIfNeeded(_ result: ScratchAnalysisResult) -> Bool {
@@ -2214,6 +2256,18 @@ struct PauseButton: View {
 
 // MARK: - Results Overlay
 
+// Supplementary post-take timing preview payload. Carries only aggregates
+// derived from the live `ScratchAnalysisResult.timing` stream — no
+// classifier labels, no confidence, no retained notation. PROFILE.md
+// keeps classifier labels/confidence off this surface and treats audio-
+// onset timing as preview-only (not saved/exported/scored).
+fileprivate struct TakeEvidenceSummary: Equatable {
+    let takeLengthSeconds: TimeInterval
+    let attempts: Int
+    let onBeatCount: Int
+    let averageAbsoluteBeatOffsetMs: Double
+}
+
 struct ResultsOverlayView: View {
     let scratch: Scratch
     let sessionTitle: String?
@@ -2224,6 +2278,7 @@ struct ResultsOverlayView: View {
     let attempts: Int
     let bestStreak: Int
     let detailNote: String?
+    fileprivate var takeEvidence: TakeEvidenceSummary? = nil
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
@@ -2257,6 +2312,11 @@ struct ResultsOverlayView: View {
                     ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
                 }
                 .padding(.horizontal, 40)
+
+                if let takeEvidence {
+                    PracticeTimingPreviewCard(summary: takeEvidence)
+                        .padding(.horizontal, 32)
+                }
 
                 if let detailNote {
                     Text(detailNote)
@@ -2314,17 +2374,17 @@ struct ResultStat: View {
     let value: String
     let label: String
     let icon: String
-    
+
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.title2)
                 .foregroundColor(Color(hex: "FFD700"))
-            
+
             Text(value)
                 .font(.system(size: 24, weight: .bold))
                 .foregroundColor(.white)
-            
+
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.5))
@@ -2333,6 +2393,65 @@ struct ResultStat: View {
         .padding(.vertical, 16)
         .background(Color.white.opacity(0.05))
         .cornerRadius(12)
+    }
+}
+
+// Visually quieter than the stats grid above it — labels in muted white,
+// values in monospaced light type. Reads as supplementary coaching
+// context, not a primary score. Copy stays inside the PROFILE.md vocab:
+// "on-device audio onsets", "(preview)", "aren't saved, exported, or
+// scored". No classifier names, no confidence numbers.
+fileprivate struct PracticeTimingPreviewCard: View {
+    let summary: TakeEvidenceSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("PRACTICE TIMING · PREVIEW")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.55))
+
+            VStack(alignment: .leading, spacing: 6) {
+                row(label: "Take length", value: takeLengthText)
+                row(label: "Attempts on mic", value: "\(summary.attempts)")
+                row(label: "On-beat estimate",
+                    value: "\(summary.onBeatCount) / \(summary.attempts) (preview)")
+                row(label: "Avg timing",
+                    value: "±\(avgOffsetMsText) ms (preview)")
+            }
+
+            Text("Timing estimates are based on on-device audio onsets. They aren't saved, exported, or scored.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(Color.white.opacity(0.04))
+        .cornerRadius(10)
+    }
+
+    private var takeLengthText: String {
+        String(format: "%.1f s", summary.takeLengthSeconds)
+    }
+
+    private var avgOffsetMsText: String {
+        "\(Int(summary.averageAbsoluteBeatOffsetMs.rounded()))"
+    }
+
+    @ViewBuilder
+    private func row(label: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(1)
+        }
     }
 }
 
