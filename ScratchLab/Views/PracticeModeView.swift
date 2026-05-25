@@ -54,9 +54,15 @@ struct PracticeModeView: View {
     let usesBackingTrack: Bool
     
     @Environment(\.dismiss) var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
+
+    // Compact vertical size class is iPhone landscape (and small split-view).
+    // Used only for surgical landscape adjustments — every branch keeps the
+    // portrait layout byte-identical.
+    private var isCompactVertical: Bool { verticalSizeClass == .compact }
 
     // Bundled demo-audio player for the non-scored Demo assist mode. Reused
     // from the coach card; owned here so the live session can drive the demo
@@ -567,7 +573,10 @@ struct PracticeModeView: View {
                             color: Color(hex: "F59E0B")
                         )
                     }
-                } else {
+                } else if !isCompactVertical {
+                    // Hidden in iPhone landscape — redundant with the session
+                    // title in `practiceTopHUD` and saves chip-strip width that
+                    // otherwise pushes everything off-screen on narrow heights.
                     PracticeStatusChip(
                         title: "Scratch",
                         value: activeScratch.name,
@@ -608,11 +617,16 @@ struct PracticeModeView: View {
         // still axis-parametric (it can render vertical) — this is just the
         // Practice surface's choice.
         let axis: LaneAxis = .horizontal
-        return VStack(spacing: 8) {
+        // In iPhone landscape, the lane was collapsing to zero height when the
+        // top HUD + GuidedCutCueLayer + bottom HUD claimed all available
+        // vertical space. A min-height + tighter spacing keeps the lane
+        // visible without removing any of the surrounding elements.
+        let laneMinHeight: CGFloat = isCompactVertical ? 110 : 0
+        return VStack(spacing: isCompactVertical ? 4 : 8) {
             practiceTopHUD
 
             notationLanePanel(axis: axis)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, minHeight: laneMinHeight, maxHeight: .infinity)
                 .overlay(alignment: .bottom) {
                     feedbackBanner.padding(.bottom, 10)
                 }
@@ -626,7 +640,7 @@ struct PracticeModeView: View {
             practiceBottomHUD
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, isCompactVertical ? 6 : 10)
     }
 
     // Thin top chip row: what the session is, and — when scored — how it goes.
@@ -649,16 +663,46 @@ struct PracticeModeView: View {
     }
 
     // Compact scored-practice metrics — understated so the lane stays dominant.
+    @ViewBuilder
     private var practiceMetricsChip: some View {
-        HStack(spacing: 12) {
-            StatDisplay(icon: leadingStat.icon, value: leadingStat.value,
-                        label: leadingStat.label, color: leadingStat.color)
-            StatDisplay(icon: "star.fill", value: "\(currentScore)",
-                        label: "Score", color: Color(hex: "FFD700"))
+        if isCompactVertical {
+            // iPhone landscape: a single inline pill instead of two stacked
+            // StatDisplay columns. Same numbers, less vertical/horizontal
+            // pressure so the notation lane can claim its own height.
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    Image(systemName: leadingStat.icon)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(leadingStat.color)
+                    Text(leadingStat.value)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                HStack(spacing: 4) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(Color(hex: "FFD700"))
+                    Text("\(currentScore)")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.black.opacity(0.5), in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(leadingStat.label) \(leadingStat.value), Score \(currentScore)")
+        } else {
+            HStack(spacing: 12) {
+                StatDisplay(icon: leadingStat.icon, value: leadingStat.value,
+                            label: leadingStat.label, color: leadingStat.color)
+                StatDisplay(icon: "star.fill", value: "\(currentScore)",
+                            label: "Score", color: Color(hex: "FFD700"))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Color.black.opacity(0.5), in: Capsule())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(Color.black.opacity(0.5), in: Capsule())
     }
 
     // Thin bottom chip row: contextual guidance plus the practice-beat control.
@@ -745,13 +789,19 @@ struct PracticeModeView: View {
     }
 
     // Compact microphone status: a state dot plus the live input level.
+    // In iPhone landscape the level indicator is suppressed — its underlying
+    // HStack-of-20-bars overflows the 46pt frame and collides with the
+    // Play Beat button. The `Audio · …` chip in the status strip carries
+    // the same state without the overflow.
     private var micChip: some View {
         HStack(spacing: 6) {
             Image(systemName: micStatusIcon)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundColor(micStatusColor)
-            AudioLevelIndicator(level: audioEngine.inputLevel)
-                .frame(width: 46)
+            if !isCompactVertical {
+                AudioLevelIndicator(level: audioEngine.inputLevel)
+                    .frame(width: 46)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -1775,6 +1825,12 @@ private struct GuidedCutCueLayer: View {
     let notation: ScratchNotation
     let clockStartDate: Date
 
+    // Compact-vertical (iPhone landscape) trims the caption sentence and
+    // tightens padding so the lane above can claim more height. The
+    // look-ahead bar and the status pill — the actionable parts — stay.
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    private var isCompactVertical: Bool { verticalSizeClass == .compact }
+
     // Forward look-ahead window drawn in the cue bar.
     private let windowSeconds: TimeInterval = 3.0
     // Lead time before an upcoming closed window that triggers "CUT SOON".
@@ -1808,7 +1864,7 @@ private struct GuidedCutCueLayer: View {
             let now = elapsed.truncatingRemainder(dividingBy: loopDuration)
             let state = faderState(at: now, loopDuration: loopDuration)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: isCompactVertical ? 4 : 8) {
                 HStack {
                     Text("GUIDED CUE")
                         .font(.system(size: 11, weight: .bold))
@@ -1820,13 +1876,15 @@ private struct GuidedCutCueLayer: View {
                 lookaheadBar(now: now, loopDuration: loopDuration)
                     .frame(height: 16)
 
-                Text(caption)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.66))
-                    .fixedSize(horizontal: false, vertical: true)
+                if !isCompactVertical {
+                    Text(caption)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.66))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, isCompactVertical ? 8 : 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.black.opacity(0.5))
             .cornerRadius(16)
