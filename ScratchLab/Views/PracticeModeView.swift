@@ -547,6 +547,13 @@ struct PracticeModeView: View {
                     value: micStatusTitle,
                     color: micStatusColor
                 )
+                if let audioError = audioEngine.lastAudioError {
+                    PracticeStatusChip(
+                        title: "Issue",
+                        value: audioError,
+                        color: Color(hex: "F44336")
+                    )
+                }
                 if isGuidedDrillMode {
                     PracticeStatusChip(
                         title: "BPM",

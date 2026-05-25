@@ -73,6 +73,11 @@ class AudioEngine: ObservableObject {
     @Published var activeInputName: String = "Microphone"
     @Published var scratchMotionDirection: ScratchMotionDirection = .neutral
     @Published var scratchMotionFeedback: ScratchMotionFeedback?
+
+    // User-visible audio error surface. Set on every session/engine/
+    // permission failure path so the UI can show something instead of a
+    // silent "Microphone Ready" pill. Cleared on a successful `start()`.
+    @Published var lastAudioError: String?
     
     // Backing track playback
     @Published var isBackingTrackPlaying: Bool = false
@@ -96,6 +101,7 @@ class AudioEngine: ObservableObject {
     private let noSignalGraceDuration: TimeInterval = 1.2
     private var didConfigureAudioSession = false
     private var currentAnalysisSampleRate = 44100.0
+    private var monitorRefreshTask: Task<Void, Never>?
     
     init() {
         setupFFT()
@@ -145,6 +151,7 @@ class AudioEngine: ObservableObject {
             didConfigureAudioSession = true
         } catch {
             print("Audio session setup error: \(error)")
+            lastAudioError = "Audio session could not start."
         }
     }
     
@@ -252,11 +259,15 @@ class AudioEngine: ObservableObject {
                 break
             case .denied:
                 print("Microphone permission denied")
+                lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
                 return
             case .undetermined:
                 AVAudioApplication.requestRecordPermission { [weak self] granted in
                     guard granted else {
                         print("Microphone permission denied")
+                        Task { @MainActor in
+                            self?.lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
+                        }
                         return
                     }
                     Task { @MainActor in
@@ -273,11 +284,15 @@ class AudioEngine: ObservableObject {
                 break
             case .denied:
                 print("Microphone permission denied")
+                lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
                 return
             case .undetermined:
                 session.requestRecordPermission { [weak self] granted in
                     guard granted else {
                         print("Microphone permission denied")
+                        Task { @MainActor in
+                            self?.lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
+                        }
                         return
                     }
                     Task { @MainActor in
@@ -288,6 +303,18 @@ class AudioEngine: ObservableObject {
             @unknown default:
                 return
             }
+        }
+
+        // The iOS system mic-permission alert (and route changes / interruptions /
+        // backgrounding) can deactivate the audio session even after a successful
+        // `setupAudioSession()`. Re-assert active state on every `start()` pass —
+        // `setActive(true)` is idempotent when the session is already active.
+        do {
+            try session.setActive(true)
+        } catch {
+            print("Audio session re-activation error: \(error)")
+            lastAudioError = "Audio session could not start."
+            return
         }
         
         audioEngine = AVAudioEngine()
@@ -305,6 +332,7 @@ class AudioEngine: ObservableObject {
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.channelCount > 0 else {
             print("No audio input channels available")
+            lastAudioError = "No audio input detected on this device."
             teardownAudioEngine()
             return
         }
@@ -334,10 +362,13 @@ class AudioEngine: ObservableObject {
             isRunning = true
             lastSignalDetectedAt = nil
             analysisStartedAt = nil
+            lastAudioError = nil
             refreshInputMonitorState()
+            startMonitorRefresh()
             print("Audio engine started: \(inputFormat.sampleRate)Hz, channels=\(inputFormat.channelCount)")
         } catch {
             print("Audio engine start error: \(error)")
+            lastAudioError = "Audio engine could not start."
             teardownAudioEngine()
         }
     }
@@ -347,6 +378,9 @@ class AudioEngine: ObservableObject {
     }
 
     private func teardownAudioEngine() {
+        monitorRefreshTask?.cancel()
+        monitorRefreshTask = nil
+
         if let inputNode, isInputTapInstalled {
             inputNode.removeTap(onBus: 0)
             isInputTapInstalled = false
@@ -665,6 +699,24 @@ class AudioEngine: ObservableObject {
         scratchMotionFeedback = nil
         scratchMotionAnalyzer.reset()
         refreshInputMonitorState()
+    }
+
+    // Periodic tick that re-evaluates `inputMonitorState` so the UI pill
+    // can leave `.micLive` and reach `.noSignal` when no buffers are
+    // arriving. Without this, the pill is only refreshed from the tap
+    // callback itself — meaning a silent tap leaves the pill stuck on
+    // "Microphone Ready" forever. Owned by AudioEngine; started on a
+    // successful `engine.start()` and cancelled in `teardownAudioEngine`.
+    // No analysis or pattern-matching state is touched here.
+    private func startMonitorRefresh() {
+        monitorRefreshTask?.cancel()
+        monitorRefreshTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self else { return }
+                self.refreshInputMonitorState()
+            }
+        }
     }
     
     // MARK: - Backing Track Playback
