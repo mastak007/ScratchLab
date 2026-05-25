@@ -121,6 +121,15 @@ struct PracticeModeView: View {
     @State private var cumulativeAbsoluteBeatOffsetMs: Double = 0
     @State private var sessionStartedAt: Date?
 
+    // Live mic attempt markers for the target lane. Populated by
+    // `handleScratchDetected` and rendered by `ScratchMotionLane` as small
+    // ticks near the lane's low edge — honest "the mic registered an attempt
+    // here" markers, not full stroke notation. Capped so a long session
+    // stays bounded.
+    @State private var laneUserEvents: [LaneUserEvent] = []
+    private static let laneUserEventCap = 60
+    private static let laneUserEventDuration: TimeInterval = 0.08
+
     // Feedback
     @State private var lastFeedback: [String] = []
     @State private var showFeedback = false
@@ -880,7 +889,12 @@ struct PracticeModeView: View {
                     .audioTime { demoPlayer.sampledPlaybackTime() })
         }
         guard let notation = targetNotation else { return nil }
-        let content = LaneContent(notation: notation)
+        // Pass the session's selected BPM through so `ScratchMotionLane`'s
+        // existing beat-grid renderer (gated on `content.beatsPerMinute`)
+        // lights up. The grid is a visual timing reference — shown even
+        // when the audible click track is off.
+        let content = LaneContent(notation: notation,
+                                  beatsPerMinute: Double(practiceBeatStore.bpmValue))
         switch practiceAssistMode {
         case .demo:
             // Reel manifest missing/invalid — follow the demo audio anyway.
@@ -919,7 +933,8 @@ struct PracticeModeView: View {
 
                 notationInstructionalLine(content: lane.content, clock: lane.clock)
 
-                ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis)
+                ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis,
+                                  userEvents: laneUserEvents)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
@@ -1049,6 +1064,7 @@ struct PracticeModeView: View {
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
         sessionStartedAt = Date()
+        laneUserEvents.removeAll(keepingCapacity: true)
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
@@ -1163,6 +1179,7 @@ struct PracticeModeView: View {
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
         sessionStartedAt = nil
+        laneUserEvents.removeAll(keepingCapacity: true)
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
@@ -1212,6 +1229,13 @@ struct PracticeModeView: View {
             onBeatHitCount += 1
         }
         cumulativeAbsoluteBeatOffsetMs += abs(result.timing.beatOffset)
+
+        // Lane attempt marker — honest "the mic registered an attempt here"
+        // tick rendered by `ScratchMotionLane.drawUserEvents`. Only the
+        // looping scored modes have a meaningful lane clock; Open holds
+        // the lane at t = 0 (all events would stack), and Demo skips mic
+        // analysis entirely.
+        appendLaneUserEventForDetection()
 
         // Update accuracy (running average)
         if currentAccuracy == 0 {
@@ -1405,6 +1429,33 @@ struct PracticeModeView: View {
             onBeatCount: onBeatHitCount,
             averageAbsoluteBeatOffsetMs: avgOffset
         )
+    }
+
+    // Adds a `LaneUserEvent` for the most recent mic detection, mapped to
+    // the lane's looping clock. Gated to the three modes that actually run
+    // a `.looping` clock — Open is `.fixed(0)` (every event would land at
+    // t = 0) and Demo skips mic analysis. Keeps the buffer to the most
+    // recent `laneUserEventCap` entries so a long session stays bounded.
+    private func appendLaneUserEventForDetection() {
+        switch practiceAssistMode {
+        case .guided, .coached, .autoCut:
+            break
+        case .demo, .open:
+            return
+        }
+        guard let notation = targetNotation else { return }
+        let duration = max(notation.timelineDuration, 0.0001)
+        let elapsed = Date().timeIntervalSince(notationClockStartDate)
+        let laneTime = elapsed.truncatingRemainder(dividingBy: duration)
+        let event = LaneUserEvent(
+            startTime: max(0, laneTime),
+            endTime: min(duration, laneTime + Self.laneUserEventDuration),
+            direction: .forward
+        )
+        laneUserEvents.append(event)
+        if laneUserEvents.count > Self.laneUserEventCap {
+            laneUserEvents.removeFirst(laneUserEvents.count - Self.laneUserEventCap)
+        }
     }
 
     private func registerComboHitIfNeeded(_ result: ScratchAnalysisResult) -> Bool {
