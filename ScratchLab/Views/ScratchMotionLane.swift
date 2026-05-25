@@ -86,9 +86,14 @@ struct ScratchMotionLane: View {
     private func actionLineFraction(for axis: LaneAxis) -> CGFloat {
         axis == .vertical ? 0.85 : 0.18
     }
-    /// Lookahead window — landscape is wider, so it can show a little more.
+    /// Lookahead window. Landscape used to show 6.5 s, but at typical
+    /// practice tempos (~90 BPM, ~1 stroke/beat) that filled the lane with
+    /// ~12 strokes — visually it read as the static reference phrase
+    /// rather than a moving training slice. 3 s lookahead in landscape
+    /// keeps ~4–5 strokes on screen so the next stroke is the focus,
+    /// while portrait keeps the wider 5.5 s window.
     private func secondsAhead(for axis: LaneAxis) -> TimeInterval {
-        axis == .vertical ? 5.5 : 6.5
+        axis == .vertical ? 5.5 : 3.0
     }
 
     /// Phase 2.2 — dedicated action-line fraction for the ribbon strip

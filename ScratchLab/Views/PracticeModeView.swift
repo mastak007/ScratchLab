@@ -810,27 +810,46 @@ struct PracticeModeView: View {
         .accessibilityLabel("Microphone: \(micStatusTitle)")
     }
 
-    // Compact practice-beat toggle.
+    // Compact practice-beat toggle. When the user hasn't enabled a beat in
+    // SessionSetupOverlay (`practiceBeatStore.isBeatEnabled == false`), the
+    // chip surfaces an honest "Beat Off · slashed speaker" instead of a
+    // tappable-looking "Play Beat" — same `.disabled` semantics, just no
+    // longer disguising the disabled state.
     private var beatToggleChip: some View {
         Button(action: { practiceBeatStore.togglePlayback() }) {
             HStack(spacing: 6) {
-                Image(systemName: practiceBeatStore.isPlaying ? "stop.fill" : "play.fill")
+                Image(systemName: beatChipIconName)
                     .font(.system(size: 10, weight: .bold))
-                Text(practiceBeatStore.isPlaying
-                     ? PracticeBeatUIContract.stopLabel
-                     : PracticeBeatUIContract.playLabel)
+                Text(beatChipLabel)
                     .font(.system(size: 12, weight: .bold))
             }
-            .foregroundColor(.black)
+            .foregroundColor(practiceBeatStore.isBeatEnabled ? .black : .white.opacity(0.7))
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(
                 practiceBeatStore.isBeatEnabled
                     ? Color(hex: practiceBeatStore.isPlaying ? "F59E0B" : "22C55E")
-                    : Color.white.opacity(0.25),
+                    : Color.white.opacity(0.15),
                 in: Capsule())
         }
         .disabled(!practiceBeatStore.isBeatEnabled)
+        .accessibilityLabel(practiceBeatStore.isBeatEnabled
+                            ? (practiceBeatStore.isPlaying
+                               ? PracticeBeatUIContract.stopLabel
+                               : PracticeBeatUIContract.playLabel)
+                            : "Beat Off")
+    }
+
+    private var beatChipIconName: String {
+        guard practiceBeatStore.isBeatEnabled else { return "speaker.slash.fill" }
+        return practiceBeatStore.isPlaying ? "stop.fill" : "play.fill"
+    }
+
+    private var beatChipLabel: String {
+        guard practiceBeatStore.isBeatEnabled else { return "Beat Off" }
+        return practiceBeatStore.isPlaying
+            ? PracticeBeatUIContract.stopLabel
+            : PracticeBeatUIContract.playLabel
     }
 
     @ViewBuilder
