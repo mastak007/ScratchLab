@@ -37,11 +37,11 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
 
     var explainer: String {
         switch self {
-        case .autoCut: return "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet."
+        case .autoCut: return "Animates the target pattern as a looping visual preview. App audio is coming later — for now, no playback."
         case .demo:    return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
         case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
-        case .coached: return "ScratchLab compares your cuts against the target."
-        case .open:    return "ScratchLab leaves the fader fully manual."
+        case .coached: return "Target pattern loops in time. Mic listens for your scratches; in-session comparison is coming."
+        case .open:    return "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on."
         }
     }
 }
@@ -885,10 +885,17 @@ struct PracticeModeView: View {
         case .demo:
             // Reel manifest missing/invalid — follow the demo audio anyway.
             return (content, .audioTime { demoPlayer.sampledPlaybackTime() })
-        case .autoCut, .guided:
+        case .autoCut, .guided, .coached:
+            // Coached promotes from `.fixed(0)` to a wall-clock loop so the
+            // lane visibly moves under the action line while the mic listens.
+            // The explainer used to overpromise an in-session "vs target"
+            // comparison; the looping reference at least delivers the
+            // temporal flow that promise implies. Per-attempt user overlays
+            // are still Phase 2 work.
             return (content, .looping(start: notationClockStartDate,
                                       duration: content.duration))
-        case .coached, .open:
+        case .open:
+            // Open stays parked: it's the freestyle / static-reference mode.
             return (content, .fixed(0))
         }
     }
