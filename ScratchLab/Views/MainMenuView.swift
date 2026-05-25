@@ -13,6 +13,10 @@ struct MainMenuView: View {
     @State private var showingProfile = false
     @State private var showingSettings = false
     @State private var showingPracticeHub = false
+    @State private var showingCapturePlaceholder = false
+    @State private var showingReviewPlaceholder = false
+    // Dormant routes — Slice C will surface these via AdvancedHubView.
+    // Kept here so the existing navigationDestination wiring stays compiled.
     @State private var showingCompanionCam = false
     @State private var showingWatchCapture = false
     @State private var showingPerformerMonitor = false
@@ -63,6 +67,12 @@ struct MainMenuView: View {
         }
         .navigationDestination(isPresented: $showingPracticeHub) {
             LevelSelectView()
+        }
+        .navigationDestination(isPresented: $showingCapturePlaceholder) {
+            CapturePlaceholderView()
+        }
+        .navigationDestination(isPresented: $showingReviewPlaceholder) {
+            ReviewPlaceholderView()
         }
         .navigationDestination(isPresented: $showingDemoMode) {
             DemoModeView()
@@ -203,66 +213,28 @@ struct MainMenuView: View {
     private var menuButtons: some View {
         VStack(spacing: 16) {
             MenuButton(
-                title: "Try Demo",
-                subtitle: "See scratch feedback instantly",
-                icon: "play.circle.fill",
-                accent: Color(hex: "FFD700"),
-                action: { showingDemoMode = true }
-            )
-
-            MenuButton(
-                title: "Live Practice",
-                subtitle: "Pick a scratch and practice from mic or wired input",
+                title: "Practice",
+                subtitle: "Hear the scratch, see the notation, copy it. Live mic listens.",
                 icon: "waveform",
                 accent: Color(hex: "22C55E"),
                 action: { showingPracticeHub = true }
             )
 
             MenuButton(
-                title: "Companion Camera",
-                subtitle: isIOSAppOnMac
-                    ? "Use ScratchLabDesktop on Mac for capture. Companion Camera is for iPhone hardware."
-                    : "Send deck video to your main device",
-                icon: "iphone.gen3.radiowaves.left.and.right",
+                title: "Capture",
+                subtitle: "On-device take capture is coming.",
+                icon: "record.circle",
                 accent: Color(hex: "F59E0B"),
-                action: { showingCompanionCam = true }
+                action: { showingCapturePlaceholder = true }
             )
 
             MenuButton(
-                title: "Performer Monitor",
-                subtitle: performerMonitorSubtitle,
-                icon: performerMonitorIcon,
+                title: "Review",
+                subtitle: "On-device review is coming.",
+                icon: "list.bullet.rectangle",
                 accent: Color(hex: "0EA5E9"),
-                action: { showingPerformerMonitor = true }
+                action: { showingReviewPlaceholder = true }
             )
-
-            MenuButton(
-                title: "Watch Capture",
-                subtitle: "Import wrist motion and relay it back to Mac capture",
-                icon: "applewatch.side.right",
-                accent: Color(hex: "6366F1"),
-                action: { showingWatchCapture = true }
-            )
-
-            #if DEBUG && canImport(RealityKit)
-            MenuButton(
-                title: "3D Coach Demo",
-                subtitle: "Preview the 3D coach model animation",
-                icon: "cube.transparent",
-                accent: Color(hex: "8B5CF6"),
-                action: { showingCoachPreview = true }
-            )
-            #endif
-
-            #if DEBUG
-            MenuButton(
-                title: "Virtual Platter Prototype",
-                subtitle: "Developer-only scratch-on-glass slice (no capture/ML)",
-                icon: "circle.circle",
-                accent: Color(hex: "F59E0B"),
-                action: { showingVirtualPlatterPrototype = true }
-            )
-            #endif
         }
     }
 
@@ -308,6 +280,75 @@ private struct UnsupportedCompanionCameraView: View {
             .frame(maxWidth: 560, alignment: .leading)
         }
         .navigationTitle("Companion Camera")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct CapturePlaceholderView: View {
+    var body: some View {
+        ZStack {
+            BackgroundView()
+
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Capture")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundColor(.white)
+
+                Text("On-device take capture is coming. For now, use Mac Companion capture tools under Advanced.")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Button is intentionally inert until Slice C adds AdvancedHubView.
+                Button(action: {}) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("Open Mac Companion Tools")
+                            .font(.system(size: 15, weight: .bold))
+                    }
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+                }
+                .disabled(true)
+
+                Text("Coming with the Advanced section.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+            .padding(24)
+            .frame(maxWidth: 560, alignment: .leading)
+        }
+        .navigationTitle("Capture")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ReviewPlaceholderView: View {
+    var body: some View {
+        ZStack {
+            BackgroundView()
+
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Review")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundColor(.white)
+
+                Text("On-device Review is coming. Full take review currently runs on the ScratchLab Mac app.")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(24)
+            .frame(maxWidth: 560, alignment: .leading)
+        }
+        .navigationTitle("Review")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
