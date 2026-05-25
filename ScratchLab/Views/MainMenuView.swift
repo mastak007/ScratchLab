@@ -15,8 +15,10 @@ struct MainMenuView: View {
     @State private var showingPracticeHub = false
     @State private var showingCapturePlaceholder = false
     @State private var showingReviewPlaceholder = false
-    // Dormant routes — Slice C will surface these via AdvancedHubView.
-    // Kept here so the existing navigationDestination wiring stays compiled.
+    @State private var showingAdvancedHub = false
+    // Orphan routes — AdvancedHubView owns its own copy of this state and
+    // its own navigationDestinations. Left here so no view/destination wiring
+    // is deleted in this slice; safe to remove in a future cleanup pass.
     @State private var showingCompanionCam = false
     @State private var showingWatchCapture = false
     @State private var showingPerformerMonitor = false
@@ -73,6 +75,9 @@ struct MainMenuView: View {
         }
         .navigationDestination(isPresented: $showingReviewPlaceholder) {
             ReviewPlaceholderView()
+        }
+        .navigationDestination(isPresented: $showingAdvancedHub) {
+            AdvancedHubView()
         }
         .navigationDestination(isPresented: $showingDemoMode) {
             DemoModeView()
@@ -150,6 +155,10 @@ struct MainMenuView: View {
         }
     }
 
+    // TODO: orphan after Slice C — AdvancedHubView now owns the live
+    // relay-status surface. Left unused for review continuity; remove in a
+    // follow-up cleanup once Slice C has shipped. Same for
+    // `watchRelayStatusText`, `performerMonitorSubtitle`, `performerMonitorIcon`.
     private var systemStatusCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("LIVE INPUT READY")
@@ -235,6 +244,14 @@ struct MainMenuView: View {
                 accent: Color(hex: "0EA5E9"),
                 action: { showingReviewPlaceholder = true }
             )
+
+            MenuButton(
+                title: "Advanced / Mac Companion",
+                subtitle: "Demo, Mac relay tools, and experimental previews",
+                icon: "slider.horizontal.3",
+                accent: Color(hex: "64748B"),
+                action: { showingAdvancedHub = true }
+            )
         }
     }
 
@@ -299,28 +316,24 @@ private struct CapturePlaceholderView: View {
                     .foregroundColor(.white.opacity(0.78))
                     .fixedSize(horizontal: false, vertical: true)
 
-                // Button is intentionally inert until Slice C adds AdvancedHubView.
-                Button(action: {}) {
+                NavigationLink {
+                    AdvancedHubView()
+                } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.up.right.square")
                             .font(.system(size: 14, weight: .bold))
                         Text("Open Mac Companion Tools")
                             .font(.system(size: 15, weight: .bold))
                     }
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
                     )
                 }
-                .disabled(true)
-
-                Text("Coming with the Advanced section.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
             }
             .padding(24)
             .frame(maxWidth: 560, alignment: .leading)
@@ -350,6 +363,181 @@ private struct ReviewPlaceholderView: View {
         }
         .navigationTitle("Review")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct AdvancedHubView: View {
+    @EnvironmentObject private var companionRelayBroadcaster: CompanionCameraBroadcaster
+    @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
+
+    @State private var showingDemoMode = false
+    @State private var showingCompanionCam = false
+    @State private var showingPerformerMonitor = false
+    @State private var showingWatchCapture = false
+    @State private var showingCoachPreview = false
+    #if DEBUG
+    @State private var showingVirtualPlatterPrototype = false
+    #endif
+
+    private var isIOSAppOnMac: Bool {
+        ProcessInfo.processInfo.isiOSAppOnMac
+    }
+
+    var body: some View {
+        ZStack {
+            BackgroundView()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 20) {
+                    relayStatusCard
+                    advancedMenuButtons
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
+            }
+        }
+        .navigationTitle("Advanced / Mac Companion")
+        .navigationBarTitleDisplayMode(.inline)
+        #if DEBUG && canImport(RealityKit)
+        .sheet(isPresented: $showingCoachPreview) {
+            NavigationStack {
+                CoachPreviewView()
+            }
+        }
+        #endif
+        .navigationDestination(isPresented: $showingDemoMode) {
+            DemoModeView()
+        }
+        #if DEBUG
+        .navigationDestination(isPresented: $showingVirtualPlatterPrototype) {
+            VirtualPlatterPrototypeView()
+        }
+        #endif
+        .navigationDestination(isPresented: $showingCompanionCam) {
+            if isIOSAppOnMac {
+                UnsupportedCompanionCameraView()
+            } else {
+                CompanionCameraView()
+            }
+        }
+        .navigationDestination(isPresented: $showingWatchCapture) {
+            WatchCaptureHubView()
+        }
+        .navigationDestination(isPresented: $showingPerformerMonitor) {
+            IPadPerformerMonitorView()
+        }
+    }
+
+    private var relayStatusCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("WATCH RELAY")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color(hex: "A78BFA"))
+
+            Text(watchRelayStatusText)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white.opacity(0.86))
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                StatusBadge(
+                    label: "Relay",
+                    value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
+                    color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
+                )
+                StatusBadge(
+                    label: "Watch",
+                    value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
+                    color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
+                )
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var advancedMenuButtons: some View {
+        VStack(spacing: 16) {
+            MenuButton(
+                title: "Try Demo",
+                subtitle: "See scratch feedback instantly",
+                icon: "play.circle.fill",
+                accent: Color(hex: "FFD700"),
+                action: { showingDemoMode = true }
+            )
+
+            MenuButton(
+                title: "Companion Camera",
+                subtitle: isIOSAppOnMac
+                    ? "Use ScratchLabDesktop on Mac for capture. Companion Camera is for iPhone hardware."
+                    : "Send deck video to your main device",
+                icon: "iphone.gen3.radiowaves.left.and.right",
+                accent: Color(hex: "F59E0B"),
+                action: { showingCompanionCam = true }
+            )
+
+            MenuButton(
+                title: "Performer Monitor",
+                subtitle: performerMonitorSubtitle,
+                icon: performerMonitorIcon,
+                accent: Color(hex: "0EA5E9"),
+                action: { showingPerformerMonitor = true }
+            )
+
+            MenuButton(
+                title: "Watch Capture",
+                subtitle: "Import wrist motion and relay it back to Mac capture",
+                icon: "applewatch.side.right",
+                accent: Color(hex: "6366F1"),
+                action: { showingWatchCapture = true }
+            )
+
+            #if DEBUG && canImport(RealityKit)
+            MenuButton(
+                title: "3D Coach Demo",
+                subtitle: "Preview the 3D coach model animation",
+                icon: "cube.transparent",
+                accent: Color(hex: "8B5CF6"),
+                action: { showingCoachPreview = true }
+            )
+            #endif
+
+            #if DEBUG
+            MenuButton(
+                title: "Virtual Platter Prototype",
+                subtitle: "Developer-only scratch-on-glass slice (no capture/ML)",
+                icon: "circle.circle",
+                accent: Color(hex: "F59E0B"),
+                action: { showingVirtualPlatterPrototype = true }
+            )
+            #endif
+        }
+    }
+
+    private var watchRelayStatusText: String {
+        if companionRelayBroadcaster.connectedPeerNames.isEmpty {
+            return "The iPhone relay is active. Open ScratchLab on macOS and connect Companion Camera when you want watch motion files to bounce back to the Mac."
+        }
+        if watchMotionCaptureStore.isWatchReachable {
+            return "Relay is live between Mac and Watch. Mac record commands can start watch capture, and imported watch motion will return through this iPhone."
+        }
+        return "Mac relay is connected, but the watch is not currently reachable. Keep the watch app open and the devices nearby for live motion capture."
+    }
+
+    private var performerMonitorSubtitle: String {
+        "Receive deck view on this device"
+    }
+
+    private var performerMonitorIcon: String {
+        UIDevice.current.userInterfaceIdiom == .pad
+            ? "ipad.landscape.badge.play"
+            : "iphone.badge.play"
     }
 }
 
