@@ -34,7 +34,6 @@ struct MainMenuView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 20) {
                         headerView
-                        systemStatusCard
                         menuButtons
                     }
                     .padding(.horizontal, 20)
@@ -121,7 +120,7 @@ struct MainMenuView: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.white)
 
-                Text("Practice + companion")
+                Text("Hear it. See the notation. Copy it.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.white.opacity(0.68))
             }
