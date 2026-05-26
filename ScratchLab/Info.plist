@@ -65,7 +65,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>ScratchLab uses the camera to capture deck video, align guide boxes, and record scratch sessions.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ScratchLab uses local network access to connect to nearby ScratchLab devices for companion camera, performer monitor, and watch relay.</string>
+	<string>ScratchLab uses your local network to discover the ScratchLab camera companion and Mac performer monitor on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ScratchLab uses the microphone or selected audio input to record scratch audio and analyze takes.</string>
 	<key>UIAppFonts</key>
