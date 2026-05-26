@@ -224,6 +224,92 @@ enum ScratchMotionRenderer {
         }
     }
 
+    // MARK: - Draw (action-notation trace)
+
+    /// Draws each stroke as a single diagonal slash anchored above the
+    /// lane's baseline. Pure — reads only its arguments, writes only to
+    /// the context.
+    ///
+    /// Forward strokes rise from baseline to peak height (`/` shape).
+    /// Backward strokes fall from peak height to baseline (`\` shape).
+    /// Every slash lives ABOVE the baseline — backward strokes never
+    /// dip below it. Each stroke is one independent line segment with
+    /// no return-to-centre tail and no connector between strokes; the
+    /// silence between strokes is therefore empty space by construction.
+    ///
+    /// Horizontal extent of each slash equals the authored
+    /// `endTime - startTime`, so longer (slower) strokes produce
+    /// visibly wider slashes than tighter (faster) strokes. Vertical
+    /// amplitude is fixed by `actionNotationBaselineFraction` /
+    /// `actionNotationPeakFraction`. Line weight scales with the speed
+    /// bucket via `speedWeight(_:)`; the hue is a single cyan
+    /// (`style.color`) — no forward/backward colour split, no junction
+    /// nodes.
+    ///
+    /// Ghosts are dropped defensively; copy-window emptiness is delivered
+    /// upstream by `LaneContent.init(reel:)` which no longer folds ghosts
+    /// in.
+    ///
+    /// Intended for the iOS Practice target lane (`ScratchMotionLane`).
+    /// macOS Review renderers (`ScratchPhraseChartView`,
+    /// `ScratchNotationCanvasView`) keep calling
+    /// `draw(_:in:viewport:style:)` directly and are unaffected.
+    static func drawActionNotationTrace(_ strokes: [LaneStroke],
+                                        in context: GraphicsContext,
+                                        viewport: LaneViewport,
+                                        style: Style) {
+        let visible = strokes.filter {
+            !$0.isGhost
+                && $0.endTime > $0.startTime
+                && viewport.isVisible(from: $0.startTime, to: $0.endTime)
+        }
+        guard !visible.isEmpty else { return }
+
+        let baselineCross = crossCoordinate(for: actionNotationBaselineFraction,
+                                            viewport: viewport)
+        let peakCross = crossCoordinate(for: actionNotationPeakFraction,
+                                        viewport: viewport)
+
+        var layer = context
+        layer.opacity = style.opacity
+
+        for stroke in visible {
+            let x1 = viewport.pos(for: stroke.startTime)
+            let x2 = viewport.pos(for: stroke.endTime)
+            let lowEnd: CGPoint
+            let peakEnd: CGPoint
+            switch stroke.direction {
+            case .forward:
+                // `/` — rises from baseline at startTime to peak at endTime.
+                lowEnd = viewport.point(scroll: x1, cross: baselineCross)
+                peakEnd = viewport.point(scroll: x2, cross: peakCross)
+            case .backward:
+                // `\` — falls from peak at startTime to baseline at endTime.
+                lowEnd = viewport.point(scroll: x2, cross: baselineCross)
+                peakEnd = viewport.point(scroll: x1, cross: peakCross)
+            }
+            var line = Path()
+            line.move(to: lowEnd)
+            line.addLine(to: peakEnd)
+            layer.stroke(
+                line,
+                with: .color(style.color),
+                style: StrokeStyle(
+                    lineWidth: style.lineWidth * speedWeight(stroke.speed),
+                    lineCap: .round
+                )
+            )
+        }
+    }
+
+    /// Cross-axis position of the slash baseline — a hair above the band's
+    /// low edge so the line cap doesn't visually merge with the band's
+    /// boundary.
+    private static let actionNotationBaselineFraction: CGFloat = 0.06
+    /// Cross-axis position of the slash peak — just below the band's high
+    /// edge so the line cap stays inside the lane chrome.
+    private static let actionNotationPeakFraction: CGFloat = 0.88
+
     // MARK: - Draw (Phase 2 — raw integrated trace)
 
     /// Draws a raw integrated platter-position timeline as a single

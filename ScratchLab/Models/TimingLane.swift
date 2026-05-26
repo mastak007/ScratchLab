@@ -73,6 +73,18 @@ extension LaneStroke {
                   faderState: stroke.faderState,
                   isGhost: false)
     }
+
+    /// The stroke with its start/end times shifted by `offset` — used to tile
+    /// a looping pattern seamlessly across the lane.
+    func shifted(by offset: TimeInterval) -> LaneStroke {
+        guard offset != 0 else { return self }
+        return LaneStroke(startTime: startTime + offset,
+                          endTime: endTime + offset,
+                          direction: direction,
+                          speed: speed,
+                          faderState: faderState,
+                          isGhost: isGhost)
+    }
 }
 
 // MARK: - Segment
@@ -231,9 +243,14 @@ extension LaneContent {
     /// segments carry solid reference strokes; copy windows carry derived
     /// ghost targets. Demo plays once — it does not loop.
     init(reel: PracticeReelTimeline) {
+        // Copy windows render as truly empty space — the warm copy band, the
+        // boundary line, and the "Your Turn" label tell the user it's their
+        // turn. Ghosts are intentionally omitted until the renderer can draw
+        // them as faint outlines distinct from solid reference strokes;
+        // `PracticeReelTimeline.derivedCopyGhostStrokes()` stays defined for
+        // that future surface.
         let references = reel.strokes.map { LaneStroke(reelStroke: $0, isGhost: false) }
-        let ghosts = reel.derivedCopyGhostStrokes().map { LaneStroke(reelStroke: $0, isGhost: true) }
-        self.init(strokes: references + ghosts,
+        self.init(strokes: references,
                   segments: reel.segments.map(LaneSegment.init(reelSegment:)),
                   beatsPerMinute: reel.bpm,
                   duration: reel.audioDuration,

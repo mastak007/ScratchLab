@@ -354,10 +354,16 @@ struct ScratchMotionLane: View {
                                                 viewport: viewport, style: .target)
             return
         }
-        guard !motionPath.isEmpty else { return }
+        guard !content.strokes.isEmpty else { return }
+        // iOS Practice target lane draws each stroke as a single diagonal
+        // slash anchored above the lane's baseline; horizontal extent is
+        // the authored `endTime - startTime`, so slow strokes are visibly
+        // wider than fast ones. macOS Review renderers
+        // (ScratchPhraseChartView, ScratchNotationCanvasView) keep calling
+        // `draw(...)` on the derived `MotionPath` and are unaffected.
         guard content.loops, content.duration > 0 else {
-            ScratchMotionRenderer.draw(motionPath, in: context,
-                                       viewport: viewport, style: .target)
+            ScratchMotionRenderer.drawActionNotationTrace(content.strokes, in: context,
+                                                         viewport: viewport, style: .target)
             return
         }
         let span = content.duration
@@ -366,8 +372,10 @@ struct ScratchMotionLane: View {
         let kHigh = Int((window.upperBound / span).rounded(.up)) + 1
         guard kLow <= kHigh else { return }
         for k in kLow...kHigh {
-            ScratchMotionRenderer.draw(motionPath.shifted(by: Double(k) * span),
-                                       in: context, viewport: viewport, style: .target)
+            let shift = Double(k) * span
+            let shifted = content.strokes.map { $0.shifted(by: shift) }
+            ScratchMotionRenderer.drawActionNotationTrace(shifted, in: context,
+                                                         viewport: viewport, style: .target)
         }
     }
 
