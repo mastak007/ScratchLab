@@ -156,6 +156,9 @@
 		TGN1001000TGN001TGN00001 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
 		TGN1001000TGN001TGN00002 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
 		TGN2011000TGN002TGN00001 /* TimingGridTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN2010000TGN002TGN00001 /* TimingGridTests.swift */; };
+		GAN1001000GAN001GAN00001 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
+		GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
+		GAN2011000GAN002GAN00001 /* GridAnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -378,6 +381,8 @@
 		NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarFixtureTests.swift; sourceTree = "<group>"; };
 		TGN1000000TGN001TGN00001 /* TimingGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingGrid.swift; sourceTree = "<group>"; };
 		TGN2010000TGN002TGN00001 /* TimingGridTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingGridTests.swift; sourceTree = "<group>"; };
+		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
+		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -493,6 +498,7 @@
 				NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */,
 				NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */,
 				TGN2010000TGN002TGN00001 /* TimingGridTests.swift */,
+				GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -643,6 +649,7 @@
 				NGP2000000NGP002NGP00001 /* GrammarParameters.swift */,
 				NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */,
 				TGN1000000TGN001TGN00001 /* TimingGrid.swift */,
+				GAN1000000GAN001GAN00001 /* GridAnnotation.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
@@ -1008,6 +1015,7 @@
 				NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */,
 				NGP3001000NGP003NGP00001 /* NotationPrimitiveDerivation.swift in Sources */,
 				TGN1001000TGN001TGN00001 /* TimingGrid.swift in Sources */,
+				GAN1001000GAN001GAN00001 /* GridAnnotation.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1098,6 +1106,7 @@
 				NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */,
 				NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */,
 				TGN1001000TGN001TGN00002 /* TimingGrid.swift in Sources */,
+				GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1188,6 +1197,7 @@
 				NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */,
 				NGF1011000NGF001NGF00001 /* NotationGrammarFixtureTests.swift in Sources */,
 				TGN2011000TGN002TGN00001 /* TimingGridTests.swift in Sources */,
+				GAN2011000GAN002GAN00001 /* GridAnnotationTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
