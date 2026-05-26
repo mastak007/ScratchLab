@@ -165,6 +165,9 @@
 		PHR1001000PHR001PHR00001 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
 		PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
 		PHR2011000PHR002PHR00001 /* PhraseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR2010000PHR002PHR00001 /* PhraseTests.swift */; };
+		ETM1001000ETM001ETM00001 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
+		ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
+		ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -393,6 +396,8 @@
 		TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingWindowTests.swift; sourceTree = "<group>"; };
 		PHR1000000PHR001PHR00001 /* Phrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/Phrase.swift; sourceTree = "<group>"; };
 		PHR2010000PHR002PHR00001 /* PhraseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTests.swift; sourceTree = "<group>"; };
+		ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/ExpectedTiming.swift; sourceTree = "<group>"; };
+		ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpectedTimingTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -511,6 +516,7 @@
 				GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */,
 				TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */,
 				PHR2010000PHR002PHR00001 /* PhraseTests.swift */,
+				ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -664,6 +670,7 @@
 				GAN1000000GAN001GAN00001 /* GridAnnotation.swift */,
 				TWE1000000TWE001TWE00001 /* TimingWindow.swift */,
 				PHR1000000PHR001PHR00001 /* Phrase.swift */,
+				ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
@@ -1032,6 +1039,7 @@
 				GAN1001000GAN001GAN00001 /* GridAnnotation.swift in Sources */,
 				TWE1001000TWE001TWE00001 /* TimingWindow.swift in Sources */,
 				PHR1001000PHR001PHR00001 /* Phrase.swift in Sources */,
+				ETM1001000ETM001ETM00001 /* ExpectedTiming.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1125,6 +1133,7 @@
 				GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */,
 				TWE1001000TWE001TWE00002 /* TimingWindow.swift in Sources */,
 				PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */,
+				ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1218,6 +1227,7 @@
 				GAN2011000GAN002GAN00001 /* GridAnnotationTests.swift in Sources */,
 				TWE2011000TWE002TWE00001 /* TimingWindowTests.swift in Sources */,
 				PHR2011000PHR002PHR00001 /* PhraseTests.swift in Sources */,
+				ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
