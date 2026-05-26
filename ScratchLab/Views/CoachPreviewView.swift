@@ -1482,24 +1482,12 @@ private struct CoachPreviewARViewContainer: UIViewRepresentable {
         disableStatisticsOverlay(on: arView)
         arView.debugOptions = []
         arView.debugOptions.remove(.showStatistics)
-        arView.__statisticsOptions = []
-        arView.__disableStatisticsRendering = true
-        disableShowStatisticsSelectorIfAvailable(on: arView)
         arView.environment.background = .color(.black)
     }
 
     private func disableStatisticsOverlay(on arView: ARView) {
         arView.debugOptions = []
         arView.debugOptions.remove(.showStatistics)
-        arView.__statisticsOptions = []
-        arView.__disableStatisticsRendering = true
-        disableShowStatisticsSelectorIfAvailable(on: arView)
-    }
-
-    private func disableShowStatisticsSelectorIfAvailable(on arView: ARView) {
-        let selector = NSSelectorFromString("setShowStatistics:")
-        guard arView.responds(to: selector) else { return }
-        (arView as NSObject).setValue(false, forKey: "showStatistics")
     }
 
     @MainActor
