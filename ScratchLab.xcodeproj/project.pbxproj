@@ -174,6 +174,9 @@
 		TOM1001000TOM001TOM00001 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
 		TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
 		TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */; };
+		SFV1001000SFV001SFV00001 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
+		SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
+		SFV2011000SFV002SFV00001 /* ScratchFamilyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -408,6 +411,8 @@
 		PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTimingSummaryTests.swift; sourceTree = "<group>"; };
 		TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingOriginMarker.swift; sourceTree = "<group>"; };
 		TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingOriginMarkerTests.swift; sourceTree = "<group>"; };
+		SFV1000000SFV001SFV00001 /* ScratchFamily.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamily.swift; sourceTree = "<group>"; };
+		SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -529,6 +534,7 @@
 				ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */,
 				PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */,
 				TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */,
+				SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -685,6 +691,7 @@
 				ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */,
 				PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */,
 				TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */,
+				SFV1000000SFV001SFV00001 /* ScratchFamily.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
@@ -1056,6 +1063,7 @@
 				ETM1001000ETM001ETM00001 /* ExpectedTiming.swift in Sources */,
 				PTS1001000PTS001PTS00001 /* PhraseTimingSummary.swift in Sources */,
 				TOM1001000TOM001TOM00001 /* TimingOriginMarker.swift in Sources */,
+				SFV1001000SFV001SFV00001 /* ScratchFamily.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1152,6 +1160,7 @@
 				ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */,
 				PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */,
 				TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */,
+				SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1248,6 +1257,7 @@
 				ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */,
 				PTS2011000PTS002PTS00001 /* PhraseTimingSummaryTests.swift in Sources */,
 				TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */,
+				SFV2011000SFV002SFV00001 /* ScratchFamilyTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
