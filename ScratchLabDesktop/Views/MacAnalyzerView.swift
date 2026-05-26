@@ -6648,6 +6648,8 @@ private struct ReviewOverlayPlayableSurface: View {
                 }
             }
 
+            diagnosticsSummaryRow(for: diagnostics)
+
             transportRow
 
             Text("Target (dim) over captured (primary). Drift shows as horizontal separation.")
@@ -6656,6 +6658,125 @@ private struct ReviewOverlayPlayableSurface: View {
         }
         .onChange(of: overlay.captured) { _, newCaptured in
             controller = OverlayReplayController(timeline: newCaptured)
+        }
+    }
+
+    /// Slice 4.6 — compact read-only tally of diagnostic finding
+    /// counts. Hidden when every count is zero (no findings to
+    /// summarise). No totals, no percentages, no grades — the chip
+    /// row is a plain tally that lets the reviewer scan how many of
+    /// each kind exist before reading the marker glyphs.
+    @ViewBuilder
+    private func diagnosticsSummaryRow(
+        for diagnostics: OverlayTimingDiagnostics
+    ) -> some View {
+        let entries = orderedSummaryEntries(from: diagnostics)
+        if !entries.isEmpty {
+            HStack(spacing: 10) {
+                ForEach(entries, id: \.kind) { entry in
+                    diagnosticsSummaryChip(kind: entry.kind, count: entry.count)
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Overlay diagnostics summary")
+        }
+    }
+
+    private struct DiagnosticsSummaryEntry {
+        let kind: OverlayStrokeFinding.Kind
+        let count: Int
+    }
+
+    /// Returns non-zero finding counts in a deterministic display
+    /// order: matched → early → late → missing → extra.
+    private func orderedSummaryEntries(
+        from diagnostics: OverlayTimingDiagnostics
+    ) -> [DiagnosticsSummaryEntry] {
+        let order: [OverlayStrokeFinding.Kind] = [
+            .matched, .early, .late, .missing, .extra
+        ]
+        let counts = diagnostics.counts
+        return order.compactMap { kind in
+            let count = counts[kind] ?? 0
+            guard count > 0 else { return nil }
+            return DiagnosticsSummaryEntry(kind: kind, count: count)
+        }
+    }
+
+    private func diagnosticsSummaryChip(
+        kind: OverlayStrokeFinding.Kind,
+        count: Int
+    ) -> some View {
+        let palette = chipPalette(for: kind)
+        return HStack(spacing: 4) {
+            Image(systemName: palette.symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(palette.foreground)
+                .accessibilityHidden(true)
+            Text("\(palette.label) \(count)")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(palette.foreground)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(palette.background, in: Capsule())
+        .accessibilityLabel("\(palette.label) \(count)")
+    }
+
+    private struct ChipPalette {
+        let label: String
+        let symbol: String
+        let foreground: Color
+        let background: Color
+    }
+
+    private func chipPalette(
+        for kind: OverlayStrokeFinding.Kind
+    ) -> ChipPalette {
+        // Matched stays dim white — it is intentionally the
+        // "no-news" case. The other four share the existing amber
+        // `Notation.cut` token, mirroring the Slice 4.5 marker
+        // styling so the chip row and the lane glyphs speak the
+        // same visual language.
+        let amber = ScratchLabDesign.Notation.cut
+        let dim   = ScratchLabDesign.Notation.dot
+        switch kind {
+        case .matched:
+            return ChipPalette(
+                label: "Matched",
+                symbol: "circle.fill",
+                foreground: dim.opacity(0.85),
+                background: Color.white.opacity(0.05)
+            )
+        case .early:
+            return ChipPalette(
+                label: "Early",
+                symbol: "arrowtriangle.left.fill",
+                foreground: amber,
+                background: amber.opacity(0.15)
+            )
+        case .late:
+            return ChipPalette(
+                label: "Late",
+                symbol: "arrowtriangle.right.fill",
+                foreground: amber,
+                background: amber.opacity(0.15)
+            )
+        case .missing:
+            return ChipPalette(
+                label: "Missing",
+                symbol: "circle.dashed",
+                foreground: amber,
+                background: amber.opacity(0.15)
+            )
+        case .extra:
+            return ChipPalette(
+                label: "Extra",
+                symbol: "square.fill",
+                foreground: amber,
+                background: amber.opacity(0.15)
+            )
         }
     }
 
