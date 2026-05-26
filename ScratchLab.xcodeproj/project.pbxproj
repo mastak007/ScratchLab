@@ -183,6 +183,9 @@
 		SFS1001000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
 		SFS1001000SFS001SFS00002 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
 		SFS2011000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */; };
+		SFM1001000SFM001SFM00001 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
+		SFM1001000SFM001SFM00002 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
+		SFM2011000SFM002SFM00001 /* ScratchFamilySummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -423,6 +426,8 @@
 		SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyAttachmentTests.swift; sourceTree = "<group>"; };
 		SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilyAnnotationSet.swift; sourceTree = "<group>"; };
 		SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyAnnotationSetTests.swift; sourceTree = "<group>"; };
+		SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilySummary.swift; sourceTree = "<group>"; };
+		SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilySummaryTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -547,6 +552,7 @@
 				SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */,
 				SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */,
 				SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */,
+				SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -706,6 +712,7 @@
 				SFV1000000SFV001SFV00001 /* ScratchFamily.swift */,
 				SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */,
 				SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */,
+				SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
@@ -1080,6 +1087,7 @@
 				SFV1001000SFV001SFV00001 /* ScratchFamily.swift in Sources */,
 				SFA1001000SFA001SFA00001 /* ScratchFamilyAttachment.swift in Sources */,
 				SFS1001000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift in Sources */,
+				SFM1001000SFM001SFM00001 /* ScratchFamilySummary.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1179,6 +1187,7 @@
 				SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */,
 				SFA1001000SFA001SFA00002 /* ScratchFamilyAttachment.swift in Sources */,
 				SFS1001000SFS001SFS00002 /* ScratchFamilyAnnotationSet.swift in Sources */,
+				SFM1001000SFM001SFM00002 /* ScratchFamilySummary.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1278,6 +1287,7 @@
 				SFV2011000SFV002SFV00001 /* ScratchFamilyTests.swift in Sources */,
 				SFA2011000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift in Sources */,
 				SFS2011000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift in Sources */,
+				SFM2011000SFM002SFM00001 /* ScratchFamilySummaryTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
