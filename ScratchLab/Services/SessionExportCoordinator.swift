@@ -310,6 +310,47 @@ struct SessionExportReviewDocument: Codable, Equatable, Sendable {
     }
 }
 
+struct SessionExportReplayTake: Codable, Equatable, Sendable {
+    let takeID: String
+    let takeNumber: Int
+    let timeline: SessionReplayTimeline?
+
+    init(
+        takeID: String,
+        takeNumber: Int,
+        timeline: SessionReplayTimeline?
+    ) {
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.timeline = timeline
+    }
+}
+
+struct SessionExportReplayDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_session_replay_v1"
+
+    let schemaVersion: String
+    let sessionID: String
+    let generatedAt: Date
+    let takes: [SessionExportReplayTake]
+
+    init(
+        schemaVersion: String = SessionExportReplayDocument.currentSchemaVersion,
+        sessionID: String,
+        generatedAt: Date = Date(),
+        takes: [SessionExportReplayTake]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.sessionID = sessionID
+        self.generatedAt = generatedAt
+        self.takes = takes
+    }
+
+    var hasTimelines: Bool {
+        takes.contains { $0.timeline != nil }
+    }
+}
+
 struct SessionExportArtifactMetadata: Codable, Equatable, Sendable {
     let takeID: String
     let takeNumber: Int
@@ -1549,6 +1590,33 @@ struct SessionArchiveBuilder: Sendable {
         )
     }
 
+    func replayDocument(
+        for package: SessionExportPackage,
+        generatedAt: Date = Date()
+    ) -> SessionExportReplayDocument {
+        let takes = package.takes.map { take -> SessionExportReplayTake in
+            let sidecar = try? decodeSidecar(at: take.sidecarURL)
+            let timeline: SessionReplayTimeline? = {
+                guard let snapshot = sidecar?.detectedNotation else { return nil }
+                let duration = snapshot.capturedEvidenceEndTime ?? take.duration
+                return SessionReplayTimeline.build(
+                    from: snapshot,
+                    takeDuration: duration
+                )
+            }()
+            return SessionExportReplayTake(
+                takeID: take.takeID,
+                takeNumber: take.takeNumber,
+                timeline: timeline
+            )
+        }
+        return SessionExportReplayDocument(
+            sessionID: package.metadata.sessionID,
+            generatedAt: generatedAt,
+            takes: takes
+        )
+    }
+
     func exportMetadataDocument(
         for package: SessionExportPackage,
         options: SessionExportOptions
@@ -1911,6 +1979,11 @@ struct SessionArchiveBuilder: Sendable {
         let reviewDocument = reviewDocument(for: package)
         let reviewDocumentData = try Self.jsonEncoder.encode(reviewDocument)
         try reviewDocumentData.write(to: reviewDocumentURL, options: .atomic)
+
+        let replayDocumentURL = manifestsURL.appendingPathComponent("session_replay.json")
+        let replayDocument = replayDocument(for: package, generatedAt: reviewDocument.generatedAt)
+        let replayDocumentData = try Self.jsonEncoder.encode(replayDocument)
+        try replayDocumentData.write(to: replayDocumentURL, options: .atomic)
 
         try stageExportMixArtifacts(
             package,

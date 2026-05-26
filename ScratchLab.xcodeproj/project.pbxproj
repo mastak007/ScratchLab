@@ -164,6 +164,7 @@
 		ROT0001000ROT001ROT00001 /* ReviewOverlayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */; };
 		RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */; };
 		ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */; };
+		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -369,6 +370,7 @@
 		ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimeline.swift; sourceTree = "<group>"; };
 		RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayLaneView.swift; sourceTree = "<group>"; };
 		ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimelineTests.swift; sourceTree = "<group>"; };
+		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -463,6 +465,7 @@
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
 				SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */,
 				ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */,
+				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1133,6 +1136,7 @@
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
 				SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */,
 				ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */,
+				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
