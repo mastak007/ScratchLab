@@ -1,5 +1,173 @@
 # AI Handoff
 
+## 2026-05-27 — Notation track safe stop point reached (Sections 1–9 closed; HEAD `f1b3b7b`, in sync with `origin/main`)
+
+The notation/timing/semantics/coaching/presentation/replay/debug-Review
+track is at a clean, App-Store-safe stop point. Thirty `Notation:`
+commits across nine sections (commit range `2c90ed5..f1b3b7b`) shipped
+a fully-isolated, pure-Swift notation pipeline plus two DEBUG-only
+preview surfaces. Zero production capture / export / scoring / ML /
+Practice / Coach / Review behaviour was changed. The next TestFlight
+build can be cut from this HEAD safely.
+
+### Sync status
+
+- HEAD = `origin/main` = `f1b3b7b338ec12f4dd52932b5e0c167afc797542`
+- Working tree clean.
+- `git fetch origin main` confirmed in-sync.
+
+### Completed sections
+
+1. **Section 1 — grammar** (`Models/Notation/Grammar/`): `NotationPrimitive`,
+   `NotationPrimitiveDerivation`, `GrammarParameters`. Pure value types.
+2. **Section 2 — timing** (`Models/Notation/Timing/`): `TimingGrid`,
+   `GridAnnotation`, `Phrase`, `ExpectedTiming`, `TimingWindow`,
+   `TimingOriginMarker`, `PhraseTimingSummary`. Pure, deterministic
+   musical position projection.
+3. **Section 3 — semantics** (`Models/Notation/Semantics/`):
+   `ScratchFamily`, `ScratchFamilyAttachment`, `ScratchFamilyAnnotationSet`,
+   `ScratchFamilySummary`. Family-vocabulary sidecar layer.
+4. **Section 4 — coaching** (`Models/Notation/Coaching/`):
+   `CoachingEventVocabulary`, `CoachingEvent`, `DriftCoachingEvaluator`,
+   `PhraseCoachingEvaluator`, `CoachingEventSummary`. Pure evaluators
+   over presentation data — produce events, do not feed scoring.
+5. **Section 5 — presentation / geometry**
+   (`Models/Notation/Presentation/`): `NotationPresentationModel`,
+   `NotationLaneGeometry`, `NotationPlayheadGeometry`,
+   `NotationGridlineGeometry`, `NotationViewportWindow`. Pure mappers
+   from primitives + sidecars to renderer-ready geometry.
+6. **Section 6 — debug renderer host** (`Views/Notation/`):
+   `NotationLaneGeometryView` (DEBUG-callable Canvas renderer),
+   `NotationLaneGeometryViewPreview` (`#if DEBUG` preview harness),
+   `DebugNotationLaneHostView` (`#if DEBUG` standalone host with
+   empty / simple / dense presets).
+7. **Section 7 — deterministic replay**
+   (`Models/Notation/Presentation/NotationReplayModel.swift`):
+   `NotationReplayFrame`, `NotationReplayState`, `NotationReplayProjection`,
+   `NotationReplayDriver`. No-clock, no-timer, no-AVFoundation
+   value-level frame stepper that composes the four Section 5 mappers.
+   Section 7 also added a `.replay` preset to `DebugNotationLaneHostView`
+   driven by a `Stepper`-based `frameIndex` (DEBUG-only).
+8. **Section 8 — DEBUG Review card**
+   (`Views/Notation/DebugReviewNotationCard.swift`): `#if DEBUG`
+   standalone card that demonstrates the projection pipeline against
+   a synthetic target / captured pair with deterministic timing drift.
+   Two stacked `NotationLaneGeometryView` instances share one
+   `NotationReplayState` and a frame `Stepper`. **Not wired into
+   production Review** — deliberately unreachable from the running
+   app per the audit's "no broad MacAnalyzerView redesign" constraint.
+9. **Section 9 — final safety audit** (this slice's predecessor). All
+   ten audit gates passed; see `Verification summary` below.
+
+### Explicit non-changes
+
+- Production **Practice / Review / Capture / Coach** behavior was not
+  intentionally changed. Diff against pre-notation baseline
+  (`2c90ed5^..HEAD`) touches zero files matching
+  `Capture|Export|Score|MLClassif|Practice|SessionReplayClock|SessionReplayTimeline|SessionReviewValidator|MacAnalyzer|NotationVisualizer|ReviewOverlay|MainMenu|ContentView`.
+- The two DEBUG surfaces (`DebugNotationLaneHostView`,
+  `DebugReviewNotationCard`) are **not production UX**. Both are
+  wrapped top-to-bottom in `#if DEBUG`, both have zero production
+  callers, both are unreachable from any navigation entry point.
+  Release builds compile them out entirely.
+- **No export / schema integration.** `scratchlab_session_export_v4`
+  and `scratchlab_session_replay_v1` are byte-identical to the
+  pre-notation baseline — `SessionExportCoordinator.swift:23,330`
+  and `SessionReplayTimeline.swift:67` were not touched.
+
+### Key files / directories added
+
+```
+ScratchLab/Models/Notation/Grammar/        (Section 1)
+ScratchLab/Models/Notation/Timing/         (Section 2)
+ScratchLab/Models/Notation/Semantics/      (Section 3)
+ScratchLab/Models/Notation/Coaching/       (Section 4)
+ScratchLab/Models/Notation/Presentation/   (Sections 5 + 7)
+ScratchLab/Views/Notation/                 (Sections 6 + 7 + 8)
+ScratchLabDesktopTests/{Coaching,Drift,Phrase,Notation,Debug,Expected,Grid,ScratchFamily,Timing}*.swift
+ScratchLab.xcodeproj/project.pbxproj       (additive Sources-phase entries only)
+```
+
+Source files: 28 new across `Models/Notation/**` and `Views/Notation/**`.
+Test files: 28 new in `ScratchLabDesktopTests/`.
+Only existing file modified: `project.pbxproj` (file-ref additions).
+
+### Verification summary from Slice 9.1
+
+| Gate | Result |
+|---|---|
+| `git status --short --branch` | `## main...origin/main` (clean) |
+| `git fetch origin main` | fetched, no new commits |
+| `git rev-parse HEAD origin/main` | both `f1b3b7b…` — in sync |
+| `xcodebuild … -destination 'generic/platform=iOS' build` | `** BUILD SUCCEEDED **` |
+| `xcodebuild … -destination 'platform=macOS' build` | `** BUILD SUCCEEDED **` |
+| `xcodebuild … -destination 'platform=macOS' build-for-testing` | `** TEST BUILD SUCCEEDED **` |
+| Forbidden imports in notation-track Swift | 0 hits for `AVFoundation`, `CoreML`, `CreateML`, `RealityKit`, `ARKit`, `Combine` |
+| Determinism sweep (`Date()`, `Timer`, `DispatchQueue`, `TimelineView`, `@StateObject`, `ObservableObject`, `@Published`, `RunLoop`, `asyncAfter`, `NSTimer`, `CADisplayLink`, `mach_absolute_time`, `CFAbsoluteTimeGetCurrent`) | Only match is a doc-comment in `DebugReviewNotationCard.swift:35` asserting *absence* of `TimelineView`. No actual impurity. |
+| `Info.plist` / `PrivacyInfo.xcprivacy` / entitlements / signing / `xcschememanagement.plist` | Untouched |
+| `reference_frames/` / `reference_videos/` | Untouched |
+| Resource files (`.mlmodel`, `.mlmodelc`, `.mlpackage`, audio/video) | Zero added |
+| Notation-track tests compile-presence | 27 XCTest classes + 1 swift-testing class, ~387 methods, all linked into the macOS `.xctest` bundle |
+
+### Known limitations
+
+- **No production Review wiring yet.** `DebugReviewNotationCard` exists
+  but is unreachable from the running app. `MacAnalyzerView` /
+  `NotationVisualizerView` / `ReviewOverlayLaneView` were deliberately
+  not modified.
+- **No live capture-to-notation bridge yet.** The notation pipeline
+  consumes `NotationPresentationModel` directly; there is no adapter
+  from `SessionReplayTimeline` (or from live capture snapshots) into
+  that shape. The Slice 8.1 plan recommended such an adapter
+  (`SessionReplayPresentationAdapter`) but Slice 8.2 shipped the DEBUG
+  card instead. The adapter is the natural next minimal step if the
+  product needs it.
+- **No export schema bump.** Nothing in the notation track persists
+  to disk; no encoder runs against any schema-version-bearing file;
+  `scratchlab_session_export_v4` / `scratchlab_session_replay_v1`
+  unchanged.
+- **Test execution environment limitation, build-for-testing works.**
+  Per the recorded `project_test_runner_hang` memory, `xcodebuild
+  test` / `test-without-building` route through an iOS test-host that
+  Gatekeeper denies on this machine; `xcrun xctest` directly cannot
+  resolve `@rpath/ScratchLab.debug.dylib` from the bundled-test
+  layout. **Canonical verification mode on this project is
+  build-for-testing (compile-time contract) plus grep-verify of test
+  methods.** Both gates green here. If a CI environment can run the
+  full XCTest suite, the existing test bundle compiles and links
+  cleanly against the macOS target.
+
+### Next recommended move
+
+**Stop here and make a product decision** before any further wiring.
+The notation track is in the safest possible state for an App Store
+or TestFlight build: invisible to users, fully isolated, with no
+export or scoring entanglement.
+
+Three plausible next moves, in increasing risk:
+
+1. **Stop and ship.** Cut the next TestFlight from `f1b3b7b`. Zero
+   user-visible change from the notation work. No coordination cost.
+2. **Plan production Review integration separately.** Run a dedicated
+   planning slice that decides how `NotationLaneGeometryView` /
+   `NotationReplayProjection` should appear on a real Review surface
+   (which session, which take, what data source). Don't begin
+   implementation until App-Store-safety phrasing (`PROFILE.md`),
+   data-source policy, and the location of the new UI are pinned.
+3. **Ship `SessionReplayPresentationAdapter`.** The Slice 8.1 planned
+   adapter — `SessionReplayTimeline → NotationPresentationModel`
+   plus `→ NotationReplayState`. Pure additive value-level mapper,
+   no UI, no production caller. Lets a future Slice wire either
+   DEBUG surface against real `SessionReplayTimeline` data instead
+   of synthetic fixtures, without touching `MacAnalyzerView`.
+
+Recommended sequence: **(1) handoff + ship**, then **(2) plan
+production Review integration separately** before any DEBUG-surface
+wiring. The two DEBUG surfaces being deliberately unreachable is a
+feature before a release cut, not a bug.
+
+---
+
 ## 2026-05-25 — Review notation viewport/duration chain LANDED (commits `2163916`, `13c1f89`; manual smoke passed)
 
 Two Review-only fixes that together correct the captured-vs-target
