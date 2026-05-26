@@ -145,6 +145,13 @@
 		SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
 		PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
 		PPT0011000PPT001PPT00001 /* PlatterPositionTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */; };
+		NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
+		NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
+		NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
+		NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
+		NGP3001000NGP003NGP00001 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
+		NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
+		NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -360,6 +367,10 @@
 		SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometry.swift; sourceTree = "<group>"; };
 		SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionRenderer.swift; sourceTree = "<group>"; };
 		PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimeline.swift; sourceTree = "<group>"; };
+		NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitive.swift; sourceTree = "<group>"; };
+		NGP2000000NGP002NGP00001 /* GrammarParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/GrammarParameters.swift; sourceTree = "<group>"; };
+		NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitiveDerivation.swift; sourceTree = "<group>"; };
+		NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -472,6 +483,7 @@
 				LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */,
 				PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */,
 				BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */,
+				NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -618,6 +630,9 @@
 				SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */,
 				SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */,
 				PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */,
+				NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */,
+				NGP2000000NGP002NGP00001 /* GrammarParameters.swift */,
+				NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
@@ -979,6 +994,9 @@
 				SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */,
 				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
+				NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */,
+				NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */,
+				NGP3001000NGP003NGP00001 /* NotationPrimitiveDerivation.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1065,6 +1083,9 @@
 				SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
+				NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */,
+				NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */,
+				NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1152,6 +1173,7 @@
 				LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */,
 				PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */,
 				BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */,
+				NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
