@@ -8,21 +8,40 @@ import SwiftUI
 /// the two lanes is implicit in the horizontal offset between paired
 /// target and captured events on the shared axis.
 ///
+/// Slice 4.3 (transport): `playheadTime` is now optional — `nil` hides
+/// the cursor entirely (used when there is no controller wired) and
+/// any non-`nil` value renders the moving cursor. `duration` is an
+/// optional override of the axis span; when `nil` the axis falls back
+/// to `overlay.displayDurationSeconds` so existing call sites keep
+/// rendering identically.
+///
 /// Visual rules:
 ///   - target events render as outlined "ghost" marks at low opacity
 ///   - captured events render as solid primary marks
-///   - the playhead cursor is a vertical line at `currentTime`
-///     clamped via `ReviewOverlayTimeline.clamp(time:)`
+///   - the playhead cursor is a vertical line at the supplied
+///     `playheadTime`, clamped to `[0, effectiveDuration]`
 ///
-/// The view is a pure function of `(overlay, currentTime)` — it owns
-/// no animation state, no timer, no replay cursor of its own. The
-/// caller drives `currentTime` from a `SessionReplayClock`
-/// (typically `clock.currentTime(hostTime:)` inside a `TimelineView`
+/// The view is a pure function of `(overlay, playheadTime, duration)`
+/// — it owns no animation state, no timer, no replay cursor of its
+/// own. The caller drives `playheadTime` from a
+/// `OverlayReplayController` (typically
+/// `controller.currentTime(at: hostTime)` inside a `TimelineView`
 /// schedule) which guarantees deterministic seek-safety end-to-end.
 struct ReviewOverlayLaneView: View {
 
     let overlay: ReviewOverlayTimeline
-    let currentTime: TimeInterval
+    let playheadTime: TimeInterval?
+    let duration: TimeInterval?
+
+    init(
+        overlay: ReviewOverlayTimeline,
+        playheadTime: TimeInterval? = nil,
+        duration: TimeInterval? = nil
+    ) {
+        self.overlay = overlay
+        self.playheadTime = playheadTime
+        self.duration = duration
+    }
 
     private static let laneInsetX: CGFloat = 8
     private static let laneInsetY: CGFloat = 8
@@ -135,7 +154,7 @@ struct ReviewOverlayLaneView: View {
         style: LaneStyle
     ) {
         guard frame.width > 0, frame.height > 0, !events.isEmpty else { return }
-        let span = overlay.displayDurationSeconds
+        let span = effectiveDuration
         guard span > 0 else { return }
 
         for event in events {
@@ -165,9 +184,10 @@ struct ReviewOverlayLaneView: View {
     }
 
     private func drawCursor(context: GraphicsContext, size: CGSize) {
-        let span = overlay.displayDurationSeconds
+        guard let playheadTime else { return }
+        let span = effectiveDuration
         guard span > 0, size.width > Self.laneInsetX * 2 else { return }
-        let clamped = overlay.clamp(time: currentTime)
+        let clamped = clampedPlayhead(playheadTime, span: span)
         let drawableWidth = size.width - (Self.laneInsetX * 2)
         let x = Self.laneInsetX + CGFloat(clamped / span) * drawableWidth
         var path = Path()
@@ -180,6 +200,22 @@ struct ReviewOverlayLaneView: View {
         )
     }
 
+    /// Axis span the lane scales to. Slice 4.3 lets callers override
+    /// `overlay.displayDurationSeconds` so a controller anchored to a
+    /// captured-only timeline can drive a cursor whose visible track
+    /// matches the controller's `duration` even if the overlay's
+    /// target lane reports a shorter span.
+    private var effectiveDuration: Double {
+        if let duration { return max(0, duration) }
+        return overlay.displayDurationSeconds
+    }
+
+    private func clampedPlayhead(_ time: TimeInterval, span: Double) -> TimeInterval {
+        if time <= 0 { return 0 }
+        if time >= span { return span }
+        return time
+    }
+
     private func xOffset(for time: TimeInterval, frame: CGRect, span: Double) -> CGFloat {
         let clamped = max(0, min(time, span))
         let ratio = clamped / span
@@ -189,11 +225,19 @@ struct ReviewOverlayLaneView: View {
     // MARK: - Accessibility
 
     private var accessibilityValue: String {
-        let span = overlay.displayDurationSeconds
+        let span = effectiveDuration
         if span <= 0 {
             return "Empty overlay"
         }
-        let cursor = overlay.clamp(time: currentTime)
+        guard let playheadTime else {
+            return String(
+                format: "Target events: %d, captured events: %d, span %.2fs",
+                overlay.target.events.count,
+                overlay.captured.events.count,
+                span
+            )
+        }
+        let cursor = clampedPlayhead(playheadTime, span: span)
         return String(
             format: "Target events: %d, captured events: %d, cursor %.2fs of %.2fs",
             overlay.target.events.count,

@@ -4213,12 +4213,7 @@ struct MacAnalyzerView: View {
                     capturedSnapshot: capturedSnapshot,
                     capturedDuration: capturedDuration
                 )
-                ReviewOverlayLaneView(overlay: overlay, currentTime: 0)
-                    .frame(height: 96)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                Text("Target (dim) over captured (primary). Drift shows as horizontal separation.")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
+                ReviewOverlayPlayableSurface(overlay: overlay)
             } else {
                 reviewOverlayDiffEmptyState(
                     hasTarget: targetNotation != nil,
@@ -6604,6 +6599,128 @@ struct MacAnalyzerView: View {
             Slider(value: value, in: range)
         }
         .disabled(captureEngine.calibrationLocked)
+    }
+}
+
+/// Slice 4.3 — playable container for the Overlay Review card.
+///
+/// Owns the local `OverlayReplayController` state for a single overlay
+/// pair so the controller persists across view rebuilds inside this
+/// subtree (e.g. when the parent re-evaluates `body`) and is reset to
+/// a fresh controller when the overlay's captured timeline changes —
+/// which is the only signal that the take being reviewed switched.
+/// Renders the lane view, the transport row, and a deterministic
+/// elapsed-time readout driven by `TimelineView(.animation)`. No
+/// editing, no scoring, no audio — visual cursor only.
+private struct ReviewOverlayPlayableSurface: View {
+
+    let overlay: ReviewOverlayTimeline
+
+    @State private var controller: OverlayReplayController
+
+    init(overlay: ReviewOverlayTimeline) {
+        self.overlay = overlay
+        _controller = State(initialValue: OverlayReplayController(timeline: overlay.captured))
+    }
+
+    var body: some View {
+        let duration = controller.duration
+        VStack(alignment: .leading, spacing: 8) {
+            TimelineView(.animation(paused: !controller.isPlaying)) { context in
+                let hostTime = context.date.timeIntervalSinceReferenceDate
+                let cursor = controller.currentTime(at: hostTime)
+                ReviewOverlayLaneView(
+                    overlay: overlay,
+                    playheadTime: controller.hasTimeline ? cursor : nil,
+                    duration: duration > 0 ? duration : nil
+                )
+                .frame(height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .onChange(of: shouldAutoStop(cursor: cursor)) { _, atEnd in
+                    if atEnd {
+                        controller.tick(hostTime: hostTime)
+                    }
+                }
+            }
+
+            transportRow
+
+            Text("Target (dim) over captured (primary). Drift shows as horizontal separation.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .onChange(of: overlay.captured) { _, newCaptured in
+            controller = OverlayReplayController(timeline: newCaptured)
+        }
+    }
+
+    @ViewBuilder
+    private var transportRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                let hostTime = Date().timeIntervalSinceReferenceDate
+                controller.restart(hostTime: hostTime)
+            } label: {
+                Label("Restart", systemImage: "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!controller.hasTimeline)
+
+            Button {
+                let hostTime = Date().timeIntervalSinceReferenceDate
+                if controller.isPlaying {
+                    controller.pause(hostTime: hostTime)
+                } else {
+                    controller.play(hostTime: hostTime)
+                }
+            } label: {
+                Label(
+                    controller.isPlaying ? "Pause" : "Play",
+                    systemImage: controller.isPlaying ? "pause.fill" : "play.fill"
+                )
+                .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(!controller.hasTimeline)
+
+            Spacer(minLength: 8)
+
+            TimelineView(.animation(paused: !controller.isPlaying)) { context in
+                let cursor = controller.currentTime(at: context.date.timeIntervalSinceReferenceDate)
+                Text(elapsedLabel(cursor: cursor, duration: controller.duration))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .accessibilityLabel("Replay position")
+                    .accessibilityValue(
+                        String(format: "%.2f seconds of %.2f", cursor, controller.duration)
+                    )
+            }
+        }
+    }
+
+    private func shouldAutoStop(cursor: TimeInterval) -> Bool {
+        guard controller.isPlaying else { return false }
+        return cursor >= controller.duration
+    }
+
+    private func elapsedLabel(cursor: TimeInterval, duration: TimeInterval) -> String {
+        String(
+            format: "%@ / %@",
+            formatSeconds(cursor),
+            formatSeconds(duration)
+        )
+    }
+
+    private func formatSeconds(_ value: TimeInterval) -> String {
+        let clamped = max(0, value)
+        let whole = Int(clamped)
+        let minutes = whole / 60
+        let seconds = whole % 60
+        let hundredths = Int((clamped - Double(whole)) * 100)
+        return String(format: "%02d:%02d.%02d", minutes, seconds, hundredths)
     }
 }
 
