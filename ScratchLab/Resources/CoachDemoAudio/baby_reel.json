@@ -1,58 +1,585 @@
 {
   "version": 1,
-  "timelineID": "baby_reel_v1",
+  "timelineID": "baby_reel_v7_baby1to4_19_19_13_24_letgo",
   "scratchID": "baby",
-  "audioFile": "baby_noBeat.wav",
-  "audioDuration": 42.866625,
+  "audioFile": "baby_reel_callresponse.wav",
+  "audioDuration": 42.012,
+  "bpm": 89,
   "segments": [
-    { "kind": "demo", "startTime": 0.0,       "endTime": 6.0,        "label": "Demo 1" },
-    { "kind": "copy", "startTime": 6.0,       "endTime": 12.37,      "label": "Your turn" },
-    { "kind": "demo", "startTime": 12.37,     "endTime": 18.0,       "label": "Demo 2" },
-    { "kind": "copy", "startTime": 18.0,      "endTime": 24.22,      "label": "Your turn" },
-    { "kind": "demo", "startTime": 24.22,     "endTime": 30.0,       "label": "Demo 3" },
-    { "kind": "copy", "startTime": 30.0,      "endTime": 36.17,      "label": "Your turn" },
-    { "kind": "demo", "startTime": 36.17,     "endTime": 42.866625,  "label": "Demo 4" }
+    {
+      "kind": "demo",
+      "startTime": 0.0,
+      "endTime": 5.2548,
+      "label": "Demo 1"
+    },
+    {
+      "kind": "copy",
+      "startTime": 5.2548,
+      "endTime": 10.6481,
+      "label": "Your turn 1"
+    },
+    {
+      "kind": "demo",
+      "startTime": 10.6481,
+      "endTime": 15.7868,
+      "label": "Demo 2"
+    },
+    {
+      "kind": "copy",
+      "startTime": 15.7868,
+      "endTime": 21.1801,
+      "label": "Your turn 2"
+    },
+    {
+      "kind": "demo",
+      "startTime": 21.1801,
+      "endTime": 26.2724,
+      "label": "Demo 3"
+    },
+    {
+      "kind": "copy",
+      "startTime": 26.2724,
+      "endTime": 31.6656,
+      "label": "Your turn 3"
+    },
+    {
+      "kind": "demo",
+      "startTime": 31.6656,
+      "endTime": 36.6186,
+      "label": "Demo 4"
+    },
+    {
+      "kind": "copy",
+      "startTime": 36.6186,
+      "endTime": 42.0119,
+      "label": "Your turn 4"
+    }
   ],
   "strokes": [
-    { "startTime": 0.27,   "endTime": 0.778,  "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 1.07,   "endTime": 1.378,  "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 1.46,   "endTime": 1.763,  "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 1.84,   "endTime": 2.368,  "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 2.605,  "endTime": 2.913,  "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 2.99,   "endTime": 3.278,  "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 3.36,   "endTime": 3.928,  "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 4.13,   "endTime": 4.453,  "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 4.52,   "endTime": 4.803,  "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 4.895,  "endTime": 5.743,  "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 12.37,  "endTime": 12.878, "direction": "forward",  "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 13.17,  "endTime": 13.478, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 13.56,  "endTime": 13.863, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 13.94,  "endTime": 14.468, "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 14.705, "endTime": 15.013, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 15.09,  "endTime": 15.378, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 15.46,  "endTime": 16.028, "direction": "forward",  "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 16.23,  "endTime": 16.553, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 16.62,  "endTime": 16.903, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 16.995, "endTime": 17.843, "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 24.22,  "endTime": 24.728, "direction": "forward",  "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 25.02,  "endTime": 25.328, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 25.41,  "endTime": 25.713, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 25.79,  "endTime": 26.318, "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 26.555, "endTime": 26.863, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 26.94,  "endTime": 27.228, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 27.31,  "endTime": 27.878, "direction": "forward",  "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 28.08,  "endTime": 28.403, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 28.47,  "endTime": 28.753, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 28.845, "endTime": 29.693, "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 36.17,  "endTime": 36.678, "direction": "forward",  "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 36.97,  "endTime": 37.278, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 37.36,  "endTime": 37.663, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 37.74,  "endTime": 38.268, "direction": "backward", "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 38.505, "endTime": 38.813, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 38.89,  "endTime": 39.178, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 39.26,  "endTime": 39.828, "direction": "forward",  "speedClassification": "slow",   "faderState": "open" },
-    { "startTime": 40.03,  "endTime": 40.353, "direction": "backward", "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 40.42,  "endTime": 40.703, "direction": "forward",  "speedClassification": "fast",   "faderState": "open" },
-    { "startTime": 40.795, "endTime": 41.643, "direction": "backward", "speedClassification": "slow",   "faderState": "open" }
+    {
+      "startTime": 0.05,
+      "endTime": 0.4215,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 0.4215,
+      "endTime": 0.8395,
+      "direction": "backward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 0.8395,
+      "endTime": 1.0485,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.0485,
+      "endTime": 1.2342,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.2342,
+      "endTime": 1.42,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.42,
+      "endTime": 1.6057,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.6057,
+      "endTime": 2.0237,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.0237,
+      "endTime": 2.372,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.372,
+      "endTime": 2.5578,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.5578,
+      "endTime": 2.7667,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.7667,
+      "endTime": 2.9293,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.9293,
+      "endTime": 3.1383,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.1383,
+      "endTime": 3.533,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.533,
+      "endTime": 3.9045,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.9045,
+      "endTime": 4.0903,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.0903,
+      "endTime": 4.2993,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.2993,
+      "endTime": 4.4618,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.4618,
+      "endTime": 4.6708,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.6708,
+      "endTime": 5.2348,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 10.6981,
+      "endTime": 10.8838,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 10.8838,
+      "endTime": 11.2554,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 11.2554,
+      "endTime": 11.4643,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 11.4643,
+      "endTime": 11.8359,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 11.8359,
+      "endTime": 11.9984,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 11.9984,
+      "endTime": 12.1842,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.1842,
+      "endTime": 12.3931,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.3931,
+      "endTime": 12.7414,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.7414,
+      "endTime": 12.9504,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.9504,
+      "endTime": 13.3452,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.3452,
+      "endTime": 13.4845,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.4845,
+      "endTime": 13.6935,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.6935,
+      "endTime": 13.8792,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.8792,
+      "endTime": 14.2507,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.2507,
+      "endTime": 14.4597,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.4597,
+      "endTime": 14.808,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.808,
+      "endTime": 14.9473,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.9473,
+      "endTime": 15.1563,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 15.1563,
+      "endTime": 15.7668,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 21.2301,
+      "endTime": 21.4391,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 21.4391,
+      "endTime": 21.9391,
+      "direction": "backward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 21.9731,
+      "endTime": 22.3446,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 22.3446,
+      "endTime": 22.6929,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 22.6929,
+      "endTime": 23.0645,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 23.0645,
+      "endTime": 23.4592,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 23.4592,
+      "endTime": 23.8075,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 23.8075,
+      "endTime": 24.2022,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 24.2022,
+      "endTime": 24.5505,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 24.5505,
+      "endTime": 24.922,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 24.922,
+      "endTime": 25.2703,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 25.2703,
+      "endTime": 25.6651,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 25.6651,
+      "endTime": 26.2524,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 31.7156,
+      "endTime": 31.9014,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 31.9014,
+      "endTime": 32.0639,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 32.0639,
+      "endTime": 32.2729,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 32.2729,
+      "endTime": 32.4122,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 32.4122,
+      "endTime": 32.6212,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 32.6212,
+      "endTime": 32.7837,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 32.7837,
+      "endTime": 32.9463,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 32.9463,
+      "endTime": 33.1553,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 33.1553,
+      "endTime": 33.3178,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 33.3178,
+      "endTime": 33.5036,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 33.5036,
+      "endTime": 33.8751,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 33.8751,
+      "endTime": 34.0608,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 34.0608,
+      "endTime": 34.2234,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 34.2234,
+      "endTime": 34.4091,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 34.4091,
+      "endTime": 34.6181,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 34.6181,
+      "endTime": 34.7807,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 34.7807,
+      "endTime": 34.9896,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 34.9896,
+      "endTime": 35.1754,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 35.1754,
+      "endTime": 35.3147,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 35.3147,
+      "endTime": 35.5005,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 35.5005,
+      "endTime": 35.6862,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 35.6862,
+      "endTime": 35.8488,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 35.8488,
+      "endTime": 36.0345,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.0345,
+      "endTime": 36.5986,
+      "direction": "backward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    }
   ]
 }
