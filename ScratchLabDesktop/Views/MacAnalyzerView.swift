@@ -5312,7 +5312,7 @@ struct MacAnalyzerView: View {
                 }
             }
 
-            Text("Scratch detection is tuned for Baby Scratch first. Audio drives the score, and camera framing supports the guide.")
+            Text("Scratch detection is tuned for Baby Scratch first. Audio timing provides the primary signal; camera framing is supporting context.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
 
@@ -5764,7 +5764,7 @@ struct MacAnalyzerView: View {
 
             if let detection = captureEngine.lastScratchDetection {
                 Label(
-                    "Latest read: \(detection.scratchName) at \(Int(detection.accuracy))% estimated accuracy and \(Int(detection.confidence))% estimated confidence.",
+                    "Latest read: \(detection.scratchName) at \(Int(detection.accuracy))% estimated accuracy.",
                     systemImage: "checkmark.seal.fill"
                 )
                 .font(.system(size: 12, weight: .semibold))
