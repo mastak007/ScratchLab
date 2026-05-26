@@ -339,6 +339,10 @@ struct MacAnalyzerView: View {
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
     @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
     @State private var reviewStatusMessage = "Confirm before export."
+    @State private var reviewMetadataByTakeID: [String: CaptureCore.CaptureReviewMetadata] = [:]
+    @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
+    @State private var reviewNotesDraft: String = ""
+    @State private var reviewerNameDraft: String = ""
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
     @State private var isShowingStagingInspector = false
@@ -765,6 +769,7 @@ struct MacAnalyzerView: View {
                     reviewHeaderCard
                     reviewSessionListCard
                     reviewTakeCard
+                    reviewActionsCard
                     reviewExportCard
                     #if DEBUG
                     platterTimelineDebugCard
@@ -2431,6 +2436,203 @@ struct MacAnalyzerView: View {
         }
     }
 
+    private var currentReviewMetadata: CaptureCore.CaptureReviewMetadata {
+        reviewMetadataByTakeID[reviewTakeID] ?? .unreviewed
+    }
+
+    private var currentReviewWarnings: [CaptureCore.SessionReviewWarning] {
+        guard let snapshot = currentRoutineNotationSnapshot else { return [] }
+        let duration = snapshot.capturedEvidenceEndTime ?? 0
+        return SessionReviewValidator.warnings(for: snapshot, takeDuration: duration)
+    }
+
+    @discardableResult
+    private func persistReviewMetadata(
+        _ transform: (CaptureCore.CaptureReviewMetadata, [CaptureCore.SessionReviewWarning]) -> CaptureCore.CaptureReviewMetadata,
+        audit reason: String
+    ) -> Bool {
+        guard let mediaURL = captureEngine.lastRoutineRecordingURL else {
+            reviewStatusMessage = "No recorded take is ready for review."
+            return false
+        }
+
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let sidecar = try decoder.decode(
+                CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: sidecarURL)
+            )
+            let existing = sidecar.reviewMetadata ?? .unreviewed
+            let warnings = currentReviewWarnings
+            let next = transform(existing, warnings)
+            let updatedSidecar = sidecar.withReviewMetadata(next, audit: reason)
+            try updatedSidecar.encodedData().write(to: sidecarURL, options: .atomic)
+            reviewMetadataByTakeID[reviewTakeID] = next
+            reviewStateSelection = next.reviewState
+            reviewNotesDraft = next.reviewNotes ?? ""
+            reviewerNameDraft = next.reviewedBy ?? ""
+            return true
+        } catch {
+            reviewStatusMessage = "Could not save review metadata for \(reviewTakeID): \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func setReviewState(_ state: CaptureCore.SessionReviewState) {
+        guard hasRecordedTake else { return }
+        let saved = persistReviewMetadata(
+            { existing, warnings in
+                CaptureCore.CaptureReviewMetadata(
+                    reviewState: state,
+                    reviewedAt: Date(),
+                    reviewedBy: existing.reviewedBy,
+                    reviewNotes: existing.reviewNotes,
+                    qualityFlags: existing.qualityFlags,
+                    labelOverride: existing.labelOverride,
+                    isTrainingQuality: existing.isTrainingQuality,
+                    warnings: warnings
+                )
+            },
+            audit: "Review state set to \(state.rawValue) for \(reviewTakeID)."
+        )
+        if saved {
+            reviewStatusMessage = "Set \(reviewTakeID) to \(state.rawValue)."
+        }
+    }
+
+    private func approveSession() { setReviewState(.approved) }
+    private func rejectSession() { setReviewState(.rejected) }
+    private func flagLowSignal() { setReviewState(.lowSignal) }
+    private func flagTimingDrift() { setReviewState(.timingDrift) }
+    private func markMislabeled() { setReviewState(.mislabeled) }
+    private func markNeedsManualReview() { setReviewState(.needsManualReview) }
+
+    private enum QualityFlagKind {
+        case signalQuality
+        case timingStability
+        case noiseFloor
+        case directionReliability
+    }
+
+    private func setQualityFlag(_ kind: QualityFlagKind, value: Bool, label: String) {
+        guard hasRecordedTake else { return }
+        let saved = persistReviewMetadata(
+            { existing, warnings in
+                let flags = existing.qualityFlags
+                let nextFlags = CaptureCore.SessionReviewQualityFlags(
+                    signalQualityFlagged: kind == .signalQuality ? value : flags.signalQualityFlagged,
+                    timingStabilityFlagged: kind == .timingStability ? value : flags.timingStabilityFlagged,
+                    noiseFloorFlagged: kind == .noiseFloor ? value : flags.noiseFloorFlagged,
+                    directionReliabilityFlagged: kind == .directionReliability ? value : flags.directionReliabilityFlagged
+                )
+                return CaptureCore.CaptureReviewMetadata(
+                    reviewState: existing.reviewState,
+                    reviewedAt: Date(),
+                    reviewedBy: existing.reviewedBy,
+                    reviewNotes: existing.reviewNotes,
+                    qualityFlags: nextFlags,
+                    labelOverride: existing.labelOverride,
+                    isTrainingQuality: existing.isTrainingQuality,
+                    warnings: warnings
+                )
+            },
+            audit: "\(label) \(value ? "flagged" : "cleared") for \(reviewTakeID)."
+        )
+        if saved {
+            reviewStatusMessage = "\(label) \(value ? "flagged" : "cleared")."
+        }
+    }
+
+    private func markTrainingQuality(_ isQuality: Bool) {
+        guard hasRecordedTake else { return }
+        let saved = persistReviewMetadata(
+            { existing, warnings in
+                CaptureCore.CaptureReviewMetadata(
+                    reviewState: existing.reviewState,
+                    reviewedAt: Date(),
+                    reviewedBy: existing.reviewedBy,
+                    reviewNotes: existing.reviewNotes,
+                    qualityFlags: existing.qualityFlags,
+                    labelOverride: existing.labelOverride,
+                    isTrainingQuality: isQuality,
+                    warnings: warnings
+                )
+            },
+            audit: "Training quality \(isQuality ? "set" : "cleared") for \(reviewTakeID)."
+        )
+        if saved {
+            reviewStatusMessage = "Training quality \(isQuality ? "set" : "cleared")."
+        }
+    }
+
+    private func overrideScratchLabel(_ raw: String?) {
+        guard hasRecordedTake else { return }
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        let saved = persistReviewMetadata(
+            { existing, warnings in
+                CaptureCore.CaptureReviewMetadata(
+                    reviewState: existing.reviewState,
+                    reviewedAt: Date(),
+                    reviewedBy: existing.reviewedBy,
+                    reviewNotes: existing.reviewNotes,
+                    qualityFlags: existing.qualityFlags,
+                    labelOverride: normalized,
+                    isTrainingQuality: existing.isTrainingQuality,
+                    warnings: warnings
+                )
+            },
+            audit: "Label override \(normalized ?? "cleared") for \(reviewTakeID)."
+        )
+        if saved {
+            reviewStatusMessage = normalized.map { "Label override set to \($0)." } ?? "Label override cleared."
+        }
+    }
+
+    private func commitReviewNotes() {
+        guard hasRecordedTake else { return }
+        let trimmedNotes = String(reviewNotesDraft.prefix(1000))
+        let normalizedNotes: String? = trimmedNotes.isEmpty ? nil : trimmedNotes
+        let trimmedReviewer = reviewerNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedReviewer: String? = trimmedReviewer.isEmpty ? nil : trimmedReviewer
+        let saved = persistReviewMetadata(
+            { existing, warnings in
+                CaptureCore.CaptureReviewMetadata(
+                    reviewState: existing.reviewState,
+                    reviewedAt: Date(),
+                    reviewedBy: normalizedReviewer,
+                    reviewNotes: normalizedNotes,
+                    qualityFlags: existing.qualityFlags,
+                    labelOverride: existing.labelOverride,
+                    isTrainingQuality: existing.isTrainingQuality,
+                    warnings: warnings
+                )
+            },
+            audit: "Review notes saved for \(reviewTakeID)."
+        )
+        if saved {
+            reviewStatusMessage = "Saved review notes."
+        }
+    }
+
+    private func loadReviewMetadataForCurrentTake() {
+        guard let mediaURL = captureEngine.lastRoutineRecordingURL else { return }
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let data = try? Data(contentsOf: sidecarURL),
+              let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data) else {
+            return
+        }
+        let metadata = sidecar.reviewMetadata ?? .unreviewed
+        reviewMetadataByTakeID[reviewTakeID] = metadata
+        reviewStateSelection = metadata.reviewState
+        reviewNotesDraft = metadata.reviewNotes ?? ""
+        reviewerNameDraft = metadata.reviewedBy ?? ""
+    }
+
     private func startMacLiveInput() {
         liveInputEnabled = true
         demoModeController.stopDemo()
@@ -3505,6 +3707,153 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var reviewActionsCard: some View {
+        let metadata = currentReviewMetadata
+        let warnings = currentReviewWarnings
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Review actions")
+                    .font(.headline)
+                Spacer(minLength: 0)
+                Text(metadata.reviewState.rawValue)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("State", selection: Binding(
+                get: { reviewStateSelection },
+                set: { newValue in
+                    reviewStateSelection = newValue
+                    setReviewState(newValue)
+                }
+            )) {
+                ForEach(CaptureCore.SessionReviewState.allCases, id: \.self) { state in
+                    Text(state.rawValue).tag(state)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(!hasRecordedTake)
+
+            HStack(spacing: 8) {
+                Button("Approve") { approveSession() }
+                    .buttonStyle(.borderedProminent)
+                Button("Reject") { rejectSession() }
+                    .scratchLabDestructiveButton()
+                Spacer(minLength: 0)
+            }
+            .disabled(!hasRecordedTake)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Flag low signal", isOn: Binding(
+                    get: { metadata.qualityFlags.signalQualityFlagged },
+                    set: { setQualityFlag(.signalQuality, value: $0, label: "Low signal") }
+                ))
+                Toggle("Flag timing drift", isOn: Binding(
+                    get: { metadata.qualityFlags.timingStabilityFlagged },
+                    set: { setQualityFlag(.timingStability, value: $0, label: "Timing drift") }
+                ))
+                Toggle("Flag noise floor", isOn: Binding(
+                    get: { metadata.qualityFlags.noiseFloorFlagged },
+                    set: { setQualityFlag(.noiseFloor, value: $0, label: "Noise floor") }
+                ))
+                Toggle("Flag direction reliability", isOn: Binding(
+                    get: { metadata.qualityFlags.directionReliabilityFlagged },
+                    set: { setQualityFlag(.directionReliability, value: $0, label: "Direction reliability") }
+                ))
+                Toggle("Training quality", isOn: Binding(
+                    get: { metadata.isTrainingQuality },
+                    set: { markTrainingQuality($0) }
+                ))
+            }
+            .disabled(!hasRecordedTake)
+            .font(.system(size: 12))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Override label")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Override", selection: Binding(
+                    get: { reviewCorrectionSelection },
+                    set: { newValue in
+                        reviewCorrectionSelection = newValue
+                        overrideScratchLabel(newValue == .unknown ? nil : newValue.rawValue)
+                    }
+                )) {
+                    ForEach(ReviewCorrection.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .disabled(!hasRecordedTake)
+                if let override = metadata.labelOverride {
+                    Text("Saved override: \(override)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Reviewer")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                TextField("Initials or name", text: $reviewerNameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!hasRecordedTake)
+                Text("Notes")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $reviewNotesDraft)
+                    .font(.system(size: 12))
+                    .frame(minHeight: 60, maxHeight: 120)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25))
+                    )
+                    .disabled(!hasRecordedTake)
+                HStack {
+                    Text("\(reviewNotesDraft.count)/1000")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("Save notes") { commitReviewNotes() }
+                        .controlSize(.small)
+                        .disabled(!hasRecordedTake)
+                }
+            }
+
+            if !warnings.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Validation warnings")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(warnings) { warning in
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.system(size: 10))
+                            Text("\(warning.kind.rawValue): \(warning.detail)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            Text(reviewStatusMessage)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onAppear { loadReviewMetadataForCurrentTake() }
+        .onChange(of: captureEngine.lastRoutineRecordingURL) { _, _ in
+            loadReviewMetadataForCurrentTake()
+        }
     }
 
     private var reviewExportCard: some View {

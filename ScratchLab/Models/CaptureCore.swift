@@ -4746,6 +4746,102 @@ enum CaptureCore {
         let reviewedAt: Date
     }
 
+    enum SessionReviewState: String, Codable, Sendable, CaseIterable {
+        case unreviewed
+        case approved
+        case rejected
+        case lowSignal = "low_signal"
+        case timingDrift = "timing_drift"
+        case mislabeled
+        case needsManualReview = "needs_manual_review"
+    }
+
+    struct SessionReviewQualityFlags: Codable, Equatable, Sendable {
+        let signalQualityFlagged: Bool
+        let timingStabilityFlagged: Bool
+        let noiseFloorFlagged: Bool
+        let directionReliabilityFlagged: Bool
+
+        init(
+            signalQualityFlagged: Bool = false,
+            timingStabilityFlagged: Bool = false,
+            noiseFloorFlagged: Bool = false,
+            directionReliabilityFlagged: Bool = false
+        ) {
+            self.signalQualityFlagged = signalQualityFlagged
+            self.timingStabilityFlagged = timingStabilityFlagged
+            self.noiseFloorFlagged = noiseFloorFlagged
+            self.directionReliabilityFlagged = directionReliabilityFlagged
+        }
+
+        static let none = SessionReviewQualityFlags()
+    }
+
+    struct SessionReviewWarning: Codable, Equatable, Sendable, Identifiable {
+        enum Kind: String, Codable, Sendable {
+            case clippedAudio = "clipped_audio"
+            case lowAmplitude = "low_amplitude"
+            case unstableOnsetSpacing = "unstable_onset_spacing"
+            case missingPhraseRegion = "missing_phrase_region"
+            case inconsistentDirection = "inconsistent_direction"
+        }
+
+        let id: UUID
+        let kind: Kind
+        let detail: String
+        let raisedAt: Date
+
+        init(
+            id: UUID = UUID(),
+            kind: Kind,
+            detail: String,
+            raisedAt: Date = Date()
+        ) {
+            self.id = id
+            self.kind = kind
+            self.detail = detail
+            self.raisedAt = raisedAt
+        }
+    }
+
+    struct CaptureReviewMetadata: Codable, Equatable, Sendable {
+        static let currentSchemaVersion = "scratchlab_review_metadata_v1"
+
+        let schemaVersion: String
+        let reviewState: SessionReviewState
+        let reviewedAt: Date?
+        let reviewedBy: String?
+        let reviewNotes: String?
+        let qualityFlags: SessionReviewQualityFlags
+        let labelOverride: String?
+        let isTrainingQuality: Bool
+        let warnings: [SessionReviewWarning]
+
+        init(
+            schemaVersion: String = CaptureReviewMetadata.currentSchemaVersion,
+            reviewState: SessionReviewState = .unreviewed,
+            reviewedAt: Date? = nil,
+            reviewedBy: String? = nil,
+            reviewNotes: String? = nil,
+            qualityFlags: SessionReviewQualityFlags = .none,
+            labelOverride: String? = nil,
+            isTrainingQuality: Bool = false,
+            warnings: [SessionReviewWarning] = []
+        ) {
+            self.schemaVersion = schemaVersion
+            self.reviewState = reviewState
+            self.reviewedAt = reviewedAt
+            self.reviewedBy = reviewedBy
+            self.reviewNotes = reviewNotes
+            self.qualityFlags = qualityFlags
+            self.labelOverride = labelOverride
+            self.isTrainingQuality = isTrainingQuality
+            self.warnings = warnings
+        }
+
+        static let unreviewed = CaptureReviewMetadata()
+    }
+
     struct DetectedNotationRecordMovementEvent: Codable, Equatable, Sendable {
         let startTime: Double
         let endTime: Double
@@ -5065,6 +5161,7 @@ enum CaptureCore {
         var linkedMotionCaptureID: UUID?
         var linkedMotionFileName: String?
         var reviewDecision: CaptureReviewDecision?
+        var reviewMetadata: CaptureReviewMetadata?
         var detectedNotation: DetectedNotationSnapshot?
         var auditTrail: [CaptureAuditEvent]
 
@@ -5098,6 +5195,7 @@ enum CaptureCore {
             linkedMotionCaptureID: UUID? = nil,
             linkedMotionFileName: String? = nil,
             reviewDecision: CaptureReviewDecision? = nil,
+            reviewMetadata: CaptureReviewMetadata? = nil,
             detectedNotation: DetectedNotationSnapshot? = nil,
             auditTrail: [CaptureAuditEvent] = []
         ) {
@@ -5130,6 +5228,7 @@ enum CaptureCore {
             self.linkedMotionCaptureID = linkedMotionCaptureID
             self.linkedMotionFileName = linkedMotionFileName
             self.reviewDecision = reviewDecision
+            self.reviewMetadata = reviewMetadata
             self.detectedNotation = detectedNotation
             self.auditTrail = auditTrail
         }
@@ -5274,6 +5373,23 @@ enum CaptureCore {
                     timestamp: reviewedAt,
                     category: "label_reviewed",
                     detail: "Review marked \(takeID) as \(label) with status \(status.rawValue)."
+                )
+            )
+            return updated
+        }
+
+        func withReviewMetadata(
+            _ metadata: CaptureReviewMetadata,
+            audit reason: String,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.reviewMetadata = metadata
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: recordedAt,
+                    category: "review_metadata_updated",
+                    detail: reason
                 )
             )
             return updated

@@ -266,6 +266,37 @@ struct SessionExportMetadataDocument: Codable, Equatable, Sendable {
     let takes: [SessionExportTakeCaptureMetadata]
 }
 
+struct SessionExportReviewTake: Codable, Equatable, Sendable {
+    let takeID: String
+    let takeNumber: Int
+    let metadata: CaptureCore.CaptureReviewMetadata?
+}
+
+struct SessionExportReviewDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_session_review_v1"
+
+    let schemaVersion: String
+    let sessionID: String
+    let generatedAt: Date
+    let takes: [SessionExportReviewTake]
+
+    init(
+        schemaVersion: String = SessionExportReviewDocument.currentSchemaVersion,
+        sessionID: String,
+        generatedAt: Date = Date(),
+        takes: [SessionExportReviewTake]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.sessionID = sessionID
+        self.generatedAt = generatedAt
+        self.takes = takes
+    }
+
+    var hasReviewedTakes: Bool {
+        takes.contains { $0.metadata != nil }
+    }
+}
+
 struct SessionExportArtifactMetadata: Codable, Equatable, Sendable {
     let takeID: String
     let takeNumber: Int
@@ -1481,6 +1512,21 @@ struct SessionArchiveBuilder: Sendable {
         return SessionExportMetadataDocument(session: hydratedPackage.metadata, takes: takes)
     }
 
+    func reviewDocument(for package: SessionExportPackage) -> SessionExportReviewDocument {
+        let takes = package.takes.map { take -> SessionExportReviewTake in
+            let sidecar = try? decodeSidecar(at: take.sidecarURL)
+            return SessionExportReviewTake(
+                takeID: take.takeID,
+                takeNumber: take.takeNumber,
+                metadata: sidecar?.reviewMetadata
+            )
+        }
+        return SessionExportReviewDocument(
+            sessionID: package.metadata.sessionID,
+            takes: takes
+        )
+    }
+
     func exportMetadataDocument(
         for package: SessionExportPackage,
         options: SessionExportOptions
@@ -1838,6 +1884,11 @@ struct SessionArchiveBuilder: Sendable {
         let exportMetadataDocument = try exportMetadataDocument(for: package, options: options)
         let exportMetadataData = try Self.jsonEncoder.encode(exportMetadataDocument)
         try exportMetadataData.write(to: exportMetadataDocumentURL, options: .atomic)
+
+        let reviewDocumentURL = manifestsURL.appendingPathComponent("session_review.json")
+        let reviewDocument = reviewDocument(for: package)
+        let reviewDocumentData = try Self.jsonEncoder.encode(reviewDocument)
+        try reviewDocumentData.write(to: reviewDocumentURL, options: .atomic)
 
         try stageExportMixArtifacts(
             package,

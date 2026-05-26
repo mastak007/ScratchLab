@@ -149,6 +149,9 @@
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
 		BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */; };
+		SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
+		SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
+		SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -343,6 +346,8 @@
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
 		PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorderTests.swift; sourceTree = "<group>"; };
 		BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabyPlatterFixtureDecodeTests.swift; sourceTree = "<group>"; };
+		SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReviewValidator.swift; sourceTree = "<group>"; };
+		SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReviewMetadataTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -432,6 +437,7 @@
 				LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */,
 				PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */,
 				BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */,
+				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -622,6 +628,7 @@
 				3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */,
 				176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */,
 				F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */,
+				SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -929,6 +936,7 @@
 				C71F1103A1B2C3D4E5F60711 /* ClickTrackEngine.swift in Sources */,
 				C71F1203A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */,
 				C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */,
+				SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				5EB4210D6F24B3426C9341BB /* SessionSharePresenter.swift in Sources */,
 				F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
 				F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */,
@@ -1012,6 +1020,7 @@
 				2C64569FCF5593D3CB171D27 /* StagingInspector.swift in Sources */,
 				AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */,
 				F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */,
+				SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				6A677B41D9030E13F18D6FF9 /* SessionSharePresenter.swift in Sources */,
 				F3000002A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
 				1564CE6A18C3FD1BE1056920 /* Archive+BackingConfiguration.swift in Sources */,
@@ -1073,6 +1082,7 @@
 				LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */,
 				PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */,
 				BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */,
+				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
