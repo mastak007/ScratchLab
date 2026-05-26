@@ -2163,6 +2163,35 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
     }
 }
 
+/// Frame-anchored direction polarity for Baby Scratch.
+///
+/// Audio onsets tell us *when* a stroke happened but not *which way* the
+/// platter moved — the same attack envelope is produced by a forward push
+/// and a backward pull. For Baby Scratch the platter alternates after a
+/// known starting direction; a reference frame of the performer's first
+/// move locks that polarity. `frame_000024.jpeg` (left deck, clockwise =
+/// forward, crossfader open) anchors the canonical sequence to forward →
+/// backward → forward → …, fader open throughout. This helper exposes the
+/// sequence so onset-driven synthesisers (currently
+/// `ScratchNotation.detectedPreview`) can superimpose direction onto
+/// timing instead of trusting upstream's polarity guess.
+enum BabyScratchPolarity {
+    /// Authoritative first-stroke direction, anchored by the reference frame.
+    static let initialDirection: ScratchNotationDirection = .forward
+    /// Fader stays open across every Baby Scratch stroke — no cut.
+    static let faderState: ScratchNotationFaderState = .open
+
+    /// Canonical direction for the `index`-th stroke (0-based), alternating
+    /// from `initialDirection`.
+    static func direction(forStrokeAtIndex index: Int) -> ScratchNotationDirection {
+        let safeIndex = max(index, 0)
+        if safeIndex.isMultiple(of: 2) {
+            return initialDirection
+        }
+        return initialDirection == .forward ? .backward : .forward
+    }
+}
+
 extension ScratchNotation {
     static func detectedPreview(
         scratchID: String,
@@ -2176,16 +2205,30 @@ extension ScratchNotation {
         }
         guard !sortedEvents.isEmpty else { return nil }
 
-        let strokes = sortedEvents.compactMap { event -> Stroke? in
-            guard event.endTime > event.startTime else { return nil }
+        // Drop zero/negative-duration events first so the polarity index is
+        // stable across survivors — otherwise a dropped event would skip an
+        // alternation slot and produce two same-direction strokes in a row.
+        let validEvents = sortedEvents.filter { $0.endTime > $0.startTime }
+        let isBabyScratch = scratchID == CaptureSessionScratchType.babyScratch.rawValue
+
+        let strokes: [Stroke] = validEvents.enumerated().compactMap { index, event -> Stroke? in
             let direction: ScratchNotationDirection
-            switch event.direction {
-            case "forward":
-                direction = .forward
-            case "backward":
-                direction = .backward
-            default:
-                return nil
+            let faderState: ScratchNotationFaderState
+            if isBabyScratch {
+                // Baby Scratch — polarity locked by the reference frame.
+                // Onset timing from `event` is preserved as-is.
+                direction = BabyScratchPolarity.direction(forStrokeAtIndex: index)
+                faderState = BabyScratchPolarity.faderState
+            } else {
+                switch event.direction {
+                case "forward":
+                    direction = .forward
+                case "backward":
+                    direction = .backward
+                default:
+                    return nil
+                }
+                faderState = .open
             }
 
             let speedClassification: ScratchNotationSpeedClassification
@@ -2203,7 +2246,7 @@ extension ScratchNotation {
                 endTime: event.endTime,
                 direction: direction,
                 speedClassification: speedClassification,
-                faderState: .open
+                faderState: faderState
             )
         }
         guard !strokes.isEmpty else { return nil }
