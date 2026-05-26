@@ -195,6 +195,9 @@
 		DCE1001000DCE001DCE00001 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
 		DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
 		DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */; };
+		PCE1001000PCE001PCE00001 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
+		PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
+		PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -443,6 +446,8 @@
 		CES2010000CES002CES00001 /* CoachingEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventTests.swift; sourceTree = "<group>"; };
 		DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/DriftCoachingEvaluator.swift; sourceTree = "<group>"; };
 		DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriftCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
+		PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/PhraseCoachingEvaluator.swift; sourceTree = "<group>"; };
+		PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -571,6 +576,7 @@
 				CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */,
 				CES2010000CES002CES00001 /* CoachingEventTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
+				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -734,6 +740,7 @@
 				CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */,
 				CES1000000CES001CES00001 /* CoachingEvent.swift */,
 				DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */,
+				PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
@@ -1112,6 +1119,7 @@
 				CEV1001000CEV001CEV00001 /* CoachingEventVocabulary.swift in Sources */,
 				CES1001000CES001CES00001 /* CoachingEvent.swift in Sources */,
 				DCE1001000DCE001DCE00001 /* DriftCoachingEvaluator.swift in Sources */,
+				PCE1001000PCE001PCE00001 /* PhraseCoachingEvaluator.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1215,6 +1223,7 @@
 				CEV1001000CEV001CEV00002 /* CoachingEventVocabulary.swift in Sources */,
 				CES1001000CES001CES00002 /* CoachingEvent.swift in Sources */,
 				DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */,
+				PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1318,6 +1327,7 @@
 				CEV2011000CEV002CEV00001 /* CoachingEventVocabularyTests.swift in Sources */,
 				CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
+				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
