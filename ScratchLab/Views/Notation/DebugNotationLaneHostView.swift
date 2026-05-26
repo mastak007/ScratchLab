@@ -23,7 +23,39 @@ struct DebugNotationLaneHostView: View {
         case replay
     }
 
+    /// Source of the `NotationPresentationModel` fed to
+    /// `NotationReplayDriver` while the host is in the `.replay`
+    /// preset. DEBUG-only — never written to disk, never wired into
+    /// Practice / Review / Capture / Coach.
+    ///
+    /// - `handBuilt`: the original hand-built
+    ///   `replayPresentation` constant. Unchanged from earlier
+    ///   slices; this is the default so existing manual workflows
+    ///   look identical.
+    /// - `scratchNotation`: `replayPresentation` rebuilt from
+    ///   `scratchNotationFixture` via
+    ///   `ScratchNotationPresentationAdapter`. Exercises the
+    ///   adapter end-to-end against the geometry mappers.
+    /// - `sessionReplay`: `replayPresentation` rebuilt from
+    ///   `sessionReplayFixture` via
+    ///   `SessionReplayPresentationAdapter`. Exercises the second
+    ///   adapter against the same downstream stack.
+    enum ReplaySource: String, CaseIterable {
+        case handBuilt
+        case scratchNotation
+        case sessionReplay
+
+        var displayName: String {
+            switch self {
+            case .handBuilt:       return "Hand-built"
+            case .scratchNotation: return "Notation"
+            case .sessionReplay:   return "Session"
+            }
+        }
+    }
+
     @State private var preset: Preset = .simple
+    @State private var replaySource: ReplaySource = .handBuilt
     @State private var frameIndex: Int = 0
 
     private static let laneWidth: Double = 400
@@ -40,6 +72,9 @@ struct DebugNotationLaneHostView: View {
             .padding()
 
             if preset == .replay {
+                replaySourcePicker
+                    .padding(.horizontal)
+                    .padding(.bottom, 4)
                 replayStepper
                     .padding(.horizontal)
                     .padding(.bottom, 8)
@@ -60,6 +95,17 @@ struct DebugNotationLaneHostView: View {
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
+    }
+
+    // MARK: Replay source picker
+
+    private var replaySourcePicker: some View {
+        Picker("Replay source", selection: $replaySource) {
+            ForEach(ReplaySource.allCases, id: \.self) { source in
+                Text(source.displayName)
+            }
+        }
+        .pickerStyle(.segmented)
     }
 
     // MARK: Replay stepper
@@ -119,12 +165,26 @@ struct DebugNotationLaneHostView: View {
         return NotationReplayDriver.project(
             frame: frame,
             state: Self.replayState,
-            presentationModel: Self.replayPresentation,
+            presentationModel: currentReplayPresentation,
             timingGrid: Self.replayGrid,
             viewportRule: Self.replayRule,
             width: Self.laneWidth,
             height: Self.laneHeight
         )
+    }
+
+    /// Resolves the `NotationPresentationModel` for the active
+    /// `replaySource`. Hand-built returns the original constant;
+    /// the two adapter sources project synthetic fixtures through
+    /// `ScratchNotationPresentationAdapter` and
+    /// `SessionReplayPresentationAdapter`. DEBUG-only: never read
+    /// outside `replayProjection`.
+    private var currentReplayPresentation: NotationPresentationModel {
+        switch replaySource {
+        case .handBuilt:       return Self.replayPresentation
+        case .scratchNotation: return Self.scratchNotationReplayPresentation
+        case .sessionReplay:   return Self.sessionReplayPresentation
+        }
     }
 
     // MARK: Preset data
@@ -299,6 +359,94 @@ struct DebugNotationLaneHostView: View {
     static let replayRule: NotationViewportWindowRule = {
         // 4 s window with 1 s of pre-roll behind the playhead.
         NotationViewportWindowRule(duration: 4, leadIn: 1)!
+    }()
+
+    // MARK: Adapter-backed replay fixtures
+    //
+    // DEBUG-only synthetic sources for `ScratchNotationPresentationAdapter`
+    // and `SessionReplayPresentationAdapter`. Constructed in memory,
+    // never persisted, never wired into Practice / Review / Capture /
+    // Coach. Internal (not private) so the DEBUG-only test target can
+    // assert determinism and adapter pass-through.
+
+    static let scratchNotationFixture: ScratchNotation = {
+        let strokes: [ScratchNotation.Stroke] = [
+            ScratchNotation.Stroke(
+                startTime: 0.50, endTime: 1.00,
+                direction: .forward,  speedClassification: .medium, faderState: .open
+            ),
+            ScratchNotation.Stroke(
+                startTime: 1.25, endTime: 1.50,
+                direction: .backward, speedClassification: .slow,   faderState: .open
+            ),
+            ScratchNotation.Stroke(
+                startTime: 2.00, endTime: 2.75,
+                direction: .forward,  speedClassification: .fast,   faderState: .open
+            ),
+            ScratchNotation.Stroke(
+                startTime: 3.50, endTime: 4.00,
+                direction: .backward, speedClassification: .medium, faderState: .open
+            ),
+            ScratchNotation.Stroke(
+                startTime: 5.00, endTime: 5.50,
+                direction: .forward,  speedClassification: .slow,   faderState: .open
+            ),
+            ScratchNotation.Stroke(
+                startTime: 6.00, endTime: 7.50,
+                direction: .backward, speedClassification: .fast,   faderState: .open
+            ),
+        ]
+        return ScratchNotation(
+            version: 1,
+            scratchID: "debug-host",
+            demoStart: 0,
+            demoEnd: 8,
+            phraseStart: nil,
+            phraseEnd: nil,
+            timingBasis: "audio",
+            strokes: strokes
+        )
+    }()
+
+    static let scratchNotationReplayPresentation: NotationPresentationModel = {
+        ScratchNotationPresentationAdapter.makeModel(from: scratchNotationFixture)
+    }()
+
+    static let sessionReplayFixture: SessionReplayTimeline = {
+        let events: [SessionReplayEvent] = [
+            SessionReplayEvent(
+                startTime: 0.50, endTime: 1.00,
+                kind: .audioOnset,     sourceIndex: 0, tag: "tap"
+            ),
+            SessionReplayEvent(
+                startTime: 1.25, endTime: nil,
+                kind: .mixerMidi,      sourceIndex: 0, tag: "midi_cc_07"
+            ),
+            SessionReplayEvent(
+                startTime: 2.00, endTime: 2.75,
+                kind: .recordMovement, sourceIndex: 0, tag: "forward"
+            ),
+            SessionReplayEvent(
+                startTime: 3.50, endTime: 4.00,
+                kind: .fader,          sourceIndex: 0, tag: "crossfader"
+            ),
+            SessionReplayEvent(
+                startTime: 5.00, endTime: nil,
+                kind: .mixerMidi,      sourceIndex: 1, tag: "midi_cc_11"
+            ),
+            SessionReplayEvent(
+                startTime: 6.00, endTime: 7.50,
+                kind: .audioOnset,     sourceIndex: 1, tag: "tap"
+            ),
+        ]
+        return SessionReplayTimeline(
+            takeDurationSeconds: 8,
+            events: events
+        )
+    }()
+
+    static let sessionReplayPresentation: NotationPresentationModel = {
+        SessionReplayPresentationAdapter.makeModel(from: sessionReplayFixture)
     }()
 
     static let replayState: NotationReplayState = {

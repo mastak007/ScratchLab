@@ -117,5 +117,93 @@ final class DebugNotationLaneHostViewTests: XCTestCase {
         XCTAssertTrue(names.contains("simple"))
         XCTAssertTrue(names.contains("dense"))
     }
+
+    // MARK: - Adapter-backed replay sources
+
+    func testReplaySourceEnumeratesHandBuiltAndBothAdapters() {
+        let names = DebugNotationLaneHostView.ReplaySource.allCases.map(\.rawValue)
+        XCTAssertEqual(Set(names),
+                       Set(["handBuilt", "scratchNotation", "sessionReplay"]),
+                       "replay source toggle must advertise the hand-built default plus both adapter-backed feeds")
+    }
+
+    func testScratchNotationAdapterPresentationMatchesFixtureShape() {
+        let fixture = DebugNotationLaneHostView.scratchNotationFixture
+        let model = DebugNotationLaneHostView.scratchNotationReplayPresentation
+        XCTAssertEqual(model.strokes.count, fixture.strokes.count)
+        XCTAssertEqual(model.strokes.map(\.primitiveIndex),
+                       Array(0..<fixture.strokes.count))
+        XCTAssertEqual(model.strokes.map(\.startTime),
+                       fixture.strokes.map(\.startTime))
+        XCTAssertEqual(model.strokes.map(\.endTime),
+                       fixture.strokes.map(\.endTime))
+        XCTAssertTrue(model.strokes.allSatisfy { $0.startPosition == nil })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.endPosition == nil })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.family == nil })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.coachingKinds.isEmpty })
+    }
+
+    func testSessionReplayAdapterPresentationMatchesFixtureShape() {
+        let fixture = DebugNotationLaneHostView.sessionReplayFixture
+        let model = DebugNotationLaneHostView.sessionReplayPresentation
+        XCTAssertEqual(model.strokes.count, fixture.events.count)
+        XCTAssertEqual(model.strokes.map(\.primitiveIndex),
+                       Array(0..<fixture.events.count))
+        XCTAssertEqual(model.strokes.map(\.startTime),
+                       fixture.events.map(\.startTime))
+        XCTAssertEqual(model.strokes.map(\.endTime),
+                       fixture.events.map { $0.endTime ?? $0.startTime })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.startPosition == nil })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.endPosition == nil })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.family == nil })
+        XCTAssertTrue(model.strokes.allSatisfy { $0.coachingKinds.isEmpty })
+    }
+
+    func testAdapterBackedPresentationsAreDeterministicAcrossRebuilds() {
+        let scratchA = ScratchNotationPresentationAdapter.makeModel(
+            from: DebugNotationLaneHostView.scratchNotationFixture
+        )
+        let scratchB = ScratchNotationPresentationAdapter.makeModel(
+            from: DebugNotationLaneHostView.scratchNotationFixture
+        )
+        XCTAssertEqual(scratchA, DebugNotationLaneHostView.scratchNotationReplayPresentation)
+        XCTAssertEqual(scratchA, scratchB)
+
+        let sessionA = SessionReplayPresentationAdapter.makeModel(
+            from: DebugNotationLaneHostView.sessionReplayFixture
+        )
+        let sessionB = SessionReplayPresentationAdapter.makeModel(
+            from: DebugNotationLaneHostView.sessionReplayFixture
+        )
+        XCTAssertEqual(sessionA, DebugNotationLaneHostView.sessionReplayPresentation)
+        XCTAssertEqual(sessionA, sessionB)
+    }
+
+    func testEveryFrameProjectsForEachAdapterBackedSource() throws {
+        let state = DebugNotationLaneHostView.replayState
+        for source in [
+            DebugNotationLaneHostView.scratchNotationReplayPresentation,
+            DebugNotationLaneHostView.sessionReplayPresentation,
+        ] {
+            for frame in state.frames {
+                let projection = NotationReplayDriver.project(
+                    frame: frame,
+                    state: state,
+                    presentationModel: source,
+                    timingGrid: DebugNotationLaneHostView.replayGrid,
+                    viewportRule: DebugNotationLaneHostView.replayRule,
+                    width: Self.laneWidth,
+                    height: Self.laneHeight
+                )
+                let unwrapped = try XCTUnwrap(projection,
+                                              "frame \(frame.index) at t=\(frame.time) failed to project for adapter-backed source")
+                XCTAssertEqual(unwrapped.viewport.width, Self.laneWidth)
+                XCTAssertEqual(unwrapped.viewport.height, Self.laneHeight)
+                XCTAssertNotNil(unwrapped.gridlineGeometry)
+                XCTAssertNotNil(unwrapped.playhead)
+                XCTAssertEqual(unwrapped.playhead?.time, frame.time)
+            }
+        }
+    }
 }
 #endif
