@@ -270,6 +270,19 @@ struct SessionExportReviewTake: Codable, Equatable, Sendable {
     let takeID: String
     let takeNumber: Int
     let metadata: CaptureCore.CaptureReviewMetadata?
+    let qualityReport: SessionQualityReport?
+
+    init(
+        takeID: String,
+        takeNumber: Int,
+        metadata: CaptureCore.CaptureReviewMetadata?,
+        qualityReport: SessionQualityReport? = nil
+    ) {
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.metadata = metadata
+        self.qualityReport = qualityReport
+    }
 }
 
 struct SessionExportReviewDocument: Codable, Equatable, Sendable {
@@ -1515,10 +1528,19 @@ struct SessionArchiveBuilder: Sendable {
     func reviewDocument(for package: SessionExportPackage) -> SessionExportReviewDocument {
         let takes = package.takes.map { take -> SessionExportReviewTake in
             let sidecar = try? decodeSidecar(at: take.sidecarURL)
+            let report: SessionQualityReport? = {
+                guard let snapshot = sidecar?.detectedNotation else { return nil }
+                let duration = snapshot.capturedEvidenceEndTime ?? take.duration
+                return SessionQualityAnalyzer.analyze(
+                    snapshot: snapshot,
+                    takeDuration: duration
+                )
+            }()
             return SessionExportReviewTake(
                 takeID: take.takeID,
                 takeNumber: take.takeNumber,
-                metadata: sidecar?.reviewMetadata
+                metadata: sidecar?.reviewMetadata,
+                qualityReport: report
             )
         }
         return SessionExportReviewDocument(
