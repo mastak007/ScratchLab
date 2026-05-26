@@ -344,6 +344,208 @@ final class OverlayTimingDiagnosticsTests: XCTestCase {
                        OverlayTimingDiagnostics.currentSchemaVersion)
     }
 
+    // MARK: - Marker mapping (Slice 4.5)
+
+    func testMarkersEmptyDiagnosticsProducesNoMarkers() {
+        let overlay = makeOverlay(targetMovements: [], capturedMovements: [])
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        XCTAssertTrue(diag.markers(for: overlay).isEmpty)
+    }
+
+    func testMarkersEmptyOverlayEventsProducesNoMarkers() {
+        // Diagnostics with no findings — even against a non-empty
+        // overlay, no markers should result.
+        let overlay = makeOverlay(
+            targetMovements: [0.25, 0.5],
+            capturedMovements: [0.25, 0.5]
+        )
+        let diagnostics = OverlayTimingDiagnostics(
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius,
+            findings: []
+        )
+        XCTAssertTrue(diagnostics.markers(for: overlay).isEmpty)
+    }
+
+    func testMarkersForMatchedFinding() {
+        let overlay = makeOverlay(
+            targetMovements: [0.50],
+            capturedMovements: [0.52]
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let markers = diag.markers(for: overlay)
+        XCTAssertEqual(markers.count, 1)
+        let marker = markers[0]
+        XCTAssertEqual(marker.kind, .matched)
+        XCTAssertEqual(marker.lane, .captured)
+        XCTAssertEqual(marker.timeSeconds, 0.52, accuracy: 1e-9)
+        XCTAssertEqual(marker.targetSourceIndex, 0)
+        XCTAssertEqual(marker.capturedSourceIndex, 0)
+    }
+
+    func testMarkersForEarlyFinding() {
+        let overlay = makeOverlay(
+            targetMovements: [1.00],
+            capturedMovements: [0.80]
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let markers = diag.markers(for: overlay)
+        XCTAssertEqual(markers.count, 1)
+        let marker = markers[0]
+        XCTAssertEqual(marker.kind, .early)
+        XCTAssertEqual(marker.lane, .captured)
+        XCTAssertEqual(marker.timeSeconds, 0.80, accuracy: 1e-9,
+                       "early marker anchors at the captured event time, not the target")
+    }
+
+    func testMarkersForLateFinding() {
+        let overlay = makeOverlay(
+            targetMovements: [1.00],
+            capturedMovements: [1.20]
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let markers = diag.markers(for: overlay)
+        XCTAssertEqual(markers.count, 1)
+        let marker = markers[0]
+        XCTAssertEqual(marker.kind, .late)
+        XCTAssertEqual(marker.lane, .captured)
+        XCTAssertEqual(marker.timeSeconds, 1.20, accuracy: 1e-9)
+    }
+
+    func testMarkersForMissingFinding() {
+        let overlay = makeOverlay(
+            targetMovements: [0.25, 0.75],
+            capturedMovements: []
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let markers = diag.markers(for: overlay)
+        XCTAssertEqual(markers.count, 2)
+        XCTAssertEqual(markers.map(\.kind), [.missing, .missing])
+        XCTAssertEqual(markers.map(\.lane), [.target, .target])
+        XCTAssertEqual(markers[0].timeSeconds, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(markers[1].timeSeconds, 0.75, accuracy: 1e-9)
+        XCTAssertNil(markers[0].capturedSourceIndex)
+        XCTAssertEqual(markers[0].targetSourceIndex, 0)
+    }
+
+    func testMarkersForExtraFinding() {
+        let overlay = makeOverlay(
+            targetMovements: [],
+            capturedMovements: [0.30, 0.70]
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let markers = diag.markers(for: overlay)
+        XCTAssertEqual(markers.count, 2)
+        XCTAssertEqual(markers.map(\.kind), [.extra, .extra])
+        XCTAssertEqual(markers.map(\.lane), [.captured, .captured])
+        XCTAssertEqual(markers[0].timeSeconds, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(markers[1].timeSeconds, 0.70, accuracy: 1e-9)
+        XCTAssertNil(markers[0].targetSourceIndex)
+        XCTAssertEqual(markers[0].capturedSourceIndex, 0)
+    }
+
+    func testMarkersForMixedScenarioPreserveFindingOrder() {
+        // Same fixture as testMixedScenarioCombinesAllKinds. Expected
+        // findings order: matched, early, late, missing, late, extra.
+        let overlay = makeOverlay(
+            targetMovements: [0.25, 0.75, 1.25, 1.75, 2.50],
+            capturedMovements: [0.27, 0.60, 1.74, 2.70, 3.50]
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let markers = diag.markers(for: overlay)
+        XCTAssertEqual(markers.count, diag.findings.count,
+                       "every finding produces exactly one marker for this overlay")
+
+        // Counts by kind line up with the diagnostics' own counts.
+        var byKind: [OverlayStrokeFinding.Kind: Int] = [:]
+        for marker in markers { byKind[marker.kind, default: 0] += 1 }
+        XCTAssertEqual(byKind[.matched] ?? 0, 1)
+        XCTAssertEqual(byKind[.early]   ?? 0, 1)
+        XCTAssertEqual(byKind[.late]    ?? 0, 2)
+        XCTAssertEqual(byKind[.missing] ?? 0, 1)
+        XCTAssertEqual(byKind[.extra]   ?? 0, 1)
+
+        // Lane anchoring rule: missing → target lane; everything
+        // else → captured lane.
+        for (finding, marker) in zip(diag.findings, markers) {
+            XCTAssertEqual(marker.kind, finding.kind)
+            switch finding.kind {
+            case .missing:
+                XCTAssertEqual(marker.lane, .target)
+            case .matched, .early, .late, .extra:
+                XCTAssertEqual(marker.lane, .captured)
+            }
+        }
+
+        // Each marker's `timeSeconds` matches the anchored event's
+        // `startTime` (target lane for missing, captured lane for
+        // everything else).
+        let targetByIndex = Dictionary(
+            uniqueKeysWithValues: overlay.target.events
+                .filter { $0.kind == .recordMovement }
+                .map { ($0.sourceIndex, $0.startTime) }
+        )
+        let capturedByIndex = Dictionary(
+            uniqueKeysWithValues: overlay.captured.events
+                .filter { $0.kind == .recordMovement }
+                .map { ($0.sourceIndex, $0.startTime) }
+        )
+        for marker in markers {
+            switch marker.lane {
+            case .target:
+                let expected = targetByIndex[marker.targetSourceIndex ?? -1]
+                XCTAssertEqual(marker.timeSeconds, expected ?? .nan, accuracy: 1e-9)
+            case .captured:
+                let expected = capturedByIndex[marker.capturedSourceIndex ?? -1]
+                XCTAssertEqual(marker.timeSeconds, expected ?? .nan, accuracy: 1e-9)
+            }
+        }
+    }
+
+    func testMarkersAreDeterministic() {
+        let overlay = makeOverlay(
+            targetMovements: [0.25, 0.75, 1.25],
+            capturedMovements: [0.27, 0.80, 1.70]
+        )
+        let diag = OverlayTimingDiagnostics.compute(
+            overlay: overlay,
+            toleranceSeconds: Self.tolerance,
+            pairingRadiusSeconds: Self.radius
+        )
+        let first = diag.markers(for: overlay)
+        let second = diag.markers(for: overlay)
+        XCTAssertEqual(first, second,
+                       "Same diagnostics + same overlay must produce equal markers")
+    }
+
     // MARK: - Helpers
 
     private func makeOverlay(

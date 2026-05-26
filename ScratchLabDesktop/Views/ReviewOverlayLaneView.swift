@@ -15,6 +15,15 @@ import SwiftUI
 /// to `overlay.displayDurationSeconds` so existing call sites keep
 /// rendering identically.
 ///
+/// Slice 4.5 (markers): an optional `diagnostics` value adds a small
+/// glyph for every `OverlayStrokeFinding`. Glyphs sit in the gap
+/// between the two lanes — target-anchored markers (`.missing`) draw
+/// just below the target lane; captured-anchored markers (`.matched`,
+/// `.early`, `.late`, `.extra`) draw just above the captured lane.
+/// Matched markers are deliberately faint; all warning kinds share
+/// the existing amber `Notation.cut` token. Markers draw under the
+/// playhead cursor so the cursor always remains on top.
+///
 /// Visual rules:
 ///   - target events render as outlined "ghost" marks at low opacity
 ///   - captured events render as solid primary marks
@@ -32,15 +41,18 @@ struct ReviewOverlayLaneView: View {
     let overlay: ReviewOverlayTimeline
     let playheadTime: TimeInterval?
     let duration: TimeInterval?
+    let diagnostics: OverlayTimingDiagnostics?
 
     init(
         overlay: ReviewOverlayTimeline,
         playheadTime: TimeInterval? = nil,
-        duration: TimeInterval? = nil
+        duration: TimeInterval? = nil,
+        diagnostics: OverlayTimingDiagnostics? = nil
     ) {
         self.overlay = overlay
         self.playheadTime = playheadTime
         self.duration = duration
+        self.diagnostics = diagnostics
     }
 
     private static let laneInsetX: CGFloat = 8
@@ -68,6 +80,7 @@ struct ReviewOverlayLaneView: View {
                 frame: layout.captured,
                 style: .primary
             )
+            drawDiagnosticMarkers(context: context, layout: layout)
             drawCursor(context: context, size: size)
         }
         .frame(minHeight: 64)
@@ -180,6 +193,83 @@ struct ReviewOverlayLaneView: View {
             if style == .ghost {
                 context.stroke(path, with: .color(style.stroke), lineWidth: 0.75)
             }
+        }
+    }
+
+    private func drawDiagnosticMarkers(context: GraphicsContext, layout: LaneLayout) {
+        guard let diagnostics else { return }
+        let span = effectiveDuration
+        guard span > 0 else { return }
+        let markers = diagnostics.markers(for: overlay)
+        guard !markers.isEmpty else { return }
+
+        for marker in markers {
+            let frame = (marker.lane == .target) ? layout.target : layout.captured
+            guard frame.width > 0 else { continue }
+            let x = frame.minX + xOffset(for: marker.timeSeconds, frame: frame, span: span)
+            let y: CGFloat
+            switch marker.lane {
+            case .target:
+                // Just below the target lane, in the inter-lane gap.
+                y = layout.target.maxY + 2
+            case .captured:
+                // Just above the captured lane, in the inter-lane gap.
+                y = layout.captured.minY - 2
+            }
+            drawMarkerGlyph(context: context, kind: marker.kind, at: CGPoint(x: x, y: y))
+        }
+    }
+
+    private func drawMarkerGlyph(
+        context: GraphicsContext,
+        kind: OverlayStrokeFinding.Kind,
+        at point: CGPoint
+    ) {
+        let warning = ScratchLabDesign.Notation.cut
+        switch kind {
+        case .matched:
+            // Deliberately subtle — matched is the "no news" case.
+            let rect = CGRect(
+                x: point.x - 1, y: point.y - 1, width: 2, height: 2
+            )
+            context.fill(
+                Path(ellipseIn: rect),
+                with: .color(ScratchLabDesign.Notation.dot.opacity(0.8))
+            )
+        case .early:
+            // Left-pointing triangle (apex at left).
+            var path = Path()
+            path.move(to: CGPoint(x: point.x - 2, y: point.y))
+            path.addLine(to: CGPoint(x: point.x + 2, y: point.y - 2))
+            path.addLine(to: CGPoint(x: point.x + 2, y: point.y + 2))
+            path.closeSubpath()
+            context.fill(path, with: .color(warning))
+        case .late:
+            // Right-pointing triangle (apex at right).
+            var path = Path()
+            path.move(to: CGPoint(x: point.x + 2, y: point.y))
+            path.addLine(to: CGPoint(x: point.x - 2, y: point.y - 2))
+            path.addLine(to: CGPoint(x: point.x - 2, y: point.y + 2))
+            path.closeSubpath()
+            context.fill(path, with: .color(warning))
+        case .missing:
+            // Open ring drawn near the target lane — "this target
+            // had no captured counterpart".
+            let rect = CGRect(
+                x: point.x - 2, y: point.y - 2, width: 4, height: 4
+            )
+            context.stroke(
+                Path(ellipseIn: rect),
+                with: .color(warning),
+                lineWidth: 1
+            )
+        case .extra:
+            // Filled square near the captured lane — "this captured
+            // stroke had no target counterpart".
+            let rect = CGRect(
+                x: point.x - 2, y: point.y - 2, width: 4, height: 4
+            )
+            context.fill(Path(rect), with: .color(warning))
         }
     }
 

@@ -6625,6 +6625,10 @@ private struct ReviewOverlayPlayableSurface: View {
 
     var body: some View {
         let duration = controller.duration
+        // Slice 4.5 — compute diagnostics once per body invocation
+        // (state change, overlay change) so the per-frame
+        // `TimelineView` closure only re-reads it.
+        let diagnostics = OverlayTimingDiagnostics.compute(overlay: overlay)
         VStack(alignment: .leading, spacing: 8) {
             TimelineView(.animation(paused: !controller.isPlaying)) { context in
                 let hostTime = context.date.timeIntervalSinceReferenceDate
@@ -6632,7 +6636,8 @@ private struct ReviewOverlayPlayableSurface: View {
                 ReviewOverlayLaneView(
                     overlay: overlay,
                     playheadTime: controller.hasTimeline ? cursor : nil,
-                    duration: duration > 0 ? duration : nil
+                    duration: duration > 0 ? duration : nil,
+                    diagnostics: diagnostics
                 )
                 .frame(height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

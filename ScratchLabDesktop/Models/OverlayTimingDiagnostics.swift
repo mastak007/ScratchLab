@@ -218,3 +218,108 @@ struct OverlayStrokeFinding: Equatable, Sendable, Codable {
     /// `.missing`.
     let capturedSourceIndex: Int?
 }
+
+/// Slice 4.5 — one drawable marker positioned on the Review overlay
+/// lane view. Resolves an `OverlayStrokeFinding` to a `(lane,
+/// timeSeconds)` placement so the renderer never has to walk the
+/// `ReviewOverlayTimeline` to look up event start times.
+///
+/// Constructed only by `OverlayTimingDiagnostics.markers(for:)` —
+/// findings whose source indices cannot be resolved against the
+/// supplied overlay are silently dropped (should not occur when the
+/// diagnostics value was produced by `compute(overlay:)` against the
+/// same overlay).
+struct OverlayDiagnosticMarker: Equatable, Sendable {
+
+    /// Which of the two stacked lanes the marker anchors to.
+    enum Lane: String, Sendable {
+        /// Target / ghost lane (top). Used for `.missing` findings —
+        /// "the authored target stroke had no captured counterpart".
+        case target
+        /// Captured / primary lane (bottom). Used for `.matched`,
+        /// `.early`, `.late`, `.extra` findings — they all anchor to
+        /// a captured stroke.
+        case captured
+    }
+
+    let kind: OverlayStrokeFinding.Kind
+    let lane: Lane
+
+    /// Seconds along the overlay axis. Equal to the anchored event's
+    /// `startTime`.
+    let timeSeconds: TimeInterval
+
+    let targetSourceIndex: Int?
+    let capturedSourceIndex: Int?
+}
+
+extension OverlayTimingDiagnostics {
+
+    /// Maps every `OverlayStrokeFinding` to a drawable marker
+    /// anchored at the corresponding event's `startTime` along the
+    /// shared overlay axis. Order matches `findings` order so two
+    /// equal `(diagnostics, overlay)` inputs produce equal output
+    /// arrays — the same determinism guarantee `compute(overlay:)`
+    /// already provides for findings.
+    ///
+    /// Lane anchoring:
+    ///   - `.missing`  → `.target`     (anchored on the target stroke
+    ///                                  that had no captured pair)
+    ///   - everything else → `.captured` (anchored on the captured
+    ///                                  stroke being judged)
+    ///
+    /// Findings whose `targetSourceIndex` / `capturedSourceIndex`
+    /// cannot be resolved against `overlay.target` /
+    /// `overlay.captured` are dropped silently. This should never
+    /// happen when both values come from the same overlay (the slice
+    /// 4.4 `compute(...)` only produces source indices it has just
+    /// read from the same overlay), but the guard keeps the renderer
+    /// safe if a caller hand-builds a mismatched pair.
+    func markers(for overlay: ReviewOverlayTimeline) -> [OverlayDiagnosticMarker] {
+        let targetMovements = overlay.target.events
+            .filter { $0.kind == .recordMovement }
+        let capturedMovements = overlay.captured.events
+            .filter { $0.kind == .recordMovement }
+
+        // Source indices are unique within a lane (one entry per
+        // `recordMovementEvents` array position), so the dictionary
+        // build cannot collide.
+        let targetByIndex = Dictionary(
+            uniqueKeysWithValues: targetMovements.map { ($0.sourceIndex, $0) }
+        )
+        let capturedByIndex = Dictionary(
+            uniqueKeysWithValues: capturedMovements.map { ($0.sourceIndex, $0) }
+        )
+
+        var markers: [OverlayDiagnosticMarker] = []
+        markers.reserveCapacity(findings.count)
+
+        for finding in findings {
+            switch finding.kind {
+            case .matched, .early, .late, .extra:
+                guard let cIndex = finding.capturedSourceIndex,
+                      let captured = capturedByIndex[cIndex]
+                else { continue }
+                markers.append(OverlayDiagnosticMarker(
+                    kind: finding.kind,
+                    lane: .captured,
+                    timeSeconds: captured.startTime,
+                    targetSourceIndex: finding.targetSourceIndex,
+                    capturedSourceIndex: cIndex
+                ))
+            case .missing:
+                guard let tIndex = finding.targetSourceIndex,
+                      let target = targetByIndex[tIndex]
+                else { continue }
+                markers.append(OverlayDiagnosticMarker(
+                    kind: finding.kind,
+                    lane: .target,
+                    timeSeconds: target.startTime,
+                    targetSourceIndex: tIndex,
+                    capturedSourceIndex: nil
+                ))
+            }
+        }
+        return markers
+    }
+}
