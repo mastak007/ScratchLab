@@ -641,9 +641,11 @@ final class ScratchMotionAnalyzer {
         let timingError = abs(forwardStroke.duration - backwardStroke.duration)
         let isBalanced = timingError <= absoluteTimingTolerance
 
+        #if DEBUG
         print("[ScratchMotion] forwardDuration=\(Int((forwardStroke.duration * 1_000).rounded()))ms")
         print("[ScratchMotion] backwardDuration=\(Int((backwardStroke.duration * 1_000).rounded()))ms")
         print("[ScratchMotion] timingError=\(Int((timingError * 1_000).rounded()))ms")
+        #endif
 
         pendingForwardStroke = nil
         pendingBackwardStroke = nil

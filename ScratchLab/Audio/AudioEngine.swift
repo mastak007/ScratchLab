@@ -155,7 +155,9 @@ class AudioEngine: ObservableObject {
             updateAvailableInputs()
             syncInputRouteState()
             let activeInputs = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
+            #if DEBUG
             print("Audio route input: \(activeInputs)")
+            #endif
             
             // Listen for route changes
             NotificationCenter.default.addObserver(
@@ -166,7 +168,9 @@ class AudioEngine: ObservableObject {
             )
             didConfigureAudioSession = true
         } catch {
+            #if DEBUG
             print("Audio session setup error: \(error)")
+            #endif
             lastAudioError = "Audio session could not start."
         }
     }
@@ -274,13 +278,17 @@ class AudioEngine: ObservableObject {
             case .granted:
                 break
             case .denied:
+                #if DEBUG
                 print("Microphone permission denied")
+                #endif
                 lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
                 return
             case .undetermined:
                 AVAudioApplication.requestRecordPermission { [weak self] granted in
                     guard granted else {
+                        #if DEBUG
                         print("Microphone permission denied")
+                        #endif
                         Task { @MainActor in
                             self?.lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
                         }
@@ -299,13 +307,17 @@ class AudioEngine: ObservableObject {
             case .granted:
                 break
             case .denied:
+                #if DEBUG
                 print("Microphone permission denied")
+                #endif
                 lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
                 return
             case .undetermined:
                 session.requestRecordPermission { [weak self] granted in
                     guard granted else {
+                        #if DEBUG
                         print("Microphone permission denied")
+                        #endif
                         Task { @MainActor in
                             self?.lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
                         }
@@ -328,7 +340,9 @@ class AudioEngine: ObservableObject {
         do {
             try session.setActive(true)
         } catch {
+            #if DEBUG
             print("Audio session re-activation error: \(error)")
+            #endif
             lastAudioError = "Audio session could not start."
             return
         }
@@ -347,7 +361,9 @@ class AudioEngine: ObservableObject {
         // Get format
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.channelCount > 0 else {
+            #if DEBUG
             print("No audio input channels available")
+            #endif
             lastAudioError = "No audio input detected on this device."
             teardownAudioEngine()
             return
@@ -381,9 +397,13 @@ class AudioEngine: ObservableObject {
             lastAudioError = nil
             refreshInputMonitorState()
             startMonitorRefresh()
+            #if DEBUG
             print("Audio engine started: \(inputFormat.sampleRate)Hz, channels=\(inputFormat.channelCount)")
+            #endif
         } catch {
+            #if DEBUG
             print("Audio engine start error: \(error)")
+            #endif
             lastAudioError = "Audio engine could not start."
             teardownAudioEngine()
         }
@@ -503,7 +523,9 @@ class AudioEngine: ObservableObject {
             Task { @MainActor in
                 self.lastAnalysisResult = result
                 self.onScratchDetected?(result)
+                #if DEBUG
                 print("Scratch detected: \(result.matchedScratchID ?? "unknown"), accuracy=\(Int(result.accuracy))")
+                #endif
             }
         }
     }
@@ -872,7 +894,9 @@ class AudioEngine: ObservableObject {
         } catch {
             backingTrackPlayer = nil
             backingTrackStatus = .unavailable(name: name)
+            #if DEBUG
             print("Error loading backing track: \(error)")
+            #endif
         }
     }
     
@@ -900,16 +924,20 @@ class AudioEngine: ObservableObject {
     
     func loadSample(named name: String, key: String) {
         guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
+            #if DEBUG
             print("Sample not found: \(name)")
+            #endif
             return
         }
-        
+
         do {
             let player = try AVAudioPlayer(contentsOf: url)
             player.prepareToPlay()
             samplePlayers[key] = player
         } catch {
+            #if DEBUG
             print("Error loading sample: \(error)")
+            #endif
         }
     }
     
@@ -943,12 +971,16 @@ class AudioEngine: ObservableObject {
             case .djApp:
                 // Inter-app audio routing (requires additional setup)
                 // This would use AudioUnit for inter-app audio
+                #if DEBUG
                 print("DJ App input requires Inter-App Audio setup")
+                #endif
             }
             updateAvailableInputs()
             syncInputRouteState()
         } catch {
+            #if DEBUG
             print("Error selecting input source: \(error)")
+            #endif
         }
     }
 }

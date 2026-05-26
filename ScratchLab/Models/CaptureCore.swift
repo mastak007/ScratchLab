@@ -4374,7 +4374,9 @@ final class RoutineSessionStore: ObservableObject {
             try persist()
             sessionOpenHistoryStore.prune(keepingSessionIDs: Set(sessions.map(\.id)))
             sessionOpenHistoryStore.updateLastOpenedAt(sessionID: draft.id)
+            #if DEBUG
             print("NEW_SESSION_CREATED:", draft.id)
+            #endif
             alertState = nil
             logger.info(
                 "Routine session create-new succeeded for sessionID=\(draft.id, privacy: .public)."
