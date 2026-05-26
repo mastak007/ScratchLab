@@ -152,6 +152,7 @@
 		NGP3001000NGP003NGP00001 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
 		NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
 		NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */; };
+		NGF1011000NGF001NGF00001 /* NotationGrammarFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -371,6 +372,7 @@
 		NGP2000000NGP002NGP00001 /* GrammarParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/GrammarParameters.swift; sourceTree = "<group>"; };
 		NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitiveDerivation.swift; sourceTree = "<group>"; };
 		NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarTests.swift; sourceTree = "<group>"; };
+		NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarFixtureTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -484,6 +486,7 @@
 				PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */,
 				BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */,
 				NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */,
+				NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -1174,6 +1177,7 @@
 				PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */,
 				BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */,
 				NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */,
+				NGF1011000NGF001NGF00001 /* NotationGrammarFixtureTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,

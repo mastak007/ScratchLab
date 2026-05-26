@@ -12,12 +12,30 @@ import Foundation
 ///
 /// Because the absolute unit is session-dependent, callers driving the
 /// derivation from real captures may want to override these values
-/// after inspecting `PlatterPositionTimeline.positionRange`. The
-/// `.standard` defaults are chosen to match the local-only baby-scratch
-/// fixture characterised in `AI_HANDOFF.md` (≈ 0.30-unit span over
-/// ≈ 26.5 s with ≈ 9 sign-flips, giving mean speed magnitudes near
-/// 0.2 unit/s). Tests use bespoke parameter values to crisply control
-/// the classification boundaries and stay independent of these defaults.
+/// after inspecting `PlatterPositionTimeline.positionRange`. Tests use
+/// bespoke parameter values to crisply control the classification
+/// boundaries and stay independent of these defaults.
+///
+/// **Defaults are tuned to the local-only baby-scratch fixture's
+/// per-interval velocity distribution**, not to any "perceived stroke"
+/// count. The fixture's `|v|` distribution (computed from
+/// sample-to-sample forward differences) is:
+///
+///     p10 ≈ 0.045   p25 ≈ 0.090   p50 ≈ 0.131
+///     p75 ≈ 0.203   p90 ≈ 0.288   max ≈ 1.328
+///
+/// `idleVelocityEpsilon` sits between p10 and p25 so the slowest tail
+/// of the distribution classifies as idle while genuine motion above
+/// p25 keeps its sign. `cuspVelocityThreshold` sits near p75 so cusp
+/// classification is reserved for the faster half of motion on both
+/// sides of a reversal. The midpoint-crossing count quoted in
+/// `AI_HANDOFF.md` (≈ 9 for this fixture) measures a different signal
+/// — large-scale crossings of the position midline — and is **not**
+/// the target of these defaults; click-anchor seams in the fixture's
+/// linearly-interpolated samples drive derivative-sign-flips at a
+/// granularity well above that count, and the grammar reports that
+/// granular truth honestly rather than smoothing toward a perceptual
+/// number.
 ///
 /// **BPM-agnostic.** No field carries beat, bar, or subdivision
 /// information; the grammar is strictly motion-shaped.
@@ -47,12 +65,13 @@ struct GrammarParameters: Equatable, Sendable, Codable {
         self.cuspVelocityThreshold = cuspVelocityThreshold
     }
 
-    /// Defaults derived from the local-only baby-scratch fixture
-    /// shape. Override per-call when working against a capture whose
-    /// `positionRange` differs materially.
+    /// Defaults tuned to the local-only baby-scratch fixture's
+    /// per-interval velocity distribution (see the type-level doc).
+    /// Override per-call when working against a capture whose
+    /// `positionRange` or sampling cadence differs materially.
     static let standard = GrammarParameters(
-        idleVelocityEpsilon: 0.02,
+        idleVelocityEpsilon: 0.05,
         minimumIdleDwell: 0.05,
-        cuspVelocityThreshold: 0.10
+        cuspVelocityThreshold: 0.20
     )
 }
