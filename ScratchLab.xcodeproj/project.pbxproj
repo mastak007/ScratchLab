@@ -166,6 +166,8 @@
 		ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */; };
 		ORC0001000ORC001ORC00001 /* OverlayReplayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */; };
 		ORT0001000ORT001ORT00001 /* OverlayReplayControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */; };
+		OTD0001000OTD001OTD00001 /* OverlayTimingDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */; };
+		OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */; };
 		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
@@ -374,6 +376,8 @@
 		ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimelineTests.swift; sourceTree = "<group>"; };
 		ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayReplayController.swift; sourceTree = "<group>"; };
 		ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayReplayControllerTests.swift; sourceTree = "<group>"; };
+		OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnostics.swift; sourceTree = "<group>"; };
+		OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnosticsTests.swift; sourceTree = "<group>"; };
 		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
@@ -470,6 +474,7 @@
 				SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */,
 				ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */,
 				ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */,
+				OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */,
 				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
@@ -716,6 +721,7 @@
 			children = (
 				ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */,
 				ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */,
+				OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -989,6 +995,7 @@
 				SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
 				ROT0001000ROT001ROT00001 /* ReviewOverlayTimeline.swift in Sources */,
 				ORC0001000ORC001ORC00001 /* OverlayReplayController.swift in Sources */,
+				OTD0001000OTD001OTD00001 /* OverlayTimingDiagnostics.swift in Sources */,
 				RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */,
 				5EB4210D6F24B3426C9341BB /* SessionSharePresenter.swift in Sources */,
 				F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
@@ -1144,6 +1151,7 @@
 				SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */,
 				ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */,
 				ORT0001000ORT001ORT00001 /* OverlayReplayControllerTests.swift in Sources */,
+				OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */,
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 			);
 		};
