@@ -222,6 +222,9 @@
 		SNA1001000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
 		SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
 		SNA2011000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */; };
+		SRA1001000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
+		SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
+		SRA2011000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */; };
 		DLH2011000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */; };
 		DRN1001000DRN001DRN00001 /* DebugReviewNotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */; };
 		DRN1001000DRN001DRN00002 /* DebugReviewNotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */; };
@@ -499,6 +502,8 @@
 		NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationReplayModelTests.swift; sourceTree = "<group>"; };
 		SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/ScratchNotationPresentationAdapter.swift; sourceTree = "<group>"; };
 		SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPresentationAdapterTests.swift; sourceTree = "<group>"; };
+		SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/SessionReplayPresentationAdapter.swift; sourceTree = "<group>"; };
+		SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayPresentationAdapterTests.swift; sourceTree = "<group>"; };
 		DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugNotationLaneHostViewTests.swift; sourceTree = "<group>"; };
 		DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugReviewNotationCard.swift; sourceTree = "<group>"; };
 		DRT2010000DRT002DRT00001 /* DebugReviewNotationCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugReviewNotationCardTests.swift; sourceTree = "<group>"; };
@@ -643,6 +648,7 @@
 				NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */,
 				NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */,
 				SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */,
+				SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */,
 				DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */,
 				DRT2010000DRT002DRT00001 /* DebugReviewNotationCardTests.swift */,
 				NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */,
@@ -823,6 +829,7 @@
 				NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */,
 				SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */,
 				SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */,
+				SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */,
 				C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */,
 				A2000034 /* ScratchMotionAnalysis.swift */,
 				8EDD250716FA81582843E833 /* WatchMotionCapture.swift */,
@@ -1209,6 +1216,7 @@
 				NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */,
 				NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */,
 				SNA1001000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift in Sources */,
+				SRA1001000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift in Sources */,
 				NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */,
 				NLP1001000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift in Sources */,
 				NLH1001000NLH001NLH00001 /* DebugNotationLaneHostView.swift in Sources */,
@@ -1325,6 +1333,7 @@
 				NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */,
 				NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */,
 				SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */,
+				SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */,
 				NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */,
 				NLP1001000NLP001NLP00002 /* NotationLaneGeometryViewPreview.swift in Sources */,
 				NLH1001000NLH001NLH00002 /* DebugNotationLaneHostView.swift in Sources */,
@@ -1441,6 +1450,7 @@
 				NVW2011000NVW002NVW00001 /* NotationViewportWindowTests.swift in Sources */,
 				NRM2011000NRM002NRM00001 /* NotationReplayModelTests.swift in Sources */,
 				SNA2011000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift in Sources */,
+				SRA2011000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift in Sources */,
 				DLH2011000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift in Sources */,
 				DRT2011000DRT002DRT00001 /* DebugReviewNotationCardTests.swift in Sources */,
 				NLV2011000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift in Sources */,
