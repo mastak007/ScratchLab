@@ -48,7 +48,9 @@ struct DebugNotationLaneHostView: View {
         }
         .background(Color.black)
         .navigationTitle("Notation Lane")
+#if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+#endif
     }
 
     // MARK: Geometry
