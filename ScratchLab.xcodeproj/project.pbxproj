@@ -219,6 +219,7 @@
 		NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
 		NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
 		NRM2011000NRM002NRM00001 /* NotationReplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */; };
+		DLH2011000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */; };
 		NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
 		NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
 		NLP1001000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */; };
@@ -490,6 +491,7 @@
 		NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationViewportWindowTests.swift; sourceTree = "<group>"; };
 		NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationReplayModel.swift; sourceTree = "<group>"; };
 		NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationReplayModelTests.swift; sourceTree = "<group>"; };
+		DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugNotationLaneHostViewTests.swift; sourceTree = "<group>"; };
 		NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryView.swift; sourceTree = "<group>"; };
 		NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryViewPreview.swift; sourceTree = "<group>"; };
 		NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugNotationLaneHostView.swift; sourceTree = "<group>"; };
@@ -630,6 +632,7 @@
 				NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */,
 				NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */,
 				NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */,
+				DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */,
 				NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
@@ -1419,6 +1422,7 @@
 				NGG2011000NGG002NGG00001 /* NotationGridlineGeometryTests.swift in Sources */,
 				NVW2011000NVW002NVW00001 /* NotationViewportWindowTests.swift in Sources */,
 				NRM2011000NRM002NRM00001 /* NotationReplayModelTests.swift in Sources */,
+				DLH2011000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift in Sources */,
 				NLV2011000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,

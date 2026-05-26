@@ -7,21 +7,24 @@ import SwiftUI
 /// with synthetic in-memory geometry for manual inspection.
 ///
 /// **Purpose:** allow a developer to open the notation lane renderer
-/// inside the running app and switch between empty, simple, and dense
-/// geometry presets without touching production Practice/Review flows.
+/// inside the running app and switch between empty, simple, dense,
+/// and frame-stepped replay geometry presets without touching
+/// production Practice/Review flows.
 ///
 /// **No production impact:** the entire file is gated behind `#if DEBUG`
 /// and the navigation entry point is gated the same way inside
 /// `AdvancedHubView`.
 struct DebugNotationLaneHostView: View {
 
-    private enum Preset: String, CaseIterable {
+    enum Preset: String, CaseIterable {
         case empty
         case simple
         case dense
+        case replay
     }
 
     @State private var preset: Preset = .simple
+    @State private var frameIndex: Int = 0
 
     private static let laneWidth: Double = 400
     private static let laneHeight: Double = 200
@@ -35,6 +38,12 @@ struct DebugNotationLaneHostView: View {
             }
             .pickerStyle(.segmented)
             .padding()
+
+            if preset == .replay {
+                replayStepper
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
 
             NotationLaneGeometryView(
                 geometry: geometry,
@@ -53,6 +62,26 @@ struct DebugNotationLaneHostView: View {
 #endif
     }
 
+    // MARK: Replay stepper
+
+    private var replayStepper: some View {
+        let lastIndex = max(0, Self.replayState.frames.count - 1)
+        let safeIndex = min(max(frameIndex, 0), lastIndex)
+        let frameTime = Self.replayState.frames[safeIndex].time
+        return HStack {
+            Stepper(
+                "Frame \(safeIndex) / \(lastIndex)",
+                value: $frameIndex,
+                in: 0...lastIndex
+            )
+            .foregroundStyle(.white)
+            Spacer()
+            Text(String(format: "t = %.2fs", frameTime))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.white)
+        }
+    }
+
     // MARK: Geometry
 
     private var geometry: NotationLaneGeometryModel {
@@ -60,6 +89,7 @@ struct DebugNotationLaneHostView: View {
         case .empty:  return Self.emptyStrokes
         case .simple: return Self.simpleStrokes
         case .dense:  return Self.denseStrokes
+        case .replay: return replayProjection?.laneGeometry ?? Self.emptyStrokes
         }
     }
 
@@ -68,6 +98,7 @@ struct DebugNotationLaneHostView: View {
         case .empty:  return Self.emptyGridlines
         case .simple: return Self.simpleGridlines
         case .dense:  return Self.denseGridlines
+        case .replay: return replayProjection?.gridlineGeometry ?? Self.emptyGridlines
         }
     }
 
@@ -76,7 +107,24 @@ struct DebugNotationLaneHostView: View {
         case .empty:  return nil
         case .simple: return Self.simplePlayhead
         case .dense:  return Self.densePlayhead
+        case .replay: return replayProjection?.playhead
         }
+    }
+
+    private var replayProjection: NotationReplayProjection? {
+        let lastIndex = max(0, Self.replayState.frames.count - 1)
+        let safeIndex = min(max(frameIndex, 0), lastIndex)
+        guard !Self.replayState.frames.isEmpty else { return nil }
+        let frame = Self.replayState.frames[safeIndex]
+        return NotationReplayDriver.project(
+            frame: frame,
+            state: Self.replayState,
+            presentationModel: Self.replayPresentation,
+            timingGrid: Self.replayGrid,
+            viewportRule: Self.replayRule,
+            width: Self.laneWidth,
+            height: Self.laneHeight
+        )
     }
 
     // MARK: Preset data
@@ -189,6 +237,87 @@ struct DebugNotationLaneHostView: View {
         time: 5, x: 200, yTop: 0, yBottom: laneHeight,
         isWithinViewport: true
     )
+
+    // MARK: Replay preset data
+    //
+    // Internal (not private) so the DEBUG-only test target can verify
+    // that the synthetic state is valid and projects deterministically
+    // for every frame. Nothing outside the host depends on these.
+
+    static let replayPresentation: NotationPresentationModel = {
+        NotationPresentationModel(strokes: [
+            NotationPresentationStroke(
+                primitiveIndex: 0,
+                startTime: 0.50, endTime: 1.00,
+                startPosition: nil, endPosition: nil,
+                family: .baby, coachingKinds: []
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 1,
+                startTime: 1.25, endTime: 1.25,
+                startPosition: nil, endPosition: nil,
+                family: nil, coachingKinds: []
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 2,
+                startTime: 2.00, endTime: 2.75,
+                startPosition: nil, endPosition: nil,
+                family: .chirp, coachingKinds: [.lateReversal]
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 3,
+                startTime: 3.50, endTime: 4.00,
+                startPosition: nil, endPosition: nil,
+                family: .flare, coachingKinds: []
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 4,
+                startTime: 5.50, endTime: 5.00,
+                startPosition: nil, endPosition: nil,
+                family: .tear, coachingKinds: []
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 5,
+                startTime: 6.00, endTime: 7.50,
+                startPosition: nil, endPosition: nil,
+                family: .scribble, coachingKinds: [.unstableTiming]
+            ),
+        ])
+    }()
+
+    static let replayGrid: TimingGrid = {
+        // 120 BPM, 4/4, sixteenth-note subdivisions, origin at 0.
+        // Force-unwrap is safe — all inputs are constant and valid.
+        TimingGrid(
+            beatsPerMinute: 120,
+            beatsPerBar: 4,
+            subdivisionsPerBeat: 4,
+            origin: 0
+        )!
+    }()
+
+    static let replayRule: NotationViewportWindowRule = {
+        // 4 s window with 1 s of pre-roll behind the playhead.
+        NotationViewportWindowRule(duration: 4, leadIn: 1)!
+    }()
+
+    static let replayState: NotationReplayState = {
+        // 17 frames at 0.5 s steps covering [0, 8] inside an 8 s take.
+        // Indices are 0..16, strictly ascending — satisfies the
+        // state's `frames` invariant trivially.
+        var frames: [NotationReplayFrame] = []
+        frames.reserveCapacity(17)
+        for i in 0..<17 {
+            let time = Double(i) * 0.5
+            // Force-unwrap is safe — index ≥ 0 and time is finite.
+            frames.append(NotationReplayFrame(index: i, time: time)!)
+        }
+        return NotationReplayState(
+            contentStart: 0,
+            contentEnd: 8,
+            frames: frames
+        )!
+    }()
 }
 
 #endif
