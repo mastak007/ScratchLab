@@ -161,6 +161,9 @@
 		SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
 		SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
 		SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */; };
+		ROT0001000ROT001ROT00001 /* ReviewOverlayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */; };
+		RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */; };
+		ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -363,6 +366,9 @@
 		SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayTimelineTests.swift; sourceTree = "<group>"; };
 		SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayClock.swift; sourceTree = "<group>"; };
 		SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayClockTests.swift; sourceTree = "<group>"; };
+		ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimeline.swift; sourceTree = "<group>"; };
+		RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayLaneView.swift; sourceTree = "<group>"; };
+		ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimelineTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -456,6 +462,7 @@
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
 				SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */,
+				ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -669,6 +676,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000001 /* ScratchLabDesktopApp.swift */,
+				ROM0000000ROM001ROM00001 /* Models */,
 				B5000002 /* Views */,
 				B5000003 /* Services */,
 				B2000010 /* AppIcon.icns */,
@@ -690,8 +698,17 @@
 				SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */,
 				SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */,
 				SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */,
+				RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		ROM0000000ROM001ROM00001 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */,
+			);
+			path = Models;
 			sourceTree = "<group>";
 		};
 		B5000003 /* Services */ = {
@@ -961,6 +978,8 @@
 				SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				SQA0001000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */,
 				SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
+				ROT0001000ROT001ROT00001 /* ReviewOverlayTimeline.swift in Sources */,
+				RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */,
 				5EB4210D6F24B3426C9341BB /* SessionSharePresenter.swift in Sources */,
 				F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
 				F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */,
@@ -1113,6 +1132,7 @@
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
 				SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */,
+				ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
