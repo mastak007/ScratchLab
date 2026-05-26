@@ -82,3 +82,5 @@ offline_eval_outputs/
 # SOUL.md / PROFILE.md; never bundled, never scored, never committed.
 reference_frames/
 reference_videos/
+context.txt
+debug_captures/

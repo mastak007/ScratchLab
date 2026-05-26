@@ -233,7 +233,7 @@ struct ScratchCoachRigView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Coach Rig")
+                Text("Scratch Guide")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(theme.primaryTextColor)
 

@@ -247,7 +247,7 @@ struct MainMenuView: View {
 
             MenuButton(
                 title: "Advanced / Mac Companion",
-                subtitle: "Demo, Mac relay tools, and experimental previews",
+                subtitle: "Demo, Mac relay tools, and advanced settings",
                 icon: "slider.horizontal.3",
                 accent: Color(hex: "64748B"),
                 action: { showingAdvancedHub = true }

@@ -179,13 +179,17 @@ private enum CoachPreviewLoader {
             forResource: CoachPreviewConstants.resourceName,
             withExtension: CoachPreviewConstants.resourceExtension
         ) else {
+#if DEBUG
             print("[CoachPreview] bundleURL=nil")
+#endif
             throw CoachPreviewError.missingBundleURL
         }
 
         let fileExists = FileManager.default.fileExists(atPath: bundleURL.path)
+#if DEBUG
         print("[CoachPreview] bundleURL=\(bundleURL.absoluteString)")
         print("[CoachPreview] fileExists=\(fileExists)")
+#endif
 
         guard fileExists else {
             throw CoachPreviewError.missingBundleFile(bundleURL)
@@ -198,18 +202,24 @@ private enum CoachPreviewLoader {
         let rootName = displayName(for: rootEntity, fallback: "\(CoachPreviewConstants.resourceName).usdz root")
         let rootChildNames = flattenedChildNames(from: rootEntity)
 
+#if DEBUG
         print("[CoachPreview] rootEntity.name=\(rootName)")
         print("[CoachPreview] rootEntity.childNames=\(rootChildNames.joined(separator: ", "))")
+#endif
 
         do {
             let namedEntity = try await Entity(named: CoachPreviewConstants.entityName, in: Bundle.main)
+#if DEBUG
             let namedEntityName = displayName(for: namedEntity, fallback: "<unnamed named entity>")
             print("[CoachPreview] namedEntity.loadSucceeded=true")
             print("[CoachPreview] namedEntity.name=\(namedEntityName)")
             print("[CoachPreview] namedEntity.childNames=\(flattenedChildNames(from: namedEntity).joined(separator: ", "))")
+#endif
         } catch {
+#if DEBUG
             print("[CoachPreview] namedEntity.loadSucceeded=false error=\(String(reflecting: error))")
             print("[CoachPreview] namedEntity.fallback=rootEntity")
+#endif
         }
 
         var coachEntity = rootEntity
@@ -237,9 +247,11 @@ private enum CoachPreviewLoader {
         logBounds(label: "finalBounds", bounds: framedBounds)
 
         let animationCount = coachEntity.availableAnimations.count
+#if DEBUG
         print("[CoachPreview] loadSucceeded=true")
         print("[CoachPreview] resolvedEntityName=\(rootName)")
         print("[CoachPreview] availableAnimations.count=\(animationCount)")
+#endif
 
         var startedAnimation = false
         var animationController: AnimationPlaybackController?
@@ -250,15 +262,21 @@ private enum CoachPreviewLoader {
                 startsPaused: false
             )
             startedAnimation = true
+#if DEBUG
             print("[CoachPreview] animationRepeatStarted=true")
+#endif
         } else {
+#if DEBUG
             print("[CoachPreview] animationRepeatStarted=false")
+#endif
         }
 
         let finalTransform = coachEntity.transform
+#if DEBUG
         print("[CoachPreview] finalScale=\(formatVector(finalTransform.scale))")
         print("[CoachPreview] finalTranslation=\(formatVector(finalTransform.translation))")
         print("[CoachPreview] finalRotation=\(formatQuaternion(finalTransform.rotation))")
+#endif
 
         return LoadedCoachEntity(
             entity: coachEntity,
@@ -370,10 +388,12 @@ private enum CoachPreviewLoader {
     }
 
     private static func logBounds(label: String, bounds: BoundingBox) {
+#if DEBUG
         print("[CoachPreview] \(label).min=\(formatVector(bounds.min))")
         print("[CoachPreview] \(label).max=\(formatVector(bounds.max))")
         print("[CoachPreview] \(label).center=\(formatVector(bounds.center))")
         print("[CoachPreview] \(label).extents=\(formatVector(bounds.extents))")
+#endif
     }
 
     static func formatVector(_ vector: SIMD3<Float>) -> String {
@@ -860,7 +880,9 @@ struct CoachPreviewView: View {
         case .idleLoop:
             resetTrainerToNeutral()
         case .forwardScratch:
+#if DEBUG
             print("[CoachTrainerMode] Forward Scratch")
+#endif
             let demoToken = beginMotionDemo()
             motionDemoTask = Task { @MainActor in
                 await runScratchPulse(
@@ -869,7 +891,9 @@ struct CoachPreviewView: View {
                 )
             }
         case .backScratch:
+#if DEBUG
             print("[CoachTrainerMode] Back Scratch")
+#endif
             let demoToken = beginMotionDemo()
             motionDemoTask = Task { @MainActor in
                 await runScratchPulse(
@@ -878,7 +902,9 @@ struct CoachPreviewView: View {
                 )
             }
         case .babyScratchDemo:
+#if DEBUG
             print("[CoachTrainerMode] Baby Scratch Demo started")
+#endif
             let demoToken = beginMotionDemo()
             motionDemoTask = Task { @MainActor in
                 await runBabyScratchDemo(demoToken: demoToken)
@@ -1012,7 +1038,9 @@ struct CoachPreviewView: View {
             }
         }
 
+#if DEBUG
         print("[CoachTrainerMode] Baby Scratch Demo completed")
+#endif
         finishMotionDemoIfCurrent(demoToken)
     }
 
@@ -1257,9 +1285,11 @@ struct CoachPreviewView: View {
         direction: CoachScratchDirection,
         velocityApprox: Double
     ) {
+#if DEBUG
         print("[CoachTrainer] scratchValue=\(formattedScratchValue(value))")
         print("[CoachTrainer] direction=\(direction.rawValue)")
         print("[CoachTrainer] velocityApprox=\(formattedSignedMeasurement(velocityApprox))")
+#endif
     }
 
     private func scratchDirection(for value: Double) -> CoachScratchDirection {
@@ -1378,8 +1408,10 @@ private struct CoachPreviewARViewContainer: UIViewRepresentable {
             guard snapshot != lastPlatterSnapshot else { return }
             lastPlatterSnapshot = snapshot
 
+#if DEBUG
             print("[CoachTrainer3D] platterRotation=\(CoachPreviewLoader.formatDecimal(rotationDegrees))")
             print("[CoachTrainer3D] scratchValue=\(String(format: "%+.2f", scratchValue))")
+#endif
         }
     }
 
