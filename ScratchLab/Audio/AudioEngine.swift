@@ -78,6 +78,22 @@ class AudioEngine: ObservableObject {
     // permission failure path so the UI can show something instead of a
     // silent "Microphone Ready" pill. Cleared on a successful `start()`.
     @Published var lastAudioError: String?
+
+    #if DEBUG
+    // Diagnostic-only raw-input recording. Captures the same float
+    // samples the matcher consumes, writes a mono WAV to /tmp, and
+    // surfaces the URL so the file can be exchanged with off-device
+    // debugging tooling. Never wired into Release builds, never used
+    // for analysis, never retained as a Practice artefact.
+    @Published var isDebugRecording: Bool = false
+    @Published var lastDebugRecordingURL: URL?
+    private struct DebugInputCapture {
+        var samples: [Float]
+        let targetSampleCount: Int
+        var sampleRate: Double
+    }
+    private var debugInputCapture: DebugInputCapture?
+    #endif
     
     // Backing track playback
     @Published var isBackingTrackPlaying: Bool = false
@@ -381,6 +397,11 @@ class AudioEngine: ObservableObject {
         monitorRefreshTask?.cancel()
         monitorRefreshTask = nil
 
+        #if DEBUG
+        debugInputCapture = nil
+        isDebugRecording = false
+        #endif
+
         if let inputNode, isInputTapInstalled {
             inputNode.removeTap(onBus: 0)
             isInputTapInstalled = false
@@ -444,6 +465,14 @@ class AudioEngine: ObservableObject {
                 self.scratchMotionFeedback = motionFeedback
             }
         }
+
+        #if DEBUG
+        // Diagnostic input recorder — captures the exact float samples the
+        // matcher will consume on the next analysis hop. Active only when
+        // `startDebugRecording(durationSeconds:)` has been invoked from the
+        // Practice DEBUG button. Zero overhead when no capture is active.
+        appendDebugSamples(samples, sampleRate: packet.sampleRate)
+        #endif
 
         // Add to analysis buffer
         analysisBuffer.append(contentsOf: samples)
@@ -701,6 +730,111 @@ class AudioEngine: ObservableObject {
         refreshInputMonitorState()
     }
 
+    #if DEBUG
+    // MARK: - Debug Input Recording (DEBUG-only)
+    //
+    // Captures the next `durationSeconds` of float samples from the input
+    // tap and writes them as a mono PCM16 WAV to the app's tmp directory.
+    // The capture path runs from the same callback as the matcher
+    // (`processAudioBuffer → appendDebugSamples`), so the file represents
+    // exactly what the matcher saw. Not retained, not analysed, not
+    // exported via the Practice/Capture pipelines. Compiled out of
+    // Release builds via `#if DEBUG`.
+
+    func startDebugRecording(durationSeconds: TimeInterval = 20) {
+        guard isRunning else { return }
+        guard debugInputCapture == nil else { return }
+        let sampleRate = currentAnalysisSampleRate > 0 ? currentAnalysisSampleRate : 44100
+        let target = max(1, Int(sampleRate * durationSeconds))
+        var capture = DebugInputCapture(samples: [], targetSampleCount: target, sampleRate: sampleRate)
+        capture.samples.reserveCapacity(target)
+        debugInputCapture = capture
+        isDebugRecording = true
+        print("[DEBUG] Input recording started: target \(target) samples at \(Int(sampleRate)) Hz")
+    }
+
+    private func appendDebugSamples(_ newSamples: [Float], sampleRate: Double) {
+        guard var capture = debugInputCapture else { return }
+        capture.sampleRate = sampleRate
+        capture.samples.append(contentsOf: newSamples)
+        guard capture.samples.count >= capture.targetSampleCount else {
+            debugInputCapture = capture
+            return
+        }
+        // Trim to exactly target, clear capture, write off the audio path.
+        let finalSamples = Array(capture.samples.prefix(capture.targetSampleCount))
+        let finalSampleRate = capture.sampleRate
+        debugInputCapture = nil
+        let outURL = Self.debugRecordingURL()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            do {
+                try Self.writeMonoWAV(samples: finalSamples,
+                                      sampleRate: finalSampleRate,
+                                      to: outURL)
+                print("[DEBUG] Input recording saved: \(outURL.path)")
+                Task { @MainActor in
+                    self?.lastDebugRecordingURL = outURL
+                    self?.isDebugRecording = false
+                }
+            } catch {
+                print("[DEBUG] Input recording write error: \(error)")
+                Task { @MainActor in
+                    self?.isDebugRecording = false
+                    self?.lastAudioError = "Debug recording failed to save."
+                }
+            }
+        }
+    }
+
+    private static func debugRecordingURL() -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        return tmp.appendingPathComponent("scratchlab_input_\(stamp).wav")
+    }
+
+    private static func writeMonoWAV(samples: [Float], sampleRate: Double, to url: URL) throws {
+        let frameCount = samples.count
+        let channels: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let bytesPerSample: UInt16 = bitsPerSample / 8
+        let sampleRateU32 = UInt32(sampleRate.rounded())
+        let byteRate = sampleRateU32 * UInt32(channels) * UInt32(bytesPerSample)
+        let dataSize = UInt32(frameCount) * UInt32(channels) * UInt32(bytesPerSample)
+        let riffSize = 36 + dataSize
+
+        var data = Data()
+        data.reserveCapacity(44 + Int(dataSize))
+
+        func appendLE<T: FixedWidthInteger>(_ value: T) {
+            var v = value.littleEndian
+            withUnsafeBytes(of: &v) { data.append(contentsOf: $0) }
+        }
+
+        data.append(contentsOf: Array("RIFF".utf8))
+        appendLE(riffSize)
+        data.append(contentsOf: Array("WAVE".utf8))
+        data.append(contentsOf: Array("fmt ".utf8))
+        appendLE(UInt32(16))               // fmt chunk size
+        appendLE(UInt16(1))                // PCM
+        appendLE(channels)
+        appendLE(sampleRateU32)
+        appendLE(byteRate)
+        appendLE(UInt16(channels * bytesPerSample))  // block align
+        appendLE(bitsPerSample)
+        data.append(contentsOf: Array("data".utf8))
+        appendLE(dataSize)
+
+        for sample in samples {
+            let clamped = max(-1.0, min(1.0, sample))
+            let int16 = Int16(clamped * 32767)
+            appendLE(int16)
+        }
+
+        try data.write(to: url, options: .atomic)
+    }
+    #endif
+
     // Periodic tick that re-evaluates `inputMonitorState` so the UI pill
     // can leave `.micLive` and reach `.noSignal` when no buffers are
     // arriving. Without this, the pill is only refreshed from the tap
@@ -852,7 +986,18 @@ class ScratchPatternMatcher {
     // Collected samples for comparison
     private var collectedFeatures: [AudioFeatures] = []
     private let defaultRequiredSamples = 6
-    private let babyRequiredSamples = 6
+    // Baby Scratch buffer widened from 6 (~140 ms) → 12 (~280 ms) so the
+    // matcher's rolling window can fit the two-onset Baby Scratch structure
+    // it scores against (`expectedOnsetCount = 2` in `BabyTrainingProfile`).
+    // At 6 samples a single Baby stroke produced one onset in the window;
+    // `peakAccuracy`, `strengthBalanceScore` and `spacingScore` then fell
+    // back to their "fewer than 2 onsets" placeholders and the multi-factor
+    // accuracy total hovered just above the 38.0 floor (see cxl.mov real-
+    // world sample diagnostic, May 2026). Other knobs — `hasFreshBabyAttack`
+    // thresholds, `quietResetThreshold`, `quietFramesRequired`,
+    // `detectionCooldown`, `minimumAccuracy`, FFT / waveform / frequency
+    // scoring — are deliberately unchanged.
+    private let babyRequiredSamples = 12
     private var analysisHopSeconds = 2048.0 / 44100.0
     private var lastDetectionDate: Date?
     private var lastDetectionScratchID: String?

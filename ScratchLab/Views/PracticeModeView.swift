@@ -395,6 +395,20 @@ struct PracticeModeView: View {
                     }
                 }
                 
+                #if DEBUG
+                // Diagnostic-only: floats top-right so it does not disturb
+                // the active Practice layout in either orientation. Visible
+                // only while a session is live, when the engine is running.
+                if isSessionActive {
+                    debugInputRecordOverlay
+                        .padding(.top, geometry.safeAreaInsets.top + 12)
+                        .padding(.trailing, 16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: .topTrailing)
+                        .allowsHitTesting(true)
+                }
+                #endif
+
                 // Accuracy burst animation
                 if showAccuracyBurst {
                     AccuracyBurstView(accuracy: lastAccuracyValue)
@@ -797,6 +811,59 @@ struct PracticeModeView: View {
         }
     }
 
+    #if DEBUG
+    // Diagnostic-only Practice control. Tapping starts a 20-second raw
+    // input capture in `AudioEngine` (DEBUG-only path); the saved WAV
+    // path is logged to console and surfaced under the button so it can
+    // be lifted off-device for matcher debugging. Never wired into
+    // Release builds; never feeds analysis, scoring, or export.
+    private var debugInputRecordOverlay: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Button {
+                audioEngine.startDebugRecording()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: audioEngine.isDebugRecording
+                          ? "record.circle.fill"
+                          : "waveform.badge.mic")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(audioEngine.isDebugRecording
+                                         ? Color(hex: "F44336")
+                                         : .white)
+                    Text(audioEngine.isDebugRecording
+                         ? "Recording input…"
+                         : "Record 20s Input")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.black.opacity(0.6), in: Capsule())
+                .overlay(
+                    Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(audioEngine.isDebugRecording || !audioEngine.isRunning)
+
+            if let url = audioEngine.lastDebugRecordingURL {
+                Text("Saved: \(url.lastPathComponent)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.75))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.5), in: Capsule())
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(audioEngine.isDebugRecording
+                            ? "Recording input"
+                            : "Record twenty seconds of input")
+    }
+    #endif
+
     // Compact microphone status: a state dot plus the live input level.
     // In iPhone landscape the level indicator is suppressed — its underlying
     // HStack-of-20-bars overflows the 46pt frame and collides with the
@@ -924,9 +991,9 @@ struct PracticeModeView: View {
         if let lane = activeLane {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text("TARGET PATTERN")
+                    Text("TARGET PATTERN · REFERENCE")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.55))
+                        .foregroundColor(.white.opacity(0.85))
                     Spacer()
                     notationStatusChip
                 }
