@@ -158,6 +158,9 @@
 		SRT0001000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
 		SRT0002000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
 		SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */; };
+		SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
+		SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
+		SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -358,6 +361,8 @@
 		SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionQualityAnalyzerTests.swift; sourceTree = "<group>"; };
 		SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayTimeline.swift; sourceTree = "<group>"; };
 		SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayTimelineTests.swift; sourceTree = "<group>"; };
+		SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayClock.swift; sourceTree = "<group>"; };
+		SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayClockTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -450,6 +455,7 @@
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
+				SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -643,6 +649,7 @@
 				F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */,
 				SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */,
 				SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */,
+				SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -953,6 +960,7 @@
 				C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */,
 				SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				SQA0001000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */,
+				SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
 				5EB4210D6F24B3426C9341BB /* SessionSharePresenter.swift in Sources */,
 				F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
 				F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */,
@@ -1039,6 +1047,7 @@
 				F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */,
 				SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				SQA0002000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */,
+				SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
 				6A677B41D9030E13F18D6FF9 /* SessionSharePresenter.swift in Sources */,
 				F3000002A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
 				1564CE6A18C3FD1BE1056920 /* Archive+BackingConfiguration.swift in Sources */,
@@ -1103,6 +1112,7 @@
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
+				SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
