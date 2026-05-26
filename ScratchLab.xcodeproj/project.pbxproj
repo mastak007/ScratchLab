@@ -216,6 +216,9 @@
 		NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
 		NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
 		NVW2011000NVW002NVW00001 /* NotationViewportWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */; };
+		NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
+		NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
+		NLV2011000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
 		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
@@ -478,6 +481,8 @@
 		NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGridlineGeometryTests.swift; sourceTree = "<group>"; };
 		NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationViewportWindow.swift; sourceTree = "<group>"; };
 		NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationViewportWindowTests.swift; sourceTree = "<group>"; };
+		NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryView.swift; sourceTree = "<group>"; };
+		NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryViewTests.swift; sourceTree = "<group>"; };
 		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
@@ -613,6 +618,7 @@
 				NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */,
 				NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */,
 				NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */,
+				NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */,
 				SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */,
 				SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */,
 				SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */,
@@ -742,6 +748,7 @@
 				A2000033 /* ScratchCoachViews.swift */,
 				C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */,
 				VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */,
+				NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -1168,6 +1175,7 @@
 				NPH1001000NPH001NPH00001 /* NotationPlayheadGeometry.swift in Sources */,
 				NGG1001000NGG001NGG00001 /* NotationGridlineGeometry.swift in Sources */,
 				NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */,
+				NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
 				C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */,
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
@@ -1278,6 +1286,7 @@
 				NPH1001000NPH001NPH00002 /* NotationPlayheadGeometry.swift in Sources */,
 				NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */,
 				NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */,
+				NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
 				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
 				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
@@ -1388,6 +1397,7 @@
 				NPH2011000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift in Sources */,
 				NGG2011000NGG002NGG00001 /* NotationGridlineGeometryTests.swift in Sources */,
 				NVW2011000NVW002NVW00001 /* NotationViewportWindowTests.swift in Sources */,
+				NLV2011000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift in Sources */,
 				SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */,
 				SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */,
 				SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */,
