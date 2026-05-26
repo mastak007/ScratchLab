@@ -3907,6 +3907,7 @@ struct MacAnalyzerView: View {
 
                 reviewTargetNotationStageCard
                 reviewCapturedNotationStageCard
+                reviewOverlayDiffStageCard
                 reviewAudioOnsetPreviewStageCard
                 reviewSummaryFooterCard
             }
@@ -4175,6 +4176,88 @@ struct MacAnalyzerView: View {
         }
         .padding(16)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// Slice 4.2 — read-only overlay diff viewer card. Renders the
+    /// authored target notation under the captured/detected notation on
+    /// a shared time axis so timing drift shows as horizontal
+    /// separation. No editing, no approve/reject, no scoring, no
+    /// playback controls — visual comparison only. Hides itself behind
+    /// explicit empty-state copy when either side is missing.
+    @ViewBuilder
+    private var reviewOverlayDiffStageCard: some View {
+        let scratchType = routineSessionSetup.scratchType ?? .babyScratch
+        let targetNotation: ScratchNotation? =
+            (scratchType == .babyScratch) ? ScratchNotation.babyScratch : nil
+        let capturedSnapshot = currentRoutineNotationSnapshot
+        let hasCaptured = capturedSnapshot?.hasDetectedEvents ?? false
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Overlay review")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Text("Visual only · timing comparison")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            if let targetNotation,
+               let capturedSnapshot,
+               hasCaptured {
+                let capturedDuration = capturedSnapshot.capturedEvidenceEndTime
+                    ?? max(0, targetNotation.timelineDuration)
+                let overlay = ReviewOverlayTimeline.build(
+                    targetNotation: targetNotation,
+                    capturedSnapshot: capturedSnapshot,
+                    capturedDuration: capturedDuration
+                )
+                ReviewOverlayLaneView(overlay: overlay, currentTime: 0)
+                    .frame(height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Text("Target (dim) over captured (primary). Drift shows as horizontal separation.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+            } else {
+                reviewOverlayDiffEmptyState(
+                    hasTarget: targetNotation != nil,
+                    hasCaptured: hasCaptured
+                )
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func reviewOverlayDiffEmptyState(
+        hasTarget: Bool,
+        hasCaptured: Bool
+    ) -> some View {
+        let title: String
+        let subtitle: String
+        if !hasTarget && !hasCaptured {
+            title = "Capture a take to compare timing"
+            subtitle = "No target notation available · No captured notation available"
+        } else if !hasTarget {
+            title = "No target notation available"
+            subtitle = "Pick a scratch type with a reference pattern to enable overlay comparison."
+        } else {
+            title = "No captured notation available"
+            subtitle = "Capture a take to compare timing against the target."
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+            Text(subtitle)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var reviewSummaryFooterCard: some View {

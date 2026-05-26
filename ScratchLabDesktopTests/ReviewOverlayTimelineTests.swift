@@ -190,6 +190,71 @@ final class ReviewOverlayTimelineTests: XCTestCase {
         XCTAssertEqual(clamped, overlay.displayDurationSeconds)
     }
 
+    // MARK: - Notation-based builder (Slice 4.2 wiring)
+
+    func testNotationBuilderProjectsStrokesAsMovementEvents() {
+        let notation = makeNotation(strokes: [
+            (startTime: 0.0, endTime: 0.5, direction: .forward),
+            (startTime: 0.5, endTime: 1.0, direction: .backward),
+            (startTime: 1.0, endTime: 1.5, direction: .forward)
+        ], phraseEnd: 2.0)
+        let captured = snapshot(audio: [(startTime: 0.6, kind: "scratchBurst")])
+
+        let overlay = ReviewOverlayTimeline.build(
+            targetNotation: notation,
+            capturedSnapshot: captured,
+            capturedDuration: 2.0
+        )
+
+        XCTAssertEqual(overlay.target.takeDurationSeconds, 2.0)
+        XCTAssertEqual(overlay.target.events.count, 3)
+        XCTAssertEqual(overlay.target.events.map(\.kind), [.recordMovement, .recordMovement, .recordMovement])
+        XCTAssertEqual(overlay.target.events.map(\.tag), ["forward", "backward", "forward"])
+        XCTAssertEqual(overlay.target.events.map(\.sourceIndex), [0, 1, 2])
+        XCTAssertEqual(overlay.target.events.map(\.startTime), [0.0, 0.5, 1.0])
+        XCTAssertEqual(overlay.captured.events.map(\.startTime), [0.6])
+        XCTAssertEqual(overlay.displayDurationSeconds, 2.0)
+    }
+
+    func testNotationBuilderIsDeterministicAcrossInvocations() {
+        let notation = makeNotation(strokes: [
+            (startTime: 0.0, endTime: 0.5, direction: .forward),
+            (startTime: 0.5, endTime: 1.0, direction: .backward)
+        ], phraseEnd: 1.0)
+        let captured = snapshot(
+            movements: [(startTime: 0.1, direction: "forward")]
+        )
+
+        let first = ReviewOverlayTimeline.build(
+            targetNotation: notation,
+            capturedSnapshot: captured,
+            capturedDuration: 1.5
+        )
+        let second = ReviewOverlayTimeline.build(
+            targetNotation: notation,
+            capturedSnapshot: captured,
+            capturedDuration: 1.5
+        )
+        XCTAssertEqual(first, second)
+        // Joint span uses the larger of the two — captured (1.5) > notation (1.0).
+        XCTAssertEqual(first.displayDurationSeconds, 1.5)
+    }
+
+    func testNotationBuilderEmptyStrokesProducesEmptyTargetLane() {
+        let notation = makeNotation(strokes: [], phraseEnd: 0.0)
+        let captured = snapshot()
+
+        let overlay = ReviewOverlayTimeline.build(
+            targetNotation: notation,
+            capturedSnapshot: captured,
+            capturedDuration: 0.0
+        )
+        XCTAssertTrue(overlay.target.events.isEmpty)
+        XCTAssertTrue(overlay.captured.events.isEmpty)
+        XCTAssertTrue(overlay.isEmpty)
+        XCTAssertEqual(overlay.displayDurationSeconds, 0.0)
+    }
+
     // MARK: - Helpers
 
     private func makeOverlay(
@@ -247,6 +312,31 @@ final class ReviewOverlayTimelineTests: XCTestCase {
             faderEvents: [],
             mixerMidiEvents: [],
             capturedAt: Self.referenceDate
+        )
+    }
+
+    private func makeNotation(
+        strokes: [(startTime: TimeInterval, endTime: TimeInterval, direction: ScratchNotationDirection)],
+        phraseEnd: TimeInterval
+    ) -> ScratchNotation {
+        let strokeValues = strokes.map { stroke in
+            ScratchNotation.Stroke(
+                startTime: stroke.startTime,
+                endTime: stroke.endTime,
+                direction: stroke.direction,
+                speedClassification: .medium,
+                faderState: .open
+            )
+        }
+        return ScratchNotation(
+            version: 1,
+            scratchID: "test_pattern",
+            demoStart: 0,
+            demoEnd: phraseEnd,
+            phraseStart: 0,
+            phraseEnd: phraseEnd,
+            timingBasis: "test",
+            strokes: strokeValues
         )
     }
 }

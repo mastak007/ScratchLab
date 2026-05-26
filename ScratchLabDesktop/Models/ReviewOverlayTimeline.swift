@@ -63,6 +63,56 @@ struct ReviewOverlayTimeline: Equatable, Sendable {
         )
     }
 
+    /// Slice 4.2 — builds an overlay where the target lane is
+    /// projected from an authored `ScratchNotation` (the reference
+    /// pattern that the Review surface already loads). Each
+    /// `ScratchNotation.Stroke` becomes one `SessionReplayEvent` with
+    /// `kind = .recordMovement`, `tag = direction.rawValue` (`forward`
+    /// / `backward`), and `sourceIndex` = the stroke's position in the
+    /// notation array.
+    ///
+    /// The projection is visual-only: it does not feed scoring,
+    /// export, or sidecars and does not introduce a new event format —
+    /// the produced `SessionReplayTimeline` has the canonical
+    /// `currentSchemaVersion`. Sort order matches
+    /// `SessionReplayTimeline.build(from:takeDuration:)` so two
+    /// overlays built from identical inputs compare equal.
+    static func build(
+        targetNotation: ScratchNotation,
+        capturedSnapshot: CaptureCore.DetectedNotationSnapshot,
+        capturedDuration: Double
+    ) -> ReviewOverlayTimeline {
+        var events: [SessionReplayEvent] = []
+        events.reserveCapacity(targetNotation.strokes.count)
+        for (index, stroke) in targetNotation.strokes.enumerated() {
+            events.append(SessionReplayEvent(
+                startTime: stroke.startTime,
+                endTime: stroke.endTime,
+                kind: .recordMovement,
+                sourceIndex: index,
+                tag: stroke.direction.rawValue
+            ))
+        }
+        events.sort { lhs, rhs in
+            if lhs.startTime != rhs.startTime {
+                return lhs.startTime < rhs.startTime
+            }
+            if lhs.kind != rhs.kind {
+                return lhs.kind < rhs.kind
+            }
+            return lhs.sourceIndex < rhs.sourceIndex
+        }
+        let target = SessionReplayTimeline(
+            takeDurationSeconds: max(0, targetNotation.timelineDuration),
+            events: events
+        )
+        let captured = SessionReplayTimeline.build(
+            from: capturedSnapshot,
+            takeDuration: max(0, capturedDuration)
+        )
+        return ReviewOverlayTimeline(target: target, captured: captured)
+    }
+
     /// True when neither timeline carries any events to render. The
     /// overlay view is still safe to instantiate in this state — the
     /// lane simply renders empty with the cursor pinned at `0`.
