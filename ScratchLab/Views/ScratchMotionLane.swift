@@ -29,6 +29,12 @@ import SwiftUI
 
 struct ScratchMotionLane: View {
 
+    /// The shared audio pipeline. The lane reads `inputLevel` (already
+    /// IIR-smoothed inside AudioEngine) to drive the action-line breathing
+    /// effect — see `actionLineBreathOffset()`. No other audio surface is
+    /// touched; the lane never consumes mic samples directly.
+    @EnvironmentObject private var audioEngine: AudioEngine
+
     /// What the lane renders — strokes, demo/copy bands, tempo, duration.
     let content: LaneContent
     /// The timing master.
@@ -419,7 +425,7 @@ struct ScratchMotionLane: View {
     /// receives no pulse — the line stays at the static 0.8.
     private func drawActionLine(in context: GraphicsContext, viewport: LaneViewport,
                                 segment: LaneSegment?) {
-        let pos = viewport.actionLinePos
+        let pos = viewport.actionLinePos + actionLineBreathOffset()
         let tint: Color = switch segment?.kind {
         case .copy: Self.copyAccent
         case .demo: Self.demoAccent
@@ -440,6 +446,24 @@ struct ScratchMotionLane: View {
                                        width: dotRadius * 2, height: dotRadius * 2)),
                 with: .color(tint))
         }
+    }
+
+    // MARK: - Action-line breathing (mic input level)
+
+    /// Maximum forward shift, in scroll-axis points, that the action line
+    /// receives at full input level. Capped tight so the breathing reads
+    /// as a quiet "the screen is listening" cue, not a timing distortion.
+    private static let actionLineBreathMaxOffset: CGFloat = 2.0
+
+    /// Action-line scroll-axis shift driven by `audioEngine.inputLevel`.
+    /// Returns 0 when the breathing flag is off, or when no audio is
+    /// flowing (silent input ≈ 0 level). AudioEngine already IIR-smooths
+    /// the level (70/30 inside `installTap`), so no additional damping is
+    /// applied here — adding lane-side smoothing would only add lag.
+    private func actionLineBreathOffset() -> CGFloat {
+        guard FeatureFlags.inputBreathingEnabled else { return 0 }
+        let clamped = max(0, min(1, CGFloat(audioEngine.inputLevel)))
+        return clamped * Self.actionLineBreathMaxOffset
     }
 
     // MARK: - Action-line pulse
