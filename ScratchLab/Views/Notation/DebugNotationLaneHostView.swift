@@ -58,6 +58,7 @@ struct DebugNotationLaneHostView: View {
     @State private var replaySource: ReplaySource = .handBuilt
     @State private var frameIndex: Int = 0
     @State private var phraseOverlayEnabled: Bool = DebugNotationLaneHostView.phraseOverlayDefaultEnabled
+    @State private var substrateOverlayEnabled: Bool = DebugNotationLaneHostView.substrateOverlayDefaultEnabled
 
     private static let laneWidth: Double = 400
     private static let laneHeight: Double = 200
@@ -68,6 +69,12 @@ struct DebugNotationLaneHostView: View {
     /// only when the user explicitly switches it on. Exposed `static`
     /// so the DEBUG-only test target can lock the default.
     static let phraseOverlayDefaultEnabled: Bool = false
+
+    /// Default state of the Phase B0 substrate-visibility toggle. Opt-in
+    /// for the same reasons as `phraseOverlayDefaultEnabled`; relevant
+    /// only in the `.replay` preset because the overlay's coordinate
+    /// space matches the replay viewport.
+    static let substrateOverlayDefaultEnabled: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -92,6 +99,12 @@ struct DebugNotationLaneHostView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 6)
 
+            if preset == .replay {
+                substrateOverlayToggle
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+            }
+
             NotationLaneGeometryView(
                 geometry: geometry,
                 gridlines: gridlines,
@@ -99,6 +112,15 @@ struct DebugNotationLaneHostView: View {
             )
             .frame(height: Self.laneHeight)
             .padding(.horizontal)
+            .overlay {
+                if preset == .replay,
+                   substrateOverlayEnabled,
+                   let overlayGeometry {
+                    DebugSubstrateOverlay(overlay: overlayGeometry)
+                        .frame(height: Self.laneHeight)
+                        .padding(.horizontal)
+                }
+            }
 
             if phraseOverlayEnabled {
                 phraseOverlayStrip
@@ -157,6 +179,18 @@ struct DebugNotationLaneHostView: View {
         Toggle("Phrase overlay (debug)", isOn: $phraseOverlayEnabled)
             .toggleStyle(.switch)
             .tint(.orange)
+            .foregroundStyle(.white)
+            .font(.caption)
+    }
+
+    /// Phase B0 substrate-visibility toggle. Renders projected phrase
+    /// boundaries (cyan vertical lines) and drift coaching markers
+    /// (info/warning dots) on top of the replay lane. Available only in
+    /// the `.replay` preset because the overlay shares its viewport.
+    private var substrateOverlayToggle: some View {
+        Toggle("Substrate overlay (debug)", isOn: $substrateOverlayEnabled)
+            .toggleStyle(.switch)
+            .tint(ScratchLabPalette.headingCyan)
             .foregroundStyle(.white)
             .font(.caption)
     }
@@ -232,6 +266,20 @@ struct DebugNotationLaneHostView: View {
         case .dense:  return Self.densePlayhead
         case .replay: return replayProjection?.playhead
         }
+    }
+
+    /// Substrate overlay geometry for the active replay frame. Re-uses
+    /// the same `NotationLaneViewport` the lane renders into so the
+    /// overlay's phrase boundaries land exactly above the lane's
+    /// strokes. Returns `nil` when not in the `.replay` preset.
+    private var overlayGeometry: DebugSubstrateOverlayGeometry? {
+        guard preset == .replay, let projection = replayProjection else { return nil }
+        return DebugSubstrateOverlayMapper.makeOverlay(
+            boundaries: Self.substratePhraseBoundaries,
+            coachingEvents: Self.substrateDriftEvents,
+            grid: Self.replayGrid,
+            viewport: projection.viewport
+        )
     }
 
     private var replayProjection: NotationReplayProjection? {
@@ -571,6 +619,48 @@ struct DebugNotationLaneHostView: View {
 
     static let phraseGridSummary: AudioPhraseGridSummary = {
         AudioPhraseGridProjector.project(phraseSummary, onto: replayGrid)
+    }()
+
+    // MARK: Substrate overlay fixture (Phase B0)
+    //
+    // DEBUG-only synthetic phrase + drift sources for the substrate
+    // overlay. The 8-second replay content at 120 BPM in 4/4 lays out
+    // four bars, so two-bar phrases sit at startBars 0 and 2 (i.e.
+    // covering 0–4 s and 4–8 s). Drift events are hand-crafted so the
+    // catalog produces one late and one early marker.
+
+    static let substratePhrases: [Phrase] = [
+        // Force-unwraps are safe — barCount > 0 is the only init guard.
+        Phrase(startBar: 0, barCount: 2)!,
+        Phrase(startBar: 2, barCount: 2)!,
+    ]
+
+    static let substratePhraseBoundaries: [PhraseBoundary] = {
+        PhraseBoundaryMapper.boundaries(phrases: substratePhrases, using: replayGrid)
+    }()
+
+    static let substrateDriftRule: DriftCoachingRule = {
+        // 50 ms thresholds — wider than the late/early offsets baked
+        // into the fixture so DriftCoachingEvaluator emits exactly one
+        // late + one early event.
+        DriftCoachingRule(lateThreshold: 0.05, earlyThreshold: 0.05)!
+    }()
+
+    static let substrateDrifts: [TimingDrift] = [
+        TimingDrift(primitiveIndex: 0,
+                    expectedTime: 2.00,
+                    actualTime: 2.08,
+                    drift: 0.08,
+                    isWithinWindow: false),
+        TimingDrift(primitiveIndex: 1,
+                    expectedTime: 5.50,
+                    actualTime: 5.42,
+                    drift: -0.08,
+                    isWithinWindow: false),
+    ]
+
+    static let substrateDriftEvents: [CoachingEvent] = {
+        DriftCoachingEvaluator.events(from: substrateDrifts, using: substrateDriftRule)
     }()
 
     static let replayState: NotationReplayState = {
