@@ -28,6 +28,7 @@ struct MacAnalyzerView: View {
         case practice
         case capture
         case review
+        case studio
         case advanced
 
         var id: String { rawValue }
@@ -37,6 +38,7 @@ struct MacAnalyzerView: View {
             case .practice: return "Practice"
             case .capture: return "Capture"
             case .review: return "Review"
+            case .studio: return "Studio"
             case .advanced: return "Advanced"
             }
         }
@@ -46,6 +48,7 @@ struct MacAnalyzerView: View {
             case .practice: return "figure.disc.sports"
             case .capture: return "record.circle"
             case .review: return "checkmark.seal.fill"
+            case .studio: return "rectangle.stack.fill"
             case .advanced: return "slider.horizontal.3"
             }
         }
@@ -67,6 +70,8 @@ struct MacAnalyzerView: View {
             }
         }
     }
+
+    @State private var studioSelectedSessionID: String?
 
     private enum CaptureTarget: String, CaseIterable, Identifiable {
         case autoDetect
@@ -391,6 +396,14 @@ struct MacAnalyzerView: View {
                 }
                 .tag(WorkspaceTab.review)
 
+            if FeatureFlags.studioModeEnabled {
+                studioWorkspace
+                    .tabItem {
+                        Label(WorkspaceTab.studio.title, systemImage: WorkspaceTab.studio.systemImage)
+                    }
+                    .tag(WorkspaceTab.studio)
+            }
+
             advancedWorkspace
                 .tabItem {
                     Label(WorkspaceTab.advanced.title, systemImage: WorkspaceTab.advanced.systemImage)
@@ -591,6 +604,29 @@ struct MacAnalyzerView: View {
 
             NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
         }
+    }
+
+    /// Phase D0 — Studio tab body. Reachable only when
+    /// `FeatureFlags.studioModeEnabled` is on; the tab itself is hidden
+    /// from `TabView` otherwise so release builds present zero new
+    /// surfaces. Sidebar lists existing `RoutineSessionStore.sessions`
+    /// in last-activity order; stage renders the placeholder host until
+    /// D-A1+ analytic surfaces plug in.
+    private var studioWorkspace: some View {
+        HSplitView {
+            StudioSessionPickerView(
+                store: routineSessionStore,
+                selection: $studioSelectedSessionID
+            )
+            .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
+
+            StudioSessionHostView(selectedDraft: studioSelectedDraft)
+        }
+    }
+
+    private var studioSelectedDraft: RoutineSessionDraft? {
+        guard let id = studioSelectedSessionID else { return nil }
+        return routineSessionStore.sessions.first(where: { $0.id == id })
     }
 
     private var practiceSidebar: some View {

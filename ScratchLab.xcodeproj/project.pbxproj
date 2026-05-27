@@ -300,6 +300,8 @@
 		F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
 		F6EB3C16D803B47D9D2E8BA5 /* Archive+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */; };
 		F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000002 /* MacAnalyzerView.swift */; };
+		STP1001000STP001STP00001 /* StudioSessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STP1000000STP001STP00001 /* StudioSessionPickerView.swift */; };
+		STH1001000STH001STH00001 /* StudioSessionHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STH1000000STH001STH00001 /* StudioSessionHostView.swift */; };
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
@@ -454,6 +456,8 @@
 		AC927BE2AC20BBF592338F0B /* Entry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
 		B2000001 /* ScratchLabDesktopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesktopApp.swift; sourceTree = "<group>"; };
 		B2000002 /* MacAnalyzerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAnalyzerView.swift; sourceTree = "<group>"; };
+		STP1000000STP001STP00001 /* StudioSessionPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioSessionPickerView.swift; sourceTree = "<group>"; };
+		STH1000000STH001STH00001 /* StudioSessionHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioSessionHostView.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
@@ -970,6 +974,8 @@
 			isa = PBXGroup;
 			children = (
 				B2000002 /* MacAnalyzerView.swift */,
+				STP1000000STP001STP00001 /* StudioSessionPickerView.swift */,
+				STH1000000STH001STH00001 /* StudioSessionHostView.swift */,
 				B2000003 /* MacCameraPreviewView.swift */,
 				B2000004 /* HandMotionOverlay.swift */,
 				B2000009 /* DeckGamificationOverlay.swift */,
@@ -1214,6 +1220,8 @@
 			files = (
 				B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */,
 				F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */,
+				STP1001000STP001STP00001 /* StudioSessionPickerView.swift in Sources */,
+				STH1001000STH001STH00001 /* StudioSessionHostView.swift in Sources */,
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
 				DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */,
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
