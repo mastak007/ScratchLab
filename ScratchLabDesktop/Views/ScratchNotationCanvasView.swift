@@ -40,14 +40,14 @@ struct ScratchNotationCanvasView: View {
     private let playheadFraction: Double = 0.30
 
     // Palette
-    private let bgRecord    = Color(white: 0.11)
-    private let bgFader     = Color(white: 0.085)
-    private let gridMajor   = Color(white: 0.22)
-    private let gridMinor   = Color(white: 0.155)
-    private let playheadCol = Color.white
-    private let faderOpenCol   = Color(red: 0.20, green: 0.88, blue: 0.55).opacity(0.7)
-    private let faderClosedCol = Color(red: 1.00, green: 0.25, blue: 0.25).opacity(0.85)
-    private let cutCol         = Color(white: 0.90)
+    private let bgRecord    = ScratchLabPalette.notationCanvasRecord
+    private let bgFader     = ScratchLabPalette.notationCanvasFader
+    private let gridMajor   = ScratchLabPalette.notationGridMajor
+    private let gridMinor   = ScratchLabPalette.notationGridMinorDense
+    private let playheadCol = ScratchLabPalette.notationPlayhead
+    private let faderOpenCol   = ScratchLabPalette.notationForward.opacity(0.7)
+    private let faderClosedCol = ScratchLabPalette.notationFaderClosed.opacity(0.85)
+    private let cutCol         = ScratchLabPalette.notationCutMark
 
     var body: some View {
         Canvas { ctx, size in

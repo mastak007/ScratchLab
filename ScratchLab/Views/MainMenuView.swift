@@ -118,7 +118,7 @@ struct MainMenuView: View {
                         
                         Text("Live practice")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(hex: "7DD3FC"))
+                            .foregroundColor(ScratchLabPalette.headingCyan)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -163,7 +163,7 @@ struct MainMenuView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("LIVE INPUT READY")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Color(hex: "7DD3FC"))
+                .foregroundColor(ScratchLabPalette.headingCyan)
 
             Text("Run live scratch practice on this device with the microphone or a wired USB/interface input. You can also use it for deck video, performer monitor, and watch motion capture with ScratchLab on your main device.")
                 .font(.system(size: 15, weight: .medium))
@@ -171,13 +171,13 @@ struct MainMenuView: View {
 
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
-                    StatusBadge(label: "Practice", value: "Live input", color: Color(hex: "22C55E"))
-                    StatusBadge(label: "Audio", value: "Mic or USB", color: Color(hex: "0EA5E9"))
+                    StatusBadge(label: "Practice", value: "Live input", color: ScratchLabPalette.success)
+                    StatusBadge(label: "Audio", value: "Mic or USB", color: ScratchLabPalette.info)
                 }
 
                 HStack(spacing: 8) {
-                    StatusBadge(label: "Camera", value: "Deck video", color: Color(hex: "F59E0B"))
-                    StatusBadge(label: "Sync", value: "Optional", color: Color(hex: "6366F1"))
+                    StatusBadge(label: "Camera", value: "Deck video", color: ScratchLabPalette.warning)
+                    StatusBadge(label: "Sync", value: "Optional", color: ScratchLabPalette.link)
                 }
             }
 
@@ -187,7 +187,7 @@ struct MainMenuView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("WATCH RELAY")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Color(hex: "A78BFA"))
+                    .foregroundColor(ScratchLabPalette.headingViolet)
 
                 Text(watchRelayStatusText)
                     .font(.system(size: 14, weight: .medium))
@@ -198,12 +198,12 @@ struct MainMenuView: View {
                     StatusBadge(
                         label: "Relay",
                         value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
-                        color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
+                        color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? ScratchLabPalette.neutralDim : ScratchLabPalette.success
                     )
                     StatusBadge(
                         label: "Watch",
                         value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
-                        color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
+                        color: watchMotionCaptureStore.isWatchReachable ? ScratchLabPalette.success : ScratchLabPalette.neutralIdle
                     )
                 }
             }
@@ -225,7 +225,7 @@ struct MainMenuView: View {
                 title: "Practice",
                 subtitle: "Hear the scratch, see the notation, copy it. Live mic listens.",
                 icon: "waveform",
-                accent: Color(hex: "22C55E"),
+                accent: ScratchLabPalette.success,
                 action: { showingPracticeHub = true }
             )
 
@@ -233,7 +233,7 @@ struct MainMenuView: View {
                 title: "Capture",
                 subtitle: "On-device take capture is coming.",
                 icon: "record.circle",
-                accent: Color(hex: "F59E0B"),
+                accent: ScratchLabPalette.warning,
                 action: { showingCapturePlaceholder = true }
             )
 
@@ -241,7 +241,7 @@ struct MainMenuView: View {
                 title: "Review",
                 subtitle: "On-device review is coming.",
                 icon: "list.bullet.rectangle",
-                accent: Color(hex: "0EA5E9"),
+                accent: ScratchLabPalette.info,
                 action: { showingReviewPlaceholder = true }
             )
 
@@ -433,7 +433,7 @@ private struct AdvancedHubView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("WATCH RELAY")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Color(hex: "A78BFA"))
+                .foregroundColor(ScratchLabPalette.headingViolet)
 
             Text(watchRelayStatusText)
                 .font(.system(size: 14, weight: .medium))
@@ -444,12 +444,12 @@ private struct AdvancedHubView: View {
                 StatusBadge(
                     label: "Relay",
                     value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
-                    color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
+                    color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? ScratchLabPalette.neutralDim : ScratchLabPalette.success
                 )
                 StatusBadge(
                     label: "Watch",
                     value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
-                    color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
+                    color: watchMotionCaptureStore.isWatchReachable ? ScratchLabPalette.success : ScratchLabPalette.neutralIdle
                 )
             }
         }
@@ -468,7 +468,7 @@ private struct AdvancedHubView: View {
                 title: "Try Demo",
                 subtitle: "See scratch feedback instantly",
                 icon: "play.circle.fill",
-                accent: Color(hex: "FFD700"),
+                accent: ScratchLabPalette.demoGold,
                 action: { showingDemoMode = true }
             )
 
@@ -478,7 +478,7 @@ private struct AdvancedHubView: View {
                     ? "Use ScratchLabDesktop on Mac for capture. Companion Camera is for iPhone hardware."
                     : "Send deck video to your main device",
                 icon: "iphone.gen3.radiowaves.left.and.right",
-                accent: Color(hex: "F59E0B"),
+                accent: ScratchLabPalette.warning,
                 action: { showingCompanionCam = true }
             )
 
@@ -486,7 +486,7 @@ private struct AdvancedHubView: View {
                 title: "Performer Monitor",
                 subtitle: performerMonitorSubtitle,
                 icon: performerMonitorIcon,
-                accent: Color(hex: "0EA5E9"),
+                accent: ScratchLabPalette.info,
                 action: { showingPerformerMonitor = true }
             )
 
@@ -494,7 +494,7 @@ private struct AdvancedHubView: View {
                 title: "Watch Capture",
                 subtitle: "Import wrist motion and relay it back to Mac capture",
                 icon: "applewatch.side.right",
-                accent: Color(hex: "6366F1"),
+                accent: ScratchLabPalette.link,
                 action: { showingWatchCapture = true }
             )
 
@@ -513,7 +513,7 @@ private struct AdvancedHubView: View {
                 title: "Virtual Platter Prototype",
                 subtitle: "Developer-only scratch-on-glass slice (no capture/ML)",
                 icon: "circle.circle",
-                accent: Color(hex: "F59E0B"),
+                accent: ScratchLabPalette.warning,
                 action: { showingVirtualPlatterPrototype = true }
             )
             #endif
@@ -548,7 +548,7 @@ private struct DemoModeView: View {
     @State private var isBuildingExportPackage = false
 
     private let theme = ScratchCoachCardTheme(
-        accentColor: Color(hex: "FFD700"),
+        accentColor: ScratchLabPalette.demoGold,
         primaryTextColor: .white,
         secondaryTextColor: .white.opacity(0.72),
         bubbleFill: Color.white.opacity(0.08),
@@ -576,7 +576,7 @@ private struct DemoModeView: View {
         case .listening:
             return Color(hex: "38BDF8")
         case .balanced:
-            return Color(hex: "22C55E")
+            return ScratchLabPalette.success
         case .unbalanced:
             return Color(hex: "EF4444")
         }
@@ -662,7 +662,7 @@ private struct DemoModeView: View {
 
                 HStack(spacing: 7) {
                     Circle()
-                        .fill(demoController.isReady ? Color(hex: "22C55E") : Color(hex: "F59E0B"))
+                        .fill(demoController.isReady ? ScratchLabPalette.success : ScratchLabPalette.warning)
                         .frame(width: 8, height: 8)
 
                     Text("Demo Mode")
@@ -686,8 +686,8 @@ private struct DemoModeView: View {
             }
 
             HStack(spacing: 8) {
-                demoStatusBadge(label: "Audio", value: "Bundled WAV", color: Color(hex: "FFD700"))
-                demoStatusBadge(label: "Hardware", value: "Not Required", color: Color(hex: "22C55E"))
+                demoStatusBadge(label: "Audio", value: "Bundled WAV", color: ScratchLabPalette.demoGold)
+                demoStatusBadge(label: "Hardware", value: "Not Required", color: ScratchLabPalette.success)
             }
         }
     }
@@ -814,7 +814,7 @@ private struct DemoModeView: View {
                 .foregroundColor(.black)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
-                .background(Color(hex: "FFD700"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(ScratchLabPalette.demoGold, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .disabled(isBuildingExportPackage || exportCoordinator.isPreparing)
         }
@@ -896,7 +896,7 @@ private struct DemoModeView: View {
             .foregroundColor(enabled ? .black : .white.opacity(0.5))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background(enabled ? Color(hex: "FFD700") : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(enabled ? ScratchLabPalette.demoGold : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .disabled(!enabled)
     }
@@ -1078,7 +1078,7 @@ struct ProfileStat: View {
         VStack(spacing: 4) {
             Text(value)
                 .font(.system(size: 24, weight: .bold))
-                .foregroundColor(Color(hex: "FFD700"))
+                .foregroundColor(ScratchLabPalette.demoGold)
             Text(label)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.6))
@@ -1114,7 +1114,7 @@ struct SettingsView: View {
                                     Spacer()
                                     if selectedInput == source {
                                         Image(systemName: "checkmark")
-                                            .foregroundColor(Color(hex: "FFD700"))
+                                            .foregroundColor(ScratchLabPalette.demoGold)
                                     }
                                 }
                             }
@@ -1504,7 +1504,7 @@ private struct IPadPerformerMonitorView: View {
                             .font(.system(size: 12, weight: .bold))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(Color(hex: "0EA5E9"))
+                            .background(ScratchLabPalette.info)
                             .foregroundColor(.white)
                             .cornerRadius(12)
                         }
@@ -1534,7 +1534,7 @@ private struct IPadPerformerMonitorView: View {
                         .font(.system(size: 12, weight: .bold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
-                        .background(Color(hex: "0EA5E9"))
+                        .background(ScratchLabPalette.info)
                         .foregroundColor(.white)
                         .cornerRadius(12)
                     }
@@ -1581,7 +1581,7 @@ private struct IPadPerformerMonitorView: View {
             .font(.system(size: 14, weight: .bold))
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
-            .background(Color(hex: "0EA5E9"))
+            .background(ScratchLabPalette.info)
             .foregroundColor(.white)
             .cornerRadius(14)
 
@@ -1725,11 +1725,11 @@ private struct IPadPerformerMonitorStage: View {
     private func highlightColor(for role: String) -> Color {
         switch role {
         case "leftDeck":
-            return Color(hex: "F59E0B")
+            return ScratchLabPalette.warning
         case "mixer":
             return Color(hex: "06B6D4")
         case "rightDeck":
-            return Color(hex: "22C55E")
+            return ScratchLabPalette.success
         default:
             return Color.white
         }
