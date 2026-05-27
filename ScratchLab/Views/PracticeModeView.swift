@@ -2510,6 +2510,21 @@ struct ResultsOverlayView: View {
 
     private func visible(_ stage: Int) -> Bool { effectiveStage >= stage }
 
+    /// Honest-failure advisory string. Computed from existing signals
+    /// already plumbed into the overlay — no new data is pulled in. Two
+    /// tiers based on detected mic attempt count:
+    ///   - 0 attempts → "didn't pick up any attempts" copy
+    ///   - 1 or 2 attempts → "only a few attempts" copy
+    ///   - 3+ attempts → no callout (normal take)
+    /// Returns nil when the flag is off so the overlay shape is identical
+    /// to pre-A9 when disabled.
+    private var honestFailureAdvice: String? {
+        guard FeatureFlags.honestFailureResultsCalloutEnabled else { return nil }
+        if attempts == 0 { return CoachCopy.LowSignal.noAttempts }
+        if attempts < 3  { return CoachCopy.LowSignal.fewAttempts }
+        return nil
+    }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.9)
@@ -2545,7 +2560,14 @@ struct ResultsOverlayView: View {
                 .opacity(visible(2) ? 1 : 0)
                 .animation(.easeOut(duration: 0.25), value: effectiveStage)
 
-                // Phase 3 — supplementary surfaces: timing preview, detail note, progress meter.
+                // Phase 3 — supplementary surfaces: callout, timing preview, detail note, progress meter.
+                if let advice = honestFailureAdvice {
+                    HonestFailureCallout(text: advice)
+                        .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
+                }
+
                 if let takeEvidence {
                     PracticeTimingPreviewCard(summary: takeEvidence)
                         .padding(.horizontal, 32)
@@ -2657,6 +2679,33 @@ struct ResultStat: View {
         .padding(.vertical, 16)
         .background(Color.white.opacity(0.05))
         .cornerRadius(12)
+    }
+}
+
+// Advisory card shown in ResultsOverlayView when the take produced few
+// or zero mic attempts. Mirrors PracticeTimingPreviewCard's quiet styling
+// so it reads as supplementary context, not a judgment. Copy strictly via
+// CoachCopy.LowSignal — no PROFILE.md banned phrases.
+fileprivate struct HonestFailureCallout: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lightbulb")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white.opacity(0.65))
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.78))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(Color.white.opacity(0.04))
+        .cornerRadius(10)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(text)
     }
 }
 

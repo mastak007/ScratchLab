@@ -114,6 +114,17 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Honest-failure callouts (results overlay)
+    //
+    // Advisory copy that follows the PROFILE.md vocab discipline: no
+    // "failed" / "wrong" / "AI" / "classifier" / "accuracy". Each string
+    // describes what was observed and proposes a concrete next step.
+
+    enum LowSignal {
+        static let noAttempts  = "We didn't pick up any attempts on this take. Check your input and run it again when you're ready."
+        static let fewAttempts = "Only a few attempts came through on this take. Run it again when you're ready."
+    }
+
     // MARK: Practice-timing preview card
     //
     // PROFILE.md-compliant preview surface. Required vocab: "on-device audio

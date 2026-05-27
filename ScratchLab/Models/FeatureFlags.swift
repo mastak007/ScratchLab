@@ -12,6 +12,7 @@ enum FeatureFlags {
     static var beatPulseEnabled: Bool       { isOn("BEAT_PULSE",       releaseDefault: true) }
     static var inputBreathingEnabled: Bool  { isOn("INPUT_BREATHING",  releaseDefault: true) }
     static var sessionCompletePolishEnabled: Bool { isOn("SESSION_COMPLETE_POLISH", releaseDefault: true) }
+    static var honestFailureResultsCalloutEnabled: Bool { isOn("HONEST_FAILURE_RESULTS_CALLOUT", releaseDefault: true) }
 
     // MARK: Resolution
 
