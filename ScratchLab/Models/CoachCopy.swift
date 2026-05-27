@@ -55,6 +55,15 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Progression
+
+    enum Progression {
+        static let streakStart = "Start a streak"
+        static func streakDay(_ n: Int) -> String {
+            "Day \(n)"
+        }
+    }
+
     // MARK: Practice-timing preview card
     //
     // PROFILE.md-compliant preview surface. Required vocab: "on-device audio

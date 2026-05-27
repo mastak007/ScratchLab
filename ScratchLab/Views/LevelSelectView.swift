@@ -150,12 +150,38 @@ struct LevelSelectView: View {
             Text("LIVE PRACTICE")
                 .font(.system(size: 28, weight: .bold))
                 .foregroundColor(.white)
-            
+
             Text("Pick a scratch first, then open the existing live setup with optional beat guidance and ScratchLab Coach.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
+
+            if FeatureFlags.streakChipEnabled {
+                streakChip
+                    .padding(.top, 4)
+            }
         }
+    }
+
+    private var streakChip: some View {
+        let streak = progressManager.currentStreak
+        let isActive = streak > 0
+        let label = isActive
+            ? CoachCopy.Progression.streakDay(streak)
+            : CoachCopy.Progression.streakStart
+        return HStack(spacing: 6) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(isActive ? ScratchLabPalette.demoGold : .white.opacity(0.35))
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(isActive ? .white : .white.opacity(0.55))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Color.white.opacity(0.06)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
     }
 
     private var practiceSelectionSection: some View {

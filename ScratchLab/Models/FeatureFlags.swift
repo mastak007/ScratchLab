@@ -4,7 +4,12 @@
 import Foundation
 
 enum FeatureFlags {
-    // Phase A flags land here, e.g. `static var streakChipEnabled: Bool { isOn("STREAK_CHIP") }`.
+
+    // MARK: Phase A polish flags
+
+    static var streakChipEnabled: Bool { isOn("STREAK_CHIP", releaseDefault: true) }
+
+    // MARK: Resolution
 
     static func isOn(
         _ key: String,
