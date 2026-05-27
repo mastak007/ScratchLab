@@ -72,6 +72,16 @@ enum CoachCopy {
         static let mastered     = "Mastered"
     }
 
+    // MARK: Recent sessions strip (LevelSelectView)
+
+    enum Recent {
+        static let header     = "RECENT"
+        static let emptyState = "Your recent sessions will appear here"
+        static let today      = "Today"
+        static let yesterday  = "Yesterday"
+        static func daysAgo(_ n: Int) -> String { "\(n)d ago" }
+    }
+
     // MARK: Live practice (LevelSelectView header)
 
     enum Practice {

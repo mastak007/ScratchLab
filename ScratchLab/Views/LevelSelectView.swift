@@ -104,6 +104,11 @@ struct LevelSelectView: View {
                     VStack(spacing: 24) {
                         headerView
 
+                        if FeatureFlags.recentSessionsEnabled {
+                            recentSessionsStrip
+                                .padding(.horizontal, 20)
+                        }
+
                         VStack(spacing: 20) {
                             practiceSelectionSection
                             comboCard
@@ -161,6 +166,71 @@ struct LevelSelectView: View {
                     .padding(.top, 4)
             }
         }
+    }
+
+    private var recentSessions: [SessionResult] {
+        Array(progressManager.sessionHistory.suffix(5).reversed())
+    }
+
+    private var recentSessionsStrip: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(CoachCopy.Recent.header)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.white.opacity(0.5))
+
+            if recentSessions.isEmpty {
+                Text(CoachCopy.Recent.emptyState)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.35))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(recentSessions) { session in
+                            recentSessionChip(session)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func recentSessionChip(_ session: SessionResult) -> some View {
+        let title = (session.scratchName ?? session.mode).uppercased()
+        let percent = "\(Int(session.finalAccuracy))%"
+        let day = Self.relativeDayString(from: session.timestamp)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(1)
+            Text(percent)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.white)
+            Text(day)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.45))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(minWidth: 84, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title) \(percent) \(day)")
+    }
+
+    private static func relativeDayString(from date: Date) -> String {
+        let calendar = Calendar.current
+        let now = Date()
+        if calendar.isDateInToday(date)     { return CoachCopy.Recent.today }
+        if calendar.isDateInYesterday(date) { return CoachCopy.Recent.yesterday }
+        let days = calendar.dateComponents([.day], from: date, to: now).day ?? 0
+        if days < 7 { return CoachCopy.Recent.daysAgo(days) }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
     }
 
     private var masteredPill: some View {

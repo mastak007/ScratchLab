@@ -7,7 +7,8 @@ enum FeatureFlags {
 
     // MARK: Phase A polish flags
 
-    static var streakChipEnabled: Bool { isOn("STREAK_CHIP", releaseDefault: true) }
+    static var streakChipEnabled: Bool      { isOn("STREAK_CHIP",      releaseDefault: true) }
+    static var recentSessionsEnabled: Bool  { isOn("RECENT_SESSIONS",  releaseDefault: true) }
 
     // MARK: Resolution
 
