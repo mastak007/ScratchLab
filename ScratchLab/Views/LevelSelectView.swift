@@ -163,6 +163,22 @@ struct LevelSelectView: View {
         }
     }
 
+    private var masteredPill: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 10, weight: .bold))
+            Text(CoachCopy.ScratchCard.mastered.uppercased())
+                .font(.system(size: 11, weight: .bold))
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(ScratchLabPalette.success)
+        .cornerRadius(999)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(CoachCopy.ScratchCard.mastered)
+    }
+
     private var streakChip: some View {
         let streak = progressManager.currentStreak
         let isActive = streak > 0
@@ -281,6 +297,9 @@ struct LevelSelectView: View {
     @ViewBuilder
     private func practiceScratchCard(for scratch: Scratch) -> some View {
         let isBabyScratch = scratch.id == babyScratch.id
+        let progress = progressManager.getProgressForScratch(scratch.id)
+        let hasHistory = (progress?.practiceCount ?? 0) > 0
+        let isMastered = progress?.isMastered == true
 
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
@@ -297,32 +316,40 @@ struct LevelSelectView: View {
 
                 Spacer()
 
-                Text(isBabyScratch ? "FOUNDATION" : "COACH")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(isBabyScratch ? .black : .white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(isBabyScratch ? Color(hex: "FFD700") : Color(hex: "263238"))
-                    .cornerRadius(999)
+                HStack(spacing: 6) {
+                    Text(isBabyScratch ? "FOUNDATION" : "COACH")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(isBabyScratch ? .black : .white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(isBabyScratch ? Color(hex: "FFD700") : Color(hex: "263238"))
+                        .cornerRadius(999)
+
+                    if isMastered {
+                        masteredPill
+                    }
+                }
             }
 
-            if isBabyScratch {
+            if hasHistory, let progress {
                 HStack(spacing: 16) {
                     StatItem(
                         icon: "star.fill",
-                        value: "\(Int(progressManager.babyScratchProgress?.bestAccuracy ?? 0))%",
-                        label: "Best Accuracy",
-                        color: Color(hex: "FFD700")
+                        value: "\(Int(progress.bestAccuracy))%",
+                        label: CoachCopy.ScratchCard.bestRunLabel,
+                        color: ScratchLabPalette.demoGold
                     )
 
                     StatItem(
                         icon: "waveform.path.ecg",
-                        value: "\(progressManager.babyScratchProgress?.practiceCount ?? 0)",
-                        label: "Attempts",
+                        value: "\(progress.practiceCount)",
+                        label: CoachCopy.ScratchCard.takesLabel,
                         color: Color(hex: "4CAF50")
                     )
                 }
-            } else {
+            }
+
+            if !isBabyScratch {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Coach card and local demo audio load in the same setup overlay after you pick this scratch.")
                         .font(.system(size: 12, weight: .medium))

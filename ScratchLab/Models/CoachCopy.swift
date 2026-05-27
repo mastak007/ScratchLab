@@ -64,6 +64,14 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Per-scratch progress (LevelSelectView cards)
+
+    enum ScratchCard {
+        static let bestRunLabel = "Best Run"
+        static let takesLabel   = "Takes"
+        static let mastered     = "Mastered"
+    }
+
     // MARK: Live practice (LevelSelectView header)
 
     enum Practice {
