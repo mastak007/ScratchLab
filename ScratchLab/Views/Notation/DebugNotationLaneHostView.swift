@@ -108,7 +108,8 @@ struct DebugNotationLaneHostView: View {
             NotationLaneGeometryView(
                 geometry: geometry,
                 gridlines: gridlines,
-                playhead: playhead
+                playhead: playhead,
+                phraseBoundaries: phraseTintBands
             )
             .frame(height: Self.laneHeight)
             .padding(.horizontal)
@@ -280,6 +281,28 @@ struct DebugNotationLaneHostView: View {
             grid: Self.replayGrid,
             viewport: projection.viewport
         )
+    }
+
+    /// Pre-projected phrase tint bands matching the active replay frame.
+    /// Reuses the same `DebugSubstrateOverlayMapper` projection so the
+    /// production lane's phrase wash lines up exactly with the
+    /// debug-only substrate overlay above it. `nil` in non-replay
+    /// presets — there is no shared viewport to project against.
+    private var phraseTintBands: [NotationLanePhraseTint]? {
+        guard preset == .replay, let projection = replayProjection else { return nil }
+        let overlay = DebugSubstrateOverlayMapper.makeOverlay(
+            boundaries: Self.substratePhraseBoundaries,
+            coachingEvents: [],
+            grid: Self.replayGrid,
+            viewport: projection.viewport
+        )
+        return overlay.phraseBoundaries.map { mark in
+            NotationLanePhraseTint(
+                phraseIndex: mark.phraseIndex,
+                xStart: mark.xStart,
+                xEndExclusive: mark.xEndExclusive
+            )
+        }
     }
 
     private var replayProjection: NotationReplayProjection? {

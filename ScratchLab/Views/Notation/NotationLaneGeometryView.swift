@@ -39,10 +39,29 @@ struct NotationLaneGeometryView: View {
     let geometry: NotationLaneGeometryModel
     let gridlines: NotationGridlineGeometryModel
     let playhead: NotationPlayheadGeometry?
+    /// Phase B2 — optional pre-projected phrase tint bands. When present
+    /// and `FeatureFlags.lanePhraseTintEnabled` is on, alternating
+    /// phrases receive a low-alpha vertical wash so the user can read
+    /// musical structure on the lane. Default `nil` keeps every existing
+    /// caller compiling unchanged.
+    let phraseBoundaries: [NotationLanePhraseTint]?
+
+    init(
+        geometry: NotationLaneGeometryModel,
+        gridlines: NotationGridlineGeometryModel,
+        playhead: NotationPlayheadGeometry?,
+        phraseBoundaries: [NotationLanePhraseTint]? = nil
+    ) {
+        self.geometry = geometry
+        self.gridlines = gridlines
+        self.playhead = playhead
+        self.phraseBoundaries = phraseBoundaries
+    }
 
     var body: some View {
         Canvas { context, size in
             drawBackground(in: &context, size: size)
+            drawPhraseTints(in: &context, size: size)
             drawGridlines(in: &context, size: size)
             drawStrokes(in: &context)
             drawPlayhead(in: &context)
@@ -54,6 +73,20 @@ struct NotationLaneGeometryView: View {
     private func drawBackground(in context: inout GraphicsContext, size: CGSize) {
         let rect = CGRect(origin: .zero, size: size)
         context.fill(Path(rect), with: .color(Color.gray.opacity(0.05)))
+    }
+
+    private func drawPhraseTints(in context: inout GraphicsContext, size: CGSize) {
+        guard FeatureFlags.lanePhraseTintEnabled,
+              let bands = phraseBoundaries else { return }
+        for band in bands where band.phraseIndex.isMultiple(of: 2) {
+            let width = max(0, band.xEndExclusive - band.xStart)
+            guard width > 0 else { continue }
+            let rect = CGRect(x: band.xStart, y: 0, width: width, height: size.height)
+            context.fill(
+                Path(rect),
+                with: .color(ScratchLabPalette.headingCyan.opacity(0.06))
+            )
+        }
     }
 
     private func drawGridlines(in context: inout GraphicsContext, size: CGSize) {
@@ -124,4 +157,16 @@ struct NotationLaneGeometryView: View {
         case .subdivision: return (width: 0.5, opacity: 0.18)
         }
     }
+}
+
+// MARK: - NotationLanePhraseTint
+
+/// A single phrase's horizontal span on the lane, in pixel space.
+/// Pure value type — Phase B AR-prep contract: phrase boundary
+/// projection is a pure function of sidecar inputs, consumable by 2D
+/// (`Canvas`) and 3D (`RealityKit`/`ARKit`) renderers without forking.
+struct NotationLanePhraseTint: Equatable, Sendable {
+    let phraseIndex: Int
+    let xStart: Double
+    let xEndExclusive: Double
 }

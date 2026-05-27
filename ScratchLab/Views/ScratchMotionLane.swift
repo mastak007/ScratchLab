@@ -35,6 +35,12 @@ struct ScratchMotionLane: View {
     /// touched; the lane never consumes mic samples directly.
     @EnvironmentObject private var audioEngine: AudioEngine
 
+    /// Phase B2 — reduce-motion gate. When the system has Reduce Motion
+    /// on, the per-hit micro-feedback ring path is skipped so the lane
+    /// renders the same static `drawUserEvents` tick state without
+    /// animated pulses.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// What the lane renders — strokes, demo/copy bands, tempo, duration.
     let content: LaneContent
     /// The timing master.
@@ -230,6 +236,7 @@ struct ScratchMotionLane: View {
                 drawBeatGrid(in: context, viewport: viewport)
                 drawMotionPath(in: context, viewport: viewport)
                 drawUserEvents(in: context, viewport: viewport)
+                drawMicroFeedbackPulses(in: context, viewport: viewport)
                 drawActionLine(in: context, viewport: viewport, segment: currentSegment)
             }
             // Past content fades into a quiet tail. Future stays full
@@ -405,6 +412,56 @@ struct ScratchMotionLane: View {
             context.fill(
                 Path(roundedRect: mark, cornerRadius: 2, style: .continuous),
                 with: .color(.white.opacity(0.85)))
+        }
+    }
+
+    // MARK: - Canvas: per-hit micro-feedback pulse (Phase B2)
+
+    /// Phase B2 per-hit micro-feedback: a brief 180 ms ease-out ring
+    /// centred on each recent `userEvents.endTime`. Visual-only — the
+    /// pulse never affects any scoring or attempt counter. The static
+    /// tick from `drawUserEvents` already records the attempt; this
+    /// ring just confirms it tactilely.
+    ///
+    /// Reduce-motion: when the system has Reduce Motion on, the entire
+    /// pulse path is skipped so the lane shows the static ticks only,
+    /// matching `[[feedback_verification_scope]]`'s "render the same
+    /// state statically" rule. Flag-off path is identical to today.
+    private func drawMicroFeedbackPulses(
+        in context: GraphicsContext,
+        viewport: LaneViewport
+    ) {
+        guard FeatureFlags.laneMicroFeedbackEnabled else { return }
+        guard !reduceMotion else { return }
+        let now = viewport.now
+        let duration: TimeInterval = 0.18
+        let inset = min(max(viewport.crossLength * 0.14, 14), 40)
+        let baseRadius: CGFloat = 4
+        let maxRadius: CGFloat = 16
+        for event in userEvents
+        where event.endTime <= now && (now - event.endTime) <= duration {
+            let progress = (now - event.endTime) / duration
+            // Quadratic ease-out for the opacity fade; linear radius growth.
+            let fade = (1 - progress) * (1 - progress)
+            let radius = baseRadius + (maxRadius - baseRadius) * CGFloat(progress)
+            let opacity = 0.55 * fade
+            let pos = viewport.pos(for: event.endTime)
+            let center = viewport.point(
+                scroll: pos,
+                cross: viewport.crossLength - inset + 7
+            )
+            var ring = Path()
+            ring.addEllipse(in: CGRect(
+                x: center.x - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            ))
+            context.stroke(
+                ring,
+                with: .color(.white.opacity(opacity)),
+                lineWidth: 1.5
+            )
         }
     }
 
