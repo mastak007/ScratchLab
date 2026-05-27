@@ -423,7 +423,7 @@ struct PracticeModeView: View {
                         headline: isComboChallengeMode ? comboResultHeadline : nil,
                         score: currentScore,
                         accuracy: displayedAccuracy,
-                        primaryMetricLabel: isComboChallengeMode ? "Phrase Lock" : "Accuracy",
+                        primaryMetricLabel: isComboChallengeMode ? "Phrase Lock" : CoachCopy.Results.primaryMetricLabel,
                         attempts: attemptCount,
                         bestStreak: bestStreak,
                         detailNote: comboResultDetail,

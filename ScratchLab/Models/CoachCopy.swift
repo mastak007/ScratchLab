@@ -39,10 +39,11 @@ enum CoachCopy {
         static let emojiGoodJob        = "👏"
         static let emojiKeepPracticing = "💪"
 
-        static let scoreLabel      = "Score"
-        static let attemptsLabel   = "Attempts"
-        static let bestStreakLabel = "Best Streak"
-        static let backToLevel     = "Back to Level"
+        static let scoreLabel        = "Score"
+        static let attemptsLabel     = "Attempts"
+        static let bestStreakLabel   = "Best Streak"
+        static let backToLevel       = "Back to Level"
+        static let primaryMetricLabel = "On Beat"
 
         static let progressToPhraseClear = "Progress to Phrase Clear"
         static let progressToMastery     = "Progress to Mastery"
