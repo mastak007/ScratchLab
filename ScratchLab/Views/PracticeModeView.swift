@@ -459,6 +459,7 @@ struct PracticeModeView: View {
                         bestStreak: bestStreak,
                         detailNote: comboResultDetail,
                         takeEvidence: practiceTimingPreviewSummary,
+                        drillSummary: drillSummary,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
                         onContinue: { showingResults = false; resetSession() },
                         onExit: { dismiss() }
@@ -1588,6 +1589,20 @@ struct PracticeModeView: View {
         )
     }
 
+    /// Phase C3 drill summary, derived from existing combo counters.
+    /// Returns nil for non-drill sessions so the card stays absent
+    /// outside structured-drill mode. Visual-only — never feeds scoring
+    /// or persistence.
+    fileprivate var drillSummary: DrillSummary? {
+        guard isComboChallengeMode else { return nil }
+        return DrillSummary(
+            subskillName: activeScratch.name,
+            repetitions: max(0, comboTrackedLoopCount),
+            landedAttempts: max(0, comboBestLockedStepCount),
+            expectedAttempts: max(1, comboTargetStepCount)
+        )
+    }
+
     // Adds a `LaneUserEvent` for the most recent mic detection, mapped to
     // the lane's looping clock. Gated to the three modes that actually run
     // a `.looping` clock — Open is `.fixed(0)` (every event would land at
@@ -2567,6 +2582,19 @@ fileprivate struct TakeEvidenceSummary: Equatable {
     let averageAbsoluteBeatOffsetMs: Double
 }
 
+/// Phase C3 structured drill summary — three honest counters plus one
+/// named subskill, rendered at the end of a structured-drill session
+/// when `FeatureFlags.structuredDrillsEnabled` is on. Counters come
+/// from existing combo state (`comboTrackedLoopCount`,
+/// `comboBestRunCount`, `comboTargetStepCount`); no new persistence,
+/// no scoring effect, no schema touch.
+fileprivate struct DrillSummary: Equatable {
+    let subskillName: String
+    let repetitions: Int
+    let landedAttempts: Int
+    let expectedAttempts: Int
+}
+
 struct ResultsOverlayView: View {
     let scratch: Scratch
     let sessionTitle: String?
@@ -2578,6 +2606,7 @@ struct ResultsOverlayView: View {
     let bestStreak: Int
     let detailNote: String?
     fileprivate var takeEvidence: TakeEvidenceSummary? = nil
+    fileprivate var drillSummary: DrillSummary? = nil
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
@@ -2660,6 +2689,13 @@ struct ResultsOverlayView: View {
 
                 if let takeEvidence {
                     PracticeTimingPreviewCard(summary: takeEvidence)
+                        .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
+                }
+
+                if FeatureFlags.structuredDrillsEnabled, let drillSummary {
+                    DrillSummaryCard(summary: drillSummary)
                         .padding(.horizontal, 32)
                         .opacity(visible(3) ? 1 : 0)
                         .animation(.easeOut(duration: 0.25), value: effectiveStage)
@@ -2796,6 +2832,62 @@ fileprivate struct HonestFailureCallout: View {
         .cornerRadius(10)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(text)
+    }
+}
+
+/// Phase C3 drill summary card. Three honest counters plus one
+/// subskill name. Visual layout mirrors `PracticeTimingPreviewCard`
+/// so the overlay reads as a quiet supplementary surface — never as
+/// a primary score, never with grading verbs.
+fileprivate struct DrillSummaryCard: View {
+    let summary: DrillSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(CoachCopy.DrillSummaryCopy.header)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.55))
+
+            VStack(alignment: .leading, spacing: 6) {
+                row(
+                    label: CoachCopy.DrillSummaryCopy.repetitionsLabel,
+                    value: "\(summary.repetitions)"
+                )
+                row(
+                    label: CoachCopy.DrillSummaryCopy.landedLabel,
+                    value: CoachCopy.DrillSummaryCopy.landedFraction(
+                        landed: summary.landedAttempts,
+                        expected: summary.expectedAttempts
+                    )
+                )
+                row(
+                    label: CoachCopy.DrillSummaryCopy.subskillLabel,
+                    value: summary.subskillName
+                )
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(CoachCopy.DrillSummaryCopy.header), \(CoachCopy.DrillSummaryCopy.repetitionsLabel) \(summary.repetitions), \(CoachCopy.DrillSummaryCopy.landedLabel) \(summary.landedAttempts) of \(summary.expectedAttempts), \(CoachCopy.DrillSummaryCopy.subskillLabel) \(summary.subskillName)"
+        )
+    }
+
+    @ViewBuilder
+    private func row(label: String, value: String) -> some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+        }
     }
 }
 

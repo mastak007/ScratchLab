@@ -159,6 +159,26 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Structured drill summary (Phase C3)
+    //
+    // Visible at the end of a structured-drill (combo) session when
+    // FeatureFlags.structuredDrillsEnabled is on. Three honest counters
+    // plus one named subskill — never any grading verbs. Repetitions
+    // are loops actually completed; landed attempts are the best run's
+    // confirmed steps; the subskill is the active scratch's display
+    // name.
+
+    enum DrillSummaryCopy {
+        static let header              = "DRILL SUMMARY"
+        static let repetitionsLabel    = "Repetitions"
+        static let landedLabel         = "Landed within window"
+        static let subskillLabel       = "Subskill"
+
+        static func landedFraction(landed: Int, expected: Int) -> String {
+            "\(landed)/\(max(1, expected))"
+        }
+    }
+
     // MARK: Honest-failure callouts (results overlay)
     //
     // Advisory copy that follows the PROFILE.md vocab discipline: no
