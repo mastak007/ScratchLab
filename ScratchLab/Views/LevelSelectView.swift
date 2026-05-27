@@ -276,10 +276,83 @@ struct LevelSelectView: View {
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(.white.opacity(0.5))
 
+            if FeatureFlags.unlockLadderEnabled {
+                practiceUnlockLadder
+            }
+
             ForEach(practiceScratchOptions) { scratch in
                 practiceScratchCard(for: scratch)
             }
         }
+    }
+
+    /// Phase B4 multi-scratch unlock ladder. Read-only consumption of
+    /// `ProgressManager.isScratchMastered` and `practiceCount`; never
+    /// writes back. Each step is a small pill — filled `success` when
+    /// the scratch is mastered, dimmed when it has practice history,
+    /// hollow when untouched. Copy honors the Phase B4 doc's stance on
+    /// progression vocabulary (no celebratory verbs).
+    private var practiceUnlockLadder: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(CoachCopy.Progression.availableNextHeader)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(.white.opacity(0.55))
+
+            HStack(spacing: 8) {
+                ForEach(practiceScratchOptions) { scratch in
+                    unlockLadderStep(for: scratch)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func unlockLadderStep(for scratch: Scratch) -> some View {
+        let progress = progressManager.getProgressForScratch(scratch.id)
+        let isMastered = progress?.isMastered == true
+        let practiceCount = progress?.practiceCount ?? 0
+        let hasHistory = practiceCount > 0
+        let fillColor: Color = {
+            if isMastered { return ScratchLabPalette.success }
+            if hasHistory { return Color.white.opacity(0.22) }
+            return Color.white.opacity(0.08)
+        }()
+        let strokeColor: Color = isMastered
+            ? ScratchLabPalette.success.opacity(0.7)
+            : Color.white.opacity(0.18)
+        let textColor: Color = isMastered
+            ? .white
+            : (hasHistory ? .white.opacity(0.85) : .white.opacity(0.55))
+        let label = scratch.name.uppercased()
+        let accessibility: String = {
+            if isMastered {
+                return CoachCopy.Progression.ladderMasteredAccessibility(name: scratch.name)
+            }
+            if hasHistory {
+                return CoachCopy.Progression.ladderInProgressAccessibility(
+                    name: scratch.name,
+                    count: practiceCount
+                )
+            }
+            return CoachCopy.Progression.ladderAvailableAccessibility(name: scratch.name)
+        }()
+        HStack(spacing: 4) {
+            if isMastered {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(textColor)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(fillColor))
+        .overlay(Capsule().stroke(strokeColor, lineWidth: 1))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibility)
     }
 
     private var comboCard: some View {

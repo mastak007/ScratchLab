@@ -63,6 +63,24 @@ enum CoachCopy {
         static func streakDay(_ n: Int) -> String {
             "Day \(n)"
         }
+
+        // Phase B4 — progression visibility. Copy stays declarative and
+        // avoids the PROFILE.md-forbidden progression vocabulary — the
+        // ladder simply shows what is mastered today and what is
+        // available next.
+
+        static let availableNextHeader = "AVAILABLE NEXT"
+        static let inSessionMomentumLabel = "Session progress"
+
+        static func ladderMasteredAccessibility(name: String) -> String {
+            "\(name) mastered"
+        }
+        static func ladderAvailableAccessibility(name: String) -> String {
+            "\(name) available"
+        }
+        static func ladderInProgressAccessibility(name: String, count: Int) -> String {
+            "\(name), \(count) practiced"
+        }
     }
 
     // MARK: Per-scratch progress (LevelSelectView cards)

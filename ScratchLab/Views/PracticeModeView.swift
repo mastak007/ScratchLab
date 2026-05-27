@@ -524,23 +524,29 @@ struct PracticeModeView: View {
                 Spacer()
                 
                 if isSessionActive {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(timeRemaining < 60 ? Color(hex: "F44336") : Color(hex: "22C55E"))
-                            .frame(width: 10, height: 10)
+                    VStack(spacing: 4) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(timeRemaining < 60 ? Color(hex: "F44336") : Color(hex: "22C55E"))
+                                .frame(width: 10, height: 10)
 
-                        Text(formatTime(timeRemaining))
-                            .font(.system(size: 24, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white)
-                            .monospacedDigit()
+                            Text(formatTime(timeRemaining))
+                                .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                                .foregroundColor(.white)
+                                .monospacedDigit()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.52))
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        )
+
+                        if FeatureFlags.inSessionMomentumEnabled {
+                            inSessionMomentumBar
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.52))
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
                 }
                 
                 Spacer()
@@ -691,6 +697,30 @@ struct PracticeModeView: View {
             }
             phraseMomentumChip
         }
+    }
+
+    /// Phase B4 intra-session momentum bar. Visual-only arc that grows
+    /// `0 → 1` over the session as `timeRemaining` ticks down. Derived
+    /// from existing counters; no new persistence, no scoring effect.
+    /// Renders a quiet 2 pt thin bar so the existing countdown chip
+    /// stays dominant.
+    private var inSessionMomentumBar: some View {
+        let total = max(activeSessionDuration, 0.001)
+        let elapsed = max(0, total - max(timeRemaining, 0))
+        let fraction = min(max(elapsed / total, 0), 1)
+        return GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.10))
+                Capsule()
+                    .fill(ScratchLabPalette.success.opacity(0.85))
+                    .frame(width: geo.size.width * fraction)
+            }
+        }
+        .frame(width: 140, height: 3)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(CoachCopy.Progression.inSessionMomentumLabel)
+        .accessibilityValue("\(Int(fraction * 100))%")
     }
 
     /// Phase B3 phrase-streak HUD chip. Renders only when the flag is
