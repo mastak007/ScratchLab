@@ -26,6 +26,17 @@ enum CoachCopy {
         static let comboInProgress  = "Chain four clean baby hits before the phrase window resets."
         static let guided           = "Follow the cue card and hit each move on time."
         static let defaultExecution = "Focus on clean execution"
+
+        // Phase C contextual practice tips. Each string is declarative,
+        // observational, and free of grading or celebration verbs —
+        // matching the PROFILE.md uncertainty vocabulary in Section X
+        // of the master roadmap.
+        static let contextualFirstSession =
+            "First time on this one — move slowly through the pattern. Speed comes after the motion clicks."
+        static let contextualReturning =
+            "Coming back to this one — walk through it slowly once before pushing the tempo."
+        static let contextualActiveStreak =
+            "Same beat, same window. Hold onto what is already working."
     }
 
     // MARK: Results overlay

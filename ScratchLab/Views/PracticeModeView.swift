@@ -334,6 +334,30 @@ struct PracticeModeView: View {
         return "Deck video and audio analyze live here. Add optional beat guidance, or keep live input only."
     }
 
+    /// Phase C minimal safe start — contextual tip selection for non-
+    /// combo practice sessions. When `CONTEXTUAL_TIPS` is on, defers to
+    /// `PracticeTipPicker`, which picks one of the three new contextual
+    /// strings (first session / returning / active streak) or rotates
+    /// the scratch's own tip list deterministically. When the flag is
+    /// off, falls back to the prior `tips.randomElement()` behaviour.
+    private func nonComboSessionTip() -> String {
+        let scratchTips = activeScratch.tips
+        let defaultTip = CoachCopy.Tip.defaultExecution
+        guard FeatureFlags.contextualTipsEnabled else {
+            return scratchTips.randomElement() ?? defaultTip
+        }
+        let context = PracticeTipPicker.Context(
+            scratchTips: scratchTips,
+            defaultTip: defaultTip,
+            lastSession: progressManager.sessionHistory.last,
+            currentStreak: progressManager.currentStreak,
+            lastPracticeDate: progressManager.lastPracticeDate,
+            practiceCount: progressManager.getProgressForScratch(activeScratch.id)?.practiceCount ?? 0,
+            now: Date()
+        )
+        return PracticeTipPicker.pick(context: context)
+    }
+
     private var currentTipText: String {
         if isComboChallengeMode {
             return comboCompleted
@@ -1211,7 +1235,7 @@ struct PracticeModeView: View {
         lastComboLockAt = nil
         sessionTipText = isComboChallengeMode
             ? "Chain all \(comboTargetStepCount) baby scratches before the phrase window resets."
-            : (activeScratch.tips.randomElement() ?? CoachCopy.Tip.defaultExecution)
+            : nonComboSessionTip()
         
         isSessionActive = true
         isPaused = false
