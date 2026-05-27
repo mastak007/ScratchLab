@@ -212,6 +212,9 @@
 		DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */; };
 		PCE1001000PCE001PCE00001 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
 		PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
+		CEP1001000CEP001CEP00001 /* CoachingEventPacer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEP1000000CEP001CEP00001 /* CoachingEventPacer.swift */; };
+		CEP1001000CEP001CEP00002 /* CoachingEventPacer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEP1000000CEP001CEP00001 /* CoachingEventPacer.swift */; };
+		CEP2011000CEP002CEP00001 /* CoachingEventPacerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEP2010000CEP002CEP00001 /* CoachingEventPacerTests.swift */; };
 		PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */; };
 		CSM1001000CSM001CSM00001 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
 		CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
@@ -511,6 +514,8 @@
 		DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/DriftCoachingEvaluator.swift; sourceTree = "<group>"; };
 		DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriftCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
 		PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/PhraseCoachingEvaluator.swift; sourceTree = "<group>"; };
+		CEP1000000CEP001CEP00001 /* CoachingEventPacer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventPacer.swift; sourceTree = "<group>"; };
+		CEP2010000CEP002CEP00001 /* CoachingEventPacerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventPacerTests.swift; sourceTree = "<group>"; };
 		PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
 		CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventSummary.swift; sourceTree = "<group>"; };
 		CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventSummaryTests.swift; sourceTree = "<group>"; };
@@ -670,6 +675,7 @@
 				CES2010000CES002CES00001 /* CoachingEventTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
+				CEP2010000CEP002CEP00001 /* CoachingEventPacerTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
 				NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */,
 				NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */,
@@ -853,6 +859,7 @@
 				CES1000000CES001CES00001 /* CoachingEvent.swift */,
 				DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */,
 				PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */,
+				CEP1000000CEP001CEP00001 /* CoachingEventPacer.swift */,
 				CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */,
 				NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */,
 				NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */,
@@ -1251,6 +1258,7 @@
 				CES1001000CES001CES00001 /* CoachingEvent.swift in Sources */,
 				DCE1001000DCE001DCE00001 /* DriftCoachingEvaluator.swift in Sources */,
 				PCE1001000PCE001PCE00001 /* PhraseCoachingEvaluator.swift in Sources */,
+				CEP1001000CEP001CEP00001 /* CoachingEventPacer.swift in Sources */,
 				CSM1001000CSM001CSM00001 /* CoachingEventSummary.swift in Sources */,
 				NPM1001000NPM001NPM00001 /* NotationPresentationModel.swift in Sources */,
 				NLG1001000NLG001NLG00001 /* NotationLaneGeometry.swift in Sources */,
@@ -1375,6 +1383,7 @@
 				CES1001000CES001CES00002 /* CoachingEvent.swift in Sources */,
 				DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */,
 				PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */,
+				CEP1001000CEP001CEP00002 /* CoachingEventPacer.swift in Sources */,
 				CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */,
 				NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */,
 				NLG1001000NLG001NLG00002 /* NotationLaneGeometry.swift in Sources */,
@@ -1495,6 +1504,7 @@
 				CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
+				CEP2011000CEP002CEP00001 /* CoachingEventPacerTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
 				NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */,
 				NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */,
