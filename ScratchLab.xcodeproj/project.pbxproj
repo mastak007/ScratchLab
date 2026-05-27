@@ -171,6 +171,9 @@
 		PTS1001000PTS001PTS00001 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
 		PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
 		PTS2011000PTS002PTS00001 /* PhraseTimingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */; };
+		APS1001000APS001APS00001 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
+		APS1001000APS001APS00002 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
+		APS2011000APS002APS00001 /* AudioPhraseSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */; };
 		TOM1001000TOM001TOM00001 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
 		TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
 		TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */; };
@@ -468,6 +471,8 @@
 		ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpectedTimingTests.swift; sourceTree = "<group>"; };
 		PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/PhraseTimingSummary.swift; sourceTree = "<group>"; };
 		PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTimingSummaryTests.swift; sourceTree = "<group>"; };
+		APS1000000APS001APS00001 /* AudioPhraseSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Phrasing/AudioPhraseSummary.swift; sourceTree = "<group>"; };
+		APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPhraseSummaryTests.swift; sourceTree = "<group>"; };
 		TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingOriginMarker.swift; sourceTree = "<group>"; };
 		TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingOriginMarkerTests.swift; sourceTree = "<group>"; };
 		SFV1000000SFV001SFV00001 /* ScratchFamily.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamily.swift; sourceTree = "<group>"; };
@@ -631,6 +636,7 @@
 				PHR2010000PHR002PHR00001 /* PhraseTests.swift */,
 				ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */,
 				PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */,
+				APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */,
 				TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */,
 				SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */,
 				SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */,
@@ -811,6 +817,7 @@
 				PHR1000000PHR001PHR00001 /* Phrase.swift */,
 				ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */,
 				PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */,
+				APS1000000APS001APS00001 /* AudioPhraseSummary.swift */,
 				TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */,
 				SFV1000000SFV001SFV00001 /* ScratchFamily.swift */,
 				SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */,
@@ -1199,6 +1206,7 @@
 				PHR1001000PHR001PHR00001 /* Phrase.swift in Sources */,
 				ETM1001000ETM001ETM00001 /* ExpectedTiming.swift in Sources */,
 				PTS1001000PTS001PTS00001 /* PhraseTimingSummary.swift in Sources */,
+				APS1001000APS001APS00001 /* AudioPhraseSummary.swift in Sources */,
 				TOM1001000TOM001TOM00001 /* TimingOriginMarker.swift in Sources */,
 				SFV1001000SFV001SFV00001 /* ScratchFamily.swift in Sources */,
 				SFA1001000SFA001SFA00001 /* ScratchFamilyAttachment.swift in Sources */,
@@ -1316,6 +1324,7 @@
 				PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */,
 				ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */,
 				PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */,
+				APS1001000APS001APS00002 /* AudioPhraseSummary.swift in Sources */,
 				TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */,
 				SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */,
 				SFA1001000SFA001SFA00002 /* ScratchFamilyAttachment.swift in Sources */,
@@ -1433,6 +1442,7 @@
 				PHR2011000PHR002PHR00001 /* PhraseTests.swift in Sources */,
 				ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */,
 				PTS2011000PTS002PTS00001 /* PhraseTimingSummaryTests.swift in Sources */,
+				APS2011000APS002APS00001 /* AudioPhraseSummaryTests.swift in Sources */,
 				TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */,
 				SFV2011000SFV002SFV00001 /* ScratchFamilyTests.swift in Sources */,
 				SFA2011000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift in Sources */,
