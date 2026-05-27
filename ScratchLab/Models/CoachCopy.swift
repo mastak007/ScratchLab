@@ -64,6 +64,38 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Live practice (LevelSelectView header)
+
+    enum Practice {
+        static let liveTitle           = "LIVE PRACTICE"
+        static let liveSubtitle        = "Pick a scratch first, then open the existing live setup with optional beat guidance and ScratchLab Coach."
+        static let selectScratchHeader = "SELECT A SCRATCH"
+    }
+
+    // MARK: Combo challenge (Baby Flow card)
+
+    enum Combo {
+        static let babyFlowTitle  = "BABY FLOW"
+        static let babyFlowBody   = "Visual combo challenge: lock 4 baby scratches in one loop at 100 BPM with optional beat guidance or live audio only."
+        static let cuesVisualNote = "The cue stays visual here too, so the analyzer keeps following your live input without loading a beat."
+
+        static let badgeCleared = "CLEARED"
+        static let badgeLive    = "LIVE"
+
+        static let bestRunLabel = "Best Run"
+        static let statusLabel  = "Status"
+
+        static let statusCleared = "Challenge cleared"
+        static let statusNoClean = "No clean loop yet"
+        static let valueCleared  = "Cleared"
+        static let valueBuilding = "Building"
+        static let valueFresh    = "Fresh"
+
+        static func bestRunPercent(_ percent: Int) -> String {
+            "Best run \(percent)%"
+        }
+    }
+
     // MARK: Practice-timing preview card
     //
     // PROFILE.md-compliant preview surface. Required vocab: "on-device audio

@@ -82,17 +82,17 @@ struct LevelSelectView: View {
 
     private var comboStatusText: String {
         if comboProgress?.comboCompleted == true {
-            return "Challenge cleared"
+            return CoachCopy.Combo.statusCleared
         }
         let best = Int(comboProgress?.comboAccuracy ?? 0)
-        return best > 0 ? "Best run \(best)%" : "No clean loop yet"
+        return best > 0 ? CoachCopy.Combo.bestRunPercent(best) : CoachCopy.Combo.statusNoClean
     }
 
     private var comboStatusValue: String {
         if comboProgress?.comboCompleted == true {
-            return "Cleared"
+            return CoachCopy.Combo.valueCleared
         }
-        return (comboProgress?.comboAccuracy ?? 0) > 0 ? "Building" : "Fresh"
+        return (comboProgress?.comboAccuracy ?? 0) > 0 ? CoachCopy.Combo.valueBuilding : CoachCopy.Combo.valueFresh
     }
     
     var body: some View {
@@ -147,11 +147,11 @@ struct LevelSelectView: View {
     
     private var headerView: some View {
         VStack(spacing: 8) {
-            Text("LIVE PRACTICE")
+            Text(CoachCopy.Practice.liveTitle)
                 .font(.system(size: 28, weight: .bold))
                 .foregroundColor(.white)
 
-            Text("Pick a scratch first, then open the existing live setup with optional beat guidance and ScratchLab Coach.")
+            Text(CoachCopy.Practice.liveSubtitle)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
@@ -186,7 +186,7 @@ struct LevelSelectView: View {
 
     private var practiceSelectionSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("SELECT A SCRATCH")
+            Text(CoachCopy.Practice.selectScratchHeader)
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(.white.opacity(0.5))
 
@@ -200,18 +200,18 @@ struct LevelSelectView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("BABY FLOW")
+                    Text(CoachCopy.Combo.babyFlowTitle)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white)
 
-                    Text("Visual combo challenge: lock 4 baby scratches in one loop at 100 BPM with optional beat guidance or live audio only.")
+                    Text(CoachCopy.Combo.babyFlowBody)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.72))
                 }
 
                 Spacer()
 
-                Text(comboProgress?.comboCompleted == true ? "CLEARED" : "LIVE")
+                Text(comboProgress?.comboCompleted == true ? CoachCopy.Combo.badgeCleared : CoachCopy.Combo.badgeLive)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(comboProgress?.comboCompleted == true ? .black : .white)
                     .padding(.horizontal, 10)
@@ -224,14 +224,14 @@ struct LevelSelectView: View {
                 StatItem(
                     icon: "link",
                     value: "\(Int(comboProgress?.comboAccuracy ?? 0))%",
-                    label: "Best Run",
+                    label: CoachCopy.Combo.bestRunLabel,
                     color: Color(hex: "00BCD4")
                 )
 
                 StatItem(
                     icon: comboProgress?.comboCompleted == true ? "checkmark.seal.fill" : "repeat",
                     value: comboStatusValue,
-                    label: "Status",
+                    label: CoachCopy.Combo.statusLabel,
                     color: Color(hex: "FF9800")
                 )
             }
@@ -240,7 +240,7 @@ struct LevelSelectView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.65))
 
-            Text("The cue stays visual here too, so the analyzer keeps following your live input without loading a beat.")
+            Text(CoachCopy.Combo.cuesVisualNote)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.65))
 
