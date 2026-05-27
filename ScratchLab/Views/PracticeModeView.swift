@@ -113,6 +113,13 @@ struct PracticeModeView: View {
     @State private var currentStreak: Int = 0
     @State private var bestStreak: Int = 0
 
+    // Phase B3 — visual-only phrase momentum counter. Increments only
+    // when a phrase coaching event confirms a phrase landed within its
+    // window. Source wiring lives downstream (Phase C2); B3 ships the
+    // renderer + chip behind FeatureFlags.phraseMomentumHUDEnabled so
+    // the chip stays hidden in production until then.
+    @State private var phraseStreakCount: Int = 0
+
     // Practice timing preview — supplementary aggregates derived from the
     // live `ScratchAnalysisResult.timing` stream. Used only by the
     // post-take preview card; never saved, scored, or exported. PROFILE.md
@@ -682,6 +689,33 @@ struct PracticeModeView: View {
             if practiceAssistMode != .demo {
                 practiceMetricsChip
             }
+            phraseMomentumChip
+        }
+    }
+
+    /// Phase B3 phrase-streak HUD chip. Renders only when the flag is
+    /// on AND a real phrase-window verdict has incremented the count;
+    /// stays hidden everywhere else so production behaviour is
+    /// unchanged until the C2 wiring lands. Visual-only — the count
+    /// never reaches the scoring pipeline.
+    @ViewBuilder
+    private var phraseMomentumChip: some View {
+        if FeatureFlags.phraseMomentumHUDEnabled, phraseStreakCount > 0 {
+            HStack(spacing: 4) {
+                Image(systemName: "waveform.path")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(ScratchLabPalette.success)
+                Text(CoachCopy.PhraseMomentum.chipValue(phraseStreakCount))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.black.opacity(0.5), in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(CoachCopy.PhraseMomentum.chipLabel) \(phraseStreakCount)"
+            )
         }
     }
 
@@ -1128,6 +1162,7 @@ struct PracticeModeView: View {
         attemptCount = 0
         currentStreak = 0
         bestStreak = 0
+        phraseStreakCount = 0
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
         sessionStartedAt = Date()
@@ -1243,6 +1278,7 @@ struct PracticeModeView: View {
         attemptCount = 0
         currentStreak = 0
         bestStreak = 0
+        phraseStreakCount = 0
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
         sessionStartedAt = nil

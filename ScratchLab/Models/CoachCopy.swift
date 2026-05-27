@@ -115,6 +115,21 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Phrase momentum HUD (Phase B3)
+    //
+    // Visual-only chip in PracticeModeView. Tracks consecutive phrases
+    // landed within the timing window — never affects any score or
+    // attempt counter. Copy stays declarative: a small numeric badge
+    // plus a static label, no celebratory verbs and no PROFILE.md-
+    // forbidden adjectives.
+
+    enum PhraseMomentum {
+        static let chipLabel = "Phrases in a row"
+        static func chipValue(_ count: Int) -> String {
+            "\(count)"
+        }
+    }
+
     // MARK: Honest-failure callouts (results overlay)
     //
     // Advisory copy that follows the PROFILE.md vocab discipline: no

@@ -50,6 +50,12 @@ struct ScratchMotionLane: View {
     /// User-attempt marks for the overlay. SCAFFOLD: empty on every shipping
     /// path, so the overlay draws nothing and scores nothing.
     var userEvents: [LaneUserEvent] = []
+    /// Phase B3 — optional phrase release tails. Each entry marks where
+    /// a phrase ends and how long the lane should fade. Empty in
+    /// production until a future slice plumbs `AudioPhraseSummary`
+    /// terminal-drag durations into the practice surface; the renderer
+    /// itself is ready and flag-gated.
+    var phraseReleaseTails: [LanePhraseReleaseTail] = []
 
     /// The integrated platter-position curve, derived once from `content`.
     /// Used by the **classified-stroke fallback** path. When the lane
@@ -65,11 +71,13 @@ struct ScratchMotionLane: View {
     private let crossfaderTimeline: CrossfaderStateTimeline
 
     init(content: LaneContent, clock: LaneClock, axis: LaneAxis,
-         userEvents: [LaneUserEvent] = []) {
+         userEvents: [LaneUserEvent] = [],
+         phraseReleaseTails: [LanePhraseReleaseTail] = []) {
         self.content = content
         self.clock = clock
         self.axis = axis
         self.userEvents = userEvents
+        self.phraseReleaseTails = phraseReleaseTails
         self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
         // Coverage spans the lane's full timeline. `state(at:)` returns
         // `.closed` for any time outside this — but the lane only ever
@@ -237,6 +245,7 @@ struct ScratchMotionLane: View {
                 drawMotionPath(in: context, viewport: viewport)
                 drawUserEvents(in: context, viewport: viewport)
                 drawMicroFeedbackPulses(in: context, viewport: viewport)
+                drawPhraseReleaseTails(in: context, viewport: viewport)
                 drawActionLine(in: context, viewport: viewport, segment: currentSegment)
             }
             // Past content fades into a quiet tail. Future stays full
@@ -465,6 +474,49 @@ struct ScratchMotionLane: View {
         }
     }
 
+    // MARK: - Canvas: phrase release tails (Phase B3)
+
+    /// Phase B3 release-tail fade. For each pending phrase end whose
+    /// fade window straddles `now`, paints a soft tail spanning the
+    /// phrase's `endTime` for its clamped duration. Tail duration is
+    /// clamped to `[0, 0.6 s]` so a runaway terminal-drag never blankets
+    /// the lane; release flag stays default-false until checkpoint β.
+    ///
+    /// Reduce-motion: the path is skipped entirely, matching the
+    /// `[[feedback_verification_scope]]` "render the same state
+    /// statically" rule — no animated fade.
+    private func drawPhraseReleaseTails(
+        in context: GraphicsContext,
+        viewport: LaneViewport
+    ) {
+        guard FeatureFlags.phraseMomentumHUDEnabled else { return }
+        guard !reduceMotion else { return }
+        guard !phraseReleaseTails.isEmpty else { return }
+        let now = viewport.now
+        for tail in phraseReleaseTails {
+            let duration = max(0, min(tail.duration, 0.6))
+            guard duration > 0 else { continue }
+            let endTime = tail.endTime
+            let tailEnd = endTime + duration
+            guard now >= endTime, now <= tailEnd else { continue }
+            let progress = (now - endTime) / duration
+            let fade = 1.0 - progress
+            let opacity = 0.12 * fade
+            let p0 = viewport.pos(for: max(endTime - 0.1, 0))
+            let p1 = viewport.pos(for: tailEnd)
+            let rect = viewport.rect(
+                scroll0: p0,
+                scroll1: p1,
+                cross0: 0,
+                cross1: viewport.crossLength
+            )
+            context.fill(
+                Path(rect),
+                with: .color(.white.opacity(opacity))
+            )
+        }
+    }
+
     // MARK: - Canvas: action line
 
     /// The fixed "now" line — perpendicular to the scroll axis. A hairline,
@@ -624,4 +676,14 @@ struct ScratchMotionLane: View {
         }
         return segment.kind == .copy ? "Your turn" : "Demo"
     }
+}
+
+// MARK: - LanePhraseReleaseTail
+
+/// One phrase's release-tail descriptor on the lane (Phase B3). Pure
+/// value type; carries an absolute `endTime` and a tail `duration`
+/// (clamped by the lane on render). No view, no clock.
+struct LanePhraseReleaseTail: Equatable, Sendable {
+    let endTime: TimeInterval
+    let duration: TimeInterval
 }
