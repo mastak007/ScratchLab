@@ -32,7 +32,11 @@ enum FeatureFlags {
     // MARK: Phase C — coach intelligence + structured training
 
     static var contextualTipsEnabled: Bool          { isOn("CONTEXTUAL_TIPS",          releaseDefault: false, debugDefault: false) }
-    static var coachingEventsPipelineEnabled: Bool  { isOn("COACHING_EVENTS_PIPELINE",  releaseDefault: false, debugDefault: false) }
+    // C0a opts the coaching data-path wiring on in DEBUG so the team
+    // can validate evaluator output against synthetic and captured
+    // fixtures without scheme edits. Release stays default-false until
+    // C1 ships and checkpoint α flips it.
+    static var coachingEventsPipelineEnabled: Bool  { isOn("COACHING_EVENTS_PIPELINE",  releaseDefault: false, debugDefault: true) }
     static var resultsDriftCoachingEnabled: Bool    { isOn("RESULTS_DRIFT_COACHING",    releaseDefault: false, debugDefault: false) }
     static var phraseCoachingSurfaceEnabled: Bool   { isOn("PHRASE_COACHING_SURFACE",   releaseDefault: false, debugDefault: false) }
     static var structuredDrillsEnabled: Bool        { isOn("STRUCTURED_DRILLS",         releaseDefault: false, debugDefault: false) }

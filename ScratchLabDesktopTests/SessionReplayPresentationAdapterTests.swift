@@ -132,4 +132,98 @@ final class SessionReplayPresentationAdapterTests: XCTestCase {
         let modelB = SessionReplayPresentationAdapter.makeModel(from: source)
         XCTAssertEqual(modelA, modelB)
     }
+
+    // MARK: - Phase C0a — attachDriftKinds helper
+
+    private func coachingEvent(
+        time: TimeInterval,
+        kind: CoachingEventKind
+    ) -> CoachingEvent {
+        guard let event = CoachingEvent(time: time, kind: kind, severity: .notice, message: nil) else {
+            XCTFail("CoachingEvent unexpectedly rejected")
+            return CoachingEvent(time: 0, kind: kind, severity: .notice, message: nil)!
+        }
+        return event
+    }
+
+    func testAttachDriftKindsMatchesStrokeByWindow() {
+        // Drift events at 0.20 and 1.30 land inside the [0.10, 0.42]
+        // and [1.20, 1.45] stroke windows respectively.
+        let strokes: [SessionReplayEvent] = [
+            event(start: 0.10, end: 0.42, kind: .audioOnset),
+            event(start: 0.55, end: 0.91, kind: .recordMovement),
+            event(start: 1.20, end: 1.45, kind: .fader),
+        ]
+        let events = [
+            coachingEvent(time: 0.20, kind: .lateReversal),
+            coachingEvent(time: 1.30, kind: .earlyReversal),
+        ]
+        let kinds = SessionReplayPresentationAdapter.attachDriftKinds(events, to: strokes)
+        XCTAssertEqual(kinds, [[.lateReversal], [], [.earlyReversal]])
+    }
+
+    func testAttachDriftKindsDropsPhraseKinds() {
+        // Phrase / unstable / clipped / noSignal kinds are silently
+        // dropped — Phase C2 wires them after Phase B2 visibility.
+        let strokes = [event(start: 0.10, end: 0.42)]
+        let events = [
+            coachingEvent(time: 0.20, kind: .incompletePhrase),
+            coachingEvent(time: 0.25, kind: .unstableTiming),
+            coachingEvent(time: 0.30, kind: .clippedMotion),
+            coachingEvent(time: 0.35, kind: .noSignal),
+            coachingEvent(time: 0.40, kind: .unknown),
+        ]
+        let kinds = SessionReplayPresentationAdapter.attachDriftKinds(events, to: strokes)
+        XCTAssertEqual(kinds, [[]])
+    }
+
+    func testAttachDriftKindsDropsOutOfWindowEvents() {
+        // A drift event in the gap between strokes (0.50) attaches to
+        // nothing and is silently dropped.
+        let strokes = [
+            event(start: 0.10, end: 0.42),
+            event(start: 0.60, end: 0.91),
+        ]
+        let events = [coachingEvent(time: 0.50, kind: .lateReversal)]
+        let kinds = SessionReplayPresentationAdapter.attachDriftKinds(events, to: strokes)
+        XCTAssertEqual(kinds, [[], []])
+    }
+
+    func testAttachDriftKindsHandlesPointInTimeStroke() {
+        // Mixer-MIDI-style stroke (endTime == nil → zero-duration).
+        // Only an event at exactly the stroke time attaches.
+        let strokes = [event(start: 1.20, end: nil, kind: .mixerMidi)]
+        let events = [
+            coachingEvent(time: 1.20, kind: .lateReversal),
+            coachingEvent(time: 1.21, kind: .earlyReversal),
+        ]
+        let kinds = SessionReplayPresentationAdapter.attachDriftKinds(events, to: strokes)
+        XCTAssertEqual(kinds, [[.lateReversal]])
+    }
+
+    func testAttachDriftKindsEmptyInputs() {
+        XCTAssertEqual(SessionReplayPresentationAdapter.attachDriftKinds([], to: []), [])
+        let strokes = [event(start: 0.10, end: 0.42)]
+        XCTAssertEqual(SessionReplayPresentationAdapter.attachDriftKinds([], to: strokes), [[]])
+    }
+
+    func testMakeModelPropagatesAttachedKindsWhenFlagOn() {
+        // DEBUG default for COACHING_EVENTS_PIPELINE is true after
+        // C0a — passing events through makeModel must produce the
+        // same coachingKinds as attachDriftKinds.
+        let source = timeline(events: [
+            event(start: 0.10, end: 0.42, kind: .audioOnset),
+            event(start: 1.20, end: 1.45, kind: .fader),
+        ])
+        let events = [
+            coachingEvent(time: 0.20, kind: .lateReversal),
+            coachingEvent(time: 1.30, kind: .earlyReversal),
+        ]
+        let model = SessionReplayPresentationAdapter.makeModel(
+            from: source,
+            coachingEvents: events
+        )
+        XCTAssertEqual(model.strokes.map(\.coachingKinds),
+                       [[.lateReversal], [.earlyReversal]])
+    }
 }
