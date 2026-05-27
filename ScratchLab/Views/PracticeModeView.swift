@@ -460,6 +460,7 @@ struct PracticeModeView: View {
                         detailNote: comboResultDetail,
                         takeEvidence: practiceTimingPreviewSummary,
                         drillSummary: drillSummary,
+                        driftCoachingSummary: driftCoachingSummary,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
                         onContinue: { showingResults = false; resetSession() },
                         onExit: { dismiss() }
@@ -1603,6 +1604,18 @@ struct PracticeModeView: View {
         )
     }
 
+    /// Phase C1 drift coaching summary. Returns nil today because the
+    /// upstream drift-evaluator wiring against the running session
+    /// has not landed yet — the renderer + paced/tier-aware
+    /// `DriftCoachingSummaryCard` is in place, ready for a follow-up
+    /// slice that computes a real `[TimingDrift]` from the session and
+    /// runs it through `DriftCoachingEvaluator` + `CoachingEventPacer`
+    /// + `CoachingEventDisplayabilityResolver`. Until then the card
+    /// stays absent in production even when the flag is on.
+    fileprivate var driftCoachingSummary: DriftCoachingSummary? {
+        nil
+    }
+
     // Adds a `LaneUserEvent` for the most recent mic detection, mapped to
     // the lane's looping clock. Gated to the three modes that actually run
     // a `.looping` clock — Open is `.fixed(0)` (every event would land at
@@ -2595,6 +2608,22 @@ fileprivate struct DrillSummary: Equatable {
     let expectedAttempts: Int
 }
 
+/// Phase C1 drift coaching summary — up to three observational items
+/// per session, each one carrying its resolved
+/// `CoachingEventDisplayability.Tier`. Pure value type, no UI. The
+/// real upstream source (drift evaluator over the live session)
+/// plumbs in a follow-up slice; PracticeModeView currently passes
+/// `nil` so the card stays absent in production.
+fileprivate struct DriftCoachingSummary: Equatable {
+    struct Item: Equatable {
+        let kind: CoachingEventKind
+        let tier: CoachingEventDisplayability.Tier
+        let count: Int
+    }
+
+    let items: [Item]
+}
+
 struct ResultsOverlayView: View {
     let scratch: Scratch
     let sessionTitle: String?
@@ -2607,6 +2636,7 @@ struct ResultsOverlayView: View {
     let detailNote: String?
     fileprivate var takeEvidence: TakeEvidenceSummary? = nil
     fileprivate var drillSummary: DrillSummary? = nil
+    fileprivate var driftCoachingSummary: DriftCoachingSummary? = nil
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
@@ -2696,6 +2726,15 @@ struct ResultsOverlayView: View {
 
                 if FeatureFlags.structuredDrillsEnabled, let drillSummary {
                     DrillSummaryCard(summary: drillSummary)
+                        .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
+                }
+
+                if FeatureFlags.resultsDriftCoachingEnabled,
+                   let summary = driftCoachingSummary,
+                   !summary.items.isEmpty {
+                    DriftCoachingSummaryCard(summary: summary)
                         .padding(.horizontal, 32)
                         .opacity(visible(3) ? 1 : 0)
                         .animation(.easeOut(duration: 0.25), value: effectiveStage)
@@ -2887,6 +2926,81 @@ fileprivate struct DrillSummaryCard: View {
             Text(value)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white)
+        }
+    }
+}
+
+/// Phase C1 drift coaching summary card. Renders up to three
+/// observational items, each one tagged by its resolved
+/// `CoachingEventDisplayability.Tier`. Advisory items wear a thinner
+/// `info` accent and verb-softened copy; primary items wear the
+/// `warning` accent and catalog body verbatim. No numeric confidence,
+/// no grading.
+fileprivate struct DriftCoachingSummaryCard: View {
+    let summary: DriftCoachingSummary
+
+    private static let maxItems: Int = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(CoachCopy.DriftCoaching.header)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.55))
+
+            VStack(alignment: .leading, spacing: 8) {
+                let visibleItems = Array(summary.items.prefix(Self.maxItems))
+                ForEach(Array(visibleItems.enumerated()), id: \.offset) { entry in
+                    row(for: entry.element)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(CoachCopy.DriftCoaching.header). \(summary.items.prefix(Self.maxItems).map(Self.copy(for:)).joined(separator: ". "))."
+        )
+    }
+
+    @ViewBuilder
+    private func row(for item: DriftCoachingSummary.Item) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(Self.accent(for: item.tier))
+                .frame(width: 6, height: 6)
+                .padding(.top, 5)
+            Text(Self.copy(for: item))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// PROFILE.md-compliant copy. Advisory tier softens verbs; primary
+    /// tier reuses the catalog descriptor body verbatim. Pure static
+    /// function so the tone audit can be locked in tests.
+    fileprivate static func copy(for item: DriftCoachingSummary.Item) -> String {
+        switch (item.kind, item.tier) {
+        case (.lateReversal, .advisory):  return CoachCopy.DriftCoaching.advisoryLate(item.count)
+        case (.lateReversal, .primary):   return CoachCopy.DriftCoaching.primaryLate
+        case (.earlyReversal, .advisory): return CoachCopy.DriftCoaching.advisoryEarly(item.count)
+        case (.earlyReversal, .primary):  return CoachCopy.DriftCoaching.primaryEarly
+        // Phase C1 surfaces drift only. Other kinds are filtered
+        // upstream; if one reaches the card, fall back to the catalog
+        // descriptor body so the copy is still PROFILE.md-compliant.
+        default:
+            return CoachingEventCatalog.descriptor(for: item.kind).body
+        }
+    }
+
+    private static func accent(for tier: CoachingEventDisplayability.Tier) -> Color {
+        switch tier {
+        case .advisory: return ScratchLabPalette.info
+        case .primary:  return ScratchLabPalette.warning
         }
     }
 }

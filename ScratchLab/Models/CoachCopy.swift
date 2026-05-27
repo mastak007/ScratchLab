@@ -159,6 +159,37 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Drift coaching summary (Phase C1)
+    //
+    // First user-visible coaching surface. Lives in the ResultsOverlayView
+    // when FeatureFlags.resultsDriftCoachingEnabled is on and the session
+    // produced at least one drift event that survived the pacer. Advisory
+    // copy uses verb-softening per PROFILE.md Section X — "appears to,"
+    // "may have," "looks like." Primary copy is the catalog body string
+    // verbatim. No numeric confidence, no celebratory verbs, no grading.
+
+    enum DriftCoaching {
+        static let header = "Observations from this take"
+
+        static func advisoryLate(_ count: Int) -> String {
+            count <= 1
+                ? "A reversal appears to land after the expected beat."
+                : "Some reversals appear to land after the expected beat."
+        }
+        static func advisoryEarly(_ count: Int) -> String {
+            count <= 1
+                ? "A reversal may have started before the expected beat."
+                : "Some reversals may have started before the expected beat."
+        }
+
+        // Primary copy renders the catalog descriptor body verbatim
+        // when adapters tier the event up to .primary. These strings
+        // mirror CoachingEventCatalog.descriptor(for:).body so the
+        // app speaks one vocabulary across surfaces.
+        static let primaryLate  = "The reversal appears after the expected timing point."
+        static let primaryEarly = "The reversal appears before the expected timing point."
+    }
+
     // MARK: Structured drill summary (Phase C3)
     //
     // Visible at the end of a structured-drill (combo) session when
