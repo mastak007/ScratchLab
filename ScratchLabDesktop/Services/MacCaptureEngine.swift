@@ -219,7 +219,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let rawDescription = rawPoint.map { String(format: "%.3f,%.3f", $0.x, $0.y) } ?? "--"
             let displayedDescription = displayedPoint.map { String(format: "%.3f,%.3f", $0.x, $0.y) } ?? "--"
             append(&recentSamples, value: "raw[\(rawDescription)] sm[\(displayedDescription)] c=\(String(format: "%.2f", confidence))")
+            #if DEBUG
             append(&recentDirections, value: "raw=\(rawDirection.debugName) semantic=\(semanticState.debugName)")
+            #endif
         }
 
         func recordRawDirectionChange() {
@@ -233,7 +235,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         func recordBuilderSample(state: HandMotionState, position: CGPoint?, confidence: Double) {
             builderSamplesReceived += 1
             let positionDescription = position.map { String(format: "%.3f,%.3f", $0.x, $0.y) } ?? "--"
+            #if DEBUG
             append(&recentSamples, value: "builder[\(state.debugName)] p=\(positionDescription) c=\(String(format: "%.2f", confidence))")
+            #else
+            append(&recentSamples, value: "builder p=\(positionDescription) c=\(String(format: "%.2f", confidence))")
+            #endif
         }
 
         func recordRawMovementEventCreated() {
@@ -2965,13 +2971,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         platterRecordingStartTime = 0
         platterRecorderLock.unlock()
         let normalizeID = ScratchLabPerformanceSignpost.begin("MovementNormalize")
+        #if DEBUG
+        let debugSessionForSnapshot = activeRoutineMovementDebugSession
+        #else
+        let debugSessionForSnapshot: RoutineMovementDebugSession? = nil
+        #endif
         let notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: motionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
             labelConfidence: lastScratchDetection?.confidence,
-            debugSession: activeRoutineMovementDebugSession
+            debugSession: debugSessionForSnapshot
         ).withMixerMidiEvents(capturedMidi)
         ScratchLabPerformanceSignpost.end("MovementNormalize", normalizeID)
         ScratchLabPerformanceSignpost.eventNotationSnapshot(
