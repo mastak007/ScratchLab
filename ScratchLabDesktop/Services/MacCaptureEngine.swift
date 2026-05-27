@@ -2594,14 +2594,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var uidSize = UInt32(MemoryLayout<CFString?>.size)
-        var uid: CFString?
+        var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var uid: Unmanaged<CFString>?
         let uidStatus = AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
-        guard uidStatus == noErr else {
+        guard uidStatus == noErr, let uidValue = uid?.takeRetainedValue() else {
             return nil
         }
 
-        return uid as String?
+        return uidValue as String
     }
 
     private static func audioChoice(from device: AVCaptureDevice) -> AudioInputDeviceChoice {

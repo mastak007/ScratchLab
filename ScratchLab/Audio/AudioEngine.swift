@@ -815,7 +815,7 @@ class AudioEngine: ObservableObject {
         return tmp.appendingPathComponent("scratchlab_input_\(stamp).wav")
     }
 
-    private static func writeMonoWAV(samples: [Float], sampleRate: Double, to url: URL) throws {
+    nonisolated private static func writeMonoWAV(samples: [Float], sampleRate: Double, to url: URL) throws {
         let frameCount = samples.count
         let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
