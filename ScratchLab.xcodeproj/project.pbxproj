@@ -302,6 +302,10 @@
 		F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000002 /* MacAnalyzerView.swift */; };
 		STP1001000STP001STP00001 /* StudioSessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STP1000000STP001STP00001 /* StudioSessionPickerView.swift */; };
 		STH1001000STH001STH00001 /* StudioSessionHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STH1000000STH001STH00001 /* StudioSessionHostView.swift */; };
+		SRS1001000SRS001SRS00001 /* StudioReplayScrubber.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRS1000000SRS001SRS00001 /* StudioReplayScrubber.swift */; };
+		RLR1001000RLR001RLR00001 /* ReplayLoopRange.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLR1000000RLR001RLR00001 /* ReplayLoopRange.swift */; };
+		RLR1001000RLR001RLR00002 /* ReplayLoopRange.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLR1000000RLR001RLR00001 /* ReplayLoopRange.swift */; };
+		RLR2011000RLR002RLR00001 /* ReplayLoopRangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLR2010000RLR002RLR00001 /* ReplayLoopRangeTests.swift */; };
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
@@ -458,6 +462,9 @@
 		B2000002 /* MacAnalyzerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAnalyzerView.swift; sourceTree = "<group>"; };
 		STP1000000STP001STP00001 /* StudioSessionPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioSessionPickerView.swift; sourceTree = "<group>"; };
 		STH1000000STH001STH00001 /* StudioSessionHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioSessionHostView.swift; sourceTree = "<group>"; };
+		SRS1000000SRS001SRS00001 /* StudioReplayScrubber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioReplayScrubber.swift; sourceTree = "<group>"; };
+		RLR1000000RLR001RLR00001 /* ReplayLoopRange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/ReplayLoopRange.swift; sourceTree = "<group>"; };
+		RLR2010000RLR002RLR00001 /* ReplayLoopRangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayLoopRangeTests.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
@@ -686,6 +693,7 @@
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CEP2010000CEP002CEP00001 /* CoachingEventPacerTests.swift */,
 				CED2010000CED002CED00001 /* CoachingEventDisplayabilityTests.swift */,
+				RLR2010000RLR002RLR00001 /* ReplayLoopRangeTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
 				NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */,
 				NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */,
@@ -875,6 +883,7 @@
 				NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */,
 				NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */,
 				CED1000000CED001CED00001 /* CoachingEventDisplayability.swift */,
+				RLR1000000RLR001RLR00001 /* ReplayLoopRange.swift */,
 				NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */,
 				NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */,
 				NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */,
@@ -976,6 +985,7 @@
 				B2000002 /* MacAnalyzerView.swift */,
 				STP1000000STP001STP00001 /* StudioSessionPickerView.swift */,
 				STH1000000STH001STH00001 /* StudioSessionHostView.swift */,
+				SRS1000000SRS001SRS00001 /* StudioReplayScrubber.swift */,
 				B2000003 /* MacCameraPreviewView.swift */,
 				B2000004 /* HandMotionOverlay.swift */,
 				B2000009 /* DeckGamificationOverlay.swift */,
@@ -1222,6 +1232,7 @@
 				F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */,
 				STP1001000STP001STP00001 /* StudioSessionPickerView.swift in Sources */,
 				STH1001000STH001STH00001 /* StudioSessionHostView.swift in Sources */,
+				SRS1001000SRS001SRS00001 /* StudioReplayScrubber.swift in Sources */,
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
 				DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */,
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
@@ -1279,6 +1290,7 @@
 				NLG1001000NLG001NLG00001 /* NotationLaneGeometry.swift in Sources */,
 				NPH1001000NPH001NPH00001 /* NotationPlayheadGeometry.swift in Sources */,
 				CED1001000CED001CED00001 /* CoachingEventDisplayability.swift in Sources */,
+				RLR1001000RLR001RLR00001 /* ReplayLoopRange.swift in Sources */,
 				NGG1001000NGG001NGG00001 /* NotationGridlineGeometry.swift in Sources */,
 				NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */,
 				NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */,
@@ -1405,6 +1417,7 @@
 				NLG1001000NLG001NLG00002 /* NotationLaneGeometry.swift in Sources */,
 				NPH1001000NPH001NPH00002 /* NotationPlayheadGeometry.swift in Sources */,
 				CED1001000CED001CED00002 /* CoachingEventDisplayability.swift in Sources */,
+				RLR1001000RLR001RLR00002 /* ReplayLoopRange.swift in Sources */,
 				NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */,
 				NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */,
 				NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */,
@@ -1523,6 +1536,7 @@
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CEP2011000CEP002CEP00001 /* CoachingEventPacerTests.swift in Sources */,
 				CED2011000CED002CED00001 /* CoachingEventDisplayabilityTests.swift in Sources */,
+				RLR2011000RLR002RLR00001 /* ReplayLoopRangeTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
 				NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */,
 				NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */,

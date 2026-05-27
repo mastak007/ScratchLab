@@ -36,6 +36,12 @@ struct StudioSessionHostView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(for: draft)
+                if FeatureFlags.studioScrubEnabled {
+                    StudioReplayScrubber(
+                        contentStart: 0,
+                        contentEnd: max(draft.config.takeDurationSeconds ?? 0, 1)
+                    )
+                }
                 comingSoonCard
                 Spacer(minLength: 0)
             }
