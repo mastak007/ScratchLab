@@ -179,6 +179,101 @@ final class DebugNotationLaneHostViewTests: XCTestCase {
         XCTAssertEqual(sessionA, sessionB)
     }
 
+    // MARK: - Phrase overlay (Slice 3)
+
+    // 1. DEBUG host can build phrase summaries from fixture audio events
+    func testPhraseSummaryRebuildsFromFixtureAudioEvents() {
+        let rebuilt = AudioPhraseGrouper.summary(
+            for: DebugNotationLaneHostView.phraseFixtureAudioEvents
+        )
+        XCTAssertEqual(rebuilt, DebugNotationLaneHostView.phraseSummary,
+                       "the static phraseSummary must equal a fresh grouping over the fixture")
+        XCTAssertEqual(
+            DebugNotationLaneHostView.phraseSummary.spans.count,
+            3,
+            "the chosen fixture is shaped to split into exactly three phrases"
+        )
+    }
+
+    // 2. phrase overlay source is optional
+    func testPhraseOverlayDefaultIsOff() {
+        XCTAssertFalse(DebugNotationLaneHostView.phraseOverlayDefaultEnabled,
+                       "phrase overlay must ship opt-in so DEBUG sessions stay quiet by default")
+    }
+
+    // 3. empty summary does not crash and projects to an empty grid summary
+    func testEmptyPhraseSummaryProjectsCleanly() {
+        let emptySummary = AudioPhraseGrouper.summary(for: [])
+        XCTAssertTrue(emptySummary.spans.isEmpty)
+        let projection = AudioPhraseGridProjector.project(
+            emptySummary,
+            onto: DebugNotationLaneHostView.replayGrid
+        )
+        XCTAssertEqual(projection, .empty)
+        XCTAssertTrue(projection.projections.isEmpty)
+    }
+
+    // 4. phrase count label/value is deterministic
+    func testPhraseLabelIsDeterministicForFixture() {
+        let summary = DebugNotationLaneHostView.phraseSummary
+        let gridSummary = DebugNotationLaneHostView.phraseGridSummary
+        XCTAssertEqual(summary.spans.count, gridSummary.projections.count)
+
+        let firstLabel = DebugNotationLaneHostView.phraseLabel(
+            index: 0,
+            span: summary.spans[0],
+            projection: gridSummary.projections[0]
+        )
+        let secondLabel = DebugNotationLaneHostView.phraseLabel(
+            index: 0,
+            span: summary.spans[0],
+            projection: gridSummary.projections[0]
+        )
+        XCTAssertEqual(firstLabel, secondLabel,
+                       "label format must be a pure function of (index, span, projection)")
+
+        XCTAssertEqual(
+            DebugNotationLaneHostView.phraseLabel(
+                index: 1,
+                span: summary.spans[1],
+                projection: gridSummary.projections[1]
+            ),
+            "P1 0.40b d:1 b:1 c:1",
+            "the middle fixture phrase must produce a stable d/b/c count label"
+        )
+    }
+
+    // 5. no production route to the phrase overlay exists
+    func testNoProductionViewReferencesThePhraseOverlay() throws {
+        let here = URL(fileURLWithPath: #filePath)
+        let projectRoot = here
+            .deletingLastPathComponent() // ScratchLabDesktopTests
+            .deletingLastPathComponent() // project root
+        let candidates = [
+            projectRoot.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            projectRoot.appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift"),
+            projectRoot.appendingPathComponent("ScratchLabDesktop/Views/ReviewOverlayLaneView.swift"),
+        ]
+        let forbidden = [
+            "phraseFixtureAudioEvents",
+            "phraseSummary",
+            "phraseGridSummary",
+            "phraseOverlayEnabled",
+            "phraseOverlayDefaultEnabled",
+            "AudioPhraseGrouper",
+            "AudioPhraseGridProjector",
+            "AudioPhraseGridSummary",
+            "AudioPhraseSummary",
+        ]
+        for url in candidates {
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            for needle in forbidden {
+                XCTAssertFalse(contents.contains(needle),
+                               "\(url.lastPathComponent) must not reference \(needle) — Slice 3 overlays are DEBUG-only")
+            }
+        }
+    }
+
     func testEveryFrameProjectsForEachAdapterBackedSource() throws {
         let state = DebugNotationLaneHostView.replayState
         for source in [

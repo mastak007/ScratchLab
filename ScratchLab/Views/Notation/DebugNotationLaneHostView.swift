@@ -57,9 +57,17 @@ struct DebugNotationLaneHostView: View {
     @State private var preset: Preset = .simple
     @State private var replaySource: ReplaySource = .handBuilt
     @State private var frameIndex: Int = 0
+    @State private var phraseOverlayEnabled: Bool = DebugNotationLaneHostView.phraseOverlayDefaultEnabled
 
     private static let laneWidth: Double = 400
     private static let laneHeight: Double = 200
+    private static let phraseOverlayHeight: Double = 28
+
+    /// Default state of the phrase overlay toggle. Opt-in — production
+    /// flows never see this surface, and even the DEBUG host renders it
+    /// only when the user explicitly switches it on. Exposed `static`
+    /// so the DEBUG-only test target can lock the default.
+    static let phraseOverlayDefaultEnabled: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,6 +88,10 @@ struct DebugNotationLaneHostView: View {
                     .padding(.bottom, 8)
             }
 
+            phraseOverlayToggle
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+
             NotationLaneGeometryView(
                 geometry: geometry,
                 gridlines: gridlines,
@@ -87,6 +99,13 @@ struct DebugNotationLaneHostView: View {
             )
             .frame(height: Self.laneHeight)
             .padding(.horizontal)
+
+            if phraseOverlayEnabled {
+                phraseOverlayStrip
+                    .frame(height: Self.phraseOverlayHeight)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+            }
 
             Spacer()
         }
@@ -126,6 +145,64 @@ struct DebugNotationLaneHostView: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.white)
         }
+    }
+
+    // MARK: Phrase overlay (DEBUG diagnostic)
+
+    /// Opt-in toggle controlling whether the phrase-summary strip is
+    /// drawn below the existing lane. The toggle ships off; flipping
+    /// it on does not change any production rendering path, since the
+    /// host view itself is gated behind `#if DEBUG`.
+    private var phraseOverlayToggle: some View {
+        Toggle("Phrase overlay (debug)", isOn: $phraseOverlayEnabled)
+            .toggleStyle(.switch)
+            .tint(.orange)
+            .foregroundStyle(.white)
+            .font(.caption)
+    }
+
+    /// Diagnostic strip that paints one translucent band per grouped
+    /// phrase across a `[0, phraseTakeDurationSeconds]` horizontal
+    /// scale. Pure presentation of the Slice-1/Slice-2 transforms —
+    /// no clock, no animation, no Combine, no AVFoundation.
+    private var phraseOverlayStrip: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let duration = Self.phraseTakeDurationSeconds
+            ZStack(alignment: .topLeading) {
+                Color.white.opacity(0.06)
+                ForEach(Array(Self.phraseSummary.spans.enumerated()), id: \.offset) { entry in
+                    let span = entry.element
+                    let projection = Self.phraseGridSummary.projections[entry.offset]
+                    let xStart = (span.startTime / duration) * width
+                    let bandWidth = max(2.0, (span.duration / duration) * width)
+                    Rectangle()
+                        .fill(Color.orange.opacity(0.30))
+                        .frame(width: bandWidth, height: height)
+                        .overlay(alignment: .leading) {
+                            Text(Self.phraseLabel(index: entry.offset, span: span, projection: projection))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 3)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .offset(x: xStart)
+                }
+            }
+        }
+    }
+
+    /// Compact per-phrase label. Pure function of the span and its
+    /// grid projection so the test target can lock the format.
+    static func phraseLabel(
+        index: Int,
+        span: AudioPhraseSpan,
+        projection: AudioPhraseGridProjection
+    ) -> String {
+        let bars = String(format: "%.2f", projection.durationInBars)
+        return "P\(index) \(bars)b d:\(span.possibleDragCount) b:\(span.scratchBurstCount) c:\(span.possibleCutCount)"
     }
 
     // MARK: Geometry
@@ -447,6 +524,53 @@ struct DebugNotationLaneHostView: View {
 
     static let sessionReplayPresentation: NotationPresentationModel = {
         SessionReplayPresentationAdapter.makeModel(from: sessionReplayFixture)
+    }()
+
+    // MARK: Phrase overlay fixture
+    //
+    // DEBUG-only synthetic audio events used by the phrase overlay
+    // toggle. Constructed in memory, never persisted, never wired into
+    // Practice / Review / Capture / Coach. Internal (not private) so
+    // the DEBUG-only test target can lock the grouping output.
+
+    static let phraseTakeDurationSeconds: Double = 8.0
+
+    static let phraseFixtureAudioEvents: [CaptureCore.DetectedNotationAudioEvent] = {
+        func ev(
+            _ start: Double,
+            _ end: Double,
+            _ kind: String,
+            confidence: Double = 0.75
+        ) -> CaptureCore.DetectedNotationAudioEvent {
+            CaptureCore.DetectedNotationAudioEvent(
+                startTime: start,
+                endTime: end,
+                duration: end - start,
+                peakLevel: -12.0,
+                rmsLevel: -18.0,
+                confidence: confidence,
+                eventKind: kind,
+                source: "debug-phrase-fixture"
+            )
+        }
+        return [
+            ev(0.50, 0.80, "scratchBurst"),
+            ev(0.90, 1.10, "possibleDrag"),
+            // implicit > 2 s gap splits the next phrase
+            ev(4.00, 4.20, "possibleDrag"),
+            ev(4.30, 4.50, "scratchBurst"),
+            ev(4.60, 4.80, "possibleCut"),
+            // implicit > 2 s gap splits the next phrase
+            ev(6.95, 7.95, "possibleDrag", confidence: 0.90),
+        ]
+    }()
+
+    static let phraseSummary: AudioPhraseSummary = {
+        AudioPhraseGrouper.summary(for: phraseFixtureAudioEvents)
+    }()
+
+    static let phraseGridSummary: AudioPhraseGridSummary = {
+        AudioPhraseGridProjector.project(phraseSummary, onto: replayGrid)
     }()
 
     static let replayState: NotationReplayState = {
