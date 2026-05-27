@@ -1625,6 +1625,11 @@ struct SessionArchiveBuilder: Sendable {
         let artifactMetadata = try hydratedPackage.takes.map { take -> SessionExportArtifactMetadata in
             let captureMetadata = try resolvedTakeCaptureMetadata(for: take, packageMetadata: hydratedPackage.metadata)
             let sidecar = try decodeSidecar(at: take.sidecarURL)
+            let captureValues = resolvedTakeCaptureValues(
+                for: take,
+                sidecar: sidecar,
+                packageMetadata: hydratedPackage.metadata
+            )
             let notationExport = try resolvedNotationExport(
                 for: take,
                 sidecar: sidecar,
@@ -1632,7 +1637,15 @@ struct SessionArchiveBuilder: Sendable {
             )
             let djToken = try canonicalPerformerToken(from: hydratedPackage.metadata)
             let scratchTypeToken = try canonicalScratchTypeToken(from: hydratedPackage.metadata)
-            let canonicalBPM = captureMetadata.bpm ?? take.bpm
+            // Use the canonical-BPM fallback chain that `canonicalFilesMap` /
+            // `session_manifest.json` already use, so all three exporters
+            // (staged-to-disk audio path, session_manifest, and this
+            // export_metadata document) emit the same `_<bpm>_` token.
+            // Without this, a No Beat / nil-bpm take fell through to
+            // `take.bpm == 0` and emitted a stale `_000_` token even
+            // though the canonical paths used `_095_` (or whichever
+            // session/calibration default applied).
+            let canonicalBPM = captureValues.canonicalBPM ?? captureMetadata.bpm ?? take.bpm
             let canReadAudioStem = take.audioArtifactURL.flatMap { try? AVAudioFile(forReading: $0) } != nil
             let canRenderBeatStem = (captureMetadata.captureMode == CaptureSessionCaptureMode.timedClick.rawValue
                 || captureMetadata.clickEnabled

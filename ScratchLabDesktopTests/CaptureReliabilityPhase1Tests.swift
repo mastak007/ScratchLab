@@ -5615,6 +5615,117 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(archivedExportTakeMetadata.recordingStartHostTime, 456)
     }
 
+    /// Regression: a calibration_no_click / No Beat take with `bpm: nil`
+    /// must emit the SAME audio-path token in `export_metadata.json` as
+    /// in `session_manifest.json` and on disk. Before the fix, the
+    /// staged file and `session_manifest` used the canonical
+    /// `defaultTimedBPM` fallback (`_095_`), but `export_metadata`
+    /// fell through to `take.bpm == 0` and emitted a stale `_000_`
+    /// token. QA caught this in the noisy/talked-through export.
+    func testCalibrationNoBeatExportMetadataAudioPathUsesCanonicalBPMToken() throws {
+        let root = try makeTemporaryDirectory()
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: "calibration-no-beat-path-token",
+            takeNumber: 1,
+            bpm: nil,
+            createdAt: Date(timeIntervalSince1970: 1_710_000_750),
+            captureMode: .calibrationNoClick,
+            captureTiming: CaptureTimingMetadata(
+                clickStartHostTime: nil,
+                recordingStartHostTime: 789
+            ),
+            useRealMedia: true
+        )
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "Calibration No Beat Path Token",
+            config: nil
+        )
+        XCTAssertNil(builder.validationReport(for: source))
+
+        let package = try builder.preparePackage(from: source)
+        XCTAssertNil(package.metadata.bpm)
+        XCTAssertEqual(package.metadata.captureMode, CaptureSessionCaptureMode.calibrationNoClick.rawValue)
+        XCTAssertEqual(package.takes.first?.bpm, 0,
+                       "No Beat take should fall through to SessionExportTake.bpm == 0 — this is the input condition the regression covers")
+
+        let exportMetadata = try builder.exportMetadataDocument(
+            for: package,
+            options: SessionExportOptions(mixMode: .scratchOnly)
+        )
+        let exportTake = try XCTUnwrap(exportMetadata.takes.first)
+        let scratchOnlyFile = try XCTUnwrap(exportTake.scratchOnlyFile)
+        XCTAssertNil(exportTake.bpm, "exported take-level bpm stays nil; the path-token fallback is independent")
+        XCTAssertTrue(scratchOnlyFile.contains("_\(String(format: "%03d", CaptureClickTrackDefaults.defaultTimedBPM))_"),
+                      "export_metadata.scratchOnlyFile must use the canonical default-timed-BPM token (\(CaptureClickTrackDefaults.defaultTimedBPM)), got \(scratchOnlyFile)")
+        XCTAssertFalse(scratchOnlyFile.contains("_000_"),
+                       "export_metadata.scratchOnlyFile must not carry a stale _000_ token from take.bpm fallback, got \(scratchOnlyFile)")
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let archive = try builder.createArchive(
+            from: package,
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            archive.archiveURL,
+            to: root.appendingPathComponent("calibration-no-beat-path-token-unzipped", isDirectory: true)
+        )
+        let archivedExportMetadata = try decodeExportMetadataDocument(from: archiveRoot)
+        let archivedExportScratchOnly = try XCTUnwrap(archivedExportMetadata.takes.first?.scratchOnlyFile)
+
+        let manifestData = try Data(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/session_manifest.json")
+        )
+        let manifestJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
+        )
+        let manifestTakes = try XCTUnwrap(manifestJSON["takes"] as? [[String: Any]])
+        let manifestFiles = try XCTUnwrap(manifestTakes.first?["files"] as? [String: String])
+        let manifestScratchOnly = try XCTUnwrap(manifestFiles["scratch_only"])
+        let manifestSerato = try XCTUnwrap(manifestFiles["serato"])
+
+        let audioDirectory = archiveRoot.appendingPathComponent("audio", isDirectory: true)
+        let audioFiles = try FileManager.default.contentsOfDirectory(
+            at: audioDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).map(\.lastPathComponent)
+        let stagedAudioFile = try XCTUnwrap(
+            audioFiles.first(where: { $0.hasSuffix("_scratch_only.wav") }),
+            "no _scratch_only.wav was staged into the archive"
+        )
+
+        let canonicalToken = "_\(String(format: "%03d", CaptureClickTrackDefaults.defaultTimedBPM))_"
+
+        XCTAssertTrue(archivedExportScratchOnly.contains(canonicalToken),
+                      "archived export_metadata.scratchOnlyFile must use \(canonicalToken), got \(archivedExportScratchOnly)")
+        XCTAssertTrue(manifestScratchOnly.contains(canonicalToken),
+                      "archived session_manifest.files.scratch_only must use \(canonicalToken), got \(manifestScratchOnly)")
+        XCTAssertTrue(manifestSerato.contains(canonicalToken),
+                      "archived session_manifest.files.serato must use \(canonicalToken), got \(manifestSerato)")
+        XCTAssertTrue(stagedAudioFile.contains(canonicalToken),
+                      "staged-on-disk audio filename must use \(canonicalToken), got \(stagedAudioFile)")
+
+        XCTAssertFalse(archivedExportScratchOnly.contains("_000_"),
+                       "archived export_metadata.scratchOnlyFile must not contain _000_, got \(archivedExportScratchOnly)")
+        XCTAssertFalse(manifestScratchOnly.contains("_000_"),
+                       "archived session_manifest.files.scratch_only must not contain _000_, got \(manifestScratchOnly)")
+        XCTAssertFalse(manifestSerato.contains("_000_"),
+                       "archived session_manifest.files.serato must not contain _000_, got \(manifestSerato)")
+        XCTAssertFalse(stagedAudioFile.contains("_000_"),
+                       "staged audio filename must not contain _000_, got \(stagedAudioFile)")
+
+        XCTAssertEqual(archivedExportScratchOnly, manifestScratchOnly,
+                       "export_metadata.scratchOnlyFile and session_manifest.files.scratch_only must agree byte-for-byte")
+        XCTAssertEqual("audio/\(stagedAudioFile)", manifestScratchOnly,
+                       "staged-on-disk audio path and session_manifest.files.scratch_only must agree byte-for-byte")
+    }
+
     func testTimedClickExportMetadataPersistsPresetBPMsAndTiming() throws {
         let root = try makeTemporaryDirectory()
         let sessionID = "timed-click-presets"
