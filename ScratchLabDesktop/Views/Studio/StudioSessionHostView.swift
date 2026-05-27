@@ -42,6 +42,9 @@ struct StudioSessionHostView: View {
                         contentEnd: max(draft.config.takeDurationSeconds ?? 0, 1)
                     )
                 }
+                if FeatureFlags.studioArchaeologyEnabled {
+                    StudioArchaeologyView(data: archaeologyData(for: draft))
+                }
                 comingSoonCard
                 Spacer(minLength: 0)
             }
@@ -74,6 +77,17 @@ struct StudioSessionHostView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// Phase D-A2 — derives archaeology chart data from existing
+    /// session state. Returns `.empty` for now because the live plumb
+    /// from `RoutineSessionDraft` through `AudioPhraseSummary` +
+    /// `PhraseBoundaryMapper` + `TimingDrift` is not yet wired in
+    /// production. The renderer ships with this empty contract so the
+    /// surface stays honest until the upstream derivation lands.
+    private func archaeologyData(for draft: RoutineSessionDraft) -> StudioArchaeologyData {
+        _ = draft
+        return .empty
     }
 
     private var placeholder: some View {
