@@ -2491,29 +2491,50 @@ struct ResultsOverlayView: View {
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
-    
+
+    // Reveal sequencing (Phase A slice 8). Each VStack child fades in at
+    // its assigned stage. Backdrop and overall layout are unchanged; the
+    // backdrop is outside the gated region so it appears immediately.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var revealStage: Int = 0
+
+    /// Stage gate used by every animated section. When the polish flag is
+    /// off OR the system has Reduce Motion on, returns the terminal stage
+    /// (4) so every section is visible from the first frame.
+    private var effectiveStage: Int {
+        if !FeatureFlags.sessionCompletePolishEnabled || reduceMotion {
+            return 4
+        }
+        return revealStage
+    }
+
+    private func visible(_ stage: Int) -> Bool { effectiveStage >= stage }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.9)
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 32) {
-                // Performance emoji
+                // Phase 1 — title block: performance emoji + headline + scratch name.
                 Text(accuracy >= 90 ? CoachCopy.Results.emojiMastery : accuracy >= 70 ? CoachCopy.Results.emojiGoodJob : CoachCopy.Results.emojiKeepPracticing)
                     .font(.system(size: 80))
+                    .opacity(visible(1) ? 1 : 0)
+                    .animation(.easeOut(duration: 0.25), value: effectiveStage)
 
-                // Result text
                 VStack(spacing: 8) {
                     Text(headline ?? (accuracy >= 90 ? CoachCopy.Results.mastery : accuracy >= 70 ? CoachCopy.Results.goodJob : CoachCopy.Results.keepPracticing))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
-                    
+
                     Text(sessionTitle ?? scratch.name)
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                 }
-                
-                // Stats grid
+                .opacity(visible(1) ? 1 : 0)
+                .animation(.easeOut(duration: 0.25), value: effectiveStage)
+
+                // Phase 2 — stats grid.
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
                     ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
                     ResultStat(value: "\(score)", label: CoachCopy.Results.scoreLabel, icon: "star.fill")
@@ -2521,10 +2542,15 @@ struct ResultsOverlayView: View {
                     ResultStat(value: "\(bestStreak)", label: CoachCopy.Results.bestStreakLabel, icon: "flame.fill")
                 }
                 .padding(.horizontal, 40)
+                .opacity(visible(2) ? 1 : 0)
+                .animation(.easeOut(duration: 0.25), value: effectiveStage)
 
+                // Phase 3 — supplementary surfaces: timing preview, detail note, progress meter.
                 if let takeEvidence {
                     PracticeTimingPreviewCard(summary: takeEvidence)
                         .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
                 }
 
                 if let detailNote {
@@ -2533,9 +2559,10 @@ struct ResultsOverlayView: View {
                         .foregroundColor(.white.opacity(0.72))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
                 }
-                
-                // Progress to mastery
+
                 let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
                 if accuracy < progressGoal {
                     VStack(spacing: 8) {
@@ -2553,9 +2580,11 @@ struct ResultsOverlayView: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.white.opacity(0.4))
                     }
+                    .opacity(visible(3) ? 1 : 0)
+                    .animation(.easeOut(duration: 0.25), value: effectiveStage)
                 }
-                
-                // Buttons
+
+                // Phase 4 — action buttons.
                 VStack(spacing: 12) {
                     Button(action: onContinue) {
                         Text(continueButtonTitle)
@@ -2566,7 +2595,7 @@ struct ResultsOverlayView: View {
                             .background(Color(hex: "FFD700"))
                             .cornerRadius(12)
                     }
-                    
+
                     Button(action: onExit) {
                         Text(CoachCopy.Results.backToLevel)
                             .font(.system(size: 14, weight: .medium))
@@ -2574,7 +2603,33 @@ struct ResultsOverlayView: View {
                     }
                 }
                 .padding(.horizontal, 40)
+                .opacity(visible(4) ? 1 : 0)
+                .allowsHitTesting(visible(4))
+                .animation(.easeOut(duration: 0.25), value: effectiveStage)
             }
+        }
+        .onAppear(perform: scheduleReveal)
+    }
+
+    /// Staggered fade-in: title at 0 ms, stats at 150 ms, extras at 300 ms,
+    /// buttons at 450 ms. Total reveal completes around 700 ms (last 250 ms
+    /// fade ends ≈ 700 ms after onAppear). Short-circuited to instant when
+    /// the polish flag is off or Reduce Motion is enabled.
+    private func scheduleReveal() {
+        guard FeatureFlags.sessionCompletePolishEnabled, !reduceMotion else {
+            revealStage = 4
+            return
+        }
+        revealStage = 0
+        withAnimation(.easeOut(duration: 0.25)) { revealStage = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.25)) { revealStage = 2 }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+            withAnimation(.easeOut(duration: 0.25)) { revealStage = 3 }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            withAnimation(.easeOut(duration: 0.25)) { revealStage = 4 }
         }
     }
 }
