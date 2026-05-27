@@ -410,6 +410,13 @@ struct ScratchMotionLane: View {
     /// The accent picks up the active segment: amber while copying, blue
     /// while watching the demo (and blue when there's no segment, e.g.
     /// scored modes).
+    ///
+    /// When `FeatureFlags.beatPulseEnabled` is on AND the content has a
+    /// non-nil/positive `beatsPerMinute`, the white line's opacity briefly
+    /// bumps from the 0.8 baseline to 1.0 and back with a sine envelope
+    /// across the first 120 ms of each beat. Line weight and the colored
+    /// end dots are unchanged. Open mode without a beat (`bpm == nil`)
+    /// receives no pulse — the line stays at the static 0.8.
     private func drawActionLine(in context: GraphicsContext, viewport: LaneViewport,
                                 segment: LaneSegment?) {
         let pos = viewport.actionLinePos
@@ -422,7 +429,8 @@ struct ScratchMotionLane: View {
         var line = Path()
         line.move(to: viewport.point(scroll: pos, cross: 0))
         line.addLine(to: viewport.point(scroll: pos, cross: viewport.crossLength))
-        context.stroke(line, with: .color(.white.opacity(0.8)), lineWidth: 1.5)
+        let opacity = actionLineOpacity(at: viewport.now)
+        context.stroke(line, with: .color(.white.opacity(opacity)), lineWidth: 1.5)
 
         let dotRadius: CGFloat = 2.5
         for cross in [CGFloat(0), viewport.crossLength] {
@@ -432,6 +440,33 @@ struct ScratchMotionLane: View {
                                        width: dotRadius * 2, height: dotRadius * 2)),
                 with: .color(tint))
         }
+    }
+
+    // MARK: - Action-line pulse
+
+    private static let actionLineBaseOpacity: Double = 0.8
+    private static let actionLinePulsePeakBoost: Double = 0.2
+    private static let actionLinePulseDuration: TimeInterval = 0.12
+
+    /// White-line opacity at the given lane time. Returns the static
+    /// `actionLineBaseOpacity` (0.8) when the beat pulse is disabled or no
+    /// tempo is declared. With both conditions met, the first
+    /// `actionLinePulseDuration` (120 ms) of each beat receives a smooth
+    /// sine bump up to `actionLineBaseOpacity + actionLinePulsePeakBoost`
+    /// (1.0) before returning to baseline.
+    private func actionLineOpacity(at time: TimeInterval) -> Double {
+        guard FeatureFlags.beatPulseEnabled,
+              let bpm = content.beatsPerMinute,
+              bpm > 0 else {
+            return Self.actionLineBaseOpacity
+        }
+        let beatInterval = 60.0 / bpm
+        let phase = time.truncatingRemainder(dividingBy: beatInterval)
+        guard phase >= 0, phase < Self.actionLinePulseDuration else {
+            return Self.actionLineBaseOpacity
+        }
+        let envelope = sin(.pi * phase / Self.actionLinePulseDuration)
+        return Self.actionLineBaseOpacity + Self.actionLinePulsePeakBoost * envelope
     }
 
     // MARK: - Overlay: segment labels

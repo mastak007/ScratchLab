@@ -9,6 +9,7 @@ enum FeatureFlags {
 
     static var streakChipEnabled: Bool      { isOn("STREAK_CHIP",      releaseDefault: true) }
     static var recentSessionsEnabled: Bool  { isOn("RECENT_SESSIONS",  releaseDefault: true) }
+    static var beatPulseEnabled: Bool       { isOn("BEAT_PULSE",       releaseDefault: true) }
 
     // MARK: Resolution
 
