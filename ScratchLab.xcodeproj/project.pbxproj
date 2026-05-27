@@ -16,6 +16,8 @@
 		FFT2011000FFT002FFT00001 /* FeatureFlagsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFT2010000FFT002FFT00001 /* FeatureFlagsTests.swift */; };
 		SLP0001000SLP001SLP00001 /* ScratchLabPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLP0000000SLP001SLP00001 /* ScratchLabPalette.swift */; };
 		SLP0002000SLP001SLP00001 /* ScratchLabPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLP0000000SLP001SLP00001 /* ScratchLabPalette.swift */; };
+		CCP0001000CCP001CCP00001 /* CoachCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCP0000000CCP001CCP00001 /* CoachCopy.swift */; };
+		CCP0002000CCP001CCP00001 /* CoachCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCP0000000CCP001CCP00001 /* CoachCopy.swift */; };
 		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
 		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
 		10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000008 /* DJRigLayoutDetector.swift */; };
@@ -365,6 +367,7 @@
 		FFL0000000FFL001FFL00001 /* FeatureFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlags.swift; sourceTree = "<group>"; };
 		FFT2010000FFT002FFT00001 /* FeatureFlagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlagsTests.swift; sourceTree = "<group>"; };
 		SLP0000000SLP001SLP00001 /* ScratchLabPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabPalette.swift; sourceTree = "<group>"; };
+		CCP0000000CCP001CCP00001 /* CoachCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachCopy.swift; sourceTree = "<group>"; };
 		0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ReadingDeprecated.swift"; sourceTree = "<group>"; };
 		148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+WritingDeprecated.swift"; sourceTree = "<group>"; };
 		176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionSharePresenter.swift; sourceTree = "<group>"; };
@@ -859,6 +862,7 @@
 				VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */,
 				FFL0000000FFL001FFL00001 /* FeatureFlags.swift */,
 				SLP0000000SLP001SLP00001 /* ScratchLabPalette.swift */,
+				CCP0000000CCP001CCP00001 /* CoachCopy.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1202,6 +1206,7 @@
 				STS0001000STS001STS00001 /* ScratchTypeMetadataSafety.swift in Sources */,
 				FFL0002000FFL001FFL00001 /* FeatureFlags.swift in Sources */,
 				SLP0002000SLP001SLP00001 /* ScratchLabPalette.swift in Sources */,
+				CCP0002000CCP001CCP00001 /* CoachCopy.swift in Sources */,
 				NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */,
 				SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */,
 				SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */,
@@ -1323,6 +1328,7 @@
 				A1000004 /* PracticeModeView.swift in Sources */,				SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */,
 				FFL0001000FFL001FFL00001 /* FeatureFlags.swift in Sources */,
 				SLP0001000SLP001SLP00001 /* ScratchLabPalette.swift in Sources */,
+				CCP0001000CCP001CCP00001 /* CoachCopy.swift in Sources */,
 				SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */,
 				A1000025 /* CompanionCameraView.swift in Sources */,
 				A1000029 /* StagingInspectorView.swift in Sources */,

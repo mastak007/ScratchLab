@@ -37,11 +37,11 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
 
     var explainer: String {
         switch self {
-        case .autoCut: return "Animates the target pattern as a looping visual preview. App audio is coming later — for now, no playback."
-        case .demo:    return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
-        case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
-        case .coached: return "Target pattern loops in time. Mic listens for your scratches; in-session comparison is coming."
-        case .open:    return "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on."
+        case .autoCut: return CoachCopy.AssistMode.autoCutExplainer
+        case .demo:    return CoachCopy.AssistMode.demoExplainer
+        case .guided:  return CoachCopy.AssistMode.guidedExplainer
+        case .coached: return CoachCopy.AssistMode.coachedExplainer
+        case .open:    return CoachCopy.AssistMode.openExplainer
         }
     }
 }
@@ -330,13 +330,13 @@ struct PracticeModeView: View {
     private var currentTipText: String {
         if isComboChallengeMode {
             return comboCompleted
-                ? "Phrase cleared. Hold onto the same clean motion."
-                : "Chain four clean baby hits before the phrase window resets."
+                ? CoachCopy.Tip.comboCleared
+                : CoachCopy.Tip.comboInProgress
         }
         if isGuidedDrillMode {
-            return "Follow the cue card and hit each move on time."
+            return CoachCopy.Tip.guided
         }
-        return sessionTipText.isEmpty ? (activeScratch.tips.first ?? "Focus on clean execution") : sessionTipText
+        return sessionTipText.isEmpty ? (activeScratch.tips.first ?? CoachCopy.Tip.defaultExecution) : sessionTipText
     }
 
     private var coachInstruction: ScratchCoachInstruction {
@@ -1146,7 +1146,7 @@ struct PracticeModeView: View {
         lastComboLockAt = nil
         sessionTipText = isComboChallengeMode
             ? "Chain all \(comboTargetStepCount) baby scratches before the phrase window resets."
-            : (activeScratch.tips.randomElement() ?? "Focus on clean execution")
+            : (activeScratch.tips.randomElement() ?? CoachCopy.Tip.defaultExecution)
         
         isSessionActive = true
         isPaused = false
@@ -2499,12 +2499,12 @@ struct ResultsOverlayView: View {
             
             VStack(spacing: 32) {
                 // Performance emoji
-                Text(accuracy >= 90 ? "🔥" : accuracy >= 70 ? "👏" : "💪")
+                Text(accuracy >= 90 ? CoachCopy.Results.emojiMastery : accuracy >= 70 ? CoachCopy.Results.emojiGoodJob : CoachCopy.Results.emojiKeepPracticing)
                     .font(.system(size: 80))
-                
+
                 // Result text
                 VStack(spacing: 8) {
-                    Text(headline ?? (accuracy >= 90 ? "MASTERY!" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
+                    Text(headline ?? (accuracy >= 90 ? CoachCopy.Results.mastery : accuracy >= 70 ? CoachCopy.Results.goodJob : CoachCopy.Results.keepPracticing))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
                     
@@ -2516,9 +2516,9 @@ struct ResultsOverlayView: View {
                 // Stats grid
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
                     ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
-                    ResultStat(value: "\(score)", label: "Score", icon: "star.fill")
-                    ResultStat(value: "\(attempts)", label: "Attempts", icon: "number")
-                    ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
+                    ResultStat(value: "\(score)", label: CoachCopy.Results.scoreLabel, icon: "star.fill")
+                    ResultStat(value: "\(attempts)", label: CoachCopy.Results.attemptsLabel, icon: "number")
+                    ResultStat(value: "\(bestStreak)", label: CoachCopy.Results.bestStreakLabel, icon: "flame.fill")
                 }
                 .padding(.horizontal, 40)
 
@@ -2539,17 +2539,17 @@ struct ResultsOverlayView: View {
                 let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
                 if accuracy < progressGoal {
                     VStack(spacing: 8) {
-                        Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Progress to Mastery")
+                        Text(primaryMetricLabel == "Phrase Lock" ? CoachCopy.Results.progressToPhraseClear : CoachCopy.Results.progressToMastery)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
-                        
+
                         ProgressView(value: accuracy, total: progressGoal)
                             .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "FFD700")))
                             .padding(.horizontal, 40)
-                        
+
                         Text(primaryMetricLabel == "Phrase Lock"
-                            ? "\(Int(progressGoal - accuracy))% more to clear the phrase"
-                            : "\(Int(progressGoal - accuracy))% more to master")
+                            ? CoachCopy.Results.phraseClearProgress(percentRemaining: Int(progressGoal - accuracy))
+                            : CoachCopy.Results.masteryProgress(percentRemaining: Int(progressGoal - accuracy)))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.white.opacity(0.4))
                     }
@@ -2568,7 +2568,7 @@ struct ResultsOverlayView: View {
                     }
                     
                     Button(action: onExit) {
-                        Text("Back to Level")
+                        Text(CoachCopy.Results.backToLevel)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                     }
@@ -2607,29 +2607,27 @@ struct ResultStat: View {
 
 // Visually quieter than the stats grid above it — labels in muted white,
 // values in monospaced light type. Reads as supplementary coaching
-// context, not a primary score. Copy stays inside the PROFILE.md vocab:
-// "on-device audio onsets", "(preview)", "aren't saved, exported, or
-// scored". No classifier names, no confidence numbers.
+// context, not a primary score. Copy via CoachCopy.TimingPreview.
 fileprivate struct PracticeTimingPreviewCard: View {
     let summary: TakeEvidenceSummary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("PRACTICE TIMING · PREVIEW")
+            Text(CoachCopy.TimingPreview.header)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.6)
                 .foregroundColor(.white.opacity(0.55))
 
             VStack(alignment: .leading, spacing: 6) {
-                row(label: "Take length", value: takeLengthText)
-                row(label: "Attempts on mic", value: "\(summary.attempts)")
-                row(label: "On-beat estimate",
-                    value: "\(summary.onBeatCount) / \(summary.attempts) (preview)")
-                row(label: "Avg timing",
-                    value: "±\(avgOffsetMsText) ms (preview)")
+                row(label: CoachCopy.TimingPreview.takeLengthLabel, value: takeLengthText)
+                row(label: CoachCopy.TimingPreview.attemptsLabel, value: "\(summary.attempts)")
+                row(label: CoachCopy.TimingPreview.onBeatLabel,
+                    value: "\(summary.onBeatCount) / \(summary.attempts) \(CoachCopy.TimingPreview.previewSuffix)")
+                row(label: CoachCopy.TimingPreview.avgTimingLabel,
+                    value: "±\(avgOffsetMsText) ms \(CoachCopy.TimingPreview.previewSuffix)")
             }
 
-            Text("Timing estimates are based on on-device audio onsets. They aren't saved, exported, or scored.")
+            Text(CoachCopy.TimingPreview.disclaimer)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white.opacity(0.45))
                 .fixedSize(horizontal: false, vertical: true)
