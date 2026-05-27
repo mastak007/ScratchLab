@@ -1761,6 +1761,48 @@ struct MacAnalyzerView: View {
         }
     }
 
+    /// Styling for the Review "Detected" cell so the colour/icon
+    /// reflect confidence instead of mere label presence. PROFILE.md
+    /// keeps label-as-truth out of Review, so a label without a High
+    /// confidence reading must not be presented as confirmed.
+    private struct ReviewDetectedStyle {
+        let color: Color
+        let systemImage: String
+    }
+
+    private var reviewDetectedStyle: ReviewDetectedStyle {
+        let amber = Color(red: 1.0, green: 0.72, blue: 0.10)
+        let rawLabel = currentRoutineArtifactStatus?.detectedLabel
+            ?? captureEngine.lastScratchDetection?.scratchName
+        guard let label = rawLabel, !label.isEmpty else {
+            return ReviewDetectedStyle(color: .secondary, systemImage: "questionmark.circle")
+        }
+        switch reviewConfidenceLabel {
+        case "High":
+            return ReviewDetectedStyle(color: .green, systemImage: "checkmark.seal")
+        case "Medium":
+            return ReviewDetectedStyle(color: amber, systemImage: "checkmark.seal")
+        default:
+            return ReviewDetectedStyle(color: .secondary, systemImage: "questionmark.circle")
+        }
+    }
+
+    /// Friendly user-facing title for a `SessionReviewWarning.Kind`. The
+    /// model's snake_case raw value is preserved for export/schema; this
+    /// helper exists purely so the Review actions card doesn't leak the
+    /// enum spelling into the UI.
+    private func reviewWarningTitle(
+        _ kind: CaptureCore.SessionReviewWarning.Kind
+    ) -> String {
+        switch kind {
+        case .clippedAudio:        return "Audio clipping"
+        case .lowAmplitude:        return "Low signal level"
+        case .unstableOnsetSpacing: return "Unstable timing spacing"
+        case .missingPhraseRegion: return "No audio activity"
+        case .inconsistentDirection: return "Inconsistent direction"
+        }
+    }
+
     private var reviewDecisionSummary: String {
         guard hasRecordedTake else {
             return "No take to review yet"
@@ -3617,7 +3659,7 @@ struct MacAnalyzerView: View {
                 }
 
                 HStack(spacing: 8) {
-                    testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: (currentRoutineArtifactStatus?.detectedLabel ?? captureEngine.lastScratchDetection?.scratchName) == nil ? .secondary : .green)
+                    testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: reviewDetectedStyle.color)
                     testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
                 }
 
@@ -3833,7 +3875,7 @@ struct MacAnalyzerView: View {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                                 .font(.system(size: 10))
-                            Text("\(warning.kind.rawValue): \(warning.detail)")
+                            Text("\(reviewWarningTitle(warning.kind)): \(warning.detail)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -4271,7 +4313,7 @@ struct MacAnalyzerView: View {
         let exportReady: Bool = currentRoutineArtifactStatus?.readiness == .ready
         return HStack(alignment: .top, spacing: 12) {
             reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: .white)
-            reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: "checkmark.seal", color: detectedLabel == "Pattern not confirmed" ? .secondary : .green)
+            reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: reviewDetectedStyle.systemImage, color: reviewDetectedStyle.color)
             reviewFooterMetric(title: "Confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
             reviewFooterMetric(title: "Source", value: capturedSource.label, systemImage: capturedSource.systemImage, color: capturedSource.color)
             reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? .green : .secondary)
@@ -4318,15 +4360,15 @@ struct MacAnalyzerView: View {
         }
         if !snapshot.recordMovementEvents.isEmpty {
             if snapshot.notationSource == "detected" {
-                return ReviewCapturedSource(label: "Video movement", systemImage: "figure.wave", color: .green)
+                return ReviewCapturedSource(label: "Video motion", systemImage: "figure.wave", color: .green)
             }
-            return ReviewCapturedSource(label: "Movement recorded", systemImage: "figure.wave", color: amber)
+            return ReviewCapturedSource(label: "Motion only", systemImage: "figure.wave", color: amber)
         }
         if !snapshot.faderEvents.isEmpty {
             return ReviewCapturedSource(label: "Fader", systemImage: "slider.horizontal.3", color: .green)
         }
         if !snapshot.audioEvents.isEmpty {
-            return ReviewCapturedSource(label: "Audio inferred", systemImage: "ear.and.waveform", color: amber)
+            return ReviewCapturedSource(label: "Audio only (timing)", systemImage: "ear.and.waveform", color: amber)
         }
         if !snapshot.mixerMidiEvents.isEmpty {
             return ReviewCapturedSource(label: "Raw MIDI unmapped", systemImage: "pianokeys", color: .secondary)
@@ -6765,14 +6807,14 @@ private struct ReviewOverlayPlayableSurface: View {
             )
         case .missing:
             return ChipPalette(
-                label: "Missing",
+                label: "Unplayed",
                 symbol: "circle.dashed",
                 foreground: amber,
                 background: amber.opacity(0.15)
             )
         case .extra:
             return ChipPalette(
-                label: "Extra",
+                label: "Off-target",
                 symbol: "square.fill",
                 foreground: amber,
                 background: amber.opacity(0.15)
