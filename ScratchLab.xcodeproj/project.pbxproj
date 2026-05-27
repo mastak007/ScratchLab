@@ -309,6 +309,9 @@
 		CFP1001000CFP001CFP00001 /* CinematicFrameProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFP1000000CFP001CFP00001 /* CinematicFrameProducer.swift */; };
 		CFP2011000CFP002CFP00001 /* CinematicFrameProducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFP2010000CFP002CFP00001 /* CinematicFrameProducerTests.swift */; };
 		SAV1001000SAV001SAV00001 /* StudioArchaeologyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAV1000000SAV001SAV00001 /* StudioArchaeologyView.swift */; };
+		CFR1001000CFR001CFR00001 /* CinematicFrameRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFR1000000CFR001CFR00001 /* CinematicFrameRenderer.swift */; };
+		CFR2011000CFR002CFR00001 /* CinematicFrameRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFR2010000CFR002CFR00001 /* CinematicFrameRendererTests.swift */; };
+		NOV1001000NOV001NOV00001 /* NotationOverlayVideoExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = NOV1000000NOV001NOV00001 /* NotationOverlayVideoExporter.swift */; };
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
@@ -471,6 +474,9 @@
 		CFP1000000CFP001CFP00001 /* CinematicFrameProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/CinematicFrameProducer.swift; sourceTree = "<group>"; };
 		CFP2010000CFP002CFP00001 /* CinematicFrameProducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CinematicFrameProducerTests.swift; sourceTree = "<group>"; };
 		SAV1000000SAV001SAV00001 /* StudioArchaeologyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioArchaeologyView.swift; sourceTree = "<group>"; };
+		CFR1000000CFR001CFR00001 /* CinematicFrameRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/CinematicFrameRenderer.swift; sourceTree = "<group>"; };
+		CFR2010000CFR002CFR00001 /* CinematicFrameRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CinematicFrameRendererTests.swift; sourceTree = "<group>"; };
+		NOV1000000NOV001NOV00001 /* NotationOverlayVideoExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/NotationOverlayVideoExporter.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
@@ -701,6 +707,7 @@
 				CED2010000CED002CED00001 /* CoachingEventDisplayabilityTests.swift */,
 				RLR2010000RLR002RLR00001 /* ReplayLoopRangeTests.swift */,
 				CFP2010000CFP002CFP00001 /* CinematicFrameProducerTests.swift */,
+				CFR2010000CFR002CFR00001 /* CinematicFrameRendererTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
 				NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */,
 				NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */,
@@ -1032,6 +1039,8 @@
 				SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */,
 				STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */,
 				CFP1000000CFP001CFP00001 /* CinematicFrameProducer.swift */,
+				CFR1000000CFR001CFR00001 /* CinematicFrameRenderer.swift */,
+				NOV1000000NOV001NOV00001 /* NotationOverlayVideoExporter.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -1244,6 +1253,8 @@
 				SRS1001000SRS001SRS00001 /* StudioReplayScrubber.swift in Sources */,
 				CFP1001000CFP001CFP00001 /* CinematicFrameProducer.swift in Sources */,
 				SAV1001000SAV001SAV00001 /* StudioArchaeologyView.swift in Sources */,
+				CFR1001000CFR001CFR00001 /* CinematicFrameRenderer.swift in Sources */,
+				NOV1001000NOV001NOV00001 /* NotationOverlayVideoExporter.swift in Sources */,
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
 				DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */,
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
@@ -1549,6 +1560,7 @@
 				CED2011000CED002CED00001 /* CoachingEventDisplayabilityTests.swift in Sources */,
 				RLR2011000RLR002RLR00001 /* ReplayLoopRangeTests.swift in Sources */,
 				CFP2011000CFP002CFP00001 /* CinematicFrameProducerTests.swift in Sources */,
+				CFR2011000CFR002CFR00001 /* CinematicFrameRendererTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
 				NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */,
 				NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */,
