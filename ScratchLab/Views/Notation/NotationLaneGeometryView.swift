@@ -71,18 +71,37 @@ struct NotationLaneGeometryView: View {
     }
 
     private func drawStrokes(in context: inout GraphicsContext) {
+        let tintEnabled = FeatureFlags.laneJudgmentTintEnabled
         for stroke in geometry.strokes {
             var path = Path()
             path.move(to: CGPoint(x: stroke.xStart, y: stroke.yStart))
             path.addLine(to: CGPoint(x: stroke.xEnd, y: stroke.yEnd))
             let opacity: Double = stroke.family == nil ? 0.7 : 0.95
             let lineWidth: Double = stroke.coachingKinds.isEmpty ? 2.0 : 2.8
+            let baseColor: Color = tintEnabled
+                ? Self.judgmentTint(for: stroke.coachingKinds)
+                : Color.primary
             context.stroke(
                 path,
-                with: .color(Color.primary.opacity(opacity)),
+                with: .color(baseColor.opacity(opacity)),
                 lineWidth: lineWidth
             )
         }
+    }
+
+    /// Maps a stroke's `coachingKinds` to a `ScratchLabPalette` semantic
+    /// alias so the spatial replay renderer (Phase D-S) can address the
+    /// same color by name. Strokes with no usable timing signal fall
+    /// back to `Color.primary` so the lane stays a neutral reference
+    /// surface — the app never asserts an on-beat verdict from absence
+    /// of evidence.
+    ///
+    /// Pure static function so the DEBUG-only test target can lock the
+    /// mapping. Phase B1 release-default-false until checkpoint α.
+    static func judgmentTint(for kinds: [CoachingEventKind]) -> Color {
+        if kinds.contains(.lateReversal)  { return ScratchLabPalette.warning }
+        if kinds.contains(.earlyReversal) { return ScratchLabPalette.info }
+        return Color.primary
     }
 
     private func drawPlayhead(in context: inout GraphicsContext) {
