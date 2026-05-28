@@ -1410,6 +1410,14 @@ struct PracticeModeView: View {
         // analysis entirely.
         appendLaneUserEventForDetection(timing: result.timing)
 
+        // Phase B3 production wiring (interim semantics): bump the
+        // momentum HUD's streak on a clean on-beat attempt, reset on
+        // a clearly off-window one. Until real phrase boundaries reach
+        // live Practice (B2 / C2), this is an *attempt streak*, not a
+        // phrase streak — the visible label intentionally says
+        // "Timing streak" to match what the count actually represents.
+        applyMomentumUpdate(for: result.timing)
+
         // Update accuracy (running average)
         if currentAccuracy == 0 {
             currentAccuracy = result.accuracy
@@ -1712,6 +1720,37 @@ struct PracticeModeView: View {
                 .practiceCount
         )
         return PracticeMilestonePicker.pick(from: context)
+    }
+
+    /// Phase B3 production wiring. Adjusts `phraseStreakCount` based on
+    /// the same live `LaneJudgment.from(...)` mapper the B1 lane tint
+    /// already uses, so the HUD chip and the lane tick read the exact
+    /// same evidence:
+    ///   - `.onBeat` → increment streak by 1.
+    ///   - `.early` / `.late` → reset streak to 0 (a clearly off-window
+    ///     attempt breaks the streak; honest, not punitive).
+    ///   - `.neutral` → hold (no usable timing signal; never claim a
+    ///     verdict from absence of evidence).
+    ///
+    /// Interim semantics: this is an on-beat *attempt* streak, not a
+    /// phrase streak. The internal field stays named
+    /// `phraseStreakCount` so the codepath stays ready for the
+    /// eventual phrase-grouped source from B2 / C2; the visible label
+    /// in `CoachCopy.PhraseMomentum` says "Timing streak" to match
+    /// what the count represents today.
+    private func applyMomentumUpdate(for timing: ScratchAnalysisResult.TimingResult) {
+        let judgment = LaneJudgment.from(
+            beatOffsetMilliseconds: timing.beatOffset,
+            isOnBeat: timing.isOnBeat
+        )
+        switch judgment {
+        case .onBeat:
+            phraseStreakCount += 1
+        case .early, .late:
+            phraseStreakCount = 0
+        case .neutral:
+            break
+        }
     }
 
     // Captures one signed-offset sample for the drift coaching pipeline.

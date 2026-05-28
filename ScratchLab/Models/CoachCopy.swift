@@ -146,14 +146,18 @@ enum CoachCopy {
 
     // MARK: Phrase momentum HUD (Phase B3)
     //
-    // Visual-only chip in PracticeModeView. Tracks consecutive phrases
-    // landed within the timing window — never affects any score or
-    // attempt counter. Copy stays declarative: a small numeric badge
-    // plus a static label, no celebratory verbs and no PROFILE.md-
-    // forbidden adjectives.
+    // Visual-only chip in PracticeModeView. **Interim semantics:**
+    // until real phrase boundaries flow into live Practice (Phase C2
+    // / B2 production plumb), this HUD counts consecutive on-beat
+    // attempts — a "timing streak" — not literal phrase completions.
+    // The internal @State name still says `phraseStreakCount` so the
+    // codepath stays ready for the eventual phrase-grouped source;
+    // the visible label says "Timing streak" because that is what the
+    // count actually represents today. No celebratory verbs, no
+    // PROFILE.md-forbidden adjectives.
 
     enum PhraseMomentum {
-        static let chipLabel = "Phrases in a row"
+        static let chipLabel = "Timing streak"
         static func chipValue(_ count: Int) -> String {
             "\(count)"
         }
