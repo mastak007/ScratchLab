@@ -565,11 +565,13 @@ struct MacAnalyzerView: View {
 
     /// Compact visual notation guide that pairs with the coach/demo
     /// audio in the macOS Practice surface. Sits below the camera
-    /// stage so it adds context without replacing the camera. Reuses
-    /// the existing demo coordinator clock so the guide auto-syncs
-    /// with whatever drives the Replay button.
+    /// stage so it adds context without replacing the camera.
+    ///
+    /// Observes `demoModeController` (the same controller wired to
+    /// the visible Coach → Replay button), so the canvas follows
+    /// exactly the audio the user can hear when they tap Replay.
     private var babyScratchGuideCard: some View {
-        MacBabyScratchPracticeGuideView(demo: babyScratchDemo)
+        MacBabyScratchPracticeGuideView(demoController: demoModeController)
     }
 
     private var captureWorkspace: some View {

@@ -17,19 +17,23 @@ import SwiftUI
 /// - Reads like instructional scratch notation, not like an
 ///   oscilloscope or mirrored waveform.
 ///
-/// **Sync to playback:** the canvas lives inside a `TimelineView` that
-/// fires at the display refresh rate and reads
-/// `BabyScratchDemoPlaybackCoordinator.currentAudioTime` *inside the
-/// closure*, so each tick re-renders against a fresh demo clock — no
-/// caching shenanigans, no manual `@Published` plumb. Tiling uses the
-/// deterministic `notationCanvasLoopTime(for:cycleDuration:)` helper
-/// (commit a4ea922) so every Baby Scratch repetition continues to
-/// animate, not just the first.
+/// **Sync to playback:** the macOS Practice sidebar's visible
+/// Coach → Replay button drives `ScratchLabDemoModeController` (NOT
+/// `BabyScratchDemoPlaybackCoordinator`). The guide therefore
+/// observes the same `demoController` so the canvas follows the
+/// audio the user can actually hear. Reads
+/// `demoController.demoPlayer.sampledPlaybackTime()` *inside* the
+/// `TimelineView` closure each tick — that is the host-clock-
+/// interpolated, latency-compensated playhead the iOS Demo lane
+/// already uses. Tiling flows through the deterministic
+/// `BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
+/// for:cycleDuration:)` helper (commit a4ea922) so every Baby
+/// Scratch repetition continues to animate, not just the first.
 ///
 /// **macOS-only** by file placement. iOS Practice is unchanged.
 struct MacBabyScratchPracticeGuideView: View {
 
-    @ObservedObject var demo: BabyScratchDemoPlaybackCoordinator
+    @ObservedObject var demoController: ScratchLabDemoModeController
 
     private let notation: ScratchNotation? = ScratchNotation.loadBabyScratchFromBundle()
 
@@ -67,19 +71,16 @@ struct MacBabyScratchPracticeGuideView: View {
             // Read demo clock *inside* the closure so the canvas
             // re-renders against the fresh audio time on every tick.
             //
-            // Use `sampledPlaybackTime()` rather than the raw
-            // `currentAudioTime` — the sampled clock is the smoothing,
-            // host-clock-interpolated playhead the upstream code
-            // already uses for the iOS Demo lane (see
-            // `PracticeModeView.activeLane` and `DemoAudioClock` in
-            // `ScratchCoachDemoAudioPlayer`). The raw player time is a
-            // coarse polled sample of `AVAudioPlayer.currentTime` and
-            // can repeat the same value across consecutive ticks,
-            // which made the guide canvas appear frozen during
-            // playback. The sampled time always advances during
-            // playback and holds during pause/stop.
+            // Source: `demoController.demoPlayer.sampledPlaybackTime()`
+            // — the same host-clock-interpolated playhead the iOS Demo
+            // lane uses and the same player the sidebar's visible
+            // Replay button drives. Earlier wiring read
+            // `babyScratchDemo.currentAudioTime`, which is a separate
+            // demo player not bound to that button; pressing Replay
+            // started one player while the guide listened to the
+            // other, so the canvas stayed frozen.
             let loopDuration = max(notation?.timelineDuration ?? 0, 0.0001)
-            let audioTime = demo.audioPlayer.sampledPlaybackTime()
+            let audioTime = demoController.demoPlayer.sampledPlaybackTime()
             let now = BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
                 for: audioTime,
                 cycleDuration: loopDuration
@@ -97,7 +98,7 @@ struct MacBabyScratchPracticeGuideView: View {
 
     private var captionLine: some View {
         Text(
-            demo.isPlaying
+            demoController.demoPlayer.isPlaying
                 ? CoachCopy.PracticeGuide.babyScratchPlayingCaption
                 : CoachCopy.PracticeGuide.babyScratchIdleCaption
         )
