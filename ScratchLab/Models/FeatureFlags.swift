@@ -25,8 +25,8 @@ enum FeatureFlags {
     static var lanePhraseTintEnabled: Bool     { isOn("LANE_PHRASE_TINT",     releaseDefault: true,  debugDefault: true) }
     static var laneMicroFeedbackEnabled: Bool  { isOn("LANE_MICRO_FEEDBACK",  releaseDefault: true,  debugDefault: true) }
     static var phraseMomentumHUDEnabled: Bool  { isOn("PHRASE_MOMENTUM_HUD",  releaseDefault: true,  debugDefault: true) }
-    static var unlockLadderEnabled: Bool       { isOn("UNLOCK_LADDER",        releaseDefault: false, debugDefault: false) }
-    static var inSessionMomentumEnabled: Bool  { isOn("IN_SESSION_MOMENTUM",  releaseDefault: false, debugDefault: false) }
+    static var unlockLadderEnabled: Bool       { isOn("UNLOCK_LADDER",        releaseDefault: true,  debugDefault: true) }
+    static var inSessionMomentumEnabled: Bool  { isOn("IN_SESSION_MOMENTUM",  releaseDefault: true,  debugDefault: true) }
     static var sessionReplayEnabled: Bool      { isOn("SESSION_REPLAY",       releaseDefault: false, debugDefault: false) }
 
     // MARK: Phase C — coach intelligence + structured training
