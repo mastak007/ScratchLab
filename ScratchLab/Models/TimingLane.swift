@@ -135,6 +135,61 @@ struct LaneUserEvent: Equatable, Sendable {
     let startTime: TimeInterval
     let endTime: TimeInterval
     let direction: ScratchNotationDirection
+    /// Phase B1 — optional visual judgment for the user-attempt tick.
+    /// Renderer consumes this only when
+    /// `FeatureFlags.laneJudgmentTintEnabled` is on; nil is the
+    /// default so existing call sites compile unchanged and produce
+    /// the same neutral tick they always have.
+    ///
+    /// Presentation-only: deliberately not a `CoachingEventKind`. A
+    /// user-attempt tick being "early" or "late" relative to the
+    /// action line is a UI signal, not a coaching event — keeping the
+    /// types separate prevents the renderer's visual states from
+    /// leaking into the coaching value-type contract.
+    var judgment: LaneJudgment? = nil
+}
+
+// MARK: - LaneJudgment
+
+/// Presentation-only judgment of one user-attempt tick relative to the
+/// nearest beat. Pure value type; no clock, no UI, no coaching
+/// implication. Renderer maps each case to a `ScratchLabPalette`
+/// semantic alias per the Phase B AR-prep contract:
+///
+/// - `.onBeat` → success
+/// - `.early`  → info
+/// - `.late`   → warning
+/// - `.neutral` → fall back to today's white tint (no usable signal)
+enum LaneJudgment: String, Equatable, Sendable, CaseIterable {
+    case onBeat
+    case early
+    case late
+    case neutral
+
+    /// Threshold (in milliseconds, signed) above which an attempt
+    /// counts as outside the on-beat window. Matches the same 80 ms
+    /// boundary the Phase C1 drift summary uses so the lane tick and
+    /// the post-session summary read consistent.
+    static let outsideWindowThresholdMs: Double = 80
+
+    /// Pure, deterministic mapping from a signed beat offset (in
+    /// milliseconds; positive = late, negative = early) plus the
+    /// upstream `isOnBeat` verdict.
+    ///
+    /// `isOnBeat == true` always wins over a marginally-outside-window
+    /// numeric offset (mirrors the upstream pipeline's own definition
+    /// of "on beat"). Non-finite or NaN offsets collapse to
+    /// `.neutral`.
+    static func from(
+        beatOffsetMilliseconds offset: Double,
+        isOnBeat: Bool
+    ) -> LaneJudgment {
+        guard offset.isFinite else { return .neutral }
+        if isOnBeat { return .onBeat }
+        if offset > outsideWindowThresholdMs { return .late }
+        if offset < -outsideWindowThresholdMs { return .early }
+        return .onBeat
+    }
 }
 
 // MARK: - Content

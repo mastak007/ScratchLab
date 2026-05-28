@@ -405,12 +405,21 @@ struct ScratchMotionLane: View {
 
     /// Draws the user's own attempt marks alongside the reference curve.
     ///
-    /// SCAFFOLD. `userEvents` is empty on every shipping call path, so this
-    /// draws nothing today. It keeps a populated render path ready for the
-    /// future timing-comparison overlay; wiring `userEvents` to a live source
-    /// (mic analysis, capture, scoring) is deliberately out of scope here.
+    /// Phase B1 — when `FeatureFlags.laneJudgmentTintEnabled` is on AND
+    /// the event carries a non-nil `LaneJudgment`, each tick paints in
+    /// the corresponding `ScratchLabPalette` semantic alias:
+    ///
+    /// - `.onBeat` → success (the user landed inside the window)
+    /// - `.early`  → info (the user landed early)
+    /// - `.late`   → warning (the user landed late)
+    /// - `.neutral` → today's white tint (no usable timing signal)
+    ///
+    /// Flag-off OR judgment-nil paths fall back to the original
+    /// white tint exactly as before — no production behaviour change
+    /// when the flag is default-false.
     private func drawUserEvents(in context: GraphicsContext, viewport: LaneViewport) {
         let inset = min(max(viewport.crossLength * 0.14, 14), 40)
+        let tintEnabled = FeatureFlags.laneJudgmentTintEnabled
         for event in userEvents
         where viewport.isVisible(from: event.startTime, to: event.endTime) {
             let p0 = viewport.pos(for: event.startTime)
@@ -418,9 +427,27 @@ struct ScratchMotionLane: View {
             let mark = viewport.rect(scroll0: p0, scroll1: p1,
                                      cross0: viewport.crossLength - inset + 5,
                                      cross1: viewport.crossLength - inset + 9)
+            let fillColor: Color = tintEnabled
+                ? Self.tintColor(for: event.judgment)
+                : .white.opacity(0.85)
             context.fill(
                 Path(roundedRect: mark, cornerRadius: 2, style: .continuous),
-                with: .color(.white.opacity(0.85)))
+                with: .color(fillColor))
+        }
+    }
+
+    /// Maps a `LaneJudgment` to a `ScratchLabPalette` semantic alias.
+    /// Phase B AR-prep: the spatial replay renderer (Phase D-S) will
+    /// consume the same semantic names so the visual grammar crosses
+    /// 2D and 3D surfaces unchanged. Pure static so the tinting
+    /// decision stays testable.
+    private static func tintColor(for judgment: LaneJudgment?) -> Color {
+        switch judgment {
+        case .onBeat?:  return ScratchLabPalette.success.opacity(0.90)
+        case .early?:   return ScratchLabPalette.info.opacity(0.90)
+        case .late?:    return ScratchLabPalette.warning.opacity(0.90)
+        case .neutral?, .none:
+            return .white.opacity(0.85)
         }
     }
 

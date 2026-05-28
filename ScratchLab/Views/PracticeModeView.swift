@@ -1408,7 +1408,7 @@ struct PracticeModeView: View {
         // looping scored modes have a meaningful lane clock; Open holds
         // the lane at t = 0 (all events would stack), and Demo skips mic
         // analysis entirely.
-        appendLaneUserEventForDetection()
+        appendLaneUserEventForDetection(timing: result.timing)
 
         // Update accuracy (running average)
         if currentAccuracy == 0 {
@@ -1760,7 +1760,9 @@ struct PracticeModeView: View {
     // a `.looping` clock — Open is `.fixed(0)` (every event would land at
     // t = 0) and Demo skips mic analysis. Keeps the buffer to the most
     // recent `laneUserEventCap` entries so a long session stays bounded.
-    private func appendLaneUserEventForDetection() {
+    private func appendLaneUserEventForDetection(
+        timing: ScratchAnalysisResult.TimingResult? = nil
+    ) {
         switch practiceAssistMode {
         case .guided, .coached, .autoCut:
             break
@@ -1771,10 +1773,21 @@ struct PracticeModeView: View {
         let duration = max(notation.timelineDuration, 0.0001)
         let elapsed = Date().timeIntervalSince(notationClockStartDate)
         let laneTime = elapsed.truncatingRemainder(dividingBy: duration)
+        // Phase B1 — derive a presentation-only judgment from the
+        // upstream signed beat offset. Renderer consumes this only
+        // when LANE_JUDGMENT_TINT is on; nil means "no signal" and the
+        // tick stays at today's neutral white tint.
+        let judgment: LaneJudgment? = timing.map { signal in
+            LaneJudgment.from(
+                beatOffsetMilliseconds: signal.beatOffset,
+                isOnBeat: signal.isOnBeat
+            )
+        }
         let event = LaneUserEvent(
             startTime: max(0, laneTime),
             endTime: min(duration, laneTime + Self.laneUserEventDuration),
-            direction: .forward
+            direction: .forward,
+            judgment: judgment
         )
         laneUserEvents.append(event)
         if laneUserEvents.count > Self.laneUserEventCap {

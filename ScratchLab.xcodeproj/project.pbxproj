@@ -326,6 +326,7 @@
 		SRH1001000SRH001SRH00001 /* ScratchReviewHint.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRH1000000SRH001SRH00001 /* ScratchReviewHint.swift */; };
 		SRH1001000SRH001SRH00002 /* ScratchReviewHint.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRH1000000SRH001SRH00001 /* ScratchReviewHint.swift */; };
 		SRH2011000SRH002SRH00001 /* ScratchReviewHintPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRH2010000SRH002SRH00001 /* ScratchReviewHintPickerTests.swift */; };
+		LJD2011000LJD002LJD00001 /* LaneJudgmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LJD2010000LJD002LJD00001 /* LaneJudgmentTests.swift */; };
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
@@ -501,6 +502,7 @@
 		PML2010000PML002PML00001 /* PracticeMilestonePickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeMilestonePickerTests.swift; sourceTree = "<group>"; };
 		SRH1000000SRH001SRH00001 /* ScratchReviewHint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchReviewHint.swift; sourceTree = "<group>"; };
 		SRH2010000SRH002SRH00001 /* ScratchReviewHintPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchReviewHintPickerTests.swift; sourceTree = "<group>"; };
+		LJD2010000LJD002LJD00001 /* LaneJudgmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneJudgmentTests.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
@@ -737,6 +739,7 @@
 				NCL2010000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift */,
 				PML2010000PML002PML00001 /* PracticeMilestonePickerTests.swift */,
 				SRH2010000SRH002SRH00001 /* ScratchReviewHintPickerTests.swift */,
+				LJD2010000LJD002LJD00001 /* LaneJudgmentTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
 				NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */,
 				NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */,
@@ -1609,6 +1612,7 @@
 				NCL2011000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift in Sources */,
 				PML2011000PML002PML00001 /* PracticeMilestonePickerTests.swift in Sources */,
 				SRH2011000SRH002SRH00001 /* ScratchReviewHintPickerTests.swift in Sources */,
+				LJD2011000LJD002LJD00001 /* LaneJudgmentTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
 				NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */,
 				NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */,
