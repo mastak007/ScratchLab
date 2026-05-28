@@ -14,28 +14,41 @@ import SwiftUI
 ///   not by mirroring below the centre line.
 /// - There is one baseline. There is one playhead. The notation
 ///   scrolls past the fixed playhead as the demo audio advances.
-/// - Reads like instructional scratch notation, not like an
-///   oscilloscope or mirrored waveform.
+/// - During silences between scratches the canvas paints **nothing**
+///   — only the baseline holds. The guide is honest about whether the
+///   coach audio is currently scratching: no scratch sound → no
+///   notation.
 ///
-/// **Sync to playback:** the macOS Practice sidebar's visible
-/// Coach → Replay button drives `ScratchLabDemoModeController` (NOT
-/// `BabyScratchDemoPlaybackCoordinator`). The guide therefore
-/// observes the same `demoController` so the canvas follows the
-/// audio the user can actually hear. Reads
+/// **Data source:** the bundled extracted-stroke resource
+/// (`baby_scratch_strokes.json` → `phraseEnd: 42.4`) encodes every
+/// real scratch position across the full 42-second coach audio, with
+/// gaps where the audio is silent. Using these segments — instead of
+/// the single 5-second notation loop — means the guide paints a
+/// stroke only when the audio is actually scratching at that time.
+///
+/// **Sync to playback:** observes `ScratchLabDemoModeController`
+/// (the same controller wired to the sidebar's visible Coach →
+/// Replay button) so the canvas follows the audio the user can
+/// actually hear. Reads
 /// `demoController.demoPlayer.sampledPlaybackTime()` *inside* the
 /// `TimelineView` closure each tick — that is the host-clock-
 /// interpolated, latency-compensated playhead the iOS Demo lane
 /// already uses. Tiling flows through the deterministic
 /// `BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
-/// for:cycleDuration:)` helper (commit a4ea922) so every Baby
-/// Scratch repetition continues to animate, not just the first.
+/// for:cycleDuration:)` helper (commit a4ea922).
 ///
 /// **macOS-only** by file placement. iOS Practice is unchanged.
 struct MacBabyScratchPracticeGuideView: View {
 
     @ObservedObject var demoController: ScratchLabDemoModeController
 
-    private let notation: ScratchNotation? = ScratchNotation.loadBabyScratchFromBundle()
+    private let strokeSegments: [ScratchLabBabyScratchStrokeSegment] =
+        BabyScratchReferenceMotionTimeline.strokeSegments
+
+    /// Loop duration matches the bundled audio's stroke span so the
+    /// canvas wraps cleanly when the coach demo replays from t = 0.
+    private let segmentLoopDuration: TimeInterval =
+        BabyScratchReferenceMotionTimeline.phraseEnd
 
     private static let laneHeight: CGFloat = 156
     private static let playheadFraction: Double = 0.30
@@ -74,12 +87,8 @@ struct MacBabyScratchPracticeGuideView: View {
             // Source: `demoController.demoPlayer.sampledPlaybackTime()`
             // — the same host-clock-interpolated playhead the iOS Demo
             // lane uses and the same player the sidebar's visible
-            // Replay button drives. Earlier wiring read
-            // `babyScratchDemo.currentAudioTime`, which is a separate
-            // demo player not bound to that button; pressing Replay
-            // started one player while the guide listened to the
-            // other, so the canvas stayed frozen.
-            let loopDuration = max(notation?.timelineDuration ?? 0, 0.0001)
+            // Replay button drives.
+            let loopDuration = max(segmentLoopDuration, 0.0001)
             let audioTime = demoController.demoPlayer.sampledPlaybackTime()
             let now = BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
                 for: audioTime,
@@ -135,17 +144,19 @@ struct MacBabyScratchPracticeGuideView: View {
         now: TimeInterval,
         loopDuration: TimeInterval
     ) {
-        guard let notation, !notation.strokes.isEmpty else { return }
+        guard !strokeSegments.isEmpty else { return }
         let baseline = Self.baselineY(in: size)
         let peakHeight = size.height * 0.58
         let playheadX = size.width * CGFloat(Self.playheadFraction)
         let pps = size.width / CGFloat(Self.visibleSeconds)
         // Render three copies of the loop so seam transitions stay
-        // continuous as audio advances past loopDuration.
+        // continuous as audio replays from t = 0. Each segment paints
+        // only at its real audio position — silences between scratches
+        // remain empty.
         for offset in [-loopDuration, 0, loopDuration] {
-            for stroke in notation.strokes {
-                drawStroke(
-                    stroke,
+            for segment in strokeSegments {
+                drawSegment(
+                    segment,
                     timeOffset: offset,
                     now: now,
                     playheadX: playheadX,
@@ -159,8 +170,8 @@ struct MacBabyScratchPracticeGuideView: View {
         }
     }
 
-    private func drawStroke(
-        _ stroke: ScratchNotation.Stroke,
+    private func drawSegment(
+        _ segment: ScratchLabBabyScratchStrokeSegment,
         timeOffset: TimeInterval,
         now: TimeInterval,
         playheadX: CGFloat,
@@ -170,22 +181,28 @@ struct MacBabyScratchPracticeGuideView: View {
         canvasWidth: CGFloat,
         ctx: GraphicsContext
     ) {
-        let startTime = stroke.startTime + timeOffset
-        let endTime = stroke.endTime + timeOffset
+        // Skip explicit hold segments — no scratch sound is occurring,
+        // so the guide stays silent (baseline only) during that span.
+        guard segment.direction != .neutral else { return }
+
+        let startTime = segment.startTime + timeOffset
+        let endTime = segment.endTime + timeOffset
         let xStart = playheadX + CGFloat(startTime - now) * pps
         let xEnd = playheadX + CGFloat(endTime - now) * pps
-        // Cull off-screen strokes (with a small bleed margin).
+        // Cull off-screen segments (with a small bleed margin).
         guard xEnd > -8, xStart < canvasWidth + 8 else { return }
         // Forward = cyan/green; backward = warm pink. Direction encoded
         // by colour so the notation can stay one-sided above the
         // baseline. No grading verbs; no "good vs bad" connotation —
         // these are pure direction indicators.
         let color: Color
-        switch stroke.direction {
+        switch segment.direction {
         case .forward:
             color = ScratchLabPalette.notationForward
         case .backward:
             color = Color(red: 1.00, green: 0.45, blue: 0.78)
+        case .neutral:
+            return
         }
         // Triangle stroke that peaks once above the baseline. Both
         // forward and backward strokes use the same upward triangle
@@ -201,7 +218,7 @@ struct MacBabyScratchPracticeGuideView: View {
             style: StrokeStyle(lineWidth: 2.4, lineJoin: .round)
         )
         // Filled apex node so the peak reads clearly even on short
-        // strokes. Same colour, half opacity.
+        // segments. Same colour, slightly lower opacity.
         let apexRadius: CGFloat = 3.5
         let apex = CGRect(
             x: midX - apexRadius,
