@@ -159,6 +159,20 @@ enum CoachCopy {
         }
     }
 
+    // MARK: macOS Practice — Baby Scratch guide card
+    //
+    // Compact card embedded in the macOS Practice surface that shows
+    // the Baby Scratch notation synced to the coach/demo audio.
+    // Honest framing: it is a visual guide, not a verdict and not a
+    // diagnostic. Copy is calm and instructional.
+
+    enum PracticeGuide {
+        static let babyScratchTitle = "Baby Scratch guide"
+        static let babyScratchSubtitle = "Visual guide · coach demo"
+        static let babyScratchPlayingCaption = "Following the coach demo."
+        static let babyScratchIdleCaption = "Press Replay to follow the coach demo."
+    }
+
     // MARK: Multi-take comparison (Phase D-A4)
     //
     // Studio surface. Strict compare-never-rank discipline per

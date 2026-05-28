@@ -300,6 +300,7 @@
 		F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
 		F6EB3C16D803B47D9D2E8BA5 /* Archive+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */; };
 		F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000002 /* MacAnalyzerView.swift */; };
+		MBG1001000MBG001MBG00001 /* MacBabyScratchPracticeGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MBG1000000MBG001MBG00001 /* MacBabyScratchPracticeGuideView.swift */; };
 		STP1001000STP001STP00001 /* StudioSessionPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STP1000000STP001STP00001 /* StudioSessionPickerView.swift */; };
 		STH1001000STH001STH00001 /* StudioSessionHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STH1000000STH001STH00001 /* StudioSessionHostView.swift */; };
 		SRS1001000SRS001SRS00001 /* StudioReplayScrubber.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRS1000000SRS001SRS00001 /* StudioReplayScrubber.swift */; };
@@ -481,6 +482,7 @@
 		AC927BE2AC20BBF592338F0B /* Entry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
 		B2000001 /* ScratchLabDesktopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesktopApp.swift; sourceTree = "<group>"; };
 		B2000002 /* MacAnalyzerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAnalyzerView.swift; sourceTree = "<group>"; };
+		MBG1000000MBG001MBG00001 /* MacBabyScratchPracticeGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBabyScratchPracticeGuideView.swift; sourceTree = "<group>"; };
 		STP1000000STP001STP00001 /* StudioSessionPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioSessionPickerView.swift; sourceTree = "<group>"; };
 		STH1000000STH001STH00001 /* StudioSessionHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioSessionHostView.swift; sourceTree = "<group>"; };
 		SRS1000000SRS001SRS00001 /* StudioReplayScrubber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioReplayScrubber.swift; sourceTree = "<group>"; };
@@ -1033,6 +1035,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000002 /* MacAnalyzerView.swift */,
+				MBG1000000MBG001MBG00001 /* MacBabyScratchPracticeGuideView.swift */,
 				STP1000000STP001STP00001 /* StudioSessionPickerView.swift */,
 				STH1000000STH001STH00001 /* StudioSessionHostView.swift */,
 				SRS1000000SRS001SRS00001 /* StudioReplayScrubber.swift */,
@@ -1285,6 +1288,7 @@
 			files = (
 				B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */,
 				F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */,
+				MBG1001000MBG001MBG00001 /* MacBabyScratchPracticeGuideView.swift in Sources */,
 				STP1001000STP001STP00001 /* StudioSessionPickerView.swift in Sources */,
 				STH1001000STH001STH00001 /* StudioSessionHostView.swift in Sources */,
 				SRS1001000SRS001SRS00001 /* StudioReplayScrubber.swift in Sources */,

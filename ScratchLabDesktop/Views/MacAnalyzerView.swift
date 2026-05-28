@@ -556,10 +556,20 @@ struct MacAnalyzerView: View {
             VStack(spacing: 18) {
                 practiceStageHeader
                 practiceCameraStage
+                babyScratchGuideCard
             }
             .padding(18)
             .background(Color.black)
         }
+    }
+
+    /// Compact visual notation guide that pairs with the coach/demo
+    /// audio in the macOS Practice surface. Sits below the camera
+    /// stage so it adds context without replacing the camera. Reuses
+    /// the existing demo coordinator clock so the guide auto-syncs
+    /// with whatever drives the Replay button.
+    private var babyScratchGuideCard: some View {
+        MacBabyScratchPracticeGuideView(demo: babyScratchDemo)
     }
 
     private var captureWorkspace: some View {
