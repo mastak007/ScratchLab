@@ -17,9 +17,21 @@ final class NotationVisualizerViewModel: ObservableObject {
     // MARK: Notation data (loaded once)
 
     let notation: ScratchNotation?
-    // Display duration: the notation phrase window. Audio cycles are longer;
-    // timing within each cycle is mapped via BabyScratchReferenceMotionTimeline.
-    var loopDuration: TimeInterval { BabyScratchReferenceMotionTimeline.phraseEnd }
+    // Display duration: the *notation's own* phrase window. The bundled
+    // Baby Scratch notation (Resources/Notation/baby_scratch.json) only
+    // covers one phrase (~5 s), but the bundled demo audio plays through
+    // multiple Baby Scratch repetitions across ~42 s. Driving the
+    // canvas loop from the notation's own `timelineDuration` lets the
+    // shared renderer tile that single phrase across every repetition
+    // — the strokes stay aligned to the playhead instead of drifting
+    // off-screen after the first phrase ends. Falls back to the longer
+    // strokes-JSON span only when no notation is loaded.
+    var loopDuration: TimeInterval {
+        if let duration = notation?.timelineDuration, duration > 0 {
+            return duration
+        }
+        return BabyScratchReferenceMotionTimeline.phraseEnd
+    }
 
     // MARK: Shared coordinator — master clock for all timing
 
@@ -91,8 +103,9 @@ final class NotationVisualizerViewModel: ObservableObject {
         guard !isPlaying else { return }
         demo.playBabyScratch()
         isPlaying = demo.isPlaying
-        playbackTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
-            for: demo.currentAudioTime
+        playbackTime = BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
+            for: demo.currentAudioTime,
+            cycleDuration: loopDuration
         )
     }
 
@@ -160,14 +173,20 @@ final class NotationVisualizerViewModel: ObservableObject {
             }
         }
 
-        // Audio player time is the master clock. Map it to notation phrase time.
+        // Audio player time is the master clock. Map it onto the
+        // notation canvas's own phrase loop so a single-phrase notation
+        // tiles cleanly across every Baby Scratch repetition in the
+        // demo audio. Cycle index is computed against the same cycle
+        // duration so wrap detection fires once per notation phrase
+        // repeat — matching the visible loop the renderer paints.
         let audioTime = demo.currentAudioTime
         ScratchLabPerformanceSignpost.event("CoachPlaybackTick", time: audioTime)
-        let cycleDur = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
+        let cycleDur = loopDuration
 
         let currentCycleIndex = cycleDur > 0 ? Int(audioTime / cycleDur) : 0
-        let newLoopTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
-            for: audioTime
+        let newLoopTime = BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
+            for: audioTime,
+            cycleDuration: cycleDur
         )
         if playbackTime != newLoopTime {
             playbackTime = newLoopTime

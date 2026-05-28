@@ -318,6 +318,7 @@
 		SAD1001000SAD001SAD00001 /* StudioAnnotationDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAD1000000SAD001SAD00001 /* StudioAnnotationDocument.swift */; };
 		SAD1001000SAD001SAD00002 /* StudioAnnotationDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAD1000000SAD001SAD00001 /* StudioAnnotationDocument.swift */; };
 		SAD2011000SAD002SAD00001 /* StudioAnnotationDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAD2010000SAD002SAD00001 /* StudioAnnotationDocumentTests.swift */; };
+		NCL2011000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NCL2010000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift */; };
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
@@ -487,6 +488,7 @@
 		SRP2010000SRP002SRP00001 /* SpatialReplayProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialReplayProjectionTests.swift; sourceTree = "<group>"; };
 		SAD1000000SAD001SAD00001 /* StudioAnnotationDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Studio/StudioAnnotationDocument.swift; sourceTree = "<group>"; };
 		SAD2010000SAD002SAD00001 /* StudioAnnotationDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioAnnotationDocumentTests.swift; sourceTree = "<group>"; };
+		NCL2010000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCanvasLoopTimeTests.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
@@ -720,6 +722,7 @@
 				CFR2010000CFR002CFR00001 /* CinematicFrameRendererTests.swift */,
 				SRP2010000SRP002SRP00001 /* SpatialReplayProjectionTests.swift */,
 				SAD2010000SAD002SAD00001 /* StudioAnnotationDocumentTests.swift */,
+				NCL2010000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
 				NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */,
 				NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */,
@@ -1581,6 +1584,7 @@
 				CFR2011000CFR002CFR00001 /* CinematicFrameRendererTests.swift in Sources */,
 				SRP2011000SRP002SRP00001 /* SpatialReplayProjectionTests.swift in Sources */,
 				SAD2011000SAD002SAD00001 /* StudioAnnotationDocumentTests.swift in Sources */,
+				NCL2011000NCL002NCL00001 /* NotationCanvasLoopTimeTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
 				NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */,
 				NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */,

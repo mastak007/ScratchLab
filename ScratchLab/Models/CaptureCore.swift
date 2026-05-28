@@ -3621,6 +3621,28 @@ final class BabyScratchDemoPlaybackCoordinator: ObservableObject {
         return min(phraseEnd, max(0, cycleLocalTime))
     }
 
+    /// Maps a full demo-audio time onto a caller-supplied notation
+    /// loop, wrapping into `[0, cycleDuration)`. Use this when the
+    /// rendered notation covers a single phrase shorter than the audio:
+    /// the canvas can tile that phrase across every Baby Scratch
+    /// repetition in the bundled demo without the renderer needing to
+    /// invent its own modulo logic.
+    ///
+    /// Pure / deterministic. Defensive against non-finite or
+    /// non-positive `cycleDuration` (returns a clamped time so the
+    /// renderer never receives NaN / Infinity).
+    nonisolated static func notationCanvasLoopTime(
+        for audioTime: TimeInterval,
+        cycleDuration: TimeInterval
+    ) -> TimeInterval {
+        let safeTime = audioTime.isFinite ? max(0, audioTime) : 0
+        guard cycleDuration.isFinite, cycleDuration > 0 else {
+            return safeTime
+        }
+        let remainder = safeTime.truncatingRemainder(dividingBy: cycleDuration)
+        return remainder >= 0 ? remainder : remainder + cycleDuration
+    }
+
     nonisolated static func coachPose(for audioTime: TimeInterval) -> BabyScratchReferenceMotionPose {
         ScratchLabPerformanceSignpost.event("CoachPoseLookup", time: audioTime)
         return BabyScratchReferenceMotionTimeline.pose(at: audioTime)
