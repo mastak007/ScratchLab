@@ -159,6 +159,33 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Notation video export (Phase D-X1)
+    //
+    // Studio-side macOS-only export action. Strings are deliberately
+    // descriptive and honest: this slice ships a "demo notation video"
+    // entry point that exports the bundled scratch fixture as a
+    // transparent ProRes 4444 .mov for OBS / Premiere / FCP smoke
+    // tests. Per-session export plumbing is a future slice and the
+    // copy never claims to capture a specific take.
+
+    enum Export {
+        static let header = "EXPORT"
+        static let demoVideoButtonTitle = "Export demo notation video"
+        static let demoVideoCaption =
+            "Saves a short transparent notation video for OBS / Premiere / Final Cut."
+        static let exportingLabel = "Exporting…"
+        static let savePanelTitle = "Save Notation Demo Video"
+        static let defaultFileName = "scratchlab_notation_demo"
+
+        static func saveSuccess(fileName: String) -> String {
+            "Saved \(fileName)."
+        }
+
+        static func saveFailure(reason: String) -> String {
+            "Export did not finish: \(reason)"
+        }
+    }
+
     // MARK: Needs-review hint (Phase C6b)
     //
     // Soft nudge that appears on a Level Select card when a

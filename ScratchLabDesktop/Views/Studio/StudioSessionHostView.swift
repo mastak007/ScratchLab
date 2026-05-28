@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import SwiftUI
 
 // MARK: - StudioSessionHostView
@@ -19,6 +22,20 @@ struct StudioSessionHostView: View {
     let selectedDraft: RoutineSessionDraft?
 
     private static let appName = "ScratchLab"
+
+    // Phase D-X1 — export-button state. `idle` (no export running),
+    // `exporting` (button disabled, "Exporting…" label), `success`
+    // (briefly shows the saved file name), `failure` (briefly shows
+    // the error reason). The status auto-clears back to `.idle`
+    // after a short interval so the surface stays clean.
+    @State private var exportStatus: ExportStatus = .idle
+
+    fileprivate enum ExportStatus: Equatable {
+        case idle
+        case exporting
+        case success(fileName: String)
+        case failure(reason: String)
+    }
 
     var body: some View {
         ZStack {
@@ -44,6 +61,9 @@ struct StudioSessionHostView: View {
                 }
                 if FeatureFlags.studioArchaeologyEnabled {
                     StudioArchaeologyView(data: archaeologyData(for: draft))
+                }
+                if FeatureFlags.exportNotationOverlayVideoEnabled {
+                    notationVideoExportCard
                 }
                 comingSoonCard
                 Spacer(minLength: 0)
@@ -79,6 +99,68 @@ struct StudioSessionHostView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    /// Phase D-X1 export-button card. Flag-gated; macOS-only call site.
+    /// The button exports a transparent ProRes 4444 .mov from the
+    /// bundled scratch fixture — this slice ships the pipeline entry
+    /// point; per-session source plumbing is a future slice. Honest
+    /// copy: "demo notation video", not "your take".
+    private var notationVideoExportCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(CoachCopy.Export.header)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button {
+                    presentNotationVideoExportPanel()
+                } label: {
+                    if case .exporting = exportStatus {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(CoachCopy.Export.exportingLabel)
+                        }
+                    } else {
+                        Text(CoachCopy.Export.demoVideoButtonTitle)
+                    }
+                }
+                .disabled(exportStatus == .exporting)
+                Spacer(minLength: 0)
+            }
+            Text(CoachCopy.Export.demoVideoCaption)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let statusText = exportStatusText {
+                Text(statusText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(exportStatusColor)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var exportStatusText: String? {
+        switch exportStatus {
+        case .idle, .exporting:
+            return nil
+        case .success(let fileName):
+            return CoachCopy.Export.saveSuccess(fileName: fileName)
+        case .failure(let reason):
+            return CoachCopy.Export.saveFailure(reason: reason)
+        }
+    }
+
+    private var exportStatusColor: Color {
+        switch exportStatus {
+        case .failure: return ScratchLabPalette.warning
+        default:       return .secondary
+        }
+    }
+
     /// Phase D-A2 — derives archaeology chart data from existing
     /// session state. Returns `.empty` for now because the live plumb
     /// from `RoutineSessionDraft` through `AudioPhraseSummary` +
@@ -101,6 +183,138 @@ struct StudioSessionHostView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    // MARK: Phase D-X1 export pipeline
+
+    #if os(macOS)
+    private func presentNotationVideoExportPanel() {
+        let panel = NSSavePanel()
+        panel.title = CoachCopy.Export.savePanelTitle
+        panel.allowedContentTypes = [.movie]
+        panel.nameFieldStringValue = CoachCopy.Export.defaultFileName
+        panel.canCreateDirectories = true
+        let response = panel.runModal()
+        guard response == .OK, let url = panel.url else { return }
+        runNotationVideoExport(to: url)
+    }
+
+    private func runNotationVideoExport(to outputURL: URL) {
+        exportStatus = .exporting
+        Task.detached(priority: .userInitiated) {
+            let result = Self.runDemoExport(to: outputURL)
+            await MainActor.run {
+                exportStatus = result
+                Task {
+                    // Auto-clear the status after a short interval so
+                    // the surface stays clean. Cancellation-safe.
+                    try? await Task.sleep(nanoseconds: 4_500_000_000)
+                    if exportStatus == result {
+                        exportStatus = .idle
+                    }
+                }
+            }
+        }
+    }
+
+    /// Runs the export off the main thread. Uses an inline scratch
+    /// fixture so the export pipeline is exercised end-to-end without
+    /// depending on per-session data plumbing.
+    private static func runDemoExport(to outputURL: URL) -> ExportStatus {
+        let presentation = demoExportPresentationModel
+        let state = demoExportReplayState
+        let viewportRule = demoExportViewportRule
+        let frames = CinematicFrameProducer.makeFrames(
+            state: state,
+            presentationModel: presentation,
+            timingGrid: demoExportTimingGrid,
+            viewportRule: viewportRule,
+            width: Double(demoExportWidth),
+            height: Double(demoExportHeight)
+        )
+        guard let request = NotationOverlayVideoExportRequest(
+            frames: frames,
+            outputURL: outputURL,
+            width: demoExportWidth,
+            height: demoExportHeight,
+            frameRate: demoExportFrameRate
+        ) else {
+            return .failure(reason: "Invalid export request shape.")
+        }
+        do {
+            let exported = try NotationOverlayVideoExporter().export(request)
+            return .success(fileName: exported.lastPathComponent)
+        } catch {
+            return .failure(reason: String(describing: error))
+        }
+    }
+    #else
+    private func presentNotationVideoExportPanel() {}
+    #endif
+
+    // MARK: Demo export fixture
+    //
+    // Inline fixture used by the export button until per-session
+    // plumbing lands. Three Baby-Scratch-style strokes covering ~3 s,
+    // rendered at 60 fps over a 4 s window = ~180 frames. Small
+    // enough to encode in a second or two; large enough to land a
+    // working .mov in OBS / Premiere / FCP for smoke testing.
+
+    private static let demoExportWidth: Int = 960
+    private static let demoExportHeight: Int = 200
+    private static let demoExportFrameRate: Int = 60
+
+    private static let demoExportPresentationModel: NotationPresentationModel = {
+        NotationPresentationModel(strokes: [
+            NotationPresentationStroke(
+                primitiveIndex: 0,
+                startTime: 0.50, endTime: 1.00,
+                startPosition: nil, endPosition: nil,
+                family: .baby, coachingKinds: []
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 1,
+                startTime: 1.50, endTime: 2.00,
+                startPosition: nil, endPosition: nil,
+                family: .baby, coachingKinds: []
+            ),
+            NotationPresentationStroke(
+                primitiveIndex: 2,
+                startTime: 2.50, endTime: 3.00,
+                startPosition: nil, endPosition: nil,
+                family: .baby, coachingKinds: []
+            ),
+        ])
+    }()
+
+    private static let demoExportReplayState: NotationReplayState = {
+        var frames: [NotationReplayFrame] = []
+        let total = 4 * demoExportFrameRate  // 4 seconds
+        let step = 1.0 / Double(demoExportFrameRate)
+        frames.reserveCapacity(total)
+        for index in 0..<total {
+            if let frame = NotationReplayFrame(
+                index: index,
+                time: Double(index) * step
+            ) {
+                frames.append(frame)
+            }
+        }
+        return NotationReplayState(
+            contentStart: 0,
+            contentEnd: 4,
+            frames: frames
+        ) ?? NotationReplayState(contentStart: 0, contentEnd: 1, frames: [])!
+    }()
+
+    private static let demoExportTimingGrid: TimingGrid? = TimingGrid(
+        beatsPerMinute: 120,
+        beatsPerBar: 4,
+        subdivisionsPerBeat: 4,
+        origin: 0
+    )
+
+    private static let demoExportViewportRule: NotationViewportWindowRule
+        = NotationViewportWindowRule(duration: 4, leadIn: 1)!
 }
 
 // MARK: - Local helper
