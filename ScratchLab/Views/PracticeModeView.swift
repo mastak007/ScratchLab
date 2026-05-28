@@ -128,6 +128,16 @@ struct PracticeModeView: View {
     @State private var cumulativeAbsoluteBeatOffsetMs: Double = 0
     @State private var sessionStartedAt: Date?
 
+    // Phase C1 — per-attempt drift samples for the post-session drift
+    // coaching summary card. Each entry pairs the elapsed session time
+    // (seconds since `sessionStartedAt`) with the signed beat offset
+    // (positive = late, negative = early — same convention as the
+    // upstream `AudioEngine.TimingResult.beatOffset`). Session-ephemeral:
+    // never persisted, never exported, never fed into scoring math.
+    // Capped so a long session stays bounded.
+    @State private var driftCoachingAttempts: [(elapsed: TimeInterval, drift: TimeInterval)] = []
+    private static let driftCoachingAttemptCap = 240
+
     // Live mic attempt markers for the target lane. Populated by
     // `handleScratchDetected` and rendered by `ScratchMotionLane` as small
     // ticks near the lane's low edge — honest "the mic registered an attempt
@@ -1221,6 +1231,7 @@ struct PracticeModeView: View {
         phraseStreakCount = 0
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
+        driftCoachingAttempts = []
         sessionStartedAt = Date()
         laneUserEvents.removeAll(keepingCapacity: true)
         drillElapsedSeconds = 0
@@ -1337,6 +1348,7 @@ struct PracticeModeView: View {
         phraseStreakCount = 0
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
+        driftCoachingAttempts = []
         sessionStartedAt = nil
         laneUserEvents.removeAll(keepingCapacity: true)
         drillElapsedSeconds = 0
@@ -1388,6 +1400,7 @@ struct PracticeModeView: View {
             onBeatHitCount += 1
         }
         cumulativeAbsoluteBeatOffsetMs += abs(result.timing.beatOffset)
+        captureDriftCoachingSample(timing: result.timing)
 
         // Lane attempt marker — honest "the mic registered an attempt here"
         // tick rendered by `ScratchMotionLane.drawUserEvents`. Only the
@@ -1604,17 +1617,124 @@ struct PracticeModeView: View {
         )
     }
 
-    /// Phase C1 drift coaching summary. Returns nil today because the
-    /// upstream drift-evaluator wiring against the running session
-    /// has not landed yet — the renderer + paced/tier-aware
-    /// `DriftCoachingSummaryCard` is in place, ready for a follow-up
-    /// slice that computes a real `[TimingDrift]` from the session and
-    /// runs it through `DriftCoachingEvaluator` + `CoachingEventPacer`
-    /// + `CoachingEventDisplayabilityResolver`. Until then the card
-    /// stays absent in production even when the flag is on.
+    /// Phase C1 drift coaching summary, computed from the session's
+    /// per-attempt beat offsets. Returns nil for non-scored modes,
+    /// for sessions with no surviving events, and for combo drills
+    /// (drills already surface their own summary card).
+    ///
+    /// Pipeline: per-attempt drifts → `DriftCoachingEvaluator` →
+    /// `CoachingEventPacer` (spacing + same-kind suppression) →
+    /// `CoachingEventDisplayabilityResolver` (advisory vs primary
+    /// tier) → grouped `DriftCoachingSummary.Item` list.
     fileprivate var driftCoachingSummary: DriftCoachingSummary? {
-        nil
+        guard practiceAssistMode != .demo else { return nil }
+        guard !isComboChallengeMode else { return nil }
+        guard !driftCoachingAttempts.isEmpty else { return nil }
+
+        let drifts: [TimingDrift] = driftCoachingAttempts
+            .enumerated()
+            .compactMap { index, sample in
+                // Convert signed milliseconds → seconds. Late = positive;
+                // matches `DriftCoachingEvaluator`'s sign convention.
+                let driftSeconds = sample.drift / 1000.0
+                guard driftSeconds.isFinite else { return nil }
+                let actual = max(0, sample.elapsed)
+                let expected = max(0, actual - driftSeconds)
+                return TimingDrift(
+                    primitiveIndex: index,
+                    expectedTime: expected,
+                    actualTime: actual,
+                    drift: driftSeconds,
+                    isWithinWindow: abs(driftSeconds) <= Self.driftWindowSeconds
+                )
+            }
+
+        let raw = DriftCoachingEvaluator.events(
+            from: drifts,
+            using: Self.driftCoachingRule
+        )
+        guard !raw.isEmpty else { return nil }
+        guard let set = CoachingEventSet(events: raw) else { return nil }
+        let paced = CoachingEventPacer.pace(set, using: Self.driftCoachingPacing)
+        guard !paced.isEmpty else { return nil }
+
+        // Tier by per-kind occurrence count in the *paced* output:
+        // 1–2 surviving events of the same kind → advisory tier;
+        // 3+ → primary tier (catalog copy verbatim). Single tier per
+        // kind in the visible summary so the card stays compact.
+        var pacedCounts: [CoachingEventKind: Int] = [:]
+        for event in paced { pacedCounts[event.kind, default: 0] += 1 }
+
+        var items: [DriftCoachingSummary.Item] = []
+        var seenKinds: Set<CoachingEventKind> = []
+        for event in paced {
+            guard !seenKinds.contains(event.kind) else { continue }
+            let descriptor = CoachingEventCatalog.descriptor(for: event.kind)
+            let count = pacedCounts[event.kind] ?? 1
+            let tier: CoachingEventDisplayability.Tier = count >= 3
+                ? .primary
+                : .advisory
+            let resolved = CoachingEventDisplayabilityResolver.resolve(
+                .init(
+                    descriptor: descriptor,
+                    passedPacer: true,
+                    surfaceTier: tier
+                )
+            )
+            guard case .display(let resolvedTier) = resolved else { continue }
+            items.append(
+                DriftCoachingSummary.Item(
+                    kind: event.kind,
+                    tier: resolvedTier,
+                    count: count
+                )
+            )
+            seenKinds.insert(event.kind)
+        }
+        guard !items.isEmpty else { return nil }
+        return DriftCoachingSummary(items: items)
     }
+
+    // Captures one signed-offset sample for the drift coaching pipeline.
+    // Skips when no session start has been stamped (defensive — Practice
+    // always stamps in `startSession`). Caps the buffer so a long
+    // session stays bounded.
+    private func captureDriftCoachingSample(timing: ScratchAnalysisResult.TimingResult) {
+        guard let startedAt = sessionStartedAt else { return }
+        let elapsed = max(0, Date().timeIntervalSince(startedAt))
+        let sample = (elapsed: elapsed, drift: timing.beatOffset)
+        if driftCoachingAttempts.count >= Self.driftCoachingAttemptCap {
+            driftCoachingAttempts.removeFirst(
+                driftCoachingAttempts.count - Self.driftCoachingAttemptCap + 1
+            )
+        }
+        driftCoachingAttempts.append(sample)
+    }
+
+    // MARK: Phase C1 drift coaching tuning
+
+    /// Threshold (in seconds) above which a drift counts as
+    /// late / early. 80 ms is the standard "outside the on-beat
+    /// window" boundary used elsewhere in scratch-timing literature
+    /// and keeps the summary card sparse on normal takes.
+    private static let driftCoachingThresholdSeconds: TimeInterval = 0.080
+    private static let driftWindowSeconds: TimeInterval = 0.080
+
+    /// Late and early thresholds for `DriftCoachingEvaluator`. Force-
+    /// unwrap is safe — both inputs are finite and non-negative.
+    private static let driftCoachingRule: DriftCoachingRule = DriftCoachingRule(
+        lateThreshold: driftCoachingThresholdSeconds,
+        earlyThreshold: driftCoachingThresholdSeconds
+    )!
+
+    /// Pacer: global 0.6 s minimum spacing + 1.5 s per-kind window so
+    /// a few back-to-back late attempts produce one paced "late"
+    /// observation rather than three identical rows.
+    private static let driftCoachingPacing: CoachingEventPacingRule
+        = CoachingEventPacingRule(
+            minimumInterEventSpacing: 0.6,
+            sameKindSuppressionWindow: 1.5
+        )!
 
     // Adds a `LaneUserEvent` for the most recent mic detection, mapped to
     // the lane's looping clock. Gated to the three modes that actually run
