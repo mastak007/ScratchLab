@@ -159,6 +159,41 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Multi-take comparison (Phase D-A4)
+    //
+    // Studio surface. Strict compare-never-rank discipline per
+    // PROFILE.md and the Phase D doc: deltas are factual ("BPM: 100 vs
+    // 110"), the surface never ranks the two takes, and no grading
+    // language reaches the user.
+
+    enum Compare {
+        static let header = "COMPARE"
+        static let menuTitle = "Compare with…"
+        static let clearMenuTitle = "Clear comparison"
+        static let primaryColumn = "Primary"
+        static let secondaryColumn = "Compare"
+        static let placeholderNotation =
+            "Side-by-side notation comparison ships when per-session capture-data plumbing lands."
+        static let sameScratchBadge = "Same scratch"
+        static let differentScratchBadge = "Different scratch"
+
+        static func bpmDelta(primary: Int?, secondary: Int?) -> String {
+            "BPM: \(formatBPM(primary)) vs \(formatBPM(secondary))"
+        }
+
+        static func takeLengthDelta(primary: TimeInterval, secondary: TimeInterval) -> String {
+            String(format: "Take length: %.1f s vs %.1f s", primary, secondary)
+        }
+
+        static func emptySecondaryMessage(primaryName: String) -> String {
+            "Pick a second take to compare with \(primaryName)."
+        }
+
+        private static func formatBPM(_ value: Int?) -> String {
+            value.map { "\($0)" } ?? "—"
+        }
+    }
+
     // MARK: Notation video export (Phase D-X1)
     //
     // Studio-side macOS-only export action. Strings are deliberately

@@ -620,7 +620,10 @@ struct MacAnalyzerView: View {
             )
             .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
 
-            StudioSessionHostView(selectedDraft: studioSelectedDraft)
+            StudioSessionHostView(
+                store: routineSessionStore,
+                selectedDraft: studioSelectedDraft
+            )
         }
     }
 

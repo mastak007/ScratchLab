@@ -19,7 +19,10 @@ import SwiftUI
 /// never writes back to `RoutineSessionStore` or any sidecar.
 struct StudioSessionHostView: View {
 
+    @ObservedObject var store: RoutineSessionStore
     let selectedDraft: RoutineSessionDraft?
+
+    @State private var secondaryDraftID: String?
 
     private static let appName = "ScratchLab"
 
@@ -53,6 +56,9 @@ struct StudioSessionHostView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(for: draft)
+                if FeatureFlags.studioMultiTakeEnabled {
+                    multiTakeSection(primary: draft)
+                }
                 if FeatureFlags.studioScrubEnabled {
                     StudioReplayScrubber(
                         contentStart: 0,
@@ -71,6 +77,74 @@ struct StudioSessionHostView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    // MARK: Phase D-A4 multi-take
+
+    /// Multi-take card. Always shows the menu (so the user can pick a
+    /// secondary). When a secondary is picked, renders
+    /// `StudioMultiTakeView` below the menu. Clearing the menu choice
+    /// returns the card to its empty state. The card itself is gated
+    /// by `FeatureFlags.studioMultiTakeEnabled`.
+    @ViewBuilder
+    private func multiTakeSection(primary: RoutineSessionDraft) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            multiTakeMenuRow(primary: primary)
+            if let secondary = secondaryDraft(excluding: primary.id) {
+                StudioMultiTakeView(primary: primary, secondary: secondary)
+            } else {
+                Text(CoachCopy.Compare.emptySecondaryMessage(
+                    primaryName: primary.config.studioDisplayTitle(defaultAppName: Self.appName)
+                ))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func multiTakeMenuRow(primary: RoutineSessionDraft) -> some View {
+        HStack(spacing: 12) {
+            Menu(currentMultiTakeMenuLabel(primary: primary)) {
+                ForEach(otherDrafts(excluding: primary.id)) { draft in
+                    Button(draft.config.studioDisplayTitle(defaultAppName: Self.appName)) {
+                        secondaryDraftID = draft.id
+                    }
+                }
+                if !otherDrafts(excluding: primary.id).isEmpty,
+                   secondaryDraftID != nil {
+                    Divider()
+                    Button(CoachCopy.Compare.clearMenuTitle) {
+                        secondaryDraftID = nil
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func currentMultiTakeMenuLabel(primary: RoutineSessionDraft) -> String {
+        guard let secondary = secondaryDraft(excluding: primary.id) else {
+            return CoachCopy.Compare.menuTitle
+        }
+        return "\(CoachCopy.Compare.menuTitle.replacingOccurrences(of: "…", with: ":")) \(secondary.config.studioDisplayTitle(defaultAppName: Self.appName))"
+    }
+
+    private func otherDrafts(excluding primaryID: String) -> [RoutineSessionDraft] {
+        store.sessions
+            .filter { $0.id != primaryID }
+            .sorted { $0.sessionListFallbackOpenedAt > $1.sessionListFallbackOpenedAt }
+    }
+
+    /// Resolves the secondary draft if one is selected and still
+    /// exists in the store. Defensively returns `nil` when the user
+    /// has selected a draft and then deleted it elsewhere; the
+    /// secondaryDraftID auto-clears next render.
+    private func secondaryDraft(excluding primaryID: String) -> RoutineSessionDraft? {
+        guard let id = secondaryDraftID, id != primaryID else { return nil }
+        return store.sessions.first { $0.id == id }
     }
 
     private func header(for draft: RoutineSessionDraft) -> some View {
