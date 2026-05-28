@@ -159,6 +159,26 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Needs-review hint (Phase C6b)
+    //
+    // Soft nudge that appears on a Level Select card when a
+    // previously-mastered scratch has either gone stale or shows
+    // regression in the recent-attempts window. No grading verbs, no
+    // "failing" language, no streak penalty. Read-time-only — never
+    // mutates ProgressManager.
+
+    enum NeedsReview {
+        static let label = "Needs review"
+
+        static func staleAccessibility(name: String, days: Int) -> String {
+            "\(name) — last mastered \(days) days ago. Worth a fresh pass."
+        }
+
+        static func regressionAccessibility(name: String) -> String {
+            "\(name) — recent runs are softer than your best. Worth a fresh pass."
+        }
+    }
+
     // MARK: Milestone callouts (Phase C6a)
     //
     // Quiet acknowledgement copy for the first-saved-session, streak,

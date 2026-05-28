@@ -249,6 +249,51 @@ struct LevelSelectView: View {
         .accessibilityLabel(CoachCopy.ScratchCard.mastered)
     }
 
+    /// Phase C6b — soft "Needs review" pill rendered when the picker
+    /// fires. Replaces the mastered pill so the card carries one
+    /// status badge at a time. Tone is observational, not punitive;
+    /// the colour palette uses `info` rather than `warning` so the pill
+    /// reads as a nudge to revisit, not a flag of failure.
+    @ViewBuilder
+    private func needsReviewPill(for scratch: Scratch, hint: ScratchReviewHint) -> some View {
+        let accessibility: String = {
+            switch hint {
+            case .stale(let days):
+                return CoachCopy.NeedsReview.staleAccessibility(name: scratch.name, days: days)
+            case .regression:
+                return CoachCopy.NeedsReview.regressionAccessibility(name: scratch.name)
+            }
+        }()
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.counterclockwise.circle.fill")
+                .font(.system(size: 10, weight: .bold))
+            Text(CoachCopy.NeedsReview.label.uppercased())
+                .font(.system(size: 11, weight: .bold))
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(ScratchLabPalette.info)
+        .cornerRadius(999)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibility)
+    }
+
+    /// Derives the C6b review-hint state for one scratch. Read-only;
+    /// never mutates `progress`. Returns `nil` when the picker rejects
+    /// the scratch (not mastered, or neither stale nor regressing).
+    private func reviewHintForScratch(progress: ScratchProgress?) -> ScratchReviewHint? {
+        guard let progress else { return nil }
+        let context = ScratchReviewHintPicker.Context(
+            isMastered: progress.isMastered,
+            masteredDate: progress.masteredDate,
+            bestAccuracy: progress.bestAccuracy,
+            recentAccuracies: progress.recentAccuracies,
+            now: Date()
+        )
+        return ScratchReviewHintPicker.pick(from: context)
+    }
+
     private var streakChip: some View {
         let streak = progressManager.currentStreak
         let isActive = streak > 0
@@ -443,6 +488,12 @@ struct LevelSelectView: View {
         let progress = progressManager.getProgressForScratch(scratch.id)
         let hasHistory = (progress?.practiceCount ?? 0) > 0
         let isMastered = progress?.isMastered == true
+        // Phase C6b — derive at most one "needs review" hint per
+        // scratch from existing ProgressManager state. Read-time-only;
+        // never mutates isMastered or any other progress field.
+        let reviewHint: ScratchReviewHint? = FeatureFlags.needsReviewHintEnabled
+            ? reviewHintForScratch(progress: progress)
+            : nil
 
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
@@ -468,7 +519,9 @@ struct LevelSelectView: View {
                         .background(isBabyScratch ? Color(hex: "FFD700") : Color(hex: "263238"))
                         .cornerRadius(999)
 
-                    if isMastered {
+                    if let reviewHint, isMastered {
+                        needsReviewPill(for: scratch, hint: reviewHint)
+                    } else if isMastered {
                         masteredPill
                     }
                 }
