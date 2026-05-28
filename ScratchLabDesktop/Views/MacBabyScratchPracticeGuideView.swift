@@ -66,9 +66,22 @@ struct MacBabyScratchPracticeGuideView: View {
         TimelineView(.animation) { _ in
             // Read demo clock *inside* the closure so the canvas
             // re-renders against the fresh audio time on every tick.
+            //
+            // Use `sampledPlaybackTime()` rather than the raw
+            // `currentAudioTime` — the sampled clock is the smoothing,
+            // host-clock-interpolated playhead the upstream code
+            // already uses for the iOS Demo lane (see
+            // `PracticeModeView.activeLane` and `DemoAudioClock` in
+            // `ScratchCoachDemoAudioPlayer`). The raw player time is a
+            // coarse polled sample of `AVAudioPlayer.currentTime` and
+            // can repeat the same value across consecutive ticks,
+            // which made the guide canvas appear frozen during
+            // playback. The sampled time always advances during
+            // playback and holds during pause/stop.
             let loopDuration = max(notation?.timelineDuration ?? 0, 0.0001)
+            let audioTime = demo.audioPlayer.sampledPlaybackTime()
             let now = BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(
-                for: demo.currentAudioTime,
+                for: audioTime,
                 cycleDuration: loopDuration
             )
             Canvas { ctx, size in
