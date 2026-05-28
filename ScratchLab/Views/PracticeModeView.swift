@@ -1590,7 +1590,37 @@ struct PracticeModeView: View {
             progressManager.recordComboAttempt(levelID: 1, accuracy: comboProgressPercent)
         }
 
+        recordSessionHistoryEntry(elapsedDuration: elapsedDuration)
+
         sessionProgressPersisted = true
+    }
+
+    /// Append the just-finished session to `ProgressManager.sessionHistory`
+    /// so the LevelSelect "RECENT" strip surfaces it. Filters:
+    ///
+    ///   - Demo mode skipped — non-scored, would surface as 0 % / 0
+    ///     score and confuse the strip.
+    ///   - Zero-attempt sessions skipped — recording them would clutter
+    ///     "recent sessions" with empty cards (the honest-failure
+    ///     callout in the Results overlay already handles that case).
+    ///
+    /// Reads only existing session state; no new metric is computed and
+    /// no scoring path is touched. The recorder lives on
+    /// `ProgressManager` and was previously shipped without a caller —
+    /// this slice is purely the wiring step.
+    private func recordSessionHistoryEntry(elapsedDuration: TimeInterval) {
+        guard practiceAssistMode != .demo else { return }
+        guard attemptCount > 0 else { return }
+        let result = SessionResult(
+            mode: .practice,
+            scratch: activeScratch,
+            totalScore: currentScore,
+            finalAccuracy: currentAccuracy,
+            bestStreak: bestStreak,
+            duration: elapsedDuration,
+            timestamp: Date()
+        )
+        progressManager.recordSessionResult(result)
     }
 
     // Builds the post-take preview-card payload from the live aggregates.
