@@ -42,8 +42,17 @@ struct MacBabyScratchPracticeGuideView: View {
 
     @ObservedObject var demoController: ScratchLabDemoModeController
 
-    private let strokeSegments: [ScratchLabBabyScratchStrokeSegment] =
-        BabyScratchReferenceMotionTimeline.strokeSegments
+    /// Derived continuous-position trace for the bundled stroke
+    /// segments. The bundled JSON encodes every stroke as 0 ↔ 1, so
+    /// the position model would force every stroke to slam to the
+    /// boundary if used verbatim. The trace helper derives a bounded
+    /// cursor from direction + duration (see
+    /// `ScratchNotationPositionTrace.derive(...)`), carrying the
+    /// cursor forward across reversals and clamping to `[0, 1]`.
+    private let trace: [ScratchNotationPositionTraceSegment] =
+        ScratchNotationPositionTrace.derive(
+            from: BabyScratchReferenceMotionTimeline.strokeSegments
+        )
 
     /// Loop duration matches the bundled audio's stroke span so the
     /// canvas wraps cleanly when the coach demo replays from t = 0.
@@ -144,25 +153,30 @@ struct MacBabyScratchPracticeGuideView: View {
         now: TimeInterval,
         loopDuration: TimeInterval
     ) {
-        guard !strokeSegments.isEmpty else { return }
+        guard !trace.isEmpty else { return }
         let baseline = Self.baselineY(in: size)
-        let peakHeight = size.height * 0.58
+        // Vertical headroom above the baseline that maps to position
+        // 1.0. Position 0.0 paints at the baseline.
+        let positionHeight = size.height * 0.62
         let playheadX = size.width * CGFloat(Self.playheadFraction)
         let pps = size.width / CGFloat(Self.visibleSeconds)
         // Render three copies of the loop so seam transitions stay
-        // continuous as audio replays from t = 0. Each segment paints
-        // only at its real audio position — silences between scratches
-        // remain empty.
+        // continuous as audio replays from t = 0. Each trace segment
+        // paints a single line from `(startTime, startPosition)` to
+        // `(endTime, endPosition)` — direction is communicated by the
+        // slope, not by mirroring below baseline. Silences between
+        // strokes remain empty: nothing is drawn until the next
+        // segment.
         for offset in [-loopDuration, 0, loopDuration] {
-            for segment in strokeSegments {
-                drawSegment(
+            for segment in trace {
+                drawTraceSegment(
                     segment,
                     timeOffset: offset,
                     now: now,
                     playheadX: playheadX,
                     pps: pps,
                     baseline: baseline,
-                    peakHeight: peakHeight,
+                    positionHeight: positionHeight,
                     canvasWidth: size.width,
                     ctx: ctx
                 )
@@ -170,21 +184,17 @@ struct MacBabyScratchPracticeGuideView: View {
         }
     }
 
-    private func drawSegment(
-        _ segment: ScratchLabBabyScratchStrokeSegment,
+    private func drawTraceSegment(
+        _ segment: ScratchNotationPositionTraceSegment,
         timeOffset: TimeInterval,
         now: TimeInterval,
         playheadX: CGFloat,
         pps: CGFloat,
         baseline: CGFloat,
-        peakHeight: CGFloat,
+        positionHeight: CGFloat,
         canvasWidth: CGFloat,
         ctx: GraphicsContext
     ) {
-        // Skip explicit hold segments — no scratch sound is occurring,
-        // so the guide stays silent (baseline only) during that span.
-        guard segment.direction != .neutral else { return }
-
         let startTime = segment.startTime + timeOffset
         let endTime = segment.endTime + timeOffset
         let xStart = playheadX + CGFloat(startTime - now) * pps
@@ -192,9 +202,8 @@ struct MacBabyScratchPracticeGuideView: View {
         // Cull off-screen segments (with a small bleed margin).
         guard xEnd > -8, xStart < canvasWidth + 8 else { return }
         // Forward = cyan/green; backward = warm pink. Direction encoded
-        // by colour so the notation can stay one-sided above the
-        // baseline. No grading verbs; no "good vs bad" connotation —
-        // these are pure direction indicators.
+        // by colour AND by slope sign (forward = upward slope, backward
+        // = downward slope above the baseline).
         let color: Color
         switch segment.direction {
         case .forward:
@@ -204,29 +213,26 @@ struct MacBabyScratchPracticeGuideView: View {
         case .neutral:
             return
         }
-        // Triangle stroke that peaks once above the baseline. Both
-        // forward and backward strokes use the same upward triangle
-        // shape so the notation never inverts below the baseline.
-        let midX = (xStart + xEnd) / 2
+        let yStart = baseline - positionHeight * CGFloat(segment.startPosition)
+        let yEnd = baseline - positionHeight * CGFloat(segment.endPosition)
         var path = Path()
-        path.move(to: CGPoint(x: xStart, y: baseline))
-        path.addLine(to: CGPoint(x: midX, y: baseline - peakHeight))
-        path.addLine(to: CGPoint(x: xEnd, y: baseline))
+        path.move(to: CGPoint(x: xStart, y: yStart))
+        path.addLine(to: CGPoint(x: xEnd, y: yEnd))
         ctx.stroke(
             path,
             with: .color(color.opacity(0.95)),
-            style: StrokeStyle(lineWidth: 2.4, lineJoin: .round)
+            style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
         )
-        // Filled apex node so the peak reads clearly even on short
-        // segments. Same colour, slightly lower opacity.
-        let apexRadius: CGFloat = 3.5
-        let apex = CGRect(
-            x: midX - apexRadius,
-            y: baseline - peakHeight - apexRadius,
-            width: apexRadius * 2,
-            height: apexRadius * 2
+        // Small node at the segment's end position so the cursor's
+        // current height reads clearly even for very short strokes.
+        let nodeRadius: CGFloat = 3.0
+        let node = CGRect(
+            x: xEnd - nodeRadius,
+            y: yEnd - nodeRadius,
+            width: nodeRadius * 2,
+            height: nodeRadius * 2
         )
-        ctx.fill(Path(ellipseIn: apex), with: .color(color.opacity(0.85)))
+        ctx.fill(Path(ellipseIn: node), with: .color(color.opacity(0.85)))
     }
 
     /// Baseline y-coordinate inside the canvas. Sits near the bottom so
