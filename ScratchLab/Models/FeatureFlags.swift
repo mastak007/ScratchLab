@@ -24,7 +24,7 @@ enum FeatureFlags {
     static var laneJudgmentTintEnabled: Bool   { isOn("LANE_JUDGMENT_TINT",   releaseDefault: true,  debugDefault: true) }
     static var lanePhraseTintEnabled: Bool     { isOn("LANE_PHRASE_TINT",     releaseDefault: true,  debugDefault: true) }
     static var laneMicroFeedbackEnabled: Bool  { isOn("LANE_MICRO_FEEDBACK",  releaseDefault: true,  debugDefault: true) }
-    static var phraseMomentumHUDEnabled: Bool  { isOn("PHRASE_MOMENTUM_HUD",  releaseDefault: false, debugDefault: false) }
+    static var phraseMomentumHUDEnabled: Bool  { isOn("PHRASE_MOMENTUM_HUD",  releaseDefault: true,  debugDefault: true) }
     static var unlockLadderEnabled: Bool       { isOn("UNLOCK_LADDER",        releaseDefault: false, debugDefault: false) }
     static var inSessionMomentumEnabled: Bool  { isOn("IN_SESSION_MOMENTUM",  releaseDefault: false, debugDefault: false) }
     static var sessionReplayEnabled: Bool      { isOn("SESSION_REPLAY",       releaseDefault: false, debugDefault: false) }
