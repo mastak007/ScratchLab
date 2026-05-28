@@ -159,6 +159,36 @@ enum CoachCopy {
         }
     }
 
+    // MARK: Milestone callouts (Phase C6a)
+    //
+    // Quiet acknowledgement copy for the first-saved-session, streak,
+    // and per-scratch practice-count milestones. Three tiers only;
+    // tone stays calm and instructional. No celebratory verbs, no
+    // grading vocabulary, no addictive-loop language. Each milestone
+    // fires at most once across a user's practice journey for a given
+    // scratch.
+
+    enum Milestone {
+        static let header = "MILESTONE"
+        static let firstSession = "First saved session"
+
+        /// Streak-day milestone. Singular form for the canonical tier
+        /// in use today; future tiers can be added without breaking
+        /// callers.
+        static func streakDay(_ count: Int) -> String {
+            switch count {
+            case 7:   return "Seven-day practice streak"
+            default:  return "\(count)-day practice streak"
+            }
+        }
+
+        /// Per-scratch practice-count milestone. Renders the scratch's
+        /// display name verbatim so different scratches read naturally.
+        static func scratchPracticeCount(scratchName: String, count: Int) -> String {
+            "\(count) \(scratchName) takes"
+        }
+    }
+
     // MARK: Drift coaching summary (Phase C1)
     //
     // First user-visible coaching surface. Lives in the ResultsOverlayView

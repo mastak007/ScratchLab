@@ -471,6 +471,7 @@ struct PracticeModeView: View {
                         takeEvidence: practiceTimingPreviewSummary,
                         drillSummary: drillSummary,
                         driftCoachingSummary: driftCoachingSummary,
+                        milestone: practiceMilestone,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
                         onContinue: { showingResults = false; resetSession() },
                         onExit: { dismiss() }
@@ -1695,6 +1696,24 @@ struct PracticeModeView: View {
         return DriftCoachingSummary(items: items)
     }
 
+    /// Phase C6a milestone selection. Reads only post-session
+    /// `ProgressManager` state — never writes back, never feeds
+    /// scoring. Returns `nil` for non-scored modes (demo) and for any
+    /// session whose state does not match a milestone tier; silence
+    /// is the default per the Phase C silence rule.
+    fileprivate var practiceMilestone: PracticeMilestone? {
+        guard practiceAssistMode != .demo else { return nil }
+        let context = PracticeMilestonePicker.Context(
+            totalScratchAttempts: progressManager.totalScratchAttempts,
+            currentStreak: progressManager.currentStreak,
+            scratchName: activeScratch.name,
+            scratchPracticeCount: progressManager
+                .getProgressForScratch(activeScratch.id)?
+                .practiceCount
+        )
+        return PracticeMilestonePicker.pick(from: context)
+    }
+
     // Captures one signed-offset sample for the drift coaching pipeline.
     // Skips when no session start has been stamped (defensive — Practice
     // always stamps in `startSession`). Caps the buffer so a long
@@ -2757,6 +2776,7 @@ struct ResultsOverlayView: View {
     fileprivate var takeEvidence: TakeEvidenceSummary? = nil
     fileprivate var drillSummary: DrillSummary? = nil
     fileprivate var driftCoachingSummary: DriftCoachingSummary? = nil
+    fileprivate var milestone: PracticeMilestone? = nil
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
@@ -2855,6 +2875,13 @@ struct ResultsOverlayView: View {
                    let summary = driftCoachingSummary,
                    !summary.items.isEmpty {
                     DriftCoachingSummaryCard(summary: summary)
+                        .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
+                }
+
+                if FeatureFlags.milestonesEnabled, let milestone {
+                    MilestoneCallout(milestone: milestone)
                         .padding(.horizontal, 32)
                         .opacity(visible(3) ? 1 : 0)
                         .animation(.easeOut(duration: 0.25), value: effectiveStage)
@@ -3121,6 +3148,55 @@ fileprivate struct DriftCoachingSummaryCard: View {
         switch tier {
         case .advisory: return ScratchLabPalette.info
         case .primary:  return ScratchLabPalette.warning
+        }
+    }
+}
+
+/// Phase C6a milestone callout. Single-line acknowledgement of a
+/// recognised milestone (first saved session, streak day, per-scratch
+/// practice count). Visual treatment mirrors `DrillSummaryCard` and
+/// `DriftCoachingSummaryCard` so the Results overlay reads as a
+/// single quiet column of supplementary surfaces, not a celebration.
+fileprivate struct MilestoneCallout: View {
+    let milestone: PracticeMilestone
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(ScratchLabPalette.demoGold)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(CoachCopy.Milestone.header)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.white.opacity(0.55))
+                Text(Self.copy(for: milestone))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(CoachCopy.Milestone.header). \(Self.copy(for: milestone)).")
+    }
+
+    /// PROFILE.md-compliant copy routing — keeps the milestone-string
+    /// resolution centralised so tests can lock the exact phrasing.
+    fileprivate static func copy(for milestone: PracticeMilestone) -> String {
+        switch milestone {
+        case .firstSession:
+            return CoachCopy.Milestone.firstSession
+        case .streakDay(let n):
+            return CoachCopy.Milestone.streakDay(n)
+        case .scratchPracticeCount(let name, let count):
+            return CoachCopy.Milestone.scratchPracticeCount(
+                scratchName: name,
+                count: count
+            )
         }
     }
 }
