@@ -7029,6 +7029,33 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("rawElapsed.truncatingRemainder"))
     }
 
+    func testNotationLabTemplateDefaultsToTeachingTraceWithRawOption() throws {
+        let notationViewURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
+        let source = try String(contentsOf: notationViewURL, encoding: .utf8)
+
+        // The Lab's Template mode defaults to the learner-facing Teaching view,
+        // which reuses the SAME shared teaching pipeline as the Practice Baby
+        // guide (so the surfaces cannot visually contradict each other).
+        XCTAssertTrue(source.contains("@State private var templateRenderRaw = false"),
+                      "Notation Lab Template must default to Teaching (raw is opt-in)")
+        XCTAssertTrue(source.contains("ScratchNotationTeachingProfile.project("),
+                      "Teaching render must shape the trace via the shared teaching profile")
+        XCTAssertTrue(source.contains("ScratchNotationPhrasePolyline.build("),
+                      "Teaching render must build phrase polylines via the shared helper")
+        XCTAssertTrue(source.contains("ScratchNotationSmoothPath.path("),
+                      "Teaching render must smooth sub-paths via the shared SmoothPath helper")
+        // Single-colour learner-facing trace — no blue/pink direction split.
+        XCTAssertTrue(source.contains("ScratchLabPalette.notationForward"),
+                      "Teaching render must use the single learner-facing colour")
+        // Raw motion stays available as a clearly-labelled diagnostic mode,
+        // still rendered by the shared (Review-shared) angular canvas.
+        XCTAssertTrue(source.contains("ScratchNotationCanvasView("),
+                      "Raw diagnostic mode must remain available")
+        XCTAssertTrue(source.contains("Raw motion"),
+                      "Raw mode must be clearly labelled as diagnostic")
+    }
+
     func testBabyScratchDemoAudioDurationExceedsSingleNotationPhrase() throws {
         let audioURL = projectRootURL()
             .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")

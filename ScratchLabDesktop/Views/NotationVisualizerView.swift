@@ -343,6 +343,13 @@ struct NotationVisualizerView: View {
     /// Starts false so any arriving snapshot immediately shows as Captured Take.
     @State private var showTemplateOverride = false
 
+    /// Template render style. Defaults to the learner-facing **Teaching** view
+    /// (shared teaching-profile + smoothed trace, matching the Practice Baby
+    /// guide). The opt-in **Raw motion · diagnostic** mode keeps the angular
+    /// `ScratchNotationCanvasView` for tooling. Review/captured truth is
+    /// unaffected (it has its own surface).
+    @State private var templateRenderRaw = false
+
     private let ticker = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
     init(demo: BabyScratchDemoPlaybackCoordinator, capturedSnapshot: CaptureCore.DetectedNotationSnapshot? = nil) {
@@ -375,15 +382,34 @@ struct NotationVisualizerView: View {
                     noCapturedTakePane
                 }
             } else {
-                ScratchNotationCanvasView(
-                    notation: vm.notation,
-                    playbackTime: vm.playbackTime,
-                    loopDuration: vm.loopDuration
-                )
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 220, maxHeight: 480)
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
+                templateRenderModePicker
+                if templateRenderRaw {
+                    // Raw motion · diagnostic — the shared angular renderer
+                    // (cyan/hot-pink, full-amplitude). Tooling only; not the
+                    // learner-facing notation.
+                    ScratchNotationCanvasView(
+                        notation: vm.notation,
+                        playbackTime: vm.playbackTime,
+                        loopDuration: vm.loopDuration
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 220, maxHeight: 480)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                } else {
+                    // Teaching (default) — shared teaching-profile + smoothed,
+                    // single-colour learner-facing trace, identical visual
+                    // language to the Practice Baby guide.
+                    BabyScratchTeachingTemplateCanvas(
+                        notation: vm.notation,
+                        loopDuration: vm.loopDuration,
+                        playbackTime: vm.playbackTime
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 220, maxHeight: 480)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                }
                 notationMotionLane
                     .padding(.horizontal, 18)
                 Spacer(minLength: 0)
@@ -435,6 +461,22 @@ struct NotationVisualizerView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: Template render-mode picker
+
+    /// Teaching (default, learner-facing) vs Raw motion (diagnostic). Teaching
+    /// reuses the shared teaching-profile + smoothing helpers so the Lab can't
+    /// contradict the Practice Baby guide; Raw keeps the angular diagnostic view.
+    private var templateRenderModePicker: some View {
+        Picker("Render", selection: $templateRenderRaw) {
+            Text("Teaching").tag(false)
+            Text("Raw motion · diagnostic").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
     }
 
     // MARK: Status bar
@@ -1624,5 +1666,83 @@ struct CapturedNotationDisplayView: View {
         case ..<20.0:  return 1.0
         default:       return 2.0
         }
+    }
+}
+
+// MARK: - Baby Scratch teaching template canvas
+
+/// Learner-facing Baby Scratch template render for the Notation Lab. Reuses the
+/// SAME pure helpers as the Practice Baby guide so the two surfaces share one
+/// visual language: position trace → `ScratchNotationTeachingProfile.project`
+/// (shallow repeats + a taller resolve) → `ScratchNotationPhrasePolyline.build`
+/// → stroked per sub-path via `ScratchNotationSmoothPath` (centripetal,
+/// rounded). Single-colour (`notationForward`), no blue/pink direction split.
+///
+/// Static full-width render of the notation's own phrase, with a thin playhead.
+/// Owns no state and does no IO, scoring, capture, or analysis.
+private struct BabyScratchTeachingTemplateCanvas: View {
+    let notation: ScratchNotation?
+    let loopDuration: TimeInterval
+    let playbackTime: TimeInterval
+
+    /// One continuous polyline group per active phrase, built from the
+    /// notation's own stroke segments through the shared teaching pipeline.
+    private var phrasePolylines: [ScratchNotationPhrasePolyline] {
+        guard let segments = notation?.strokeSegments, !segments.isEmpty else { return [] }
+        let ranges = ScratchNotationPhraseGate.activePhraseRanges(from: segments)
+        let profiled = ScratchNotationTeachingProfile.project(
+            trace: ScratchNotationRawTrace.build(from: segments),
+            phraseRanges: ranges
+        )
+        return ScratchNotationPhrasePolyline.build(from: profiled, phraseRanges: ranges)
+    }
+
+    var body: some View {
+        let polylines = phrasePolylines
+        let loop = max(loopDuration, 0.0001)
+        Canvas { ctx, size in
+            guard size.width > 0, size.height > 0 else { return }
+            let baseline = size.height * 0.82
+            // Position 1.0 paints `positionHeight` above the baseline; 0.0 at it.
+            let positionHeight = size.height * 0.62
+            let band = (baseline - positionHeight)...baseline
+
+            ctx.fill(Path(CGRect(origin: .zero, size: size)),
+                     with: .color(Color.black.opacity(0.22)))
+
+            var baselinePath = Path()
+            baselinePath.move(to: CGPoint(x: 0, y: baseline))
+            baselinePath.addLine(to: CGPoint(x: size.width, y: baseline))
+            ctx.stroke(baselinePath, with: .color(.white.opacity(0.18)), lineWidth: 0.5)
+
+            // Smoothed, single-colour phrase trace mapped full-width across the
+            // phrase duration. Each sub-path is rounded independently so silent
+            // platter resets stay as gaps.
+            for polyline in polylines {
+                var path = Path()
+                for subPath in polyline.subPaths {
+                    let points = subPath.map { vertex -> CGPoint in
+                        let x = CGFloat(vertex.time / loop) * size.width
+                        let y = baseline - positionHeight * CGFloat(vertex.position)
+                        return CGPoint(x: x, y: y)
+                    }
+                    path.addPath(ScratchNotationSmoothPath.path(through: points, clampY: band))
+                }
+                ctx.stroke(
+                    path,
+                    with: .color(ScratchLabPalette.notationForward.opacity(0.95)),
+                    style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+                )
+            }
+
+            // Thin playhead at the current loop position.
+            let t = playbackTime.truncatingRemainder(dividingBy: loop)
+            let phx = CGFloat((t < 0 ? t + loop : t) / loop) * size.width
+            var playhead = Path()
+            playhead.move(to: CGPoint(x: phx, y: 0))
+            playhead.addLine(to: CGPoint(x: phx, y: size.height))
+            ctx.stroke(playhead, with: .color(.white.opacity(0.45)), lineWidth: 1.0)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
