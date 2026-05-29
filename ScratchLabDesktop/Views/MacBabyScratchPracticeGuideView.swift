@@ -62,11 +62,15 @@ struct MacBabyScratchPracticeGuideView: View {
     /// The trace is built from the raw JSON `startProgress` /
     /// `endProgress` values (`ScratchNotationRawTrace.build`), not
     /// from the duration-proxy derivation. Baby Scratch's JSON
-    /// already encodes every stroke as a full-sample sweep
-    /// (forward 0 → 1, backward 1 → 0); the duration proxy
-    /// compressed that into a narrow band and produced a shallow
-    /// waveform-like trace (forensic on `sl notation review 3.mp4`).
-    /// Raw progress restores full lane amplitude.
+    /// encodes every stroke as a full-sample sweep (forward 0 → 1,
+    /// backward 1 → 0), which alone renders as a uniform picket of
+    /// full-height humps. `ScratchNotationTeachingProfile.project`
+    /// then reshapes that raw trace (demo-only) into the reference
+    /// teaching shape: repeated baby hits collapse into a shallow low
+    /// band and each phrase's tail resolve keeps full height. The
+    /// projection is position-only — stroke times and directions are
+    /// preserved, so the phrase gate, attack markers, and beat grid
+    /// are unaffected.
     ///
     /// Hold gaps between strokes inside the same phrase fold into
     /// the same polyline as flat horizontal vertices. Non-carry-
@@ -77,15 +81,26 @@ struct MacBabyScratchPracticeGuideView: View {
     /// silences split into separate polylines and Stage 0's phrase
     /// gate keeps them from drawing at all when the playhead is
     /// inside a silence.
-    private let phrasePolylines: [ScratchNotationPhrasePolyline] =
-        ScratchNotationPhrasePolyline.build(
-            from: ScratchNotationRawTrace.build(
+    private let phrasePolylines: [ScratchNotationPhrasePolyline] = {
+        let ranges = ScratchNotationPhraseGate.activePhraseRanges(
+            from: BabyScratchReferenceMotionTimeline.strokeSegments
+        )
+        // Demo-only teaching projection: collapse repeated baby hits
+        // into a shallow low band and keep each phrase's tail resolve at
+        // full height. Position-only — stroke times and directions are
+        // preserved, so the phrase gate, beat grid, and attack markers
+        // are unaffected. Never used by captured / Review notation.
+        let profiledTrace = ScratchNotationTeachingProfile.project(
+            trace: ScratchNotationRawTrace.build(
                 from: BabyScratchReferenceMotionTimeline.strokeSegments
             ),
-            phraseRanges: ScratchNotationPhraseGate.activePhraseRanges(
-                from: BabyScratchReferenceMotionTimeline.strokeSegments
-            )
+            phraseRanges: ranges
         )
+        return ScratchNotationPhrasePolyline.build(
+            from: profiledTrace,
+            phraseRanges: ranges
+        )
+    }()
 
     /// Discrete audible-attack onset markers — one per non-neutral
     /// stroke whose onset falls inside an active phrase. Drawn on a
@@ -307,8 +322,11 @@ struct MacBabyScratchPracticeGuideView: View {
     /// does not loop within a playback.
     ///
     /// One `Path` per phrase, one `ctx.stroke(...)` call per phrase
-    /// — sub-paths sit inside the same `Path` via `move(to:)` /
-    /// `addLine(to:)` and stroke together with a uniform line style.
+    /// — each sub-path is rounded via `ScratchNotationSmoothPath`
+    /// (centripetal Catmull-Rom) and appended into the same `Path`,
+    /// then stroked together with a uniform line style. The smoothed
+    /// curve interpolates every vertex, so timing/position are
+    /// unchanged; only the corners are rounded.
     private func drawActivePhrasePolylines(
         in ctx: GraphicsContext,
         size: CGSize,
@@ -331,18 +349,22 @@ struct MacBabyScratchPracticeGuideView: View {
             guard polyline.phraseRange.end >= visibleStart - 0.1,
                   polyline.phraseRange.start <= visibleEnd + 0.1
             else { continue }
+            // Each sub-path is smoothed independently and appended into
+            // the same phrase `Path`, so reset gaps between sub-paths
+            // stay gaps (no line is drawn across them). Control points
+            // are clamped to the drawable band so the rounded humps
+            // never bulge above position 1.0 or below the baseline.
+            let band = (baseline - positionHeight)...baseline
             var path = Path()
             for subPath in polyline.subPaths {
-                for (index, vertex) in subPath.enumerated() {
+                let points = subPath.map { vertex -> CGPoint in
                     let x = playheadX + CGFloat(vertex.time - now) * pps
                     let y = baseline - positionHeight * CGFloat(vertex.position)
-                    let point = CGPoint(x: x, y: y)
-                    if index == 0 {
-                        path.move(to: point)
-                    } else {
-                        path.addLine(to: point)
-                    }
+                    return CGPoint(x: x, y: y)
                 }
+                path.addPath(
+                    ScratchNotationSmoothPath.path(through: points, clampY: band)
+                )
             }
             ctx.stroke(
                 path,
