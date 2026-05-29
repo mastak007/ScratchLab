@@ -49,9 +49,36 @@ struct MacBabyScratchPracticeGuideView: View {
     /// cursor from direction + duration (see
     /// `ScratchNotationPositionTrace.derive(...)`), carrying the
     /// cursor forward across reversals and clamping to `[0, 1]`.
+    ///
+    /// Calibrated rate per `MacBabyScratchPracticeGuideRate` — the
+    /// helper's default rate of 1.0 cursor / sec saturates the cursor
+    /// in a single Baby-Scratch-length stroke, killing dynamic range.
+    /// Calibration is the honest interim until the JSON ships real
+    /// sample-position data.
     private let trace: [ScratchNotationPositionTraceSegment] =
         ScratchNotationPositionTrace.derive(
-            from: BabyScratchReferenceMotionTimeline.strokeSegments
+            from: BabyScratchReferenceMotionTimeline.strokeSegments,
+            movementRatePerSecond:
+                MacBabyScratchPracticeGuideRate.calibratedBabyRate
+        )
+
+    /// Horizontal "hold" segments that paint between consecutive
+    /// strokes inside the same active phrase. The position trace
+    /// carries the cursor across the hold by construction, but the
+    /// renderer paints only during each stroke's `[startTime,
+    /// endTime]` — so the held cursor value is invisible without
+    /// these. The connector helper omits any gap that exceeds the
+    /// phrase-gate's silence threshold, so inter-phrase silences stay
+    /// blank. Inlined trace derivation (same arguments as `trace`)
+    /// keeps the property initializer self-contained without forcing
+    /// a custom init on the View.
+    private let holdConnectors: [ScratchNotationHoldConnectorSegment] =
+        ScratchNotationHoldConnector.connectors(
+            from: ScratchNotationPositionTrace.derive(
+                from: BabyScratchReferenceMotionTimeline.strokeSegments,
+                movementRatePerSecond:
+                    MacBabyScratchPracticeGuideRate.calibratedBabyRate
+            )
         )
 
     /// Loop duration matches the bundled audio's stroke span so the
@@ -129,6 +156,13 @@ struct MacBabyScratchPracticeGuideView: View {
                 drawBackground(in: ctx, size: size)
                 drawBaseline(in: ctx, size: size)
                 if shouldDrawStrokes {
+                    // Connectors paint *before* strokes so stroke
+                    // slopes overlay any seam where a connector meets
+                    // a stroke endpoint — preserves direction-colour
+                    // contrast at reversals.
+                    drawHoldConnectors(
+                        in: ctx, size: size, now: now, loopDuration: loopDuration
+                    )
                     drawStrokes(in: ctx, size: size, now: now, loopDuration: loopDuration)
                 }
                 drawPlayhead(in: ctx, size: size)
@@ -169,6 +203,42 @@ struct MacBabyScratchPracticeGuideView: View {
         path.move(to: CGPoint(x: x, y: 0))
         path.addLine(to: CGPoint(x: x, y: size.height))
         ctx.stroke(path, with: .color(.white.opacity(0.50)), lineWidth: 1.0)
+    }
+
+    /// Paints the horizontal hold connectors between consecutive
+    /// strokes inside the same active phrase. Skips connectors that
+    /// fall outside the visible window. Uses a dim neutral hue so the
+    /// connector reads as "the cursor is being held here" without
+    /// competing with the direction-coloured stroke slopes.
+    private func drawHoldConnectors(
+        in ctx: GraphicsContext,
+        size: CGSize,
+        now: TimeInterval,
+        loopDuration: TimeInterval
+    ) {
+        guard !holdConnectors.isEmpty else { return }
+        let baseline = Self.baselineY(in: size)
+        let positionHeight = size.height * 0.62
+        let playheadX = size.width * CGFloat(Self.playheadFraction)
+        let pps = size.width / CGFloat(Self.visibleSeconds)
+        for offset in [-loopDuration, 0, loopDuration] {
+            for connector in holdConnectors {
+                let startTime = connector.startTime + offset
+                let endTime = connector.endTime + offset
+                let xStart = playheadX + CGFloat(startTime - now) * pps
+                let xEnd = playheadX + CGFloat(endTime - now) * pps
+                guard xEnd > -8, xStart < size.width + 8 else { continue }
+                let y = baseline - positionHeight * CGFloat(connector.position)
+                var path = Path()
+                path.move(to: CGPoint(x: xStart, y: y))
+                path.addLine(to: CGPoint(x: xEnd, y: y))
+                ctx.stroke(
+                    path,
+                    with: .color(.white.opacity(0.42)),
+                    style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
+                )
+            }
+        }
     }
 
     private func drawStrokes(
@@ -247,16 +317,28 @@ struct MacBabyScratchPracticeGuideView: View {
             with: .color(color.opacity(0.95)),
             style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
         )
-        // Small node at the segment's end position so the cursor's
-        // current height reads clearly even for very short strokes.
-        let nodeRadius: CGFloat = 3.0
-        let node = CGRect(
-            x: xEnd - nodeRadius,
-            y: yEnd - nodeRadius,
-            width: nodeRadius * 2,
-            height: nodeRadius * 2
+        // Anchor markers at both ends of the stroke so direction
+        // reversals read clearly: the *start* dot anchors the cursor
+        // value the hold connector arrived at; the *end* dot anchors
+        // the value the next hold will carry forward. Bumped from the
+        // original 3.0 px endpoint dot because that radius did not
+        // register as a reversal marker against the lane background.
+        let startRadius: CGFloat = 4.5
+        let endRadius: CGFloat = 4.5
+        let startNode = CGRect(
+            x: xStart - startRadius,
+            y: yStart - startRadius,
+            width: startRadius * 2,
+            height: startRadius * 2
         )
-        ctx.fill(Path(ellipseIn: node), with: .color(color.opacity(0.85)))
+        let endNode = CGRect(
+            x: xEnd - endRadius,
+            y: yEnd - endRadius,
+            width: endRadius * 2,
+            height: endRadius * 2
+        )
+        ctx.fill(Path(ellipseIn: startNode), with: .color(color.opacity(0.95)))
+        ctx.fill(Path(ellipseIn: endNode),   with: .color(color.opacity(0.75)))
     }
 
     /// Baseline y-coordinate inside the canvas. Sits near the bottom so
