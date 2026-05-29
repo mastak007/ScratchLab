@@ -10014,10 +10014,8 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
             macSource.contains("estimated accuracy"),
             "Practice metric copy must qualify accuracy as estimated"
         )
-        XCTAssertTrue(
-            macSource.contains("estimated confidence"),
-            "Practice metric copy must qualify confidence as estimated"
-        )
+        // Confidence is qualified via the "Est. Conf" badge (Est. = estimated);
+        // the literal "estimated confidence" phrasing is no longer used.
         XCTAssertTrue(
             macSource.contains("\"Est. Conf\""),
             "Practice confidence badge must use the estimated qualifier"
@@ -10456,6 +10454,7 @@ final class PracticeAssistModePickerTests: XCTestCase {
 
     func testAssistModePickerCopyIsPresentInPracticeModeView() throws {
         let view = try source("ScratchLab/Views/PracticeModeView.swift")
+        let copy = try source("ScratchLab/Models/CoachCopy.swift")
 
         // Section heading and persisted-state key.
         XCTAssertTrue(view.contains("\"ASSIST MODE\""),
@@ -10471,18 +10470,27 @@ final class PracticeAssistModePickerTests: XCTestCase {
                           "Assist mode picker missing label: \(label)")
         }
 
-        // All five explainer strings, verbatim.
-        let explainers = [
-            "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet.",
-            "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored.",
-            "ScratchLab shows upcoming cut cues while you move the fader.",
-            "ScratchLab compares your cuts against the target.",
-            "ScratchLab leaves the fader fully manual.",
-        ]
-        for line in explainers {
-            XCTAssertTrue(view.contains(line),
-                          "Assist mode section missing explainer: \(line)")
+        // Explainers moved to the shared CoachCopy.AssistMode source of truth.
+        // PracticeModeView must wire all five via the enum's explainer accessor.
+        for accessor in ["CoachCopy.AssistMode.autoCutExplainer",
+                         "CoachCopy.AssistMode.demoExplainer",
+                         "CoachCopy.AssistMode.guidedExplainer",
+                         "CoachCopy.AssistMode.coachedExplainer",
+                         "CoachCopy.AssistMode.openExplainer"] {
+            XCTAssertTrue(view.contains(accessor),
+                          "Assist mode must wire the explainer: \(accessor)")
         }
+        for explainer in ["static let autoCutExplainer",
+                          "static let demoExplainer",
+                          "static let guidedExplainer",
+                          "static let coachedExplainer",
+                          "static let openExplainer"] {
+            XCTAssertTrue(copy.contains(explainer),
+                          "CoachCopy.AssistMode missing explainer: \(explainer)")
+        }
+        // App Review honesty: the Auto-cut explainer must disclaim audio playback.
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("no playback"),
+                      "Auto-cut explainer must stay honest: no audio playback yet")
     }
 
     func testAssistModeStateIsNotCoupledToEngineLayers() throws {
