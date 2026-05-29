@@ -214,16 +214,16 @@ struct PracticeReelTimelineTests {
 
         #expect(reel.isValid, "baby_reel.json must validate clean: \(reel.validationErrors)")
         #expect(reel.scratchID == "baby")
-        #expect(reel.audioFile == "baby_noBeat.wav")
-        #expect(reel.segments.count == 7)
+        #expect(reel.audioFile == "baby_reel_callresponse.wav")
+        #expect(reel.segments.count == 8)
         #expect(reel.demoSegments.count == 4)
-        #expect(reel.copySegments.count == 3)
-        #expect(reel.strokes.count == 40)
+        #expect(reel.copySegments.count == 4)
+        #expect(reel.strokes.count == 75)
         #expect(reel.segments.first?.kind == .demo)
 
         // The declared audioDuration must match the real bundled audio file.
         let audioURL = root.appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
+            "ScratchLab/Resources/CoachDemoAudio/baby_reel_callresponse.wav")
         let audioFile = try AVAudioFile(forReading: audioURL)
         let measured = Double(audioFile.length) / audioFile.processingFormat.sampleRate
         #expect(reel.audioDurationIssue(actualDuration: measured) == nil,
@@ -412,14 +412,14 @@ struct CopyGhostStrokeTests {
         #expect(abs(ghosts[0].startTime - 6.0) < 1e-6)
     }
 
-    @Test("The bundled Baby reel derives ghosts for all three copy windows")
+    @Test("The bundled Baby reel derives ghosts for all four copy windows")
     func bundledBabyReelGhosts() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
             "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let ghosts = reel.derivedCopyGhostStrokes()
-        // Each of the 3 copy windows answers a 10-stroke demo segment.
-        #expect(ghosts.count == 30)
+        // Each of the 4 copy windows answers its paired demo segment.
+        #expect(ghosts.count == 75)
         #expect(ghosts.allSatisfy { reel.segment(at: $0.startTime)?.kind == .copy })
         #expect(ghosts.allSatisfy { $0.endTime <= reel.audioDuration })
     }
