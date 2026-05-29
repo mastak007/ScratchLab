@@ -59,6 +59,18 @@ struct MacBabyScratchPracticeGuideView: View {
     private let segmentLoopDuration: TimeInterval =
         BabyScratchReferenceMotionTimeline.phraseEnd
 
+    /// Active-phrase ranges derived from the same stroke segments the
+    /// trace uses. Strokes are only drawn when (a) the demo is playing
+    /// and (b) the current loop-time is inside one of these ranges.
+    /// This prevents the centered viewport from leaking upcoming-phrase
+    /// strokes into the canvas during the 5+ s silences that sit
+    /// between phrases, and suppresses all stroke drawing in the idle
+    /// / paused / post-end states.
+    private let phraseRanges: [ScratchNotationPhraseRange] =
+        ScratchNotationPhraseGate.activePhraseRanges(
+            from: BabyScratchReferenceMotionTimeline.strokeSegments
+        )
+
     private static let laneHeight: CGFloat = 156
     private static let playheadFraction: Double = 0.30
     private static let visibleSeconds: Double = 4.0
@@ -103,10 +115,22 @@ struct MacBabyScratchPracticeGuideView: View {
                 for: audioTime,
                 cycleDuration: loopDuration
             )
+            // Strokes are gated by *both* the play state and the
+            // active-phrase membership of `now`. Background, baseline,
+            // and playhead always paint so the lane stays present and
+            // signals "ready to play" during idle / silence — only the
+            // trace strokes themselves are suppressed.
+            let shouldDrawStrokes =
+                demoController.demoPlayer.isPlaying
+                && ScratchNotationPhraseGate.isInActivePhrase(
+                    now, ranges: phraseRanges
+                )
             Canvas { ctx, size in
                 drawBackground(in: ctx, size: size)
                 drawBaseline(in: ctx, size: size)
-                drawStrokes(in: ctx, size: size, now: now, loopDuration: loopDuration)
+                if shouldDrawStrokes {
+                    drawStrokes(in: ctx, size: size, now: now, loopDuration: loopDuration)
+                }
                 drawPlayhead(in: ctx, size: size)
             }
             .frame(height: Self.laneHeight)
