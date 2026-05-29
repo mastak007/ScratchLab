@@ -307,8 +307,11 @@ struct MacBabyScratchPracticeGuideView: View {
     /// does not loop within a playback.
     ///
     /// One `Path` per phrase, one `ctx.stroke(...)` call per phrase
-    /// — sub-paths sit inside the same `Path` via `move(to:)` /
-    /// `addLine(to:)` and stroke together with a uniform line style.
+    /// — each sub-path is rounded via `ScratchNotationSmoothPath`
+    /// (centripetal Catmull-Rom) and appended into the same `Path`,
+    /// then stroked together with a uniform line style. The smoothed
+    /// curve interpolates every vertex, so timing/position are
+    /// unchanged; only the corners are rounded.
     private func drawActivePhrasePolylines(
         in ctx: GraphicsContext,
         size: CGSize,
@@ -331,18 +334,22 @@ struct MacBabyScratchPracticeGuideView: View {
             guard polyline.phraseRange.end >= visibleStart - 0.1,
                   polyline.phraseRange.start <= visibleEnd + 0.1
             else { continue }
+            // Each sub-path is smoothed independently and appended into
+            // the same phrase `Path`, so reset gaps between sub-paths
+            // stay gaps (no line is drawn across them). Control points
+            // are clamped to the drawable band so the rounded humps
+            // never bulge above position 1.0 or below the baseline.
+            let band = (baseline - positionHeight)...baseline
             var path = Path()
             for subPath in polyline.subPaths {
-                for (index, vertex) in subPath.enumerated() {
+                let points = subPath.map { vertex -> CGPoint in
                     let x = playheadX + CGFloat(vertex.time - now) * pps
                     let y = baseline - positionHeight * CGFloat(vertex.position)
-                    let point = CGPoint(x: x, y: y)
-                    if index == 0 {
-                        path.move(to: point)
-                    } else {
-                        path.addLine(to: point)
-                    }
+                    return CGPoint(x: x, y: y)
                 }
+                path.addPath(
+                    ScratchNotationSmoothPath.path(through: points, clampY: band)
+                )
             }
             ctx.stroke(
                 path,
