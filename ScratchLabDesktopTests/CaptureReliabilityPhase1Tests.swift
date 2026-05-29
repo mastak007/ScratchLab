@@ -10080,8 +10080,15 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         let canvasURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/ScratchNotationCanvasView.swift")
         let source = try String(contentsOf: canvasURL, encoding: .utf8)
         XCTAssertTrue(source.contains("ScratchNotation"), "Canvas must accept ScratchNotation model")
-        XCTAssertTrue(source.contains("movementKind"), "Canvas must use movementKind for slope differentiation")
-        XCTAssertTrue(source.contains("releaseNormalPlayback"), "Canvas must handle releaseNormalPlayback distinctly")
+        // Slope/direction differentiation moved into the shared renderer
+        // (ScratchMotionRenderer + ScratchStrokeGeometry) — the same path the
+        // iOS practice lane uses — so the canvas delegates rather than
+        // referencing movementKind / releaseNormalPlayback inline.
+        XCTAssertTrue(source.contains("ScratchMotionRenderer.draw("),
+                      "Canvas must render strokes through the shared renderer (direction-coloured slope differentiation)")
+        XCTAssertTrue(source.contains("ScratchStrokeGeometry.motionPath(")
+                      && source.contains("LaneContent(notation:"),
+                      "Canvas must derive stroke geometry from the notation via the shared ScratchStrokeGeometry")
         XCTAssertTrue(source.contains("faderState"), "Canvas must render the fader lane")
         XCTAssertFalse(
             source.contains("loadBabyScratchFromBundle") || source.contains("Data(contentsOf"),
