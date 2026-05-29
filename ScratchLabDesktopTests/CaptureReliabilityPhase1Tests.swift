@@ -10752,7 +10752,7 @@ final class PracticeNotationPlaybackStatusTests: XCTestCase {
         XCTAssertTrue(view.contains("notationClockStartDate = Date()"),
                       "startSession must stamp the session-owned notation clock")
         XCTAssertTrue(view.contains("clockStartDate: notationClockStartDate")
-                      && view.contains(".looping(start: notationClockStartDate)"),
+                      && view.contains(".looping(start: notationClockStartDate,"),
                       "Notation views must be driven by the shared session clock")
         XCTAssertFalse(view.contains("@State private var startDate = Date()"),
                        "Notation views must not own private free-running clocks")
