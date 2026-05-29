@@ -227,6 +227,24 @@ final class ScratchNotationHoldConnectorTests: XCTestCase {
         XCTAssertGreaterThan(range, 0.3)
     }
 
+    // MARK: - Marker constants contract (Path B corrective)
+
+    /// Locks the post-corrective end-dot radius. b0e0336 enlarged
+    /// this from 3.0 → 4.5 which (combined with a new start dot)
+    /// produced the "beaded necklace" visual that read as discrete
+    /// notes at every stroke boundary. The honest value is the
+    /// pre-b0e0336 size; if a future change wants to enlarge it
+    /// again the regression has to be acknowledged here.
+    func testEndDotRadiusMatchesContract() {
+        XCTAssertEqual(MacBabyScratchPracticeGuideMarkers.endDotRadius, 3.0, accuracy: 1e-9)
+    }
+
+    /// Locks the post-corrective end-dot alpha. Same rationale as the
+    /// radius test — anchor, not note.
+    func testEndDotAlphaMatchesContract() {
+        XCTAssertEqual(MacBabyScratchPracticeGuideMarkers.endDotAlpha, 0.85, accuracy: 1e-9)
+    }
+
     // MARK: - 10. Long deliberate strokes can still saturate
 
     /// Calibration must not be so low that *no* stroke can reach the

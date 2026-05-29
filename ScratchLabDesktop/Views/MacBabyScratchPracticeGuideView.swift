@@ -317,28 +317,27 @@ struct MacBabyScratchPracticeGuideView: View {
             with: .color(color.opacity(0.95)),
             style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
         )
-        // Anchor markers at both ends of the stroke so direction
-        // reversals read clearly: the *start* dot anchors the cursor
-        // value the hold connector arrived at; the *end* dot anchors
-        // the value the next hold will carry forward. Bumped from the
-        // original 3.0 px endpoint dot because that radius did not
-        // register as a reversal marker against the lane background.
-        let startRadius: CGFloat = 4.5
-        let endRadius: CGFloat = 4.5
-        let startNode = CGRect(
-            x: xStart - startRadius,
-            y: yStart - startRadius,
-            width: startRadius * 2,
-            height: startRadius * 2
-        )
+        // Single subtle endpoint anchor. The b0e0336 enlargement and
+        // the addition of a bright start dot together produced a
+        // "beaded necklace" that read as discrete note events at
+        // every stroke boundary (forensic on
+        // `sl notation review 2.mp4`). Hold connectors already anchor
+        // the cursor between strokes, so the start of each stroke is
+        // visually located by the connector → slope transition — no
+        // start dot is needed. A small dim end dot remains so the
+        // cursor's resting value at end-of-stroke reads cleanly even
+        // for very short strokes.
+        let endRadius = CGFloat(MacBabyScratchPracticeGuideMarkers.endDotRadius)
         let endNode = CGRect(
             x: xEnd - endRadius,
             y: yEnd - endRadius,
             width: endRadius * 2,
             height: endRadius * 2
         )
-        ctx.fill(Path(ellipseIn: startNode), with: .color(color.opacity(0.95)))
-        ctx.fill(Path(ellipseIn: endNode),   with: .color(color.opacity(0.75)))
+        ctx.fill(
+            Path(ellipseIn: endNode),
+            with: .color(color.opacity(MacBabyScratchPracticeGuideMarkers.endDotAlpha))
+        )
     }
 
     /// Baseline y-coordinate inside the canvas. Sits near the bottom so

@@ -102,3 +102,30 @@ enum MacBabyScratchPracticeGuideRate {
     /// end of each phrase reads clearly above the rest.
     static let calibratedBabyRate: Double = 0.25
 }
+
+// MARK: - MacBabyScratchPracticeGuideMarkers
+
+/// Marker constants for the Mac Baby Scratch trace renderer.
+///
+/// **Honesty rule:** a marker dot must never imply an extra scratch
+/// note. It exists only to anchor the *end* of a real stroke so the
+/// cursor's resting value reads cleanly even on short strokes — not
+/// to flag a separate event. The deliberate **absence** of a
+/// `startDot…` constant on this enum is itself part of the contract.
+///
+/// **History:** b0e0336 enlarged the endpoint dot from 3.0 → 4.5 and
+/// added a 4.5 px start-of-stroke dot at 0.95 alpha to anchor
+/// reversals. Frame-by-frame review (`sl notation review 2.mp4`)
+/// showed the combination of bright start dot + larger end dot +
+/// hold connectors read as discrete "notes" at every catch
+/// boundary. With hold connectors in place, the connector → slope
+/// transition is itself the reversal marker — no start dot is
+/// needed. These constants restore the pre-b0e0336 end-dot style.
+enum MacBabyScratchPracticeGuideMarkers {
+    /// End-of-stroke dot radius, in points. Subtle enough that the
+    /// dot reads as an anchor and not as a note event.
+    static let endDotRadius: Double = 3.0
+    /// End-of-stroke dot colour alpha multiplier (applied on top of
+    /// the direction colour).
+    static let endDotAlpha: Double = 0.85
+}
