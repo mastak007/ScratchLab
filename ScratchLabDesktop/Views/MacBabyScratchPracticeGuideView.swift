@@ -99,6 +99,20 @@ struct MacBabyScratchPracticeGuideView: View {
     private static let playheadFraction: Double = 0.30
     private static let visibleSeconds: Double = 4.0
 
+    /// Reference tempo for the bundled Baby Scratch demo. Matches
+    /// `BabyScratchReferenceAsset.babyScratch79BPM.bpm`. Drives the
+    /// beat-grid spacing only — the trace itself is timed from the
+    /// JSON stroke times, not from this BPM.
+    private static let babyScratchBPM: Double = 79.0
+
+    /// Anchor for the beat grid in audio-time seconds. Set to the
+    /// first audible attack in the bundled Baby Scratch demo
+    /// (JSON stroke #1 startTime) so beat 0 / bar 1 sits on the
+    /// first scratch instead of on `t = 0`. The phrase 1 strokes
+    /// then land within ±90 ms of beats at 79 BPM, giving a
+    /// readable rhythmic scaffold.
+    private static let babyScratchBeatAnchor: TimeInterval = 0.27
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
@@ -152,6 +166,14 @@ struct MacBabyScratchPracticeGuideView: View {
             Canvas { ctx, size in
                 drawBackground(in: ctx, size: size)
                 drawBaseline(in: ctx, size: size)
+                // The beat grid paints **independently** of the
+                // phrase / play-state gate. The trace is gated
+                // (idle / silence / paused → no strokes), but the
+                // rhythmic scaffold remains visible so the lane
+                // reads as "ready to play in time" even during
+                // idle. Painted between baseline and trace so the
+                // trace overlays the grid when it appears.
+                drawBeatGrid(in: ctx, size: size, now: now)
                 if shouldDrawTrace {
                     drawActivePhrasePolylines(in: ctx, size: size, now: now)
                 }
@@ -193,6 +215,57 @@ struct MacBabyScratchPracticeGuideView: View {
         path.move(to: CGPoint(x: x, y: 0))
         path.addLine(to: CGPoint(x: x, y: size.height))
         ctx.stroke(path, with: .color(.white.opacity(0.50)), lineWidth: 1.0)
+    }
+
+    /// Paints the beat / bar grid behind the trace. Beat lines are
+    /// dim (α = 0.08), bar lines slightly stronger (α = 0.18,
+    /// matching the baseline's intensity) so the grid reads as
+    /// timing reference rather than as scratch content. Two stroke
+    /// calls — one per kind — share a single 0.5 pt line width and
+    /// never interact with the trace's colour palette.
+    ///
+    /// Independent of phrase / polyline / trace data: lines are
+    /// computed entirely from the visible window + BPM + anchor.
+    /// Always paints regardless of the demo's play state.
+    private func drawBeatGrid(
+        in ctx: GraphicsContext,
+        size: CGSize,
+        now: TimeInterval
+    ) {
+        let playheadX = size.width * CGFloat(Self.playheadFraction)
+        let pps = size.width / CGFloat(Self.visibleSeconds)
+        let visibleStart = now - Self.playheadFraction * Self.visibleSeconds
+        let visibleEnd = now + (1 - Self.playheadFraction) * Self.visibleSeconds
+        let lines = ScratchNotationBeatGrid.gridLines(
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            bpm: Self.babyScratchBPM,
+            anchorTime: Self.babyScratchBeatAnchor
+        )
+        guard !lines.isEmpty else { return }
+        var beatPath = Path()
+        var barPath = Path()
+        for line in lines {
+            let x = playheadX + CGFloat(line.time - now) * pps
+            switch line.kind {
+            case .beat:
+                beatPath.move(to: CGPoint(x: x, y: 0))
+                beatPath.addLine(to: CGPoint(x: x, y: size.height))
+            case .bar:
+                barPath.move(to: CGPoint(x: x, y: 0))
+                barPath.addLine(to: CGPoint(x: x, y: size.height))
+            }
+        }
+        ctx.stroke(
+            beatPath,
+            with: .color(.white.opacity(0.08)),
+            style: StrokeStyle(lineWidth: 0.5)
+        )
+        ctx.stroke(
+            barPath,
+            with: .color(.white.opacity(0.18)),
+            style: StrokeStyle(lineWidth: 0.5)
+        )
     }
 
     /// Paints one polyline group per active phrase that overlaps
