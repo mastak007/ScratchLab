@@ -1907,13 +1907,19 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     }
 
     /// Current audio output latency, used to align the notation playhead with
-    /// what the listener hears. Sourced from the audio session on iOS; macOS
-    /// has no equivalent API, so compensation is off there.
+    /// what the listener hears.
+    ///
+    /// - iOS: sourced from `AVAudioSession.outputLatency` (unchanged).
+    /// - macOS: sourced via `MacOSOutputLatency.query()`, which reads
+    ///   the default output device's latency and buffer frame size
+    ///   from Core Audio and falls back to a conservative 20 ms on
+    ///   any query error. Replaces the prior `return 0` path that
+    ///   left the demo playhead uncompensated on Mac.
     nonisolated private static func currentOutputLatency() -> TimeInterval {
         #if canImport(UIKit)
         return max(0, AVAudioSession.sharedInstance().outputLatency)
         #else
-        return 0
+        return max(0, MacOSOutputLatency.query())
         #endif
     }
 
