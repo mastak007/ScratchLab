@@ -476,8 +476,12 @@ struct ScratchMotionLaneSourceTests {
     @Test("The lane runs no scoring, capture or live-mic work")
     func noScoringOrCapture() throws {
         let source = try laneSource()
-        #expect(!source.contains("audioEngine"))
+        // The lane may PASSIVELY read `audioEngine.inputLevel` (a VU level) to
+        // drive the action-line breathing visual — that is the only allowed
+        // audio touch. It must do no scoring / capture / live-mic analysis work.
+        #expect(source.contains("audioEngine.inputLevel"))
         #expect(!source.contains("startAnalyzing"))
+        #expect(!source.contains("stopAnalyzing"))
         #expect(!source.contains("ScratchAnalysisResult"))
         #expect(!source.contains("currentScore"))
     }
@@ -612,19 +616,24 @@ struct UserAttemptScaffoldTests {
         #expect(source.contains("drawUserEvents"))
     }
 
-    @Test("The lane wiring passes no user events and adds no scoring or capture")
+    @Test("The user-attempt overlay is presentation-only — wired, transient, never scored")
     func wiringStaysNonFunctional() throws {
         let practice = try reelSource("ScratchLab/Views/PracticeModeView.swift")
         let panel = try sliceBetween(practice,
             from: "private func notationLanePanel(",
             to: "// Runtime status for the notation surface")
-        // The lane panel constructs ScratchMotionLane without a userEvents argument.
-        #expect(!panel.contains("userEvents"))
+        // The overlay is wired (Phase B1) but presentation-only: the panel
+        // passes the transient `laneUserEvents` buffer, which is cleared on
+        // reset and never saved / exported / scored.
+        #expect(panel.contains("userEvents: laneUserEvents"))
+        #expect(practice.contains("laneUserEvents.removeAll"))
         // The lane view itself still carries no scoring / capture / ML symbols.
+        // (It may passively read audioEngine.inputLevel for the breathing visual.)
         let lane = try reelSource("ScratchLab/Views/ScratchMotionLane.swift")
         #expect(!lane.contains("startAnalyzing"))
+        #expect(!lane.contains("stopAnalyzing"))
         #expect(!lane.contains("ScratchAnalysisResult"))
-        #expect(!lane.contains("AudioEngine"))
+        #expect(!lane.contains("currentScore"))
     }
 }
 
