@@ -42,26 +42,6 @@ struct MacBabyScratchPracticeGuideView: View {
 
     @ObservedObject var demoController: ScratchLabDemoModeController
 
-    /// Derived continuous-position trace for the bundled stroke
-    /// segments. The bundled JSON encodes every stroke as 0 ↔ 1, so
-    /// the position model would force every stroke to slam to the
-    /// boundary if used verbatim. The trace helper derives a bounded
-    /// cursor from direction + duration (see
-    /// `ScratchNotationPositionTrace.derive(...)`), carrying the
-    /// cursor forward across reversals and clamping to `[0, 1]`.
-    ///
-    /// Calibrated rate per `MacBabyScratchPracticeGuideRate` — the
-    /// helper's default rate of 1.0 cursor / sec saturates the cursor
-    /// in a single Baby-Scratch-length stroke, killing dynamic range.
-    /// Calibration is the honest interim until the JSON ships real
-    /// sample-position data.
-    private let trace: [ScratchNotationPositionTraceSegment] =
-        ScratchNotationPositionTrace.derive(
-            from: BabyScratchReferenceMotionTimeline.strokeSegments,
-            movementRatePerSecond:
-                MacBabyScratchPracticeGuideRate.calibratedBabyRate
-        )
-
     /// Active-phrase ranges derived from the same stroke segments the
     /// trace uses. The renderer suppresses all drawing when (a) the
     /// demo is not playing or (b) the current loop-time is not inside
@@ -79,18 +59,28 @@ struct MacBabyScratchPracticeGuideView: View {
     /// visualizer's model observed in the upper lane of every coach
     /// video in this session.
     ///
-    /// Hold gaps between strokes inside the same phrase are folded
-    /// into the same polyline as flat horizontal vertices, so the
-    /// path reads as continuous sample-position motion. Inter-phrase
+    /// The trace is built from the raw JSON `startProgress` /
+    /// `endProgress` values (`ScratchNotationRawTrace.build`), not
+    /// from the duration-proxy derivation. Baby Scratch's JSON
+    /// already encodes every stroke as a full-sample sweep
+    /// (forward 0 → 1, backward 1 → 0); the duration proxy
+    /// compressed that into a narrow band and produced a shallow
+    /// waveform-like trace (forensic on `sl notation review 3.mp4`).
+    /// Raw progress restores full lane amplitude.
+    ///
+    /// Hold gaps between strokes inside the same phrase fold into
+    /// the same polyline as flat horizontal vertices. Non-carry-
+    /// forward transitions (e.g., two consecutive backward strokes
+    /// both encoded as 1 → 0) emit an additional vertical-jump
+    /// vertex so the silent platter-reset moment reads cleanly
+    /// without drawing a fake diagonal scratch. Inter-phrase
     /// silences split into separate polylines and Stage 0's phrase
     /// gate keeps them from drawing at all when the playhead is
     /// inside a silence.
     private let phrasePolylines: [ScratchNotationPhrasePolyline] =
         ScratchNotationPhrasePolyline.build(
-            from: ScratchNotationPositionTrace.derive(
-                from: BabyScratchReferenceMotionTimeline.strokeSegments,
-                movementRatePerSecond:
-                    MacBabyScratchPracticeGuideRate.calibratedBabyRate
+            from: ScratchNotationRawTrace.build(
+                from: BabyScratchReferenceMotionTimeline.strokeSegments
             ),
             phraseRanges: ScratchNotationPhraseGate.activePhraseRanges(
                 from: BabyScratchReferenceMotionTimeline.strokeSegments

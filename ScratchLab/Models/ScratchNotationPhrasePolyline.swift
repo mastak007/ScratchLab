@@ -99,15 +99,17 @@ struct ScratchNotationPhrasePolyline: Equatable, Sendable {
                         position: current.endPosition
                     )
                 )
+                guard index + 1 < inRange.count else { continue }
+                let next = inRange[index + 1]
+                let gap = next.startTime - current.endTime
                 // Intra-phrase hold gap: insert a flat horizontal
                 // vertex at the next stroke's start time, keeping
                 // the previous stroke's end Y. The line from
                 // `current.end` to this flat vertex paints as the
                 // hold; the line from the flat vertex to the next
-                // stroke's end paints as the next stroke's slope.
-                guard index + 1 < inRange.count else { continue }
-                let next = inRange[index + 1]
-                let gap = next.startTime - current.endTime
+                // vertex paints as either the next stroke's slope
+                // (carry-forward case) or a silent reset jump
+                // (non-carry-forward case).
                 if gap > 0 && gap <= safeThreshold {
                     vertices.append(
                         ScratchNotationPolylineVertex(
@@ -116,8 +118,25 @@ struct ScratchNotationPhrasePolyline: Equatable, Sendable {
                         )
                     )
                 }
-                // gap == 0 (back-to-back): nothing inserted; the
-                // next stroke's end vertex follows directly.
+                // Non-carry-forward transition: when the next stroke
+                // does not start at the previous stroke's end value
+                // (e.g., two consecutive backward strokes both
+                // encoded as 1 → 0 in the raw JSON), emit a "jump"
+                // vertex at the next stroke's start time and start
+                // position. With the hold-flat vertex above, this
+                // produces a vertical line at `next.startTime` from
+                // `current.endPosition` to `next.startPosition` —
+                // the silent platter-reset moment. Carry-forward
+                // strokes (`next.startPosition == current.endPosition`)
+                // skip the jump and the polyline stays smooth.
+                if abs(next.startPosition - current.endPosition) > 1e-9 {
+                    vertices.append(
+                        ScratchNotationPolylineVertex(
+                            time: next.startTime,
+                            position: next.startPosition
+                        )
+                    )
+                }
                 // gap > safeThreshold should not happen inside a
                 // single phrase range (by construction of the
                 // phrase gate), but is defensively skipped.
@@ -134,32 +153,3 @@ struct ScratchNotationPhrasePolyline: Equatable, Sendable {
     }
 }
 
-// MARK: - MacBabyScratchPracticeGuideRate
-
-/// Calibration constants for the Mac Baby Scratch practice guide's
-/// duration-proxy trace. Relocated from the now-removed
-/// `ScratchNotationHoldConnector.swift` because the connector helper
-/// became dead code when the renderer moved to one polyline per
-/// phrase. The calibrated rate stays the same — only its home file
-/// moved.
-///
-/// **Rate semantics:** cursor units moved per second of stroke.
-/// `1.0` would mean a 1-second stroke walks the full lane (0 → 1).
-/// Baby Scratch strokes in the bundled JSON average ~0.4 s — at rate
-/// 1.0 each stroke moves the cursor by 40 % of the lane and saturates
-/// within one or two repeats. Rate 0.25 gives a visible walk across
-/// the eleven-stroke phrase while still letting deliberately long
-/// strokes approach the lane boundary.
-///
-/// **Why a constant, not data:** the bundled
-/// `baby_scratch_strokes.json` encodes only direction + duration
-/// (`startProgress` / `endProgress` are always 0 or 1). Real sample
-/// position is not in the source data today, so the trace is a
-/// duration-proxy. Per-scratch calibration is the honest interim
-/// fix; the long-term answer is a JSON that ships real platter
-/// position, at which point this constant becomes irrelevant.
-enum MacBabyScratchPracticeGuideRate {
-    /// Cursor units per second of stroke, calibrated for the bundled
-    /// Baby Scratch demo.
-    static let calibratedBabyRate: Double = 0.25
-}

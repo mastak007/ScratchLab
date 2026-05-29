@@ -337,6 +337,9 @@
 		PPL1001000PPL001PPL00001 /* ScratchNotationPhrasePolyline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPL1000000PPL001PPL00001 /* ScratchNotationPhrasePolyline.swift */; };
 		PPL1001000PPL001PPL00002 /* ScratchNotationPhrasePolyline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPL1000000PPL001PPL00001 /* ScratchNotationPhrasePolyline.swift */; };
 		PPL2011000PPL002PPL00001 /* ScratchNotationPhrasePolylineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPL2010000PPL002PPL00001 /* ScratchNotationPhrasePolylineTests.swift */; };
+		RWT1001000RWT001RWT00001 /* ScratchNotationRawTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = RWT1000000RWT001RWT00001 /* ScratchNotationRawTrace.swift */; };
+		RWT1001000RWT001RWT00002 /* ScratchNotationRawTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = RWT1000000RWT001RWT00001 /* ScratchNotationRawTrace.swift */; };
+		RWT2011000RWT002RWT00001 /* ScratchNotationRawTraceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RWT2010000RWT002RWT00001 /* ScratchNotationRawTraceTests.swift */; };
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
@@ -520,6 +523,8 @@
 		PGT2010000PGT002PGT00001 /* ScratchNotationPhraseGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPhraseGateTests.swift; sourceTree = "<group>"; };
 		PPL1000000PPL001PPL00001 /* ScratchNotationPhrasePolyline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPhrasePolyline.swift; sourceTree = "<group>"; };
 		PPL2010000PPL002PPL00001 /* ScratchNotationPhrasePolylineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPhrasePolylineTests.swift; sourceTree = "<group>"; };
+		RWT1000000RWT001RWT00001 /* ScratchNotationRawTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationRawTrace.swift; sourceTree = "<group>"; };
+		RWT2010000RWT002RWT00001 /* ScratchNotationRawTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationRawTraceTests.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
@@ -760,6 +765,7 @@
 				SNP2010000SNP002SNP00001 /* ScratchNotationPositionTraceTests.swift */,
 				PGT2010000PGT002PGT00001 /* ScratchNotationPhraseGateTests.swift */,
 				PPL2010000PPL002PPL00001 /* ScratchNotationPhrasePolylineTests.swift */,
+				RWT2010000RWT002RWT00001 /* ScratchNotationRawTraceTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
 				NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */,
 				NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */,
@@ -971,6 +977,7 @@
 				SNP1000000SNP001SNP00001 /* ScratchNotationPositionTrace.swift */,
 				PGT1000000PGT001PGT00001 /* ScratchNotationPhraseGate.swift */,
 				PPL1000000PPL001PPL00001 /* ScratchNotationPhrasePolyline.swift */,
+				RWT1000000RWT001RWT00001 /* ScratchNotationRawTrace.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1383,6 +1390,7 @@
 				SNP1001000SNP001SNP00001 /* ScratchNotationPositionTrace.swift in Sources */,
 				PGT1001000PGT001PGT00001 /* ScratchNotationPhraseGate.swift in Sources */,
 				PPL1001000PPL001PPL00001 /* ScratchNotationPhrasePolyline.swift in Sources */,
+				RWT1001000RWT001RWT00001 /* ScratchNotationRawTrace.swift in Sources */,
 				NGG1001000NGG001NGG00001 /* NotationGridlineGeometry.swift in Sources */,
 				NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */,
 				NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */,
@@ -1517,6 +1525,7 @@
 				SNP1001000SNP001SNP00002 /* ScratchNotationPositionTrace.swift in Sources */,
 				PGT1001000PGT001PGT00002 /* ScratchNotationPhraseGate.swift in Sources */,
 				PPL1001000PPL001PPL00002 /* ScratchNotationPhrasePolyline.swift in Sources */,
+				RWT1001000RWT001RWT00002 /* ScratchNotationRawTrace.swift in Sources */,
 				NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */,
 				NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */,
 				NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */,
@@ -1647,6 +1656,7 @@
 				SNP2011000SNP002SNP00001 /* ScratchNotationPositionTraceTests.swift in Sources */,
 				PGT2011000PGT002PGT00001 /* ScratchNotationPhraseGateTests.swift in Sources */,
 				PPL2011000PPL002PPL00001 /* ScratchNotationPhrasePolylineTests.swift in Sources */,
+				RWT2011000RWT002RWT00001 /* ScratchNotationRawTraceTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
 				NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */,
 				NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */,
