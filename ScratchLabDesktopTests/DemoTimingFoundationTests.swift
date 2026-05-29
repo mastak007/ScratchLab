@@ -492,12 +492,13 @@ struct LaneWiringTests {
         try reelSource("ScratchLab/Views/PracticeModeView.swift")
     }
 
-    @Test("One lane renderer, its axis chosen by orientation")
+    @Test("One lane renderer; the Practice surface uses a horizontal axis")
     func bothOrientationsUseOneLane() throws {
         let source = try practiceSource()
-        // A single notationLanePanel call; the axis is derived from orientation.
+        // A single notationLanePanel call; the Practice surface fixes the axis
+        // to horizontal (the lane stays axis-parametric and can render vertical).
         #expect(source.contains("notationLanePanel(axis: axis)"))
-        #expect(source.contains("verticalSizeClass == .compact ? .horizontal : .vertical"))
+        #expect(source.contains("let axis: LaneAxis = .horizontal"))
         #expect(source.contains("ScratchMotionLane(content:"))
     }
 
@@ -547,7 +548,7 @@ struct LaneWiringTests {
             from: "private var activeLane",
             to: "private func notationLanePanel")
         #expect(lane.contains("LaneContent(reel: reel)"))
-        #expect(lane.contains("LaneContent(notation: notation)"))
+        #expect(lane.contains("LaneContent(notation: notation,"))
         #expect(lane.contains(".audioTime { demoPlayer.sampledPlaybackTime() }"))
         #expect(lane.contains(".looping(start: notationClockStartDate"))
         #expect(lane.contains(".fixed(0)"))
@@ -643,9 +644,12 @@ struct LaneContentTests {
         #expect(content.segments.count == reel.segments.count)
         #expect(content.beatsPerMinute == reel.bpm)
         #expect(abs(content.duration - reel.audioDuration) < 1e-6)
-        // Solid reference strokes plus the derived copy-window ghosts.
+        // Solid reference strokes only. Copy-window ghosts are intentionally
+        // omitted until the renderer can draw them as faint outlines distinct
+        // from solid reference strokes; `LaneContent.init(reel:)` keeps
+        // `derivedCopyGhostStrokes()` defined for that future surface.
         #expect(content.strokes.filter { !$0.isGhost }.count == reel.strokes.count)
-        #expect(content.strokes.contains { $0.isGhost })
+        #expect(!content.strokes.contains { $0.isGhost })
     }
 
     @Test("A scored notation adapts to looping content with no segments")
@@ -1199,7 +1203,7 @@ struct CrossPlatformNotationParityTests {
     @Test("iOS practice lane uses the same shared renderer + geometry")
     func iOSLaneUsesSharedRenderer() throws {
         let source = try motionLaneSource()
-        #expect(source.contains("ScratchMotionRenderer.draw("))
+        #expect(source.contains("ScratchMotionRenderer.drawActionNotationTrace("))
         #expect(source.contains("ScratchStrokeGeometry.motionPath("))
     }
 
