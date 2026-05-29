@@ -20,16 +20,25 @@ Separate maintenance task to bring the macOS test suite back to green. This is
 
 ## Failure summary (counts)
 
-- XCTest: **1222 run, 12 skipped, 33 failures** (11 distinct failing test cases;
-  several have multiple assertion failures).
-- Swift Testing: **147 tests, 13 issues** (~8 distinct failing tests across 7
-  suites).
-- **1 headless hang**: `AutoCutVisualPlaybackTests.testAutoCutVisualPlaybackIsGatedToAutoCutMode`
-  (excluded via `-skip-testing` so the suite could finish).
-- Distinct failing tests total: **19**, plus the 1 hang.
+**Latest full no-skip run — `release/testflight-1 @ 47ff4f2`:** the suite
+**completed headlessly without hanging** (no crashes, no timeouts, no restarts;
+normal `xcodebuild … test`, no `-skip-testing`).
+
+- XCTest: **1224 executed, 12 skipped, 38 failures** (12 distinct failing test
+  cases; several have multiple assertion failures).
+- Swift Testing: **147 tests, 7 issues**.
+- `AutoCutVisualPlaybackTests.testAutoCutVisualPlaybackIsGatedToAutoCutMode`
+  **failed fast in ~0.045 s** with 5 assertion failures — it does **not** hang.
+  The earlier full-run "hang" was a one-off environmental / test-host stall,
+  now disproven (it also completes in ~0.2 s when run in isolation).
 - The 12 skipped are intentional fixture gates (`BABY_PLATTER_FIXTURE_PATH`
   unset → `BabyPlatterFixtureDecodeTests`, `NotationGrammarFixtureTests`) — not
   failures, no action.
+
+Progress vs the first triage run (1222 / 12 / 33 XCTest, 13 Swift Testing
+issues): slice 1 (`47ff4f2`) aligned the Baby reel manifest + ghost tests →
+Swift Testing issues 13 → 7. XCTest failures 33 → 38 because AutoCut now runs to
+a fast failure instead of stalling silently (+5 = AutoCut's 5 assertions).
 
 ## Failure groups
 
@@ -59,6 +68,17 @@ strings moved/renamed during legitimate refactors.
 - `PracticeTargetNotationChartTests.testTargetNotationChartIsRenderedInPracticeModeView`
 - `ScratchLabNotationAndExportTests.testScratchNotationCanvasViewBabyScratchModel`
   (canvas no longer literally contains `movementKind` / `releaseNormalPlayback`)
+- `AutoCutVisualPlaybackTests.testAutoCutVisualPlaybackIsGatedToAutoCutMode`
+  **(reclassified from the old "Group C / headless hang")** — it is a pure
+  source-string test on `PracticeModeView.swift` with no AV / wait / async; it
+  fails fast (~0.045 s), not a hang. The Auto-cut feature is intact (`case
+  autoCut`, the "Auto-cut" label, `autoCutExplainer`, "Preview playing" all
+  present), but the asserted literals moved on refactor: `struct
+  AutoCutTargetChart`, `showPlayhead: true`, `practiceAssistMode == .autoCut`
+  (now a `switch case`), `AutoCutTargetChart(notation:`, and the
+  "visual preview — no audio playback yet" copy (moved into
+  `CoachCopy.AssistMode.autoCutExplainer`). Its sibling
+  `testAutoCutVisualPlaybackIsNotCoupledToEngineLayers` passes.
 - `DemoTimingFoundationTests` lane-source / parity suites: "Scratch motion lane
   source", "Cross-platform notation parity", "LaneContent adapters",
   "User-attempt overlay scaffold", "Timing-lane wiring", "iOS practice lane uses
@@ -75,10 +95,13 @@ strings moved/renamed during legitimate refactors.
   must be absent) did **not** fail, so this is a missing-qualifier wording issue,
   not an added overclaim. Quick owner glance for App-Review hygiene.
 
-### Group D — Environment / headless hang
+### Group D — Environment / headless hang — **OBSOLETE (no real hang)**
 
-- `AutoCutVisualPlaybackTests.testAutoCutVisualPlaybackIsGatedToAutoCutMode`
-  starts and never finishes under a headless run (needs a real AV/run-loop).
+There is no headless hang. `AutoCutVisualPlaybackTests` was investigated and
+**reclassified into Group B** (stale source-string) — see above. In isolation it
+runs in ~0.2 s and fails fast; the full no-skip suite completes headlessly. The
+original full-run freeze was a one-off environmental / test-host stall, not
+caused by this test's code. This group is closed.
 
 ## Likely root causes
 
@@ -92,21 +115,27 @@ strings moved/renamed during legitimate refactors.
   literal substrings no longer match. The tests assert on source text, not
   behaviour, so they break on any rename even when behaviour is intact.
 - **C:** Practice/assist copy was reworded; the qualifier strings moved.
-- **D:** Test depends on real playback infrastructure that does not complete in
-  a windowserver-less / headless environment.
+- **D (obsolete):** No headless hang exists. The AutoCut test is a Group-B
+  source-string staleness (asserted literals moved on refactor), proven to fail
+  fast in ~0.045 s and to complete headlessly in the full no-skip run.
 
 ## Recommended fix order
 
-1. **Group A (assets)** — highest signal, mechanical: align expectations to the
-   shipped assets (or revert the asset if the change was unintended). Decide the
-   `baby_reel.json` shipping question first (Group A also gates the App-Review
-   hygiene check in C).
-2. **Group C (copy)** — small, App-Review-relevant; confirm the qualifying copy
-   still exists in some form and re-point the assertions.
-3. **Group D (AutoCut hang)** — unblocks running the *whole* suite headlessly in
-   CI without `-skip-testing`.
-4. **Group B (source-string guards)** — largest set; convert to behavioural
-   assertions where feasible (see below), otherwise refresh the literals.
+Slice 1 (`47ff4f2`, **done**) handled the unambiguous Group A reel-manifest +
+ghost tests. Group D is **closed** (no hang — reclassified to B). Remaining work:
+
+1. **Group A — deferred decisions** (owner sign-off needed before editing):
+   - `Resources/Notation/baby_scratch.json` source-of-truth: is the 19-stroke
+     single phrase intended (update tests, incl. speed-variety thresholds) or a
+     regression (fix the asset)?
+   - CoachDemoAudio folder policy: should `baby_reel.json` (+ reel wav) ship in
+     `CoachDemoAudio`, or move the json so the "no-json" guard stays?
+2. **Group B — stale brittle source-string / copy tests** (largest set; includes
+   the former Group C copy guards and the reclassified AutoCut test): convert to
+   behavioural assertions where feasible (see below), otherwise refresh the
+   literals to the current source. App-Review hygiene: confirm the
+   `MacAnalyzerView` "estimated confidence" qualifier and the assist-mode
+   explainer copy still exist in some form before re-pointing.
 
 ## Stale expectation updates (exact)
 
@@ -137,25 +166,25 @@ behaviour / model output instead (so refactors don't break them):
   `testTargetNotationChartIsRenderedInPracticeModeView`,
   `testCoachPreviewSourceLoadsBundledCoachUSDZ…` → assert via view-model /
   public API state rather than source substrings.
+- `testAutoCutVisualPlaybackIsGatedToAutoCutMode` → assert Auto-cut gating via
+  the assist-mode enum / view-model state (and that the explainer comes from
+  `CoachCopy.AssistMode.autoCutExplainer`) instead of literal struct-name and
+  `==` substrings.
 - `DemoTimingFoundationTests` lane-source / parity suites → assert renderer /
   geometry / lane behaviour via the shared types, not source text.
 - Where a source-string guard is genuinely intended as an architectural fence
   (e.g. "no scoring/capture/live-mic in the lane"), keep it but anchor on stable
   API symbols rather than incidental comment/copy text.
 
-## AutoCut headless-hang fix plan
+## AutoCut headless-hang fix plan — **OBSOLETE**
 
-- Reproduce in isolation: `xcodebuild … -only-testing:ScratchLabDesktopTests/AutoCutVisualPlaybackTests test`.
-- Identify the blocking wait (likely a `waitForExpectations` with no/long
-  timeout or a `RunLoop.run()` awaiting AV playback that never starts headless).
-- Fix options (pick the least invasive that keeps the test meaningful):
-  - Add an explicit, short `XCTestExpectation` timeout so it **fails fast**
-    instead of hanging.
-  - Gate the playback-dependent path behind an injectable clock / test double so
-    it does not require a real windowserver/AV pipeline.
-  - If it genuinely cannot run headless, mark it as requiring a GUI/CI host and
-    document the `-skip-testing` exclusion for headless runs.
-- Goal: the full suite runs to completion headlessly without `-skip-testing`.
+No hang exists, so there is no hang to fix. Investigation (see Group B / D-obsolete
+above) showed `AutoCutVisualPlaybackTests.testAutoCutVisualPlaybackIsGatedToAutoCutMode`
+is a pure source-string test that fails fast (~0.045 s in the full run, ~0.2 s
+isolated) and the full no-skip suite completes headlessly. The fix is the normal
+Group-B treatment (convert to behavioural / refresh literals) — there is no AV
+wait, expectation timeout, or test double to add. No `-skip-testing` exclusion is
+needed for headless CI.
 
 ## Non-goals
 
@@ -176,8 +205,10 @@ behaviour / model output instead (so refactors don't break them):
   green.
 - After all groups: run the full macOS suite (`xcodebuild -scheme
   ScratchLabDesktop -configuration Debug -destination 'platform=macOS' test`)
-  with **no** `-skip-testing` and confirm 0 failures, 0 hangs (12 fixture skips
-  remain expected).
+  with **no** `-skip-testing` and confirm 0 failures (12 fixture skips remain
+  expected). **Headless completion / no-hang is already confirmed** as of
+  `47ff4f2` (full no-skip run finished in ~134 s; remaining target is 0
+  failures).
 - Keep the build gates green throughout: iOS Debug + macOS Debug + macOS
   build-for-testing + watchOS.
 - Do not touch the pre-existing dirty files (deleted AppIcon 1024,
