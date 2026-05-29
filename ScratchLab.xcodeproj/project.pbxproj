@@ -34,6 +34,7 @@
 		219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
 		219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
 		219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
+		219D8D64A93840FC9A724C11 /* Resources/CoachDemoReels in Resources */ = {isa = PBXBuildFile; fileRef = A2000037 /* Resources/CoachDemoReels */; };
 		219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
 		VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
 		283607B7B4D70607A9ECD49F /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
@@ -131,6 +132,7 @@
 		B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
 		B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
 		B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
+		B9AF9ED9370241CF8BEFDB7C /* Resources/CoachDemoReels in Resources */ = {isa = PBXBuildFile; fileRef = A2000037 /* Resources/CoachDemoReels */; };
 		B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
 		C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
 		C68BC19238996C9C92EB97A3 /* WatchMotionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDD250716FA81582843E833 /* WatchMotionCapture.swift */; };
@@ -496,6 +498,7 @@
 		A2000033 /* ScratchCoachViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCoachViews.swift; sourceTree = "<group>"; };
 		A2000034 /* ScratchMotionAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionAnalysis.swift; sourceTree = "<group>"; };
 		A2000035 /* Resources/CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
+		A2000037 /* Resources/CoachDemoReels */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoReels; sourceTree = "<group>"; };
 		A2000036 /* Resources/Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
 		VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
 		A2000040 /* Resources/reference_beginner */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_beginner; sourceTree = "<group>"; };
@@ -899,6 +902,7 @@
 				A2000031 /* Resources/CoachInstructions */,
 				A2000032 /* Resources/CoachDemoAudio */,
 				A2000035 /* Resources/CoachDemoMotion */,
+				A2000037 /* Resources/CoachDemoReels */,
 				A2000036 /* Resources/Notation */,
 				VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */,
 				A2000040 /* Resources/reference_beginner */,
@@ -1319,6 +1323,7 @@
 				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */,
 				B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */,
+				B9AF9ED9370241CF8BEFDB7C /* Resources/CoachDemoReels in Resources */,
 				B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */,
 				772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */,
 				AA200002 /* PrivacyInfo.xcprivacy in Resources */,
@@ -1331,6 +1336,7 @@
 				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
 				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
+				219D8D64A93840FC9A724C11 /* Resources/CoachDemoReels in Resources */,
 				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
 				VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */,
 				A1000012 /* Assets.xcassets in Resources */,

@@ -209,7 +209,7 @@ struct PracticeReelTimelineTests {
     func bundledBabyReelIsValid() throws {
         let root = reelTestsRepoRoot()
         let manifestURL = root.appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/CoachDemoReels/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
 
         #expect(reel.isValid, "baby_reel.json must validate clean: \(reel.validationErrors)")
@@ -415,7 +415,7 @@ struct CopyGhostStrokeTests {
     @Test("The bundled Baby reel derives ghosts for all four copy windows")
     func bundledBabyReelGhosts() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/CoachDemoReels/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let ghosts = reel.derivedCopyGhostStrokes()
         // Each of the 4 copy windows answers its paired demo segment.
@@ -645,7 +645,7 @@ struct LaneContentTests {
     @Test("A Demo reel adapts to non-looping content with demo/copy bands")
     func reelAdapter() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/CoachDemoReels/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let content = LaneContent(reel: reel)
 
@@ -807,7 +807,7 @@ struct MotionPathTests {
     @Test("Normalization keeps the whole path within 0...1 and fills the band")
     func normalizationBounds() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/CoachDemoReels/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let path = ScratchStrokeGeometry.motionPath(for: LaneContent(reel: reel))
 
@@ -934,7 +934,7 @@ struct MotionPathTests {
     @Test("Demo (non-looping) content opens at the centre rest position")
     func demoStartsAtCentreRestState() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/CoachDemoReels/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let demoContent = LaneContent(reel: reel)
         #expect(!demoContent.loops)

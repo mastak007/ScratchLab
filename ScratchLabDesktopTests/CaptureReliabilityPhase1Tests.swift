@@ -2731,12 +2731,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let notation = try decodedBabyScratchNotation()
 
         XCTAssertEqual(notation.scratchID, "baby")
-        XCTAssertEqual(notation.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
-        XCTAssertEqual(notation.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
-        // The 42 s coach demo encodes four repetitions of the 10-stroke phrase
-        // explicitly (no looping at playback time), so the notation now ships
-        // 40 strokes spanning the full ~42 s recording.
-        XCTAssertEqual(notation.strokes.count, 40)
+        // The notation is intentionally a single ~5.07 s "Baby2" phrase (commit
+        // 602c8fa), decoupled from the 42 s demo motion timeline. Assert its own
+        // phrase bounds rather than cross-checking BabyScratchReferenceMotionTimeline.
+        XCTAssertEqual(notation.demoStart, 0, accuracy: 0.0001)
+        XCTAssertEqual(notation.demoEnd, 5.0687, accuracy: 0.0001)
+        XCTAssertEqual(notation.strokes.count, 19)
         XCTAssertEqual(notation.strokes.count, notation.strokeSegments.count)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.faderState == .open })
         let phraseStart = try XCTUnwrap(notation.phraseStart)
@@ -2745,13 +2745,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let lastStroke = try XCTUnwrap(notation.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
-        XCTAssertGreaterThan(phraseEnd, 40)
-        XCTAssertLessThan(phraseEnd, 42)
+        XCTAssertEqual(phraseStart, 0, accuracy: 0.0001)
+        XCTAssertEqual(phraseEnd, 5.0687, accuracy: 0.0001)
         XCTAssertEqual(notation.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
-        let slowToFastGap = notation.strokes[2].startTime - notation.strokes[1].endTime
-        XCTAssertLessThan(slowToFastGap, 0.20)
-        XCTAssertEqual(notation.strokes[2].startTime, 1.46, accuracy: 0.0001)
+        XCTAssertEqual(notation.strokes[2].startTime, 0.5573, accuracy: 0.0001)
         XCTAssertFalse(rawJSON.contains("/Users/"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("cxl"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("makemkv"))
@@ -2776,16 +2774,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertGreaterThan(roundedDurations.count, 1)
         XCTAssertLessThan(slowestFast, fastestSlow)
-        XCTAssertGreaterThanOrEqual(slowDurations.count, 3)
-        XCTAssertGreaterThanOrEqual(fastDurations.count, 3)
+        // The single 19-stroke "Baby2" phrase carries at least one slow and one
+        // fast stroke (it no longer ships the old 40-stroke ×4 pattern). Slow
+        // strokes are longer than fast ones, and the phrase stays non-uniform
+        // (several distinct stroke durations) without a single repeated value.
+        XCTAssertGreaterThanOrEqual(slowDurations.count, 1)
+        XCTAssertGreaterThanOrEqual(fastDurations.count, 1)
         XCTAssertGreaterThan(slowAverage, fastAverage)
-        // The 42 s coach demo encodes the 10-stroke speed pattern four times
-        // back-to-back, so the duration array repeats the original pattern.
-        let phraseDurationPattern = [5080, 3080, 3030, 5280, 3080, 2880, 5680, 3230, 2830, 8480]
-        XCTAssertEqual(
-            roundedDurationsByTenThousand,
-            Array(repeating: phraseDurationPattern, count: 4).flatMap { $0 }
-        )
+        XCTAssertGreaterThanOrEqual(roundedDurations.count, 5)
+        XCTAssertEqual(roundedDurationsByTenThousand.count, notation.strokes.count)
     }
 
     func testBabyScratchExtractedMotionJSONDecodesAndContainsNoSourceProvenance() throws {
@@ -4223,9 +4220,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testCoachDemoAudioResourceFolderShipsOnlyRuntimeWavs() throws {
         let resourceFolder = projectRootURL().appendingPathComponent("ScratchLab/Resources/CoachDemoAudio")
         let fileNames = Set(try FileManager.default.contentsOfDirectory(atPath: resourceFolder.path))
+        // Runtime wavs only. `baby_reel_callresponse.wav` is the call-response
+        // reel's runtime audio; its manifest (`baby_reel.json`) lives in
+        // `CoachDemoReels/`, keeping this folder strictly JSON-free.
         let expectedFileNames: Set<String> = [
             "baby_noBeat.wav",
             "chirpflare_noBeat.wav",
+            "baby_reel_callresponse.wav",
         ]
 
         XCTAssertEqual(fileNames, expectedFileNames)
