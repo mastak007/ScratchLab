@@ -87,6 +87,24 @@ struct MacBabyScratchPracticeGuideView: View {
             )
         )
 
+    /// Discrete audible-attack onset markers — one per non-neutral
+    /// stroke whose onset falls inside an active phrase. Drawn on a
+    /// separate low marker row beneath the trace lane (never on the
+    /// trace line itself) so the repeated scratch hits read as a
+    /// rhythm row. The motion trace stays the primary, honest layer;
+    /// this layer only makes the onsets the ear tracks visible.
+    ///
+    /// Built from the same stroke segments and phrase gate the trace
+    /// uses, so the markers share the trace's timing mapping and
+    /// phrase gating exactly.
+    private let attackMarkers: [ScratchNotationAttackMarker] =
+        ScratchNotationAttackMarkers.build(
+            from: BabyScratchReferenceMotionTimeline.strokeSegments,
+            phraseRanges: ScratchNotationPhraseGate.activePhraseRanges(
+                from: BabyScratchReferenceMotionTimeline.strokeSegments
+            )
+        )
+
     /// Audio duration the canvas tracks. The bundled demo is
     /// single-shot: it plays once through `phraseEnd` and stops —
     /// it does not loop within a playback. No tile array; the
@@ -176,6 +194,11 @@ struct MacBabyScratchPracticeGuideView: View {
                 drawBeatGrid(in: ctx, size: size, now: now)
                 if shouldDrawTrace {
                     drawActivePhrasePolylines(in: ctx, size: size, now: now)
+                    // Attack markers share the trace's gate: they paint
+                    // only while a phrase is active/replaying, so idle /
+                    // silence / post-end stay empty. Drawn after the
+                    // trace and before the playhead.
+                    drawAttackMarkers(in: ctx, size: size, now: now)
                 }
                 drawPlayhead(in: ctx, size: size)
             }
@@ -327,6 +350,50 @@ struct MacBabyScratchPracticeGuideView: View {
                 style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
             )
         }
+    }
+
+    /// Paints the audible-attack onset markers on a dedicated low
+    /// marker row beneath the trace lane. Each marker is a short,
+    /// uniform vertical tick — deliberately **not** a dot on the trace
+    /// line (dots on the upper trace were a prior regression that read
+    /// as extra phantom notes). The ticks share the trace's x mapping
+    /// (`playheadX + (time - now) * pps`) but sit on a fixed y row, so
+    /// they read as rhythm / onset scaffolding rather than as part of
+    /// the motion curve.
+    ///
+    /// Neutral colour, low alpha: the motion trace stays primary. Only
+    /// markers inside the visible window are drawn. Phrase gating is
+    /// handled by the caller (same `shouldDrawTrace` condition as the
+    /// trace), so idle / silence / post-end paint nothing here.
+    private func drawAttackMarkers(
+        in ctx: GraphicsContext,
+        size: CGSize,
+        now: TimeInterval
+    ) {
+        guard !attackMarkers.isEmpty else { return }
+        let playheadX = size.width * CGFloat(Self.playheadFraction)
+        let pps = size.width / CGFloat(Self.visibleSeconds)
+        let visibleStart = now - Self.playheadFraction * Self.visibleSeconds
+        let visibleEnd = now + (1 - Self.playheadFraction) * Self.visibleSeconds
+        // Marker row sits below the baseline (0.82) so it never
+        // overlaps the upward stroke geometry. Ticks are centred on
+        // the row.
+        let rowY = size.height * 0.93
+        let halfTick: CGFloat = 5
+        var path = Path()
+        for marker in attackMarkers {
+            guard marker.time >= visibleStart - 0.1,
+                  marker.time <= visibleEnd + 0.1
+            else { continue }
+            let x = playheadX + CGFloat(marker.time - now) * pps
+            path.move(to: CGPoint(x: x, y: rowY - halfTick))
+            path.addLine(to: CGPoint(x: x, y: rowY + halfTick))
+        }
+        ctx.stroke(
+            path,
+            with: .color(.white.opacity(0.32)),
+            style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+        )
     }
 
     /// Baseline y-coordinate inside the canvas. Sits near the bottom so
