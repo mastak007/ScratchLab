@@ -62,41 +62,48 @@ struct MacBabyScratchPracticeGuideView: View {
                 MacBabyScratchPracticeGuideRate.calibratedBabyRate
         )
 
-    /// Horizontal "hold" segments that paint between consecutive
-    /// strokes inside the same active phrase. The position trace
-    /// carries the cursor across the hold by construction, but the
-    /// renderer paints only during each stroke's `[startTime,
-    /// endTime]` — so the held cursor value is invisible without
-    /// these. The connector helper omits any gap that exceeds the
-    /// phrase-gate's silence threshold, so inter-phrase silences stay
-    /// blank. Inlined trace derivation (same arguments as `trace`)
-    /// keeps the property initializer self-contained without forcing
-    /// a custom init on the View.
-    private let holdConnectors: [ScratchNotationHoldConnectorSegment] =
-        ScratchNotationHoldConnector.connectors(
-            from: ScratchNotationPositionTrace.derive(
-                from: BabyScratchReferenceMotionTimeline.strokeSegments,
-                movementRatePerSecond:
-                    MacBabyScratchPracticeGuideRate.calibratedBabyRate
-            )
-        )
-
-    /// Loop duration matches the bundled audio's stroke span so the
-    /// canvas wraps cleanly when the coach demo replays from t = 0.
-    private let segmentLoopDuration: TimeInterval =
-        BabyScratchReferenceMotionTimeline.phraseEnd
-
     /// Active-phrase ranges derived from the same stroke segments the
-    /// trace uses. Strokes are only drawn when (a) the demo is playing
-    /// and (b) the current loop-time is inside one of these ranges.
-    /// This prevents the centered viewport from leaking upcoming-phrase
-    /// strokes into the canvas during the 5+ s silences that sit
-    /// between phrases, and suppresses all stroke drawing in the idle
-    /// / paused / post-end states.
+    /// trace uses. The renderer suppresses all drawing when (a) the
+    /// demo is not playing or (b) the current loop-time is not inside
+    /// one of these ranges. Inherited unchanged from Stage 0
+    /// (commit cad51fe).
     private let phraseRanges: [ScratchNotationPhraseRange] =
         ScratchNotationPhraseGate.activePhraseRanges(
             from: BabyScratchReferenceMotionTimeline.strokeSegments
         )
+
+    /// One continuous polyline per active phrase. Replaces the prior
+    /// tokenized model (stroke segments + hold connectors + endpoint
+    /// dots, tiled across `[-loopDuration, 0, loopDuration]`) with
+    /// one stroked `CGPath` per phrase — the SXRATCH reference
+    /// visualizer's model observed in the upper lane of every coach
+    /// video in this session.
+    ///
+    /// Hold gaps between strokes inside the same phrase are folded
+    /// into the same polyline as flat horizontal vertices, so the
+    /// path reads as continuous sample-position motion. Inter-phrase
+    /// silences split into separate polylines and Stage 0's phrase
+    /// gate keeps them from drawing at all when the playhead is
+    /// inside a silence.
+    private let phrasePolylines: [ScratchNotationPhrasePolyline] =
+        ScratchNotationPhrasePolyline.build(
+            from: ScratchNotationPositionTrace.derive(
+                from: BabyScratchReferenceMotionTimeline.strokeSegments,
+                movementRatePerSecond:
+                    MacBabyScratchPracticeGuideRate.calibratedBabyRate
+            ),
+            phraseRanges: ScratchNotationPhraseGate.activePhraseRanges(
+                from: BabyScratchReferenceMotionTimeline.strokeSegments
+            )
+        )
+
+    /// Audio duration the canvas tracks. The bundled demo is
+    /// single-shot: it plays once through `phraseEnd` and stops —
+    /// it does not loop within a playback. No tile array; the
+    /// renderer draws each polyline exactly once at its native
+    /// audio time.
+    private let segmentLoopDuration: TimeInterval =
+        BabyScratchReferenceMotionTimeline.phraseEnd
 
     private static let laneHeight: CGFloat = 156
     private static let playheadFraction: Double = 0.30
@@ -142,12 +149,12 @@ struct MacBabyScratchPracticeGuideView: View {
                 for: audioTime,
                 cycleDuration: loopDuration
             )
-            // Strokes are gated by *both* the play state and the
-            // active-phrase membership of `now`. Background, baseline,
-            // and playhead always paint so the lane stays present and
-            // signals "ready to play" during idle / silence — only the
-            // trace strokes themselves are suppressed.
-            let shouldDrawStrokes =
+            // Polylines paint only when the demo is playing AND the
+            // current playback time sits inside one of the active
+            // phrase ranges. Background, baseline, and playhead
+            // always paint so the lane stays present and signals
+            // "ready to play" during idle / silence.
+            let shouldDrawTrace =
                 demoController.demoPlayer.isPlaying
                 && ScratchNotationPhraseGate.isInActivePhrase(
                     now, ranges: phraseRanges
@@ -155,15 +162,8 @@ struct MacBabyScratchPracticeGuideView: View {
             Canvas { ctx, size in
                 drawBackground(in: ctx, size: size)
                 drawBaseline(in: ctx, size: size)
-                if shouldDrawStrokes {
-                    // Connectors paint *before* strokes so stroke
-                    // slopes overlay any seam where a connector meets
-                    // a stroke endpoint — preserves direction-colour
-                    // contrast at reversals.
-                    drawHoldConnectors(
-                        in: ctx, size: size, now: now, loopDuration: loopDuration
-                    )
-                    drawStrokes(in: ctx, size: size, now: now, loopDuration: loopDuration)
+                if shouldDrawTrace {
+                    drawActivePhrasePolylines(in: ctx, size: size, now: now)
                 }
                 drawPlayhead(in: ctx, size: size)
             }
@@ -205,139 +205,59 @@ struct MacBabyScratchPracticeGuideView: View {
         ctx.stroke(path, with: .color(.white.opacity(0.50)), lineWidth: 1.0)
     }
 
-    /// Paints the horizontal hold connectors between consecutive
-    /// strokes inside the same active phrase. Skips connectors that
-    /// fall outside the visible window. Uses a dim neutral hue so the
-    /// connector reads as "the cursor is being held here" without
-    /// competing with the direction-coloured stroke slopes.
-    private func drawHoldConnectors(
+    /// Paints one continuous polyline per active phrase that overlaps
+    /// the visible time window. Each polyline is built once at init
+    /// from the trace + phrase ranges (see `phrasePolylines`); here
+    /// the only work per frame is the audio-time → canvas-X mapping,
+    /// path assembly, and a single stroke call per polyline.
+    ///
+    /// **No dots.** The reference SXRATCH visualizer paints the upper
+    /// lane as one stroked line; dots in the upper lane were the
+    /// regression that prompted this replacement.
+    ///
+    /// **No loop tiling.** The bundled audio plays once through and
+    /// does not loop within a playback, so the prior
+    /// `[-loopDuration, 0, loopDuration]` tile array would only
+    /// inject phantom strokes at audio boundaries.
+    private func drawActivePhrasePolylines(
         in ctx: GraphicsContext,
         size: CGSize,
-        now: TimeInterval,
-        loopDuration: TimeInterval
+        now: TimeInterval
     ) {
-        guard !holdConnectors.isEmpty else { return }
-        let baseline = Self.baselineY(in: size)
-        let positionHeight = size.height * 0.62
-        let playheadX = size.width * CGFloat(Self.playheadFraction)
-        let pps = size.width / CGFloat(Self.visibleSeconds)
-        for offset in [-loopDuration, 0, loopDuration] {
-            for connector in holdConnectors {
-                let startTime = connector.startTime + offset
-                let endTime = connector.endTime + offset
-                let xStart = playheadX + CGFloat(startTime - now) * pps
-                let xEnd = playheadX + CGFloat(endTime - now) * pps
-                guard xEnd > -8, xStart < size.width + 8 else { continue }
-                let y = baseline - positionHeight * CGFloat(connector.position)
-                var path = Path()
-                path.move(to: CGPoint(x: xStart, y: y))
-                path.addLine(to: CGPoint(x: xEnd, y: y))
-                ctx.stroke(
-                    path,
-                    with: .color(.white.opacity(0.42)),
-                    style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
-                )
-            }
-        }
-    }
-
-    private func drawStrokes(
-        in ctx: GraphicsContext,
-        size: CGSize,
-        now: TimeInterval,
-        loopDuration: TimeInterval
-    ) {
-        guard !trace.isEmpty else { return }
+        guard !phrasePolylines.isEmpty else { return }
         let baseline = Self.baselineY(in: size)
         // Vertical headroom above the baseline that maps to position
         // 1.0. Position 0.0 paints at the baseline.
         let positionHeight = size.height * 0.62
         let playheadX = size.width * CGFloat(Self.playheadFraction)
         let pps = size.width / CGFloat(Self.visibleSeconds)
-        // Render three copies of the loop so seam transitions stay
-        // continuous as audio replays from t = 0. Each trace segment
-        // paints a single line from `(startTime, startPosition)` to
-        // `(endTime, endPosition)` — direction is communicated by the
-        // slope, not by mirroring below baseline. Silences between
-        // strokes remain empty: nothing is drawn until the next
-        // segment.
-        for offset in [-loopDuration, 0, loopDuration] {
-            for segment in trace {
-                drawTraceSegment(
-                    segment,
-                    timeOffset: offset,
-                    now: now,
-                    playheadX: playheadX,
-                    pps: pps,
-                    baseline: baseline,
-                    positionHeight: positionHeight,
-                    canvasWidth: size.width,
-                    ctx: ctx
-                )
+        // Cull polylines whose entire phrase range sits outside the
+        // visible window. Visible window in audio-time is
+        // `[now - playheadFraction * visibleSeconds, now + (1 -
+        // playheadFraction) * visibleSeconds]`.
+        let visibleStart = now - Self.playheadFraction * Self.visibleSeconds
+        let visibleEnd = now + (1 - Self.playheadFraction) * Self.visibleSeconds
+        for polyline in phrasePolylines {
+            guard polyline.phraseRange.end >= visibleStart - 0.1,
+                  polyline.phraseRange.start <= visibleEnd + 0.1
+            else { continue }
+            var path = Path()
+            for (index, vertex) in polyline.vertices.enumerated() {
+                let x = playheadX + CGFloat(vertex.time - now) * pps
+                let y = baseline - positionHeight * CGFloat(vertex.position)
+                let point = CGPoint(x: x, y: y)
+                if index == 0 {
+                    path.move(to: point)
+                } else {
+                    path.addLine(to: point)
+                }
             }
+            ctx.stroke(
+                path,
+                with: .color(ScratchLabPalette.notationForward.opacity(0.95)),
+                style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+            )
         }
-    }
-
-    private func drawTraceSegment(
-        _ segment: ScratchNotationPositionTraceSegment,
-        timeOffset: TimeInterval,
-        now: TimeInterval,
-        playheadX: CGFloat,
-        pps: CGFloat,
-        baseline: CGFloat,
-        positionHeight: CGFloat,
-        canvasWidth: CGFloat,
-        ctx: GraphicsContext
-    ) {
-        let startTime = segment.startTime + timeOffset
-        let endTime = segment.endTime + timeOffset
-        let xStart = playheadX + CGFloat(startTime - now) * pps
-        let xEnd = playheadX + CGFloat(endTime - now) * pps
-        // Cull off-screen segments (with a small bleed margin).
-        guard xEnd > -8, xStart < canvasWidth + 8 else { return }
-        // Forward = cyan/green; backward = warm pink. Direction encoded
-        // by colour AND by slope sign (forward = upward slope, backward
-        // = downward slope above the baseline).
-        let color: Color
-        switch segment.direction {
-        case .forward:
-            color = ScratchLabPalette.notationForward
-        case .backward:
-            color = Color(red: 1.00, green: 0.45, blue: 0.78)
-        case .neutral:
-            return
-        }
-        let yStart = baseline - positionHeight * CGFloat(segment.startPosition)
-        let yEnd = baseline - positionHeight * CGFloat(segment.endPosition)
-        var path = Path()
-        path.move(to: CGPoint(x: xStart, y: yStart))
-        path.addLine(to: CGPoint(x: xEnd, y: yEnd))
-        ctx.stroke(
-            path,
-            with: .color(color.opacity(0.95)),
-            style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
-        )
-        // Single subtle endpoint anchor. The b0e0336 enlargement and
-        // the addition of a bright start dot together produced a
-        // "beaded necklace" that read as discrete note events at
-        // every stroke boundary (forensic on
-        // `sl notation review 2.mp4`). Hold connectors already anchor
-        // the cursor between strokes, so the start of each stroke is
-        // visually located by the connector → slope transition — no
-        // start dot is needed. A small dim end dot remains so the
-        // cursor's resting value at end-of-stroke reads cleanly even
-        // for very short strokes.
-        let endRadius = CGFloat(MacBabyScratchPracticeGuideMarkers.endDotRadius)
-        let endNode = CGRect(
-            x: xEnd - endRadius,
-            y: yEnd - endRadius,
-            width: endRadius * 2,
-            height: endRadius * 2
-        )
-        ctx.fill(
-            Path(ellipseIn: endNode),
-            with: .color(color.opacity(MacBabyScratchPracticeGuideMarkers.endDotAlpha))
-        )
     }
 
     /// Baseline y-coordinate inside the canvas. Sits near the bottom so
