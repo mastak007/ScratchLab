@@ -3,6 +3,7 @@ import SwiftUI
 private enum ScratchLabDesktopWindowID {
     static let mainWindow = "main-window"
     static let performerMonitor = "performer-monitor"
+    static let controllerInspector = "controller-inspector"
 }
 
 @main
@@ -56,6 +57,13 @@ struct ScratchLabDesktopApp: App {
             performerMonitorContent
         }
         .windowResizability(.contentSize)
+
+        // Developer-facing Core MIDI capture inspector. Display-only; opened from
+        // the Window menu. Suppressed under test hosting like the other scenes.
+        Window("Controller Inspector", id: ScratchLabDesktopWindowID.controllerInspector) {
+            controllerInspectorContent
+        }
+        .windowResizability(.contentSize)
     }
 
     @ViewBuilder
@@ -89,6 +97,16 @@ struct ScratchLabDesktopApp: App {
                 .environmentObject(sessionUploadManager)
                 .environmentObject(progressManager)
                 .frame(minWidth: 900, minHeight: 620)
+        }
+    }
+
+    @ViewBuilder
+    private var controllerInspectorContent: some View {
+        if isRunningTests {
+            Color.clear
+                .frame(width: 1, height: 1)
+        } else {
+            ControllerInspectorView()
         }
     }
 }
@@ -125,6 +143,10 @@ private struct ScratchLabDesktopCommands: Commands {
 
             Button("Show Performer Monitor") {
                 openWindow(id: ScratchLabDesktopWindowID.performerMonitor)
+            }
+
+            Button("Controller Inspector") {
+                openWindow(id: ScratchLabDesktopWindowID.controllerInspector)
             }
         }
     }

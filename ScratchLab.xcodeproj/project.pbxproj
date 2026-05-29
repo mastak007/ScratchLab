@@ -101,6 +101,14 @@
 		CI00IOS00002 /* MIDITransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0002 /* MIDITransport.swift */; };
 		CI00IOS00003 /* ControllerInputNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0003 /* ControllerInputNormalizer.swift */; };
 		CI00TBF00001 /* ScratchControllerInputModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00TREF0001 /* ScratchControllerInputModelTests.swift */; };
+		CI00MAC00004 /* MIDIMessageParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0004 /* MIDIMessageParsing.swift */; };
+		CI00MAC00005 /* DetectedControlSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0005 /* DetectedControlSummary.swift */; };
+		CI00IOS00004 /* MIDIMessageParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0004 /* MIDIMessageParsing.swift */; };
+		CI00IOS00005 /* DetectedControlSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0005 /* DetectedControlSummary.swift */; };
+		CI00MAC00006 /* CoreMIDIInputTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0006 /* CoreMIDIInputTransport.swift */; };
+		CI00MAC00007 /* ControllerInspectorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0007 /* ControllerInspectorModel.swift */; };
+		CI00MAC00008 /* ControllerInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00FREF0008 /* ControllerInspectorView.swift */; };
+		CI00TBF00002 /* ControllerInspectorParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CI00TREF0002 /* ControllerInspectorParsingTests.swift */; };
 		A1000006 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
 		A1000007 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* AudioEngine.swift */; };
 		A1000008 /* SampleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000008 /* SampleManager.swift */; };
@@ -484,6 +492,12 @@
 		CI00FREF0002 /* MIDITransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDITransport.swift; sourceTree = "<group>"; };
 		CI00FREF0003 /* ControllerInputNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerInputNormalizer.swift; sourceTree = "<group>"; };
 		CI00TREF0001 /* ScratchControllerInputModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchControllerInputModelTests.swift; sourceTree = "<group>"; };
+		CI00FREF0004 /* MIDIMessageParsing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIMessageParsing.swift; sourceTree = "<group>"; };
+		CI00FREF0005 /* DetectedControlSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectedControlSummary.swift; sourceTree = "<group>"; };
+		CI00FREF0006 /* CoreMIDIInputTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMIDIInputTransport.swift; sourceTree = "<group>"; };
+		CI00FREF0007 /* ControllerInspectorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerInspectorModel.swift; sourceTree = "<group>"; };
+		CI00FREF0008 /* ControllerInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerInspectorView.swift; sourceTree = "<group>"; };
+		CI00TREF0002 /* ControllerInspectorParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerInspectorParsingTests.swift; sourceTree = "<group>"; };
 		A2000006 /* GameState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameState.swift; sourceTree = "<group>"; };
 		A2000007 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
 		A2000008 /* SampleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleManager.swift; sourceTree = "<group>"; };
@@ -789,6 +803,7 @@
 				CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */,
 				CES2010000CES002CES00001 /* CoachingEventTests.swift */,
 				CI00TREF0001 /* ScratchControllerInputModelTests.swift */,
+				CI00TREF0002 /* ControllerInspectorParsingTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CEP2010000CEP002CEP00001 /* CoachingEventPacerTests.swift */,
@@ -1040,6 +1055,8 @@
 				CI00FREF0001 /* ScratchControllerInputModels.swift */,
 				CI00FREF0002 /* MIDITransport.swift */,
 				CI00FREF0003 /* ControllerInputNormalizer.swift */,
+				CI00FREF0004 /* MIDIMessageParsing.swift */,
+				CI00FREF0005 /* DetectedControlSummary.swift */,
 			);
 			path = ControllerInput;
 			sourceTree = "<group>";
@@ -1140,6 +1157,7 @@
 				SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */,
 				SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */,
 				RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */,
+				CI00FREF0008 /* ControllerInspectorView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -1151,6 +1169,7 @@
 				ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */,
 				OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */,
 				ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */,
+				CI00FREF0007 /* ControllerInspectorModel.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1171,6 +1190,7 @@
 				CFP1000000CFP001CFP00001 /* CinematicFrameProducer.swift */,
 				CFR1000000CFR001CFR00001 /* CinematicFrameRenderer.swift */,
 				NOV1000000NOV001NOV00001 /* NotationOverlayVideoExporter.swift */,
+				CI00FREF0006 /* CoreMIDIInputTransport.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -1478,6 +1498,11 @@
 				CI00MAC00001 /* ScratchControllerInputModels.swift in Sources */,
 				CI00MAC00002 /* MIDITransport.swift in Sources */,
 				CI00MAC00003 /* ControllerInputNormalizer.swift in Sources */,
+				CI00MAC00004 /* MIDIMessageParsing.swift in Sources */,
+				CI00MAC00005 /* DetectedControlSummary.swift in Sources */,
+				CI00MAC00006 /* CoreMIDIInputTransport.swift in Sources */,
+				CI00MAC00007 /* ControllerInspectorModel.swift in Sources */,
+				CI00MAC00008 /* ControllerInspectorView.swift in Sources */,
 				B5AA0002A1B2C3D4E5F60709 /* GameState.swift in Sources */,
 				B5AA0003A1B2C3D4E5F60709 /* ProgressManager.swift in Sources */,
 				B5AA0004A1B2C3D4E5F60709 /* ScratchFormulaAST.swift in Sources */,
@@ -1556,6 +1581,8 @@
 				CI00IOS00001 /* ScratchControllerInputModels.swift in Sources */,
 				CI00IOS00002 /* MIDITransport.swift in Sources */,
 				CI00IOS00003 /* ControllerInputNormalizer.swift in Sources */,
+				CI00IOS00004 /* MIDIMessageParsing.swift in Sources */,
+				CI00IOS00005 /* DetectedControlSummary.swift in Sources */,
 				A1000006 /* GameState.swift in Sources */,
 				D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */,
 				PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */,
@@ -1721,6 +1748,7 @@
 				CEV2011000CEV002CEV00001 /* CoachingEventVocabularyTests.swift in Sources */,
 				CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */,
 				CI00TBF00001 /* ScratchControllerInputModelTests.swift in Sources */,
+				CI00TBF00002 /* ControllerInspectorParsingTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CEP2011000CEP002CEP00001 /* CoachingEventPacerTests.swift in Sources */,
