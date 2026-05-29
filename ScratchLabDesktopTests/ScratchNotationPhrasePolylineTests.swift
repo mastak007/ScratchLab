@@ -3,25 +3,24 @@ import XCTest
 
 /// Locks the contract of `ScratchNotationPhrasePolyline.build(...)`:
 /// pure, deterministic conversion of a position trace + phrase
-/// ranges into one continuous polyline per active phrase. Replaces
-/// the prior tokenized-stroke renderer model (stroke segments + hold
-/// connectors + endpoint dots) with the SXRATCH-style continuous
-/// sample-position polyline.
+/// ranges into one polyline group per active phrase, where each
+/// polyline group is a list of **sub-paths**.
 ///
-/// Composition rules:
+/// Sub-path rules:
 ///   - One polyline per active phrase range.
-///   - Vertices are ordered in time.
-///   - First vertex = first stroke's `(startTime, startPosition)`.
-///   - Each subsequent stroke contributes its end vertex
-///     `(endTime, endPosition)`.
-///   - Intra-phrase holds (gaps `> 0`, `≤ silenceThreshold`) inject
-///     a flat horizontal vertex `(nextStroke.startTime, current.
-///     endPosition)` between strokes so the path stays geometrically
-///     continuous through holds.
-///   - Inter-phrase silences (gaps `> silenceThreshold`) split into
-///     separate polylines — never bridged.
-///   - No loop tiling: every vertex sits in `[trace.first.startTime,
-///     trace.last.endTime]`. The audio is single-shot.
+///   - Within a phrase, vertices are ordered by time.
+///   - First vertex of the first sub-path = first stroke's
+///     `(startTime, startPosition)`.
+///   - Each stroke contributes its `(endTime, endPosition)` vertex.
+///   - Intra-phrase carry-forward holds emit a flat horizontal
+///     vertex at `(nextStroke.startTime, current.endPosition)` in
+///     the **same** sub-path.
+///   - Non-carry-forward transitions (`next.startPosition !=
+///     current.endPosition`) close the current sub-path and open a
+///     new one at the next stroke's start vertex. No vertex is
+///     emitted in the gap — the renderer paints nothing for the
+///     silent platter reset interval.
+///   - Inter-phrase silences split into separate polylines.
 final class ScratchNotationPhrasePolylineTests: XCTestCase {
 
     // MARK: - Helpers
@@ -52,25 +51,54 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
     private func stroke(
         startTime: TimeInterval,
         endTime: TimeInterval,
-        direction: ScratchMotionDirection = .forward
+        direction: ScratchMotionDirection = .forward,
+        startProgress: Double = 0,
+        endProgress: Double = 0
     ) -> ScratchLabBabyScratchStrokeSegment {
         ScratchLabBabyScratchStrokeSegment(
             startTime: startTime,
             endTime: endTime,
             direction: direction,
             holdAfter: 0,
-            startProgress: 0,
-            endProgress: 0
+            startProgress: startProgress,
+            endProgress: endProgress
+        )
+    }
+
+    private func backwardStroke(
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) -> ScratchLabBabyScratchStrokeSegment {
+        stroke(
+            startTime: startTime,
+            endTime: endTime,
+            direction: .backward,
+            startProgress: 1.0,
+            endProgress: 0.0
+        )
+    }
+
+    private func forwardStroke(
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) -> ScratchLabBabyScratchStrokeSegment {
+        stroke(
+            startTime: startTime,
+            endTime: endTime,
+            direction: .forward,
+            startProgress: 0.0,
+            endProgress: 1.0
         )
     }
 
     // MARK: - 1. Empty input
 
     func testEmptyTraceProducesNoPolyline() {
-        let result = ScratchNotationPhrasePolyline.build(
-            from: [], phraseRanges: [phrase(0, 1)]
+        XCTAssertTrue(
+            ScratchNotationPhrasePolyline.build(
+                from: [], phraseRanges: [phrase(0, 1)]
+            ).isEmpty
         )
-        XCTAssertTrue(result.isEmpty)
     }
 
     func testEmptyPhraseRangesProducesNoPolyline() {
@@ -83,26 +111,26 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
 
     // MARK: - 2. Single stroke
 
-    func testSingleStrokeProducesTwoVertices() {
+    func testSingleStrokeProducesOneSubPathWithTwoVertices() {
         let result = ScratchNotationPhrasePolyline.build(
             from: [trace(startTime: 0, endTime: 0.5, startPosition: 0.5, endPosition: 0.3)],
             phraseRanges: [phrase(0, 0.5)]
         )
         XCTAssertEqual(result.count, 1)
-        XCTAssertEqual(result[0].vertices.count, 2)
-        XCTAssertEqual(result[0].vertices[0].time, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[0].position, 0.5, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].time, 0.5, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].position, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths.count, 1)
+        XCTAssertEqual(result[0].subPaths[0].count, 2)
+        XCTAssertEqual(result[0].subPaths[0][0].time, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][0].position, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].time, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].position, 0.3, accuracy: 1e-9)
     }
 
-    // MARK: - 3. Consecutive strokes share vertex chain
+    // MARK: - 3. Carry-forward strokes stay in one sub-path
 
-    /// Two strokes with no hold gap (back-to-back) produce three
-    /// vertices total — the second stroke's start vertex is the same
-    /// (time, position) as the first stroke's end, so it is not
-    /// emitted twice.
-    func testConsecutiveStrokesShareVertexChain() {
+    /// Two carry-forward strokes (back-to-back, shared endpoint)
+    /// stay in the same sub-path. The shared vertex is emitted once,
+    /// not duplicated.
+    func testCarryForwardBackToBackStrokesStayInOneSubPath() {
         let trace = [
             trace(startTime: 0.0, endTime: 0.5, startPosition: 0.5, endPosition: 0.3),
             trace(startTime: 0.5, endTime: 1.0, startPosition: 0.3, endPosition: 0.4),
@@ -111,22 +139,22 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
             from: trace, phraseRanges: [phrase(0, 1.0)]
         )
         XCTAssertEqual(result.count, 1)
-        XCTAssertEqual(result[0].vertices.count, 3)
-        XCTAssertEqual(result[0].vertices[0].time, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].time, 0.5, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].position, 0.3, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[2].time, 1.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[2].position, 0.4, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths.count, 1)
+        XCTAssertEqual(result[0].subPaths[0].count, 3)
+        XCTAssertEqual(result[0].subPaths[0][0].time, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].time, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].position, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][2].time, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][2].position, 0.4, accuracy: 1e-9)
     }
 
-    // MARK: - 4. Intra-phrase hold injects flat vertex
+    // MARK: - 4. Intra-phrase carry-forward hold adds a flat vertex
 
-    /// Two strokes separated by a 0.3 s hold (sub-threshold) produce
-    /// four vertices: stroke 1 start, stroke 1 end, flat hold vertex
-    /// at `(stroke2.startTime, stroke1.endPosition)`, stroke 2 end.
-    /// The two middle vertices share Y so the polyline draws a flat
-    /// horizontal hold segment between them.
-    func testIntraPhraseHoldAddsFlatHorizontalVertex() {
+    /// Two carry-forward strokes separated by an intra-phrase hold
+    /// gap (sub-threshold) produce ONE sub-path with a flat
+    /// horizontal vertex at `(nextStroke.startTime,
+    /// current.endPosition)`.
+    func testIntraPhraseHoldKeepsCarryForwardStrokesInOneSubPath() {
         let trace = [
             trace(startTime: 0.0, endTime: 0.5, startPosition: 0.5, endPosition: 0.3),
             trace(startTime: 0.8, endTime: 1.2, startPosition: 0.3, endPosition: 0.4),
@@ -135,147 +163,26 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
             from: trace, phraseRanges: [phrase(0, 1.2)]
         )
         XCTAssertEqual(result.count, 1)
-        XCTAssertEqual(result[0].vertices.count, 4)
-        // Stroke 1 end → flat hold vertex must share Y.
-        XCTAssertEqual(
-            result[0].vertices[1].position,
-            result[0].vertices[2].position,
-            accuracy: 1e-9
-        )
-        XCTAssertEqual(result[0].vertices[2].time, 0.8, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[3].time, 1.2, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[3].position, 0.4, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths.count, 1)
+        XCTAssertEqual(result[0].subPaths[0].count, 4)
+        // Stroke 1 start → end.
+        XCTAssertEqual(result[0].subPaths[0][0].position, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].position, 0.3, accuracy: 1e-9)
+        // Flat hold vertex at the next stroke's startTime, same Y.
+        XCTAssertEqual(result[0].subPaths[0][2].time, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][2].position, 0.3, accuracy: 1e-9)
+        // Stroke 2 end.
+        XCTAssertEqual(result[0].subPaths[0][3].time, 1.2, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][3].position, 0.4, accuracy: 1e-9)
     }
 
-    // MARK: - 5. Inter-phrase silence splits into separate polylines
-
-    /// A 5 s gap above the 1.5 s threshold must produce two
-    /// independent polylines — never one bridged polyline. This is
-    /// the rule that keeps phrase boundaries honest.
-    func testInterPhraseSilenceSplitsPolylines() {
-        let trace = [
-            trace(startTime: 0.0, endTime: 0.5, startPosition: 0.5, endPosition: 0.3),
-            trace(startTime: 5.5, endTime: 6.0, startPosition: 0.3, endPosition: 0.4),
-        ]
-        let result = ScratchNotationPhrasePolyline.build(
-            from: trace,
-            phraseRanges: [phrase(0, 0.5), phrase(5.5, 6.0)]
-        )
-        XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(result[0].vertices.last?.time, 0.5)
-        XCTAssertEqual(result[1].vertices.first?.time, 5.5)
-        // Critically: the two polylines must not share or chain
-        // their vertex streams. The last vertex of polyline 0 sits
-        // at t=0.5; the first vertex of polyline 1 sits at t=5.5.
-        // No vertex exists in between.
-        for polyline in result {
-            for vertex in polyline.vertices {
-                let inFirst = vertex.time >= 0.0 && vertex.time <= 0.5
-                let inSecond = vertex.time >= 5.5 && vertex.time <= 6.0
-                XCTAssertTrue(
-                    inFirst || inSecond,
-                    "vertex at t=\(vertex.time) leaks across the inter-phrase silence"
-                )
-            }
-        }
-    }
-
-    // MARK: - 6. No vertex outside the audio range (no loop tiling)
-
-    /// Locks the no-tiling rule: every vertex must sit inside the
-    /// audio time range. The prior renderer tiled at
-    /// `[-loopDuration, 0, loopDuration]` which injected phantom
-    /// strokes at audio_t < ~1.2 s (from the −loopDuration tile of
-    /// the trace's last stroke) and audio_t > ~39.6 s (from the
-    /// +loopDuration tile of the trace's first stroke). The polyline
-    /// builder is the single source of vertex truth — anything
-    /// outside the audio range is forbidden by construction.
-    func testNoVerticesOutsideAudioRange() {
-        // Synthetic four-phrase shape mirroring the bundled JSON.
-        var traceSegments: [ScratchNotationPositionTraceSegment] = []
-        var phraseRanges: [ScratchNotationPhraseRange] = []
-        for (start, end) in [(0.27, 6.50), (11.50, 18.60), (23.70, 30.45), (35.70, 42.40)] {
-            phraseRanges.append(phrase(start, end))
-            // Three strokes per phrase, all intra-phrase gaps ≤ 1 s.
-            let span = end - start
-            let durations = [0.4, 0.5, 0.6]
-            var t = start
-            for (i, d) in durations.enumerated() {
-                traceSegments.append(
-                    trace(
-                        startTime: t,
-                        endTime: min(end, t + d),
-                        startPosition: Double(i) * 0.2,
-                        endPosition: Double(i) * 0.2 + 0.1
-                    )
-                )
-                t += d + 0.2
-                if t > end { break }
-            }
-        }
-        // Close phrase 4 cleanly at end = 42.4.
-        traceSegments.append(
-            trace(startTime: 41.9, endTime: 42.4, startPosition: 0.4, endPosition: 0.5)
-        )
-        let result = ScratchNotationPhrasePolyline.build(
-            from: traceSegments, phraseRanges: phraseRanges
-        )
-        XCTAssertGreaterThan(result.count, 0)
-        for polyline in result {
-            for vertex in polyline.vertices {
-                XCTAssertGreaterThanOrEqual(vertex.time, 0.0 - 1e-9)
-                XCTAssertLessThanOrEqual(vertex.time, 42.4 + 1e-9)
-            }
-        }
-    }
-
-    // MARK: - 7. Vertices are strictly ordered in time
-
-    func testVerticesAreOrderedInTime() {
-        let trace = [
-            trace(startTime: 0.0, endTime: 0.5, startPosition: 0.5, endPosition: 0.3),
-            trace(startTime: 0.8, endTime: 1.2, startPosition: 0.3, endPosition: 0.4),
-            trace(startTime: 1.4, endTime: 1.8, startPosition: 0.4, endPosition: 0.5),
-        ]
-        let result = ScratchNotationPhrasePolyline.build(
-            from: trace, phraseRanges: [phrase(0, 1.8)]
-        )
-        XCTAssertEqual(result.count, 1)
-        let times = result[0].vertices.map(\.time)
-        let sorted = times.sorted()
-        XCTAssertEqual(times, sorted, "vertices must be ordered in time")
-    }
-
-    // MARK: - 8. Determinism
-
-    func testDeterministicAcrossReruns() {
-        let trace = [
-            trace(startTime: 0.0, endTime: 0.5, startPosition: 0.5, endPosition: 0.3),
-            trace(startTime: 0.8, endTime: 1.2, startPosition: 0.3, endPosition: 0.4),
-            trace(startTime: 5.5, endTime: 6.0, startPosition: 0.4, endPosition: 0.5),
-        ]
-        let ranges = [phrase(0, 1.2), phrase(5.5, 6.0)]
-        let first = ScratchNotationPhrasePolyline.build(
-            from: trace, phraseRanges: ranges
-        )
-        for _ in 0..<99 {
-            XCTAssertEqual(
-                ScratchNotationPhrasePolyline.build(from: trace, phraseRanges: ranges),
-                first
-            )
-        }
-    }
-
-    // MARK: - 9. Non-carry-forward strokes emit hold-then-jump
+    // MARK: - 5. Non-carry-forward transition breaks the sub-path
 
     /// Two consecutive backward strokes (each 1 → 0) with an
-    /// intra-phrase gap must produce the vertex sequence
-    /// `(s1.start, 1) → (s1.end, 0) → (s2.start, 0) →
-    /// (s2.start, 1) → (s2.end, 0)`. The hold-flat vertex at
-    /// `(s2.startTime, 0)` followed by the jump vertex at
-    /// `(s2.startTime, 1)` produces a vertical line at `s2.startTime`
-    /// — the silent platter-reset moment.
-    func testNonCarryForwardStrokesEmitHoldThenJumpVertices() {
+    /// intra-phrase gap produce **two sub-paths**, each containing
+    /// 2 vertices. No vertex is emitted in the gap — neither a flat
+    /// hold nor a vertical jump. The renderer paints nothing there.
+    func testNonCarryForwardTransitionBreaksSubPath() {
         let trace = [
             trace(startTime: 0.0, endTime: 0.5,
                   startPosition: 1.0, endPosition: 0.0, direction: .backward),
@@ -286,58 +193,32 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
             from: trace, phraseRanges: [phrase(0, 1.2)]
         )
         XCTAssertEqual(result.count, 1)
-        XCTAssertEqual(result[0].vertices.count, 5)
-        XCTAssertEqual(result[0].vertices[0].time, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[0].position, 1.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].time, 0.5, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].position, 0.0, accuracy: 1e-9)
-        // Flat hold at the previous endPosition (0) — runs until
-        // the next stroke's startTime.
-        XCTAssertEqual(result[0].vertices[2].time, 0.8, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[2].position, 0.0, accuracy: 1e-9)
-        // Jump at the same X to the next stroke's startPosition (1).
-        XCTAssertEqual(result[0].vertices[3].time, 0.8, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[3].position, 1.0, accuracy: 1e-9)
-        // Stroke 2 end.
-        XCTAssertEqual(result[0].vertices[4].time, 1.2, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[4].position, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths.count, 2)
+        XCTAssertEqual(result[0].subPaths[0].count, 2)
+        XCTAssertEqual(result[0].subPaths[1].count, 2)
+        XCTAssertEqual(result[0].subPaths[0][0].position, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].position, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[1][0].time, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[1][0].position, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[1][1].time, 1.2, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[1][1].position, 0.0, accuracy: 1e-9)
+        // Critically: no vertex anywhere between 0.5 and 0.8.
+        for sub in result[0].subPaths {
+            for vertex in sub {
+                XCTAssertFalse(
+                    vertex.time > 0.5 && vertex.time < 0.8,
+                    "vertex at t=\(vertex.time) sits inside the silent reset interval"
+                )
+            }
+        }
     }
 
-    // MARK: - 10. Carry-forward strokes skip the jump
+    // MARK: - 6. Back-to-back non-carry-forward also breaks
 
-    /// When `next.startPosition == current.endPosition`, the polyline
-    /// stays smooth and emits no extra jump vertex. Verified for
-    /// both gap > 0 (one flat-hold vertex only) and gap == 0
-    /// (back-to-back, no flat-hold vertex either).
-    func testCarryForwardStrokesDoNotEmitJump() {
-        let withHold = [
-            trace(startTime: 0.0, endTime: 0.5,
-                  startPosition: 0.5, endPosition: 0.3),
-            trace(startTime: 0.8, endTime: 1.2,
-                  startPosition: 0.3, endPosition: 0.4),
-        ]
-        let resultWithHold = ScratchNotationPhrasePolyline.build(
-            from: withHold, phraseRanges: [phrase(0, 1.2)]
-        )
-        XCTAssertEqual(resultWithHold[0].vertices.count, 4)
-
-        let backToBack = [
-            trace(startTime: 0.0, endTime: 0.5,
-                  startPosition: 0.5, endPosition: 0.3),
-            trace(startTime: 0.5, endTime: 1.0,
-                  startPosition: 0.3, endPosition: 0.4),
-        ]
-        let resultBackToBack = ScratchNotationPhrasePolyline.build(
-            from: backToBack, phraseRanges: [phrase(0, 1.0)]
-        )
-        XCTAssertEqual(resultBackToBack[0].vertices.count, 3)
-    }
-
-    // MARK: - 11. Back-to-back non-carry-forward emits jump without hold
-
-    /// gap == 0 with non-equal positions: emit just the jump vertex,
-    /// no flat-hold vertex (the hold would have zero duration).
-    func testBackToBackNonCarryForwardEmitsJumpOnly() {
+    /// gap == 0 with non-equal positions still breaks the sub-path.
+    /// The two strokes share a `time` but not a `position`; the
+    /// renderer must not connect them with a vertical line.
+    func testBackToBackNonCarryForwardBreaksSubPath() {
         let trace = [
             trace(startTime: 0.0, endTime: 0.5,
                   startPosition: 1.0, endPosition: 0.0, direction: .backward),
@@ -347,22 +228,20 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
         let result = ScratchNotationPhrasePolyline.build(
             from: trace, phraseRanges: [phrase(0, 1.0)]
         )
-        XCTAssertEqual(result[0].vertices.count, 4)
-        // Stroke 1 end, then jump vertex at same X, then stroke 2 end.
-        XCTAssertEqual(result[0].vertices[1].time, 0.5, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[1].position, 0.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[2].time, 0.5, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[2].position, 1.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[3].time, 1.0, accuracy: 1e-9)
-        XCTAssertEqual(result[0].vertices[3].position, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths.count, 2)
+        XCTAssertEqual(result[0].subPaths[0].count, 2)
+        XCTAssertEqual(result[0].subPaths[1].count, 2)
+        // Both sub-paths share the boundary time 0.5 but at
+        // different positions. They do not share a vertex.
+        XCTAssertEqual(result[0].subPaths[0][1].time, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[0][1].position, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[1][0].time, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(result[0].subPaths[1][0].position, 1.0, accuracy: 1e-9)
     }
 
-    // MARK: - 12. Phrase boundary does not connect across silence
+    // MARK: - 7. Inter-phrase silence still produces independent polylines
 
-    /// When trace segments are split across two phrases by an
-    /// inter-phrase silence, the polylines remain independent. No
-    /// jump or hold vertex appears across the silence gap.
-    func testPhraseBoundaryDoesNotConnectAcrossSilence() {
+    func testInterPhraseSilenceSplitsIntoSeparatePolylines() {
         let trace = [
             trace(startTime: 0.0, endTime: 0.5,
                   startPosition: 1.0, endPosition: 0.0, direction: .backward),
@@ -375,55 +254,145 @@ final class ScratchNotationPhrasePolylineTests: XCTestCase {
             phraseRanges: [phrase(0, 0.5), phrase(5.5, 6.0)]
         )
         XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(result[0].vertices.count, 2)
-        XCTAssertEqual(result[1].vertices.count, 2)
-        // Critically: no vertex at time 0.5–5.5.
+        XCTAssertEqual(result[0].subPaths.count, 1)
+        XCTAssertEqual(result[1].subPaths.count, 1)
+        XCTAssertEqual(result[0].subPaths[0].last?.time, 0.5)
+        XCTAssertEqual(result[1].subPaths[0].first?.time, 5.5)
+    }
+
+    // MARK: - 8. Bundled phrase 1 produces six sub-paths
+
+    /// Locks the exact sub-path count for the bundled phrase-1
+    /// shape: four isolated backwards (strokes 1-4) + one connected
+    /// run (5, 6, 7, 8) + one connected run (9, 10, 11). The four
+    /// isolated backwards each form their own sub-path because each
+    /// backward stroke ends at 0 and the next backward stroke starts
+    /// at 1 — non-carry-forward.
+    func testBundledPhrase1ProducesSixSubPaths() {
+        let rawStrokes: [ScratchLabBabyScratchStrokeSegment] = [
+            backwardStroke(startTime: 0.27,  endTime: 0.778),
+            backwardStroke(startTime: 1.07,  endTime: 1.378),
+            backwardStroke(startTime: 1.46,  endTime: 1.763),
+            backwardStroke(startTime: 1.84,  endTime: 2.368),
+            backwardStroke(startTime: 2.605, endTime: 2.913),
+            forwardStroke(startTime: 2.99,  endTime: 3.278),
+            backwardStroke(startTime: 3.36,  endTime: 3.928),
+            forwardStroke(startTime: 4.13,  endTime: 4.453),
+            forwardStroke(startTime: 4.52,  endTime: 4.803),
+            backwardStroke(startTime: 4.895, endTime: 5.743),
+            forwardStroke(startTime: 5.743, endTime: 6.5),
+        ]
+        let trace = ScratchNotationRawTrace.build(from: rawStrokes)
+        let result = ScratchNotationPhrasePolyline.build(
+            from: trace, phraseRanges: [phrase(0.27, 6.5)]
+        )
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(
+            result[0].subPaths.count, 6,
+            "expected 4 isolated backwards + run(5-8) + run(9-11) = 6 sub-paths"
+        )
+        // The first four sub-paths are each one backward stroke
+        // (2 vertices each).
+        for index in 0..<4 {
+            XCTAssertEqual(
+                result[0].subPaths[index].count, 2,
+                "sub-path \(index) should be a single 1→0 backward stroke"
+            )
+        }
+        // Sub-path 4 covers strokes 5-8: 5 stroke endpoints + 3
+        // intra-phrase hold vertices = 8 vertices.
+        XCTAssertEqual(result[0].subPaths[4].count, 8)
+        // Sub-path 5 covers strokes 9-11: 4 stroke endpoints + 1
+        // intra-phrase hold vertex between 9 and 10 (gap 0.092 s) +
+        // 0 between 10 and 11 (back-to-back gap 0) = 5 vertices.
+        XCTAssertEqual(result[0].subPaths[5].count, 5)
+    }
+
+    // MARK: - 9. Bundled phrases 2-4 produce one sub-path each
+
+    /// Every transition in phrases 2-4 is carry-forward (B-F-B-F-…
+    /// alternates with shared endpoints 0 or 1), so each phrase
+    /// should produce exactly one sub-path.
+    func testBundledPhrase2ProducesOneSubPath() {
+        // Compact representative of phrase 2's BFBFBF alternation.
+        let rawStrokes: [ScratchLabBabyScratchStrokeSegment] = [
+            backwardStroke(startTime: 11.50, endTime: 12.00),
+            forwardStroke(startTime: 12.37, endTime: 12.878),
+            backwardStroke(startTime: 13.17, endTime: 13.478),
+            forwardStroke(startTime: 13.56, endTime: 13.863),
+            backwardStroke(startTime: 13.94, endTime: 14.468),
+        ]
+        let trace = ScratchNotationRawTrace.build(from: rawStrokes)
+        let result = ScratchNotationPhrasePolyline.build(
+            from: trace, phraseRanges: [phrase(11.50, 14.468)]
+        )
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].subPaths.count, 1)
+        XCTAssertGreaterThanOrEqual(result[0].subPaths[0].count, 5)
+    }
+
+    // MARK: - 10. Bundled phrase 1 still reaches both lane boundaries
+
+    /// Amplitude rule preserved across sub-paths: phrase 1's
+    /// concatenated sub-path vertices must include at least one
+    /// position == 0 and at least one position == 1.
+    func testBundledPhrase1ReachesBothLaneBoundariesAcrossSubPaths() {
+        let rawStrokes: [ScratchLabBabyScratchStrokeSegment] = [
+            backwardStroke(startTime: 0.27, endTime: 0.778),
+            forwardStroke(startTime: 1.0, endTime: 1.5),
+        ]
+        let trace = ScratchNotationRawTrace.build(from: rawStrokes)
+        let result = ScratchNotationPhrasePolyline.build(
+            from: trace, phraseRanges: [phrase(0.27, 1.5)]
+        )
+        XCTAssertEqual(result.count, 1)
+        let allPositions = result[0].subPaths.flatMap { $0 }.map(\.position)
+        XCTAssertTrue(allPositions.contains(0.0))
+        XCTAssertTrue(allPositions.contains(1.0))
+    }
+
+    // MARK: - 11. No vertex outside phrase / audio range
+
+    func testNoVerticesOutsidePhraseRange() {
+        let trace = [
+            trace(startTime: 0.0, endTime: 0.5,
+                  startPosition: 1.0, endPosition: 0.0, direction: .backward),
+            trace(startTime: 0.8, endTime: 1.2,
+                  startPosition: 1.0, endPosition: 0.0, direction: .backward),
+        ]
+        let result = ScratchNotationPhrasePolyline.build(
+            from: trace, phraseRanges: [phrase(0, 1.2)]
+        )
         for polyline in result {
-            for vertex in polyline.vertices {
-                XCTAssertFalse(
-                    vertex.time > 0.5 && vertex.time < 5.5,
-                    "vertex at t=\(vertex.time) leaks across the inter-phrase silence"
-                )
+            for sub in polyline.subPaths {
+                for vertex in sub {
+                    XCTAssertGreaterThanOrEqual(vertex.time, 0.0 - 1e-9)
+                    XCTAssertLessThanOrEqual(vertex.time, 1.2 + 1e-9)
+                }
             }
         }
     }
 
-    // MARK: - 13. Bundled-shaped phrase 1 reaches both lane boundaries
+    // MARK: - 12. Determinism
 
-    /// With raw progress (post-corrective), the bundled phrase 1
-    /// polyline must contain at least one vertex at position 0 and
-    /// at least one at position 1. The duration-proxy lost this; the
-    /// raw trace restores it.
-    func testBundledShapedPhrase1ReachesBothLaneBoundaries() {
-        let rawStrokes: [ScratchLabBabyScratchStrokeSegment] = [
-            stroke(startTime: 0.27,  endTime: 0.778, direction: .backward),
-            stroke(startTime: 1.07,  endTime: 1.378, direction: .backward),
-            stroke(startTime: 2.99,  endTime: 3.278, direction: .forward),
-            stroke(startTime: 5.743, endTime: 6.5,   direction: .forward),
+    func testDeterministicAcrossReruns() {
+        let trace = [
+            trace(startTime: 0.0, endTime: 0.5,
+                  startPosition: 1.0, endPosition: 0.0, direction: .backward),
+            trace(startTime: 0.8, endTime: 1.2,
+                  startPosition: 1.0, endPosition: 0.0, direction: .backward),
+            trace(startTime: 5.5, endTime: 6.0,
+                  startPosition: 1.0, endPosition: 0.0, direction: .backward),
         ]
-        // Manually set raw progress to JSON shape (1↔0 / 0↔1).
-        let rawProgress: [(Double, Double)] = [
-            (1.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, 1.0)
-        ]
-        let withRawProgress: [ScratchLabBabyScratchStrokeSegment] =
-            zip(rawStrokes, rawProgress).map { strokeAndProgress in
-                let (s, progress) = strokeAndProgress
-                return ScratchLabBabyScratchStrokeSegment(
-                    startTime: s.startTime,
-                    endTime: s.endTime,
-                    direction: s.direction,
-                    holdAfter: s.holdAfter,
-                    startProgress: progress.0,
-                    endProgress: progress.1
-                )
-            }
-        let traceForPhrase = ScratchNotationRawTrace.build(from: withRawProgress)
-        let result = ScratchNotationPhrasePolyline.build(
-            from: traceForPhrase, phraseRanges: [phrase(0.27, 6.5)]
+        let ranges = [phrase(0, 1.2), phrase(5.5, 6.0)]
+        let first = ScratchNotationPhrasePolyline.build(
+            from: trace, phraseRanges: ranges
         )
-        XCTAssertEqual(result.count, 1)
-        let positions = result[0].vertices.map(\.position)
-        XCTAssertTrue(positions.contains(0.0))
-        XCTAssertTrue(positions.contains(1.0))
+        for _ in 0..<99 {
+            XCTAssertEqual(
+                ScratchNotationPhrasePolyline.build(from: trace, phraseRanges: ranges),
+                first
+            )
+        }
     }
 }

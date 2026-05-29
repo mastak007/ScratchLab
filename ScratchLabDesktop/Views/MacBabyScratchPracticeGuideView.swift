@@ -195,20 +195,24 @@ struct MacBabyScratchPracticeGuideView: View {
         ctx.stroke(path, with: .color(.white.opacity(0.50)), lineWidth: 1.0)
     }
 
-    /// Paints one continuous polyline per active phrase that overlaps
-    /// the visible time window. Each polyline is built once at init
-    /// from the trace + phrase ranges (see `phrasePolylines`); here
-    /// the only work per frame is the audio-time → canvas-X mapping,
-    /// path assembly, and a single stroke call per polyline.
+    /// Paints one polyline group per active phrase that overlaps
+    /// the visible time window. Each polyline group is a list of
+    /// **sub-paths**; sub-paths within a phrase share no geometry.
+    /// Non-carry-forward transitions (silent platter resets)
+    /// produce a break between sub-paths — the renderer paints
+    /// nothing across the break interval, so silent resets read as
+    /// visual gaps instead of vertical lines.
     ///
     /// **No dots.** The reference SXRATCH visualizer paints the upper
     /// lane as one stroked line; dots in the upper lane were the
     /// regression that prompted this replacement.
     ///
     /// **No loop tiling.** The bundled audio plays once through and
-    /// does not loop within a playback, so the prior
-    /// `[-loopDuration, 0, loopDuration]` tile array would only
-    /// inject phantom strokes at audio boundaries.
+    /// does not loop within a playback.
+    ///
+    /// One `Path` per phrase, one `ctx.stroke(...)` call per phrase
+    /// — sub-paths sit inside the same `Path` via `move(to:)` /
+    /// `addLine(to:)` and stroke together with a uniform line style.
     private func drawActivePhrasePolylines(
         in ctx: GraphicsContext,
         size: CGSize,
@@ -232,14 +236,16 @@ struct MacBabyScratchPracticeGuideView: View {
                   polyline.phraseRange.start <= visibleEnd + 0.1
             else { continue }
             var path = Path()
-            for (index, vertex) in polyline.vertices.enumerated() {
-                let x = playheadX + CGFloat(vertex.time - now) * pps
-                let y = baseline - positionHeight * CGFloat(vertex.position)
-                let point = CGPoint(x: x, y: y)
-                if index == 0 {
-                    path.move(to: point)
-                } else {
-                    path.addLine(to: point)
+            for subPath in polyline.subPaths {
+                for (index, vertex) in subPath.enumerated() {
+                    let x = playheadX + CGFloat(vertex.time - now) * pps
+                    let y = baseline - positionHeight * CGFloat(vertex.position)
+                    let point = CGPoint(x: x, y: y)
+                    if index == 0 {
+                        path.move(to: point)
+                    } else {
+                        path.addLine(to: point)
+                    }
                 }
             }
             ctx.stroke(

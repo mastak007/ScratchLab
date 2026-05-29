@@ -42,17 +42,35 @@ struct ScratchNotationPolylineVertex: Equatable, Sendable {
 
 // MARK: - ScratchNotationPhrasePolyline
 
-/// One continuous polyline for a single active phrase. The polyline
-/// composes stroke slopes AND intra-phrase holds into one ordered
-/// vertex list, so a single stroked `CGPath` paints both.
+/// One renderable polyline group for a single active phrase. A
+/// phrase may contain multiple **sub-paths** when consecutive
+/// strokes inside it do not carry forward (their endpoints do not
+/// share a position) — those non-carry-forward transitions are
+/// **silent platter resets** in the source motion, and the renderer
+/// must not draw a visible line through them. Each sub-path is a
+/// contiguous vertex run; sub-paths within a phrase share no
+/// geometry. Holds within a carry-forward run remain flat
+/// horizontal vertices in the same sub-path.
 struct ScratchNotationPhrasePolyline: Equatable, Sendable {
     let phraseRange: ScratchNotationPhraseRange
-    let vertices: [ScratchNotationPolylineVertex]
+    let subPaths: [[ScratchNotationPolylineVertex]]
 
     /// Builds one polyline per active phrase range. Pure mapper —
     /// same input → byte-identical output. No clock, no I/O, no UI.
     /// Strokes outside any phrase range are ignored (the phrase gate
     /// is the authority on what counts as an active phrase).
+    ///
+    /// **Sub-path break rule:** within a phrase, the current sub-path
+    /// is closed and a new one is opened whenever
+    /// `next.startPosition != current.endPosition`. The interval
+    /// between `current.endTime` and `next.startTime` represents a
+    /// silent platter reset and produces **no vertex at all** —
+    /// neither a vertical jump nor a diagonal slope nor a flat
+    /// hold. The visual result is a gap in the rendered path. This
+    /// replaces the earlier "hold-then-jump" rule that emitted a
+    /// flat hold then a vertical line at every silent reset
+    /// (forensic on `sl notation review 3.mp4` / the four 2:26–2:27
+    /// PM screenshots).
     static func build(
         from trace: [ScratchNotationPositionTraceSegment],
         phraseRanges: [ScratchNotationPhraseRange],
@@ -76,76 +94,77 @@ struct ScratchNotationPhrasePolyline: Equatable, Sendable {
                     && segment.endTime <= range.end + epsilon
             }
             guard !inRange.isEmpty else { continue }
-            var vertices: [ScratchNotationPolylineVertex] = []
-            vertices.reserveCapacity(inRange.count * 2 + 1)
-            // First vertex: the first stroke's (startTime,
-            // startPosition). All subsequent strokes contribute only
-            // their end vertex (their start vertex is the same as
-            // the previous stroke's end vertex by the carry-forward
-            // rule of `ScratchNotationPositionTrace`, so emitting it
-            // would duplicate).
+
+            var subPaths: [[ScratchNotationPolylineVertex]] = []
+            var current: [ScratchNotationPolylineVertex] = []
+            current.reserveCapacity(inRange.count * 2 + 1)
+            // Start the first sub-path at the first stroke's start
+            // vertex. Every subsequent stroke contributes its end
+            // vertex; carry-forward transitions add an optional flat
+            // hold vertex; non-carry-forward transitions close the
+            // current sub-path and open a new one at the next
+            // stroke's start vertex.
             let first = inRange[0]
-            vertices.append(
+            current.append(
                 ScratchNotationPolylineVertex(
                     time: first.startTime,
                     position: first.startPosition
                 )
             )
             for index in 0..<inRange.count {
-                let current = inRange[index]
-                vertices.append(
+                let stroke = inRange[index]
+                current.append(
                     ScratchNotationPolylineVertex(
-                        time: current.endTime,
-                        position: current.endPosition
+                        time: stroke.endTime,
+                        position: stroke.endPosition
                     )
                 )
                 guard index + 1 < inRange.count else { continue }
                 let next = inRange[index + 1]
-                let gap = next.startTime - current.endTime
-                // Intra-phrase hold gap: insert a flat horizontal
-                // vertex at the next stroke's start time, keeping
-                // the previous stroke's end Y. The line from
-                // `current.end` to this flat vertex paints as the
-                // hold; the line from the flat vertex to the next
-                // vertex paints as either the next stroke's slope
-                // (carry-forward case) or a silent reset jump
-                // (non-carry-forward case).
-                if gap > 0 && gap <= safeThreshold {
-                    vertices.append(
-                        ScratchNotationPolylineVertex(
-                            time: next.startTime,
-                            position: current.endPosition
+                let gap = next.startTime - stroke.endTime
+                let carriesForward =
+                    abs(next.startPosition - stroke.endPosition) < epsilon
+                if carriesForward {
+                    // Same sub-path. If there is a positive
+                    // intra-phrase hold gap, paint it as a flat
+                    // horizontal segment by adding one vertex at the
+                    // next stroke's startTime, same Y as the
+                    // previous stroke's endPosition.
+                    if gap > 0, gap <= safeThreshold {
+                        current.append(
+                            ScratchNotationPolylineVertex(
+                                time: next.startTime,
+                                position: stroke.endPosition
+                            )
                         )
-                    )
-                }
-                // Non-carry-forward transition: when the next stroke
-                // does not start at the previous stroke's end value
-                // (e.g., two consecutive backward strokes both
-                // encoded as 1 → 0 in the raw JSON), emit a "jump"
-                // vertex at the next stroke's start time and start
-                // position. With the hold-flat vertex above, this
-                // produces a vertical line at `next.startTime` from
-                // `current.endPosition` to `next.startPosition` —
-                // the silent platter-reset moment. Carry-forward
-                // strokes (`next.startPosition == current.endPosition`)
-                // skip the jump and the polyline stays smooth.
-                if abs(next.startPosition - current.endPosition) > 1e-9 {
-                    vertices.append(
+                    }
+                    // gap == 0 (back-to-back, shared endpoint):
+                    // nothing inserted; the next stroke's end vertex
+                    // follows directly. gap > safeThreshold should
+                    // not happen inside a single phrase range (by
+                    // construction of the phrase gate); defensively
+                    // ignored.
+                } else {
+                    // Non-carry-forward: silent platter reset. Close
+                    // the current sub-path and start a new one at
+                    // the next stroke's start vertex. No vertex is
+                    // emitted in the gap interval, so nothing is
+                    // drawn between them.
+                    if current.count >= 2 { subPaths.append(current) }
+                    current = [
                         ScratchNotationPolylineVertex(
                             time: next.startTime,
                             position: next.startPosition
                         )
-                    )
+                    ]
                 }
-                // gap > safeThreshold should not happen inside a
-                // single phrase range (by construction of the
-                // phrase gate), but is defensively skipped.
             }
-            guard vertices.count >= 2 else { continue }
+            if current.count >= 2 { subPaths.append(current) }
+            guard !subPaths.isEmpty else { continue }
             result.append(
                 ScratchNotationPhrasePolyline(
                     phraseRange: range,
-                    vertices: vertices
+                    subPaths: subPaths
                 )
             )
         }
