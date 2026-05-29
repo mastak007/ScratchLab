@@ -2265,3 +2265,41 @@ inside a Copy Bundle Resources phase. Audit-only - do not modify the project.
 - Do not commit. Do not push.
 - No `Co-Authored-By` trailers.
 
+## Full macOS test triage — release/testflight-1 @ c7abf5e
+
+- Builds green on all targets: iOS Debug, macOS Debug, macOS build-for-testing, watchOS — all `BUILD SUCCEEDED`.
+- Full macOS XCTest suite WAS run (not just notation tests).
+- Suite is RED:
+  - XCTest: 1222 run, 12 skipped, 33 failures.
+  - Swift Testing: 147 tests, 13 issues.
+  - 1 headless hang in `AutoCutVisualPlaybackTests.testAutoCutVisualPlaybackIsGatedToAutoCutMode`
+    (started, never finished; excluded via
+    `-skip-testing:ScratchLabDesktopTests/AutoCutVisualPlaybackTests` to let the suite finish).
+- Triage: failures are PRE-EXISTING stale tests / environment issues — NOT caused by
+  PR #11 Baby notation work. Proven: every implicated asset/source was last changed by
+  commits that are ancestors of branch point `8cef014`; the 2 merge commits
+  (`e0a0f7e`, `fbda84e`) touched only `ScratchNotationSmoothPath.swift`,
+  `ScratchNotationTeachingProfile.swift`, `MacBabyScratchPracticeGuideView.swift`
+  (referenced by no test), two test files, and the pbxproj.
+- Baby notation merge tests PASS: `ScratchNotationSmoothPathTests` and
+  `ScratchNotationTeachingProfileTests`.
+- Failure clusters needing SEPARATE test maintenance (owned outside the Baby notation line):
+  - Reel manifest / coach-demo-audio asset expectations (call-response reel:
+    `baby_reel_callresponse.wav` + `baby_reel.json`; 8 segments / 75 strokes vs old
+    `baby_noBeat` / 7 / 40) and `Resources/Notation/baby_scratch.json` now single-phrase
+    (19 strokes / ~5.07 s vs expected 40 / ~42 s).
+  - Brittle source-string guard tests (PracticeModeView / ScratchMotionLane /
+    CoachPreview / NotationVisualizer / ScratchNotationCanvasView) — strings moved on refactor.
+  - Copy guards: assist-mode explainer copy and the `MacAnalyzerView` "estimated
+    confidence" / "Est. Conf" qualifier (the overclaim-add guard "react in real time"
+    did NOT fail). Quick owner glance recommended for App-Review hygiene.
+  - `AutoCutVisualPlaybackTests` headless behaviour (make it fail fast or run in a real
+    GUI/CI session).
+- Readiness caveat: DO NOT claim the full macOS XCTest suite is green for TestFlight
+  readiness. Builds pass and the app runs; the suite is red with stale/environment
+  failures pending the separate maintenance task above.
+- Working tree still carries only the PRE-EXISTING dirty files (leave untouched):
+  - deleted `ScratchLab/Assets.xcassets/AppIcon.appiconset/icon-1024.png`
+  - untracked `docs/feature-walkthrough.md`
+  - untracked `docs/planning/`
+
