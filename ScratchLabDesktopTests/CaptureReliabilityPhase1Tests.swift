@@ -3675,19 +3675,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                        "Practice setup must not advertise the 3D coach demo")
     }
 
-    func testPracticeModeSourceExposesBabyScratchAudioMotionFeedback() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+    func testCoachPreviewSourceExposesBabyScratchAudioMotionFeedback() throws {
+        // The Baby Scratch audio-motion feedback panel moved from
+        // PracticeModeView to CoachPreviewView and is now rendered as
+        // `trainerBadge` rows. (PROFILE: motion labels stay in the coach /
+        // trainer context, not surfaced as truth in Practice.)
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CoachPreviewView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("private var showsBabyScratchMotionFeedback: Bool"))
-        XCTAssertTrue(source.contains("activeScratch.id == \"baby_scratch\""))
         XCTAssertTrue(source.contains("audioEngine.scratchMotionFeedback"))
-        XCTAssertTrue(source.contains("Text(\"AUDIO MOTION\")"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Direction\", value: audioEngine.scratchMotionDirection.label)"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Forward\", value: scratchMotionForwardDurationText)"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Back\", value: scratchMotionBackwardDurationText)"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Error\", value: scratchMotionTimingErrorText)"))
-        XCTAssertTrue(source.contains("private func formatScratchMotionDuration(_ duration: TimeInterval?) -> String"))
+        XCTAssertTrue(source.contains("trainerBadge(title: \"Direction\", value: audioEngine.scratchMotionDirection.label)"))
+        XCTAssertTrue(source.contains("trainerBadge(title: \"Forward\", value: audioForwardDurationText)"))
+        XCTAssertTrue(source.contains("trainerBadge(title: \"Back\", value: audioBackwardDurationText)"))
+        XCTAssertTrue(source.contains("trainerBadge(title: \"Timing Error\", value: audioTimingErrorText)"))
+        XCTAssertTrue(source.contains("private func formattedDuration(_ duration: TimeInterval?) -> String"))
     }
 
     func testCoachPreviewSourceLoadsBundledCoachUSDZWithRealityKitDiagnosticsAndARViewFraming() throws {
@@ -3711,10 +3712,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("DispatchQueue.main.async { [weak arView] in"))
         XCTAssertTrue(source.contains("arView.debugOptions = []"))
         XCTAssertTrue(source.contains("arView.debugOptions.remove(.showStatistics)"))
-        XCTAssertTrue(source.contains("arView.__statisticsOptions = []"))
-        XCTAssertTrue(source.contains("arView.__disableStatisticsRendering = true"))
-        XCTAssertTrue(source.contains("NSSelectorFromString(\"setShowStatistics:\")"))
-        XCTAssertTrue(source.contains("(arView as NSObject).setValue(false, forKey: \"showStatistics\")"))
+        // Statistics-overlay suppression moved from private-API hacks
+        // (__statisticsOptions / setShowStatistics: KVC) to a dedicated
+        // public-API helper.
+        XCTAssertTrue(source.contains("private func disableStatisticsOverlay(on arView: ARView)"),
+                      "ARView statistics overlay must be suppressed via a dedicated helper")
+        XCTAssertTrue(source.contains("disableStatisticsOverlay(on: arView)"),
+                      "configure(_:) must call the statistics-overlay suppressor")
         XCTAssertTrue(source.contains("AnchorEntity(world: .zero)"))
         XCTAssertTrue(source.contains("Bundle.main.url("))
         XCTAssertTrue(source.contains("print(\"[CoachPreview] rootEntity.name="))
