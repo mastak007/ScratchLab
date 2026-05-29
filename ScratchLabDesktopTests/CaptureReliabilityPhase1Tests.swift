@@ -10516,17 +10516,23 @@ final class PracticeTargetNotationChartTests: XCTestCase {
     func testTargetNotationChartIsRenderedInPracticeModeView() throws {
         let view = try source("ScratchLab/Views/PracticeModeView.swift")
 
-        XCTAssertTrue(view.contains("\"TARGET PATTERN\""),
+        // The target pattern is rendered under a "TARGET PATTERN" header, now
+        // via the unified `ScratchMotionLane` (the prior `ScratchPhraseChartView`
+        // render was folded into the one notation lane).
+        XCTAssertTrue(view.contains("TARGET PATTERN"),
                       "Practice must show a 'TARGET PATTERN' heading")
-        XCTAssertTrue(view.contains("ScratchPhraseChartView(source: .target("),
-                      "Practice must render the existing ScratchPhraseChartView with a target notation")
+        XCTAssertTrue(view.contains("ScratchMotionLane(content: lane.content"),
+                      "Practice must render the target notation through ScratchMotionLane")
+        XCTAssertTrue(view.contains("LaneContent(notation:"),
+                      "The target lane content must be built from the target notation")
         XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
                       "Target chart must read the existing bundled Baby Scratch notation")
 
-        // The non-Auto-cut chart render stays static (no playhead). Auto-cut
-        // adds an animated playhead — see AutoCutVisualPlaybackTests.
-        XCTAssertTrue(view.contains("ScratchPhraseChartView(source: .target(notation))"),
-                      "A static (no-playhead) target chart render must remain for non-Auto-cut modes")
+        // A static (parked) target render remains for the non-animated Open
+        // mode: Open uses a fixed clock (no playhead movement). Animated modes
+        // use a looping / audio clock — see AutoCutVisualPlaybackTests.
+        XCTAssertTrue(view.contains("case .open:") && view.contains(".fixed(0)"),
+                      "A static (parked) target render must remain for Open mode")
     }
 
     func testScratchPhraseChartViewIsOniOSTarget() throws {
