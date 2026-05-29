@@ -7010,7 +7010,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         // Shared coordinator must be the master clock source — no separate player owned by the VM.
         XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator"))
         XCTAssertTrue(source.contains("demo.currentAudioTime"))
-        XCTAssertTrue(source.contains("BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration"))
+        // Cycle/loop timing now flows through the coordinator's loop-time
+        // helper using a timeline-derived cycle duration (loopDuration =
+        // phraseEnd), replacing the old demoAudioPhraseCycleDuration reference.
+        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.notationCanvasLoopTime(")
+                      && source.contains("cycleDuration:"),
+                      "VM must derive loop time from the shared coordinator using a timeline cycle duration")
         XCTAssertTrue(source.contains("BabyScratchReferenceMotionTimeline.phraseEnd"))
         // Separate owned player must be gone.
         XCTAssertFalse(source.contains("let audioPlayer = ScratchCoachDemoAudioPlayer()"))
