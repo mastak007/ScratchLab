@@ -92,6 +92,15 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Suggested sensitivity (sample-seconds per 1000 ticks) from the last measurement.
     @Published private(set) var tickSuggestedPer1000: Double?
 
+    // RANE diagnostic recorder (capture raw hardware events to JSON; no playback impact).
+    @Published private(set) var isRecordingDiagnostics = false
+    @Published private(set) var isCalibrationRecording = false
+    @Published private(set) var diagnosticEventCount = 0
+    @Published private(set) var diagnosticReachedCapacity = false
+    @Published private(set) var diagnosticSummary: RaneDiagnosticSummary?
+    @Published private(set) var lastDiagnosticExportPath: String?
+    @Published private(set) var lastDiagnosticExportError: String?
+
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
@@ -151,6 +160,8 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var lastCrossfaderDate: Date?
     private var lastPublishedPosition: TimeInterval = 0
     private var measurement = PlatterTickMeasurement()
+    private var recorder = RaneDiagnosticRecorder()
+    private var recordingStartDate: Date?
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
@@ -236,6 +247,64 @@ final class ScratchPlaybackLabModel: ObservableObject {
         }
     }
 
+    // MARK: - RANE diagnostic recording
+
+    /// Begins capturing raw platter pitch-bend events to memory. Pass `calibration: true`
+    /// for a one-revolution run (drives the ticks-per-revolution estimate). Capture is
+    /// in-memory only; nothing is written to disk until `exportDiagnostics()`.
+    func startDiagnosticRecording(calibration: Bool = false) {
+        recorder.start(calibration: calibration)
+        recordingStartDate = Date()
+        isRecordingDiagnostics = true
+        isCalibrationRecording = calibration
+        diagnosticEventCount = 0
+        diagnosticReachedCapacity = false
+        diagnosticSummary = nil
+        lastDiagnosticExportError = nil
+    }
+
+    /// Stops capturing and freezes the summary. Captured events remain available for
+    /// export until the next `startDiagnosticRecording`.
+    func stopDiagnosticRecording() {
+        recorder.stop()
+        isRecordingDiagnostics = false
+        diagnosticEventCount = recorder.events.count
+        diagnosticReachedCapacity = recorder.didReachCapacity
+        diagnosticSummary = recorder.summary
+    }
+
+    /// Writes the captured session to a timestamped JSON file in ~/Downloads. Explicit
+    /// user action only — never called automatically. Errors are surfaced via
+    /// `lastDiagnosticExportError`; success via `lastDiagnosticExportPath`.
+    func exportDiagnostics() {
+        lastDiagnosticExportError = nil
+        guard !recorder.events.isEmpty else {
+            lastDiagnosticExportPath = nil
+            lastDiagnosticExportError = "No diagnostic events to export."
+            return
+        }
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            lastDiagnosticExportPath = nil
+            lastDiagnosticExportError = "Could not locate the Downloads folder."
+            return
+        }
+        let now = Date()
+        let export = RaneDiagnosticSessionExport(
+            events: recorder.events,
+            isCalibration: recorder.isCalibration,
+            exportedAtEpochSeconds: now.timeIntervalSince1970
+        )
+        let url = downloads.appendingPathComponent("RaneDiagnostic-\(Int(now.timeIntervalSince1970)).json")
+        do {
+            let data = try export.jsonData()
+            try data.write(to: url, options: .atomic)
+            lastDiagnosticExportPath = url.path
+        } catch {
+            lastDiagnosticExportPath = nil
+            lastDiagnosticExportError = error.localizedDescription
+        }
+    }
+
     // MARK: - Gain
 
     /// Applies the lab output gain: crossfader position when gating is on AND a valid
@@ -284,6 +353,20 @@ final class ScratchPlaybackLabModel: ObservableObject {
             let now = Date()
             pitchBendEventDates.append(now)
             lastPitchBendDate = now
+            // Diagnostic capture (no @Published writes here — surfaced at display rate).
+            if isRecordingDiagnostics {
+                let elapsed = recordingStartDate.map { now.timeIntervalSince($0) } ?? 0
+                recorder.record(RaneDiagnosticEvent(
+                    timestamp: elapsed,
+                    rawPitchBend: raw,
+                    previousRawPitchBend: previousRawLatest,
+                    wrappedDelta: mapper.lastWrappedDelta,
+                    samplePositionSeconds: mapper.samplePosition,
+                    crossfader: crossfaderValidLatest ? crossfaderLatest : nil,
+                    deck: deckChannel,
+                    sourceName: sourceName
+                ))
+            }
 
         case .controlChange where parsed.controlNumber == crossfaderCC:
             if let value = parsed.value {
@@ -337,6 +420,15 @@ final class ScratchPlaybackLabModel: ObservableObject {
         // Playhead is "moving" if the position changed since the last publish.
         playheadMoving = abs(mapper.samplePosition - lastPublishedPosition) > 1.0e-6
         lastPublishedPosition = mapper.samplePosition
+
+        // Diagnostic recorder: surface live count and reflect an auto-stop at capacity
+        // (the MIDI path never writes @Published state).
+        diagnosticEventCount = recorder.events.count
+        if isRecordingDiagnostics, !recorder.isRecording {
+            isRecordingDiagnostics = false
+            diagnosticReachedCapacity = recorder.didReachCapacity
+            diagnosticSummary = recorder.summary
+        }
     }
 }
 #endif

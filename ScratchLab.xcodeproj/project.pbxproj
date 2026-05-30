@@ -113,6 +113,7 @@
 		SPL0MAP0IOS00001 /* ScratchPlatterPlayheadMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0MAP0FREF0001 /* ScratchPlatterPlayheadMapper.swift */; };
 		SPL0ENG0MAC00001 /* ScratchPlaybackLabEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0ENG0FREF0001 /* ScratchPlaybackLabEngine.swift */; };
 		SPL0MOD0MAC00001 /* ScratchPlaybackLabModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0MOD0FREF0001 /* ScratchPlaybackLabModel.swift */; };
+		RDR0BFIL0MAC00001 /* RaneDiagnosticRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RDR0FREF0MAC00001 /* RaneDiagnosticRecorder.swift */; };
 		SPL0VUE0MAC00001 /* ScratchPlaybackLabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0VUE0FREF0001 /* ScratchPlaybackLabView.swift */; };
 		SPL0TST0TBF00001 /* ScratchPlatterPlayheadMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0TST0FREF0001 /* ScratchPlatterPlayheadMapperTests.swift */; };
 		RPLENV00TST00BUILDFILE01 /* ScratchPlaybackLabRenderEnvelopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPLENV00TST00FILEREF0001 /* ScratchPlaybackLabRenderEnvelopeTests.swift */; };
@@ -309,6 +310,7 @@
 		OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */; };
 		ODD0001000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */; };
 		ODT0001000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */; };
+		RDT0BFIL0TST00001 /* RaneDiagnosticRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RDT0FREF0TST00001 /* RaneDiagnosticRecorderTests.swift */; };
 		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
@@ -508,6 +510,7 @@
 		SPL0MAP0FREF0001 /* ScratchPlatterPlayheadMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterPlayheadMapper.swift; sourceTree = "<group>"; };
 		SPL0ENG0FREF0001 /* ScratchPlaybackLabEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabEngine.swift; sourceTree = "<group>"; };
 		SPL0MOD0FREF0001 /* ScratchPlaybackLabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabModel.swift; sourceTree = "<group>"; };
+		RDR0FREF0MAC00001 /* RaneDiagnosticRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneDiagnosticRecorder.swift; sourceTree = "<group>"; };
 		SPL0VUE0FREF0001 /* ScratchPlaybackLabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabView.swift; sourceTree = "<group>"; };
 		SPL0TST0FREF0001 /* ScratchPlatterPlayheadMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterPlayheadMapperTests.swift; sourceTree = "<group>"; };
 		RPLENV00TST00FILEREF0001 /* ScratchPlaybackLabRenderEnvelopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabRenderEnvelopeTests.swift; sourceTree = "<group>"; };
@@ -708,6 +711,7 @@
 		OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnosticsTests.swift; sourceTree = "<group>"; };
 		ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnostics.swift; sourceTree = "<group>"; };
 		ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnosticsTests.swift; sourceTree = "<group>"; };
+		RDT0FREF0TST00001 /* RaneDiagnosticRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneDiagnosticRecorderTests.swift; sourceTree = "<group>"; };
 		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
@@ -863,6 +867,7 @@
 				OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */,
 				ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */,
 				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
+				RDT0FREF0TST00001 /* RaneDiagnosticRecorderTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1189,6 +1194,7 @@
 				ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */,
 				CI00FREF0007 /* ControllerInspectorModel.swift */,
 				SPL0MOD0FREF0001 /* ScratchPlaybackLabModel.swift */,
+				RDR0FREF0MAC00001 /* RaneDiagnosticRecorder.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1527,6 +1533,7 @@
 				SPL0MAP0MAC00001 /* ScratchPlatterPlayheadMapper.swift in Sources */,
 				SPL0ENG0MAC00001 /* ScratchPlaybackLabEngine.swift in Sources */,
 				SPL0MOD0MAC00001 /* ScratchPlaybackLabModel.swift in Sources */,
+				RDR0BFIL0MAC00001 /* RaneDiagnosticRecorder.swift in Sources */,
 				SPL0VUE0MAC00001 /* ScratchPlaybackLabView.swift in Sources */,
 				B5AA0002A1B2C3D4E5F60709 /* GameState.swift in Sources */,
 				B5AA0003A1B2C3D4E5F60709 /* ProgressManager.swift in Sources */,
@@ -1819,6 +1826,7 @@
 				ORT0001000ORT001ORT00001 /* OverlayReplayControllerTests.swift in Sources */,
 				OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */,
 				ODT0001000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift in Sources */,
+				RDT0BFIL0TST00001 /* RaneDiagnosticRecorderTests.swift in Sources */,
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 				FFT2011000FFT002FFT00001 /* FeatureFlagsTests.swift in Sources */,
 			);
