@@ -23,6 +23,9 @@ DesignReferences/
 
 # Local build/test output
 build/
+# AI handoff generated reports (Claude report + OpenAI review). Already covered
+# by build/ above; listed explicitly so it's obvious these are never committed.
+build/ai_handoff/
 DerivedData*/
 DerivedData-*/
 .derived-data-log-*
