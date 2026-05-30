@@ -33,16 +33,20 @@ final class ScratchPlaybackLabEngine {
     private var sourceNode: AVAudioSourceNode?
     private(set) var isRunning = false
 
-    /// Target read position in *file frames*, written by the main thread and read by
-    /// the audio render thread. Guarded by an unfair lock — a single `Double`, with
-    /// negligible contention for a developer tool. (Not strictly real-time-safe, but
-    /// acceptable for this slice; revisit with a lock-free atomic if promoted.)
-    private let targetFrame = OSAllocatedUnfairLock(initialState: 0.0)
+    /// Scrub velocity in *sample-seconds of playback per real second* (signed; forward
+    /// positive). The render head integrates this continuously, so playback stays smooth
+    /// across bursty MIDI delivery — between bursts the head keeps gliding at the last
+    /// velocity rather than lurching to a target and going silent. Written by the main
+    /// thread, read by the render thread.
+    private let velocity = OSAllocatedUnfairLock(initialState: 0.0)
+    /// A pending seek (target frame) for reset/jump only; consumed once by the render
+    /// thread, which snaps `renderFrame` there and zeroes velocity. nil = no seek.
+    private let pendingSeekFrame = OSAllocatedUnfairLock<Double?>(initialState: nil)
     /// Read head the render block last reached (file frames). Audio-thread-owned.
     private var renderFrame: Double = 0
-    /// Tiny pitch-bend jitter from play/stop should not become audible as short
-    /// static bursts. Wait until the target is meaningfully away from the render
-    /// head before opening the audio envelope.
+    /// Below this much head movement in a quantum the envelope closes (silence) — so a
+    /// truly stopped platter (velocity ≈ 0) fades out, but an actively gliding one never
+    /// does. NOT keyed off target changes, so bursty delivery cannot chop the audio.
     private let minimumAudibleDeltaFrames = 8.0
     private var outputSampleRate: Double = 44_100
     private var envelope = ScratchPlaybackLabRenderEnvelope(sampleRate: 44_100)
@@ -84,7 +88,8 @@ final class ScratchPlaybackLabEngine {
         monoSamples = mono
         sampleRate = format.sampleRate
         renderFrame = 0
-        targetFrame.withLock { $0 = 0 }
+        velocity.withLock { $0 = 0 }
+        pendingSeekFrame.withLock { $0 = nil }
         envelope.reset()
         return true
     }
@@ -99,10 +104,18 @@ final class ScratchPlaybackLabEngine {
 
     // MARK: - Position
 
-    /// Sets the target playhead position in seconds (clamped to the loaded sample).
+    /// Sets the scrub velocity in sample-seconds of playback per real second (signed).
+    /// The render head integrates this continuously; the platter model refreshes it from
+    /// the smoothed CC6 step rate. Set 0 to glide to a stop (the envelope fades out).
+    func setVelocity(_ sampleSecondsPerSecond: Double) {
+        velocity.withLock { $0 = sampleSecondsPerSecond }
+    }
+
+    /// Seeks the read head to `seconds` (reset/jump only) and zeroes velocity. The render
+    /// thread applies it once, snapping `renderFrame` — it does NOT slew there.
     func setTargetPosition(seconds: TimeInterval) {
         let frames = max(0, min(seconds, duration)) * sampleRate
-        targetFrame.withLock { $0 = frames }
+        pendingSeekFrame.withLock { $0 = frames }
     }
 
     /// Enables loop playback: the read head wraps around the sample and follows the
@@ -154,9 +167,11 @@ final class ScratchPlaybackLabEngine {
 
     // MARK: - Render
 
-    /// Slews `renderFrame` from its current value to the target over the quantum,
-    /// linear-interpolating the mono buffer. Reverse when target < current; silence
-    /// when effectively stopped.
+    /// Integrates the scrub `velocity` across the quantum: the read head advances by a
+    /// constant per-frame rate, linear-interpolating the mono buffer (wrapping in loop
+    /// mode, clamping otherwise). Because motion comes from velocity — not a target
+    /// position — the head keeps gliding between MIDI bursts and only fades to silence
+    /// when velocity reaches ~0. A pending seek snaps the head and zeroes velocity.
     private func render(frameCount: AVAudioFrameCount, audioBufferList: UnsafeMutablePointer<AudioBufferList>) -> OSStatus {
         let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
         let frames = Int(frameCount)
@@ -167,22 +182,30 @@ final class ScratchPlaybackLabEngine {
             return noErr
         }
 
-        let rawTarget = targetFrame.withLock { $0 }
+        // Apply a pending seek (reset/jump): snap the head, drop velocity.
+        let seekRequest: Double? = pendingSeekFrame.withLock { state in
+            let s = state
+            state = nil
+            return s
+        }
+        if let seek = seekRequest {
+            renderFrame = Self.clampFrame(seek, total: Double(total))
+            velocity.withLock { $0 = 0 }
+        }
+
+        let v = velocity.withLock { $0 }
         let loops = loopsEnabled.withLock { $0 }
         let ring = Double(total)
         let start = renderFrame
-        // In loop mode, follow the shorter path around the sample ring so a wrapped
-        // target (end → start) sweeps forward across the seam, not backward through all.
-        let target = loops ? Self.loopAwareTarget(start: start, target: rawTarget, total: ring) : rawTarget
-        let step = (target - start) / Double(frames)
-        let audible = abs(target - start) >= minimumAudibleDeltaFrames
+        let perFrame = Self.framesPerOutputFrame(velocity: v, sampleRate: sampleRate, outputSampleRate: outputSampleRate)
+        let audible = Self.isAudible(perFrame: perFrame, frames: frames, minDeltaFrames: minimumAudibleDeltaFrames)
 
         monoSamples.withUnsafeBufferPointer { samples in
             for frameIndex in 0..<frames {
                 let sourceValue: Float
                 if audible {
-                    let position = start + step * Double(frameIndex)
-                    let readPosition = loops ? Self.wrapFrame(position, total: ring) : position
+                    let position = start + perFrame * Double(frameIndex)
+                    let readPosition = loops ? Self.wrapFrame(position, total: ring) : Self.clampFrame(position, total: ring)
                     sourceValue = Self.interpolate(samples, at: readPosition)
                 } else {
                     sourceValue = 0
@@ -195,19 +218,31 @@ final class ScratchPlaybackLabEngine {
             }
         }
 
-        renderFrame = audible ? (loops ? Self.wrapFrame(target, total: ring) : target) : start
+        let rawEnd = start + perFrame * Double(frames)
+        renderFrame = audible ? (loops ? Self.wrapFrame(rawEnd, total: ring) : Self.clampFrame(rawEnd, total: ring)) : start
         return noErr
     }
 
-    /// The target frame adjusted to the shorter signed path around a `total`-frame ring,
-    /// so a wrapped target (e.g. end → start) is followed forward across the seam rather
-    /// than swept the long way backward. May fall outside `0..<total`; wrap on read.
-    static func loopAwareTarget(start: Double, target: Double, total: Double) -> Double {
-        guard total > 0 else { return target }
-        var delta = (target - start).truncatingRemainder(dividingBy: total)
-        if delta > total / 2 { delta -= total }
-        if delta < -total / 2 { delta += total }
-        return start + delta
+    /// File frames the head advances per OUTPUT frame for a scrub `velocity`
+    /// (sample-seconds/sec). rate 1.0 ⇒ normal speed regardless of output rate.
+    static func framesPerOutputFrame(velocity: Double, sampleRate: Double, outputSampleRate: Double) -> Double {
+        guard outputSampleRate > 0 else { return 0 }
+        return velocity * sampleRate / outputSampleRate
+    }
+
+    /// The read head, advanced one quantum from `start` at `velocity`, wrapped (loop) or
+    /// clamped. Pure so the velocity integration is unit-testable without AVAudioEngine.
+    static func advancedFrame(from start: Double, velocity: Double, sampleRate: Double,
+                              outputSampleRate: Double, frames: Int, total: Double, loops: Bool) -> Double {
+        guard total > 0, frames > 0 else { return start }
+        let perFrame = framesPerOutputFrame(velocity: velocity, sampleRate: sampleRate, outputSampleRate: outputSampleRate)
+        let raw = start + perFrame * Double(frames)
+        return loops ? wrapFrame(raw, total: total) : clampFrame(raw, total: total)
+    }
+
+    /// Whether the head moves enough this quantum to be audible (i.e. velocity ≉ 0).
+    static func isAudible(perFrame: Double, frames: Int, minDeltaFrames: Double) -> Bool {
+        abs(perFrame * Double(frames)) >= minDeltaFrames
     }
 
     /// Wraps a frame index into `0 ..< total` (loop reads); 0 for non-positive total.
@@ -215,6 +250,12 @@ final class ScratchPlaybackLabEngine {
         guard total > 0 else { return 0 }
         let m = frame.truncatingRemainder(dividingBy: total)
         return m < 0 ? m + total : m
+    }
+
+    /// Clamps a frame index into `0 ... total-1` (clamp mode); 0 for non-positive total.
+    static func clampFrame(_ frame: Double, total: Double) -> Double {
+        guard total > 0 else { return 0 }
+        return Swift.min(Swift.max(frame, 0), total - 1)
     }
 
     /// Linear-interpolated read of a float buffer at a fractional index, clamped to
@@ -267,6 +308,46 @@ struct ScratchPlaybackLabRenderEnvelope {
             lastAudibleSample = 0
         }
         return output
+    }
+}
+
+/// Smooths a signed scrub velocity (sample-seconds of playback per real second) from
+/// per-event platter movement timestamped on the real (CoreMIDI) clock.
+///
+/// Pure and clock-agnostic: it's a time-based EMA, so it's robust to bursty, irregular
+/// MIDI delivery — each event contributes in proportion to the real time it spans. A
+/// gap longer than `idleTimeout` between two events zeroes the velocity (platter
+/// stopped). The host also calls `reset()` when it detects the stream has gone idle.
+struct ScratchScrubVelocityEstimator: Equatable {
+    let smoothing: TimeInterval     // EMA time-constant (~0.04 s)
+    let idleTimeout: TimeInterval   // inter-event gap treated as "stopped" (~0.18 s)
+    private(set) var velocity: Double = 0
+    private var lastTime: TimeInterval?
+
+    init(smoothing: TimeInterval = 0.04, idleTimeout: TimeInterval = 0.18) {
+        self.smoothing = max(0.001, smoothing)
+        self.idleTimeout = max(0.001, idleTimeout)
+    }
+
+    /// Feeds a playhead movement of `sampleSeconds` that occurred at real time `time`.
+    /// The first call only seeds the clock (no velocity). Returns the updated velocity.
+    @discardableResult
+    mutating func ingest(sampleSeconds: Double, at time: TimeInterval) -> Double {
+        defer { lastTime = time }
+        guard let last = lastTime else { return velocity }   // seed only
+        let dt = time - last
+        guard dt > 0 else { return velocity }
+        if dt > idleTimeout { velocity = 0; return velocity } // long gap → stopped
+        let instantaneous = sampleSeconds / dt                // sample-sec per real-sec
+        let alpha = Swift.min(1.0, dt / smoothing)
+        velocity += (instantaneous - velocity) * alpha
+        return velocity
+    }
+
+    /// Clears velocity and the clock (host calls this when the platter stream goes idle).
+    mutating func reset() {
+        velocity = 0
+        lastTime = nil
     }
 }
 #endif

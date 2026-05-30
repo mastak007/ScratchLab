@@ -112,7 +112,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Sensitivity, expressed as sample-seconds moved per 1000 CC6 steps (nicer UI
     /// numbers than per-step). One platter revolution is ~3,932 CC6 steps, so the
     /// default ~0.266 maps roughly one revolution onto a ~1 s sample.
-    @Published var sampleSecondsPer1000Ticks: Double = 0.266 {
+    @Published var sampleSecondsPer1000Ticks: Double = 0.5 {
         didSet { mapper.sampleSecondsPerStep = sampleSecondsPer1000Ticks / 1000.0 }
     }
     /// Lab-only: flip platter direction if the hardware reports the opposite sign.
@@ -174,6 +174,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var lastCrossfaderDate: Date?
     private var lastPublishedPosition: TimeInterval = 0
     private var measurement = PlatterTickMeasurement()
+    /// Smooths CC6 step rate into a continuous scrub velocity (sample-seconds/sec) the
+    /// audio engine integrates, so playback stays smooth across bursty MIDI delivery.
+    private var velocityEstimator = ScratchScrubVelocityEstimator()
+    /// Gap (real time) with no platter events after which playback glides to a stop.
+    private let velocityIdleTimeout: TimeInterval = 0.18
     private var recorder = RaneDiagnosticRecorder()
     private var recordingStartDate: Date?
     /// Latest CC6 value (platter companion stream) — the primary platter movement signal.
@@ -186,7 +191,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
-        self.mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.266 / 1000.0,
+        self.mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.5 / 1000.0,
                                                    sampleDuration: 0, boundaryMode: .loop)
         transport.onSourcedEvent = { [weak self] sourceName, event in
             MainActor.assumeIsolated { self?.ingest(sourceName: sourceName, event: event) }
@@ -229,7 +234,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
     func resetPlayhead() {
         mapper.resetPosition()
         mapper.resetTracking()
-        engine.setTargetPosition(seconds: mapper.samplePosition)
+        velocityEstimator.reset()
+        engine.setVelocity(0)
+        engine.setTargetPosition(seconds: mapper.samplePosition) // seek/snap to 0
     }
 
     /// Clears the running max-observed-delta / alias diagnostic.
@@ -370,7 +377,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
             let step = mapper.ingestCC6(value)
             lastCC6Value = value
             lastCC6StepLatest = step
-            engine.setTargetPosition(seconds: mapper.samplePosition)
+            // Drive the engine by continuous velocity (smooth across bursts), using the
+            // REAL CoreMIDI event timestamp — not Date() — so the rate is accurate.
+            let moved = Double(inverted ? -step : step) * mapper.sampleSecondsPerStep
+            velocityEstimator.ingest(sampleSeconds: moved, at: event.timestamp)
+            engine.setVelocity(velocityEstimator.velocity)
             // Tick measurement now counts CC6 steps over one revolution (~3,932).
             if isMeasuringTicks, wasSeeded {
                 measurement.record(delta: step)
@@ -402,7 +413,8 @@ final class ScratchPlaybackLabModel: ObservableObject {
                     crossfader: crossfaderValidLatest ? crossfaderLatest : nil,
                     cc6: lastCC6Value,
                     deck: deckChannel,
-                    sourceName: sourceName
+                    sourceName: sourceName,
+                    hostTime: event.timestamp
                 ))
             }
 
@@ -433,6 +445,14 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     private func publishDisplayState() {
         let now = Date()
+
+        // Glide to a stop if the platter stream has gone quiet (no events to refresh
+        // velocity). The envelope fades out smoothly when velocity reaches 0.
+        if let last = lastPlatterEventDate, now.timeIntervalSince(last) > velocityIdleTimeout,
+           velocityEstimator.velocity != 0 {
+            velocityEstimator.reset()
+            engine.setVelocity(0)
+        }
 
         rawPitchBend = rawPitchBendLatest
         previousRawPitchBend = previousRawLatest

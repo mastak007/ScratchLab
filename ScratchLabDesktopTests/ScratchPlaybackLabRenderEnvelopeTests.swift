@@ -155,31 +155,102 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         XCTAssertEqual(env.process(1.0, audible: true), 0.25, accuracy: accuracy)
     }
 
-    // MARK: - Loop seam: shorter-path target + frame wrap
+    // MARK: - Velocity estimator (smooth scrub velocity across bursty MIDI)
 
-    func testLoopAwareTargetFollowsSeamForwardNotBackward() {
-        // Read head near the end (99), target wrapped to the start (5) on a 100-frame
-        // ring → follow forward across the seam (+6), NOT backward through the sample.
-        let t = ScratchPlaybackLabEngine.loopAwareTarget(start: 99, target: 5, total: 100)
-        XCTAssertEqual(t, 105, accuracy: 1e-9)        // start + 6, wraps to 5 on read
-        XCTAssertGreaterThan(t, 99)                   // forward, not a long backward sweep
+    func testConstantForwardStepRateProducesStablePositiveVelocity() {
+        var est = ScratchScrubVelocityEstimator(smoothing: 0.04, idleTimeout: 0.18)
+        // +0.001 s of sample movement every 0.001 s of real time ⇒ velocity → 1.0.
+        var t = 0.0
+        est.ingest(sampleSeconds: 0.001, at: t)       // seed
+        for _ in 0..<400 { t += 0.001; est.ingest(sampleSeconds: 0.001, at: t) }
+        XCTAssertEqual(est.velocity, 1.0, accuracy: 0.02)
     }
 
-    func testLoopAwareTargetReverseAcrossStartSeam() {
-        // Near the start (2), target wrapped to the end (98) → follow backward (-4).
-        let t = ScratchPlaybackLabEngine.loopAwareTarget(start: 2, target: 98, total: 100)
-        XCTAssertEqual(t, -2, accuracy: 1e-9)         // start - 4, wraps to 98 on read
+    func testConstantReverseStepRateProducesStableNegativeVelocity() {
+        var est = ScratchScrubVelocityEstimator(smoothing: 0.04, idleTimeout: 0.18)
+        var t = 0.0
+        est.ingest(sampleSeconds: -0.001, at: t)
+        for _ in 0..<400 { t += 0.001; est.ingest(sampleSeconds: -0.001, at: t) }
+        XCTAssertEqual(est.velocity, -1.0, accuracy: 0.02)
     }
 
-    func testLoopAwareTargetLeavesShortMovesUnchanged() {
-        XCTAssertEqual(ScratchPlaybackLabEngine.loopAwareTarget(start: 40, target: 55, total: 100), 55, accuracy: 1e-9)
-        XCTAssertEqual(ScratchPlaybackLabEngine.loopAwareTarget(start: 55, target: 40, total: 100), 40, accuracy: 1e-9)
+    func testVelocityZeroesAfterIdleGapBetweenEvents() {
+        var est = ScratchScrubVelocityEstimator(smoothing: 0.04, idleTimeout: 0.18)
+        var t = 0.0
+        est.ingest(sampleSeconds: 0.001, at: t)
+        for _ in 0..<100 { t += 0.001; est.ingest(sampleSeconds: 0.001, at: t) }
+        XCTAssertGreaterThan(est.velocity, 0)
+        est.ingest(sampleSeconds: 0.001, at: t + 0.5)  // 0.5 s gap > idleTimeout
+        XCTAssertEqual(est.velocity, 0, accuracy: 1e-12)
     }
 
-    func testWrapFrameNormalisesIntoRing() {
+    func testEstimatorResetClearsVelocityAndClock() {
+        var est = ScratchScrubVelocityEstimator()
+        est.ingest(sampleSeconds: 0.001, at: 0)
+        est.ingest(sampleSeconds: 0.001, at: 0.001)
+        est.reset()
+        XCTAssertEqual(est.velocity, 0, accuracy: 1e-12)
+        // After reset the next event re-seeds (no velocity from a single event).
+        XCTAssertEqual(est.ingest(sampleSeconds: 0.001, at: 5.0), 0, accuracy: 1e-12)
+    }
+
+    // MARK: - Velocity integration in the render head
+
+    func testVelocityAdvancesHeadForward() {
+        // rate 1.0 (sampleRate == outputSampleRate) → +1 frame per output frame.
+        let end = ScratchPlaybackLabEngine.advancedFrame(from: 0, velocity: 1.0, sampleRate: 1000,
+                                                         outputSampleRate: 1000, frames: 100, total: 10000, loops: false)
+        XCTAssertEqual(end, 100, accuracy: 1e-9)
+    }
+
+    func testVelocityContinuesAcrossNoEventGap() {
+        // The head keeps advancing on successive quanta WITHOUT any new velocity update —
+        // this is the anti-chop behaviour (smooth glide between MIDI bursts).
+        var head = 0.0
+        for _ in 0..<3 {
+            head = ScratchPlaybackLabEngine.advancedFrame(from: head, velocity: 1.0, sampleRate: 1000,
+                                                          outputSampleRate: 1000, frames: 100, total: 10000, loops: false)
+        }
+        XCTAssertEqual(head, 300, accuracy: 1e-9)
+    }
+
+    func testZeroVelocityHoldsHead() {
+        let end = ScratchPlaybackLabEngine.advancedFrame(from: 250, velocity: 0, sampleRate: 1000,
+                                                        outputSampleRate: 1000, frames: 100, total: 10000, loops: false)
+        XCTAssertEqual(end, 250, accuracy: 1e-12)
+    }
+
+    func testLoopModeWrapsHeadContinuously() {
+        let end = ScratchPlaybackLabEngine.advancedFrame(from: 9950, velocity: 1.0, sampleRate: 1000,
+                                                        outputSampleRate: 1000, frames: 100, total: 10000, loops: true)
+        XCTAssertEqual(end, 50, accuracy: 1e-9)   // 10050 wraps to 50
+    }
+
+    func testClampModeClampsHeadAtEnd() {
+        let end = ScratchPlaybackLabEngine.advancedFrame(from: 9950, velocity: 1.0, sampleRate: 1000,
+                                                        outputSampleRate: 1000, frames: 100, total: 10000, loops: false)
+        XCTAssertEqual(end, 9999, accuracy: 1e-9) // clamps to total-1
+    }
+
+    func testAudibleTracksVelocityNotTarget() {
+        let moving = ScratchPlaybackLabEngine.framesPerOutputFrame(velocity: 1.0, sampleRate: 1000, outputSampleRate: 1000)
+        XCTAssertTrue(ScratchPlaybackLabEngine.isAudible(perFrame: moving, frames: 100, minDeltaFrames: 8))
+        let stopped = ScratchPlaybackLabEngine.framesPerOutputFrame(velocity: 0, sampleRate: 1000, outputSampleRate: 1000)
+        XCTAssertFalse(ScratchPlaybackLabEngine.isAudible(perFrame: stopped, frames: 100, minDeltaFrames: 8))
+    }
+
+    func testFramesPerOutputFrameConvertsSampleRates() {
+        // 1.0 sample-sec/sec at a 48k sample on a 44.1k output ⇒ >1 file frame/out frame.
+        XCTAssertEqual(ScratchPlaybackLabEngine.framesPerOutputFrame(velocity: 1.0, sampleRate: 48000, outputSampleRate: 44100),
+                       48000.0 / 44100.0, accuracy: 1e-9)
+    }
+
+    func testWrapAndClampFrameHelpers() {
         XCTAssertEqual(ScratchPlaybackLabEngine.wrapFrame(105, total: 100), 5, accuracy: 1e-9)
         XCTAssertEqual(ScratchPlaybackLabEngine.wrapFrame(-2, total: 100), 98, accuracy: 1e-9)
-        XCTAssertEqual(ScratchPlaybackLabEngine.wrapFrame(50, total: 0), 0, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlaybackLabEngine.clampFrame(150, total: 100), 99, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlaybackLabEngine.clampFrame(-5, total: 100), 0, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlaybackLabEngine.clampFrame(50, total: 0), 0, accuracy: 1e-9)
     }
 
     // MARK: - Boundary: degenerate ramp length

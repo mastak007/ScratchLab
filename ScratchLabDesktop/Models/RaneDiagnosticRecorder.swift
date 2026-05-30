@@ -39,6 +39,10 @@ struct RaneDiagnosticEvent: Equatable, Codable {
     let deck: Int
     /// Human-readable MIDI source name the event arrived from.
     let sourceName: String
+    /// The real CoreMIDI event timestamp (transport host-clock seconds), as opposed to
+    /// `timestamp` which is processing time. Lets the true per-event MIDI spacing be
+    /// measured offline (delivery batching vs real timing). nil for v1/v2 captures.
+    let hostTime: TimeInterval?
 }
 
 /// Pure summary of a diagnostic session, derived entirely from the recorded events.
@@ -154,8 +158,8 @@ struct RaneDiagnosticRecorder: Equatable {
 /// Codable export envelope: a schema-versioned header, the computed summary, and the
 /// full event list. Encoded as deterministic pretty JSON for offline, diffable exports.
 struct RaneDiagnosticSessionExport: Equatable, Codable {
-    // v2 adds the per-event `cc6` companion-stream field (optional; absent in v1 files).
-    static let currentSchemaVersion = 2
+    // v2 adds per-event `cc6`; v3 adds per-event `hostTime` (real CoreMIDI timestamp).
+    static let currentSchemaVersion = 3
 
     let schemaVersion: Int
     /// Wall-clock export time (epoch seconds), supplied by the host. Optional so the
