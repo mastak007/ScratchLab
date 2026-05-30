@@ -148,9 +148,10 @@ struct ScratchPlaybackLabView: View {
     private var readouts: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 28) {
-                readout("Raw pitch bend", String(model.rawPitchBend))
-                readout("Previous raw", model.previousRawPitchBend.map(String.init) ?? "—")
-                readout("Wrapped delta", String(format: "%+d", model.wrappedDelta))
+                readout("CC6 step (drives playback)", String(format: "%+d", model.cc6Step),
+                        tint: model.cc6Step > 0 ? .green : (model.cc6Step < 0 ? .orange : nil))
+                readout("Raw pitch bend (diag)", String(model.rawPitchBend))
+                readout("Wrapped delta (diag)", String(format: "%+d", model.wrappedDelta))
                 readout("Event rate", String(format: "%.0f Hz", model.eventRateHz))
             }
             HStack(spacing: 28) {
@@ -233,31 +234,33 @@ struct ScratchPlaybackLabView: View {
     private var calibrationRow: some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Measure platter ticks")
+                Text("Measure platter steps (CC6)")
                     .font(.subheadline.weight(.semibold))
-                Text("Start, rotate the platter exactly one full revolution, then Finish.")
+                Text("Start, rotate the platter exactly one full revolution, then Finish (≈3932 steps).")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
             if model.isMeasuringTicks {
-                Button("Finish tick measurement") { model.finishTickMeasurement() }
+                Button("Finish measurement") { model.finishTickMeasurement() }
                     .buttonStyle(.borderedProminent)
             } else {
-                Button("Start tick measurement") { model.startTickMeasurement() }
+                Button("Start measurement") { model.startTickMeasurement() }
             }
 
             if model.isMeasuringTicks || model.hasTickResult {
                 Divider().frame(height: 34)
                 HStack(spacing: 22) {
-                    readout("Signed ticks", String(model.tickTotalSigned))
-                    readout("Abs ticks", String(model.tickAbsoluteSum))
-                    readout("Max delta", String(model.tickMaxDelta))
+                    readout("Signed steps", String(model.tickTotalSigned))
+                    readout("Abs steps", String(model.tickAbsoluteSum))
+                    readout("Max step", String(model.tickMaxDelta))
                     readout("Events", String(model.tickEventCount))
-                    readout("Alias seen", model.tickAliasObserved ? "yes" : "no",
-                            tint: model.tickAliasObserved ? .red : nil)
                     readout("Suggested",
                             model.tickSuggestedPer1000.map { String(format: "%.4f s/1k", $0) } ?? "—")
+                }
+                if let suggested = model.tickSuggestedPer1000 {
+                    Button("Apply suggested") { model.sampleSecondsPer1000Ticks = suggested }
+                        .help("Set sensitivity to the measured ticks-per-revolution suggestion")
                 }
             }
 
@@ -339,6 +342,7 @@ struct ScratchPlaybackLabView: View {
 
     private var controlsRow: some View {
         HStack(spacing: 20) {
+            Toggle("Loop playback", isOn: $model.loopPlayback)
             Toggle("Invert direction", isOn: $model.inverted)
             Toggle("Limit delta (safety)", isOn: $model.limitDeltaForSafety)
             Toggle("Apply crossfader to volume", isOn: $model.applyCrossfaderToVolume)
@@ -353,7 +357,7 @@ struct ScratchPlaybackLabView: View {
                 Text(String(format: "%.4f s/1k", model.sampleSecondsPer1000Ticks))
                     .font(.system(.caption, design: .monospaced))
                     .frame(minWidth: 70, alignment: .trailing)
-                Slider(value: $model.sampleSecondsPer1000Ticks, in: 0.002...0.12)
+                Slider(value: $model.sampleSecondsPer1000Ticks, in: 0.02...1.0)
                     .frame(width: 220)
             }
         }
@@ -370,6 +374,7 @@ struct ScratchPlaybackLabView: View {
             checklistRow("Source unique ID", value: model.selectedSourceID.map(String.init) ?? "—",
                          ok: model.selectedSourceID != nil)
             checklistRow("Deck", value: model.deckChannel == 0 ? "Left" : "Right", ok: true)
+            checklistRow("Playback mode", value: model.loopPlayback ? "loop" : "clamp", ok: true)
             checklistRow("Pitch Bend arriving", value: model.pitchBendArriving ? "yes" : "no",
                          ok: model.pitchBendArriving)
             checklistRow("Crossfader arriving", value: model.crossfaderArriving ? "yes" : "no",

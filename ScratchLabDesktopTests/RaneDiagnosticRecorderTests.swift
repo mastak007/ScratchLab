@@ -15,6 +15,7 @@ final class RaneDiagnosticRecorderTests: XCTestCase {
         delta: Int,
         position: TimeInterval = 0,
         crossfader: Double? = nil,
+        cc6: Int? = nil,
         deck: Int = 0,
         source: String = "RANE ONE"
     ) -> RaneDiagnosticEvent {
@@ -25,6 +26,7 @@ final class RaneDiagnosticRecorderTests: XCTestCase {
             wrappedDelta: delta,
             samplePositionSeconds: position,
             crossfader: crossfader,
+            cc6: cc6,
             deck: deck,
             sourceName: source
         )
@@ -221,6 +223,19 @@ final class RaneDiagnosticRecorderTests: XCTestCase {
         let export = RaneDiagnosticSessionExport(events: events, isCalibration: false, exportedAtEpochSeconds: 12345)
         let data = try export.jsonData()
         let decoded = try JSONDecoder().decode(RaneDiagnosticSessionExport.self, from: data)
+        XCTAssertEqual(decoded, export)
+    }
+
+    func testExportSchemaIsV2AndCC6RoundTrips() throws {
+        XCTAssertEqual(RaneDiagnosticSessionExport.currentSchemaVersion, 2)
+        let events = [
+            event(raw: 8700, previousRaw: 8000, delta: 700, cc6: 54),
+            event(raw: 13725, previousRaw: 8700, delta: 5025, cc6: 53), // CC6 ticks -1
+            event(raw: 2500, previousRaw: 13725, delta: 1159, cc6: nil), // missing CC6 stays nil
+        ]
+        let export = RaneDiagnosticSessionExport(events: events, isCalibration: false, exportedAtEpochSeconds: 1)
+        let decoded = try JSONDecoder().decode(RaneDiagnosticSessionExport.self, from: try export.jsonData())
+        XCTAssertEqual(decoded.events.map(\.cc6), [54, 53, nil])
         XCTAssertEqual(decoded, export)
     }
 

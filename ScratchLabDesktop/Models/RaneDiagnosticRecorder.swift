@@ -30,6 +30,11 @@ struct RaneDiagnosticEvent: Equatable, Codable {
     let samplePositionSeconds: TimeInterval
     /// Normalised crossfader position 0...1, or nil if no valid crossfader value yet.
     let crossfader: Double?
+    /// Latest value of the platter companion stream (CC6 on the deck channel), or nil
+    /// if none seen yet. The RANE platter interleaves CC6 1:1 with the pitch bend; CC6
+    /// appears to be a ±1 direction/step counter. Captured raw for offline decode — the
+    /// mapper does not (yet) use it.
+    let cc6: Int?
     /// Raw pitch-bend MIDI channel / deck this event arrived on (0 = left, 1 = right).
     let deck: Int
     /// Human-readable MIDI source name the event arrived from.
@@ -149,7 +154,8 @@ struct RaneDiagnosticRecorder: Equatable {
 /// Codable export envelope: a schema-versioned header, the computed summary, and the
 /// full event list. Encoded as deterministic pretty JSON for offline, diffable exports.
 struct RaneDiagnosticSessionExport: Equatable, Codable {
-    static let currentSchemaVersion = 1
+    // v2 adds the per-event `cc6` companion-stream field (optional; absent in v1 files).
+    static let currentSchemaVersion = 2
 
     let schemaVersion: Int
     /// Wall-clock export time (epoch seconds), supplied by the host. Optional so the

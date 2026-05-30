@@ -46,6 +46,9 @@ final class ScratchPlaybackLabEngine {
     private let minimumAudibleDeltaFrames = 8.0
     private var outputSampleRate: Double = 44_100
     private var envelope = ScratchPlaybackLabRenderEnvelope(sampleRate: 44_100)
+    /// Whether the read head wraps around the sample (loop) instead of clamping. Written
+    /// by the main thread, read by the render thread; guarded like `targetFrame`.
+    private let loopsEnabled = OSAllocatedUnfairLock(initialState: false)
 
     // MARK: - Loading
 
@@ -100,6 +103,13 @@ final class ScratchPlaybackLabEngine {
     func setTargetPosition(seconds: TimeInterval) {
         let frames = max(0, min(seconds, duration)) * sampleRate
         targetFrame.withLock { $0 = frames }
+    }
+
+    /// Enables loop playback: the read head wraps around the sample and follows the
+    /// shorter path across the boundary so continuous rotation cycles cleanly instead of
+    /// sweeping backward through the whole sample at the seam.
+    func setLoops(_ on: Bool) {
+        loopsEnabled.withLock { $0 = on }
     }
 
     /// Output gain `0...1` for the whole lab (used optionally to gate sample volume by
@@ -157,8 +167,13 @@ final class ScratchPlaybackLabEngine {
             return noErr
         }
 
-        let target = targetFrame.withLock { $0 }
+        let rawTarget = targetFrame.withLock { $0 }
+        let loops = loopsEnabled.withLock { $0 }
+        let ring = Double(total)
         let start = renderFrame
+        // In loop mode, follow the shorter path around the sample ring so a wrapped
+        // target (end → start) sweeps forward across the seam, not backward through all.
+        let target = loops ? Self.loopAwareTarget(start: start, target: rawTarget, total: ring) : rawTarget
         let step = (target - start) / Double(frames)
         let audible = abs(target - start) >= minimumAudibleDeltaFrames
 
@@ -167,7 +182,8 @@ final class ScratchPlaybackLabEngine {
                 let sourceValue: Float
                 if audible {
                     let position = start + step * Double(frameIndex)
-                    sourceValue = Self.interpolate(samples, at: position)
+                    let readPosition = loops ? Self.wrapFrame(position, total: ring) : position
+                    sourceValue = Self.interpolate(samples, at: readPosition)
                 } else {
                     sourceValue = 0
                 }
@@ -179,8 +195,26 @@ final class ScratchPlaybackLabEngine {
             }
         }
 
-        renderFrame = audible ? target : start
+        renderFrame = audible ? (loops ? Self.wrapFrame(target, total: ring) : target) : start
         return noErr
+    }
+
+    /// The target frame adjusted to the shorter signed path around a `total`-frame ring,
+    /// so a wrapped target (e.g. end → start) is followed forward across the seam rather
+    /// than swept the long way backward. May fall outside `0..<total`; wrap on read.
+    static func loopAwareTarget(start: Double, target: Double, total: Double) -> Double {
+        guard total > 0 else { return target }
+        var delta = (target - start).truncatingRemainder(dividingBy: total)
+        if delta > total / 2 { delta -= total }
+        if delta < -total / 2 { delta += total }
+        return start + delta
+    }
+
+    /// Wraps a frame index into `0 ..< total` (loop reads); 0 for non-positive total.
+    static func wrapFrame(_ frame: Double, total: Double) -> Double {
+        guard total > 0 else { return 0 }
+        let m = frame.truncatingRemainder(dividingBy: total)
+        return m < 0 ? m + total : m
     }
 
     /// Linear-interpolated read of a float buffer at a fractional index, clamped to

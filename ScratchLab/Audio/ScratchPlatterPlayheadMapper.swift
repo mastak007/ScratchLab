@@ -6,23 +6,31 @@ import Foundation
 // - Pure value type + pure functions only. No AVFoundation, no Core MIDI, no device
 //   I/O, no Serato, no DVS. This is the unit the Scratch Playback Lab tests exercise.
 //
-// Decode model (RANE ONE MKII, from the platter-scrub videos):
-//   The platter pitch bend behaves like an ABSOLUTE 14-bit angle that holds at rest
-//   and sweeps as the platter turns, so the playhead tracks the *change* in angle:
+// Decode model (RANE ONE MKII, measured from the diagnostic recorder):
+//   The platter interleaves TWO streams 1:1 on its channel — a 14-bit pitch bend AND
+//   CC6. CC6 is the ground truth: it changes by EXACTLY ±1 per event (forward = +1,
+//   reverse = −1, with zero exceptions across thousands of captured events), so its
+//   sign is unambiguous platter direction and it effectively never aliases (to misread,
+//   it would have to skip >64 of its 128 steps between events — many revolutions per
+//   event, physically impossible). The 14-bit pitch bend, by contrast, jumps ~6,700
+//   ticks per event and folds the wrong way constantly — its direction disagreed with
+//   the true (CC6) direction up to 82% of the time on slow reverse. So:
 //
-//     delta          = wrappedDelta(lastRaw → raw, modulus: 16384)   // shortest signed path
-//     delta          = clamp(delta, ±deltaSafetyLimit) when set       // anti-explosion only
-//     delta          = -delta when inverted
-//     samplePosition += delta * sampleSecondsPerTick                  // seconds
-//     samplePosition  = clamp(samplePosition, 0 ... sampleDuration)
+//     step           = cc6Step(lastCC6 → cc6, modulus: 128)   // ±1 per event
+//     step           = -step when inverted
+//     samplePosition += step * sampleSecondsPerStep            // seconds
+//     samplePosition  = clamp/loop(samplePosition, 0 ... sampleDuration)
 //
-// Sensitivity is `sampleSecondsPerTick` — seconds of sample moved per platter tick —
-// NOT a vinyl seconds-per-revolution figure. Measurement (see PlatterTickMeasurement)
-// showed a *small* hand scratch produces thousands of ticks per event, i.e. 16384
-// ticks ≠ one revolution; the encoder is far finer, so sensitivity must be small.
+// CC6 is the PRIMARY playback driver (`ingestCC6`). The pitch bend is kept only as a
+// diagnostic readout (`trackPitchBend`) — it no longer moves the playhead, and the old
+// velocity-continuity wrap-disambiguation heuristic has been removed from the playback
+// path now that CC6 supplies direction directly.
 //
-// The first event only seeds `lastRawPitchBend` (no movement). Clamp is deliberately
-// *clamp*, not *wrap*: looping platter position is a later slice.
+// Sensitivity is `sampleSecondsPerStep` — seconds of sample moved per CC6 step. One
+// physical revolution is ~3,932 CC6 steps (measured), so mapping one revolution to a
+// sample of length D gives a step of D / 3,932.
+//
+// The first CC6 event only seeds `lastCC6Value` (no movement); `resetTracking` re-seeds.
 
 /// The two platters, identified by raw MIDI pitch-bend channel (RANE ONE MKII:
 /// left = raw channel 0x0, right = raw channel 0x1).
@@ -39,85 +47,137 @@ enum ScratchPlatterDeck: Int, CaseIterable, Equatable {
     }
 }
 
-/// Aliasing risk for a single wrapped delta: wrapped tracking can only resolve motion
-/// up to half the modulus between events, so a large per-event delta may have folded
-/// to the wrong direction.
+/// Aliasing risk for a single pitch-bend wrapped delta — a DIAGNOSTIC signal only now
+/// (the playhead is driven by CC6, which does not alias). Retained for the lab readout.
 enum ScratchDeltaAliasRisk: Equatable {
     case none
     case warn   // > aliasWarnThreshold — getting large
     case fail   // > aliasFailThreshold — direction may have aliased
 }
 
-/// Pure, testable mapping from an absolute 14-bit platter angle to a sample position
-/// in seconds. Forward platter rotation advances the position (playhead moves right);
-/// reverse rotation retreats it (playhead moves left).
-struct ScratchPlatterPlayheadMapper: Equatable {
-    /// 14-bit pitch-bend modulus used for wrapped-delta tracking.
-    static let ticksPerRevolution = 16384
+/// What the playhead does when it reaches a sample boundary.
+enum ScratchPlayheadBoundaryMode: Equatable {
+    /// Stick at the start (0) or end (sampleDuration). A debug/inspection mode.
+    case clamp
+    /// Wrap around the sample so continuous platter rotation keeps cycling instead of
+    /// sticking at 0% or 100%. The lab default for scratch playback.
+    case loop
+}
 
-    /// A per-event delta beyond this many ticks is flagged (motion is getting large
-    /// relative to the wrap window).
+/// Pure, testable mapping from the RANE platter streams to a sample position in seconds.
+/// Forward rotation (CC6 +1) advances the position; reverse rotation (CC6 −1) retreats it.
+struct ScratchPlatterPlayheadMapper: Equatable {
+    /// CC6 companion-stream modulus (7-bit), used for the ±1 step ring delta.
+    static let cc6Modulus = 128
+    /// Measured CC6 steps per physical platter revolution (RANE ONE MKII).
+    static let defaultStepsPerRevolution = 3932
+
+    /// 14-bit pitch-bend modulus — used only for the diagnostic wrapped-delta readout.
+    static let ticksPerRevolution = 16384
+    /// Diagnostic-only: a per-event pitch-bend delta beyond this is "getting large".
     static let aliasWarnThreshold = 4096
-    /// A per-event delta beyond this many ticks may have aliased to the wrong
-    /// direction (it exceeds half the modulus headroom in practice).
+    /// Diagnostic-only: a per-event pitch-bend delta beyond this may have aliased.
     static let aliasFailThreshold = 8192
 
-    /// Seconds of sample moved per platter tick. The sensitivity knob. Default is
-    /// deliberately small (a small hand scratch emits thousands of ticks per event).
-    var sampleSecondsPerTick: TimeInterval
-    /// Sample length in seconds — the upper clamp bound.
+    /// Seconds of sample moved per CC6 step. The sensitivity knob. Default maps roughly
+    /// one revolution (~3,932 steps) to a ~1 s sample.
+    var sampleSecondsPerStep: TimeInterval
+    /// Sample length in seconds — the boundary bound.
     var sampleDuration: TimeInterval
-    /// When true, platter direction is flipped (forward rotation retreats the
-    /// playhead). A lab-only escape hatch if the hardware reports the opposite sign.
+    /// When true, platter direction is flipped (forward rotation retreats the playhead).
+    /// A lab-only escape hatch if the hardware reports the opposite sign.
     var inverted: Bool
-    /// Optional anti-explosion cap (in ticks) on the delta *applied* to the playhead.
-    /// nil = no cap. The raw wrapped delta (`lastWrappedDelta`) is always preserved.
+    /// Optional diagnostic threshold (in pitch-bend ticks): flags `lastDeltaClamped` when
+    /// the pitch-bend wrapped delta exceeds it. No effect on playback (CC6 drives motion).
     var deltaSafetyLimit: Int?
+    /// Whether the playhead clamps at the sample boundary or wraps around it (loop).
+    var boundaryMode: ScratchPlayheadBoundaryMode
 
-    /// Current sample-playback position in seconds, clamped to `0...sampleDuration`.
+    /// Current sample-playback position in seconds, bounded to `0...sampleDuration`.
     private(set) var samplePosition: TimeInterval
+    /// The most recent CC6 value, or nil until the first CC6 event seeds it.
+    private(set) var lastCC6Value: Int?
+    /// The signed CC6 step (±1, pre-invert) applied on the most recent `ingestCC6`;
+    /// 0 on a seeding event. Exposed for the lab readout.
+    private(set) var lastCC6Step: Int
+
+    // Diagnostic-only pitch-bend tracking (does not move the playhead):
     /// The most recent raw pitch-bend value, or nil until the first event seeds it.
     private(set) var lastRawPitchBend: Int?
-    /// The wrapped signed delta (in ticks, pre-invert, pre-safety-cap) applied on the
-    /// most recent ingest; 0 on a seeding event. Exposed for the lab readout.
+    /// The shortest signed wrapped delta of the most recent pitch-bend event (0 on seed).
     private(set) var lastWrappedDelta: Int
-    /// Whether the most recent ingest had its applied delta capped by `deltaSafetyLimit`.
+    /// Whether the most recent pitch-bend delta exceeded `deltaSafetyLimit` (diagnostic).
     private(set) var lastDeltaClamped: Bool
     /// Largest `abs(wrappedDelta)` seen since the last `resetMaxObservedDelta()`.
     private(set) var maxObservedDelta: Int
 
     init(
-        sampleSecondsPerTick: TimeInterval = 0.00001,
+        sampleSecondsPerStep: TimeInterval = 0.000266,
         sampleDuration: TimeInterval,
         inverted: Bool = false,
         deltaSafetyLimit: Int? = nil,
+        boundaryMode: ScratchPlayheadBoundaryMode = .clamp,
         samplePosition: TimeInterval = 0,
-        lastRawPitchBend: Int? = nil
+        lastCC6Value: Int? = nil
     ) {
-        self.sampleSecondsPerTick = max(0, sampleSecondsPerTick)
+        self.sampleSecondsPerStep = max(0, sampleSecondsPerStep)
         self.sampleDuration = max(0, sampleDuration)
         self.inverted = inverted
         self.deltaSafetyLimit = deltaSafetyLimit
+        self.boundaryMode = boundaryMode
         self.samplePosition = Self.clampPosition(samplePosition, duration: self.sampleDuration)
-        self.lastRawPitchBend = lastRawPitchBend
+        self.lastCC6Value = lastCC6Value
+        self.lastCC6Step = 0
+        self.lastRawPitchBend = nil
         self.lastWrappedDelta = 0
         self.lastDeltaClamped = false
         self.maxObservedDelta = 0
     }
 
-    /// Shortest signed distance from `last` to `current` on a ring of `modulus` ticks.
-    /// Result is in `(-modulus/2 ... modulus/2]`; positive = forward across the ring,
-    /// so crossing the 16383→0 boundary forward yields a small positive delta (not a
-    /// near-full-range negative one).
-    static func wrappedDelta(from last: Int, to current: Int, modulus: Int = ticksPerRevolution) -> Int {
+    // MARK: - CC6 (primary playback driver)
+
+    /// Shortest signed step from `last` to `current` on the CC6 ring (`modulus` = 128).
+    /// Result is in `(-modulus/2 ... modulus/2]`: a 127→0 wrap is +1, a 0→127 wrap is −1.
+    /// In practice the platter only ever emits ±1, so this stays exact and never aliases.
+    static func cc6Step(from last: Int, to current: Int, modulus: Int = cc6Modulus) -> Int {
         guard modulus > 0 else { return 0 }
         var delta = (current - last) % modulus
-        if delta < 0 { delta += modulus }          // 0 ..< modulus
-        if delta > modulus / 2 { delta -= modulus } // fold to (-modulus/2 ... modulus/2]
+        if delta < 0 { delta += modulus }           // 0 ..< modulus
+        if delta > modulus / 2 { delta -= modulus }  // fold to (-modulus/2 ... modulus/2]
         return delta
     }
 
-    /// Classifies a single wrapped delta's aliasing risk.
+    /// Drives `samplePosition` from one CC6 event — the primary platter movement path.
+    /// The first event only seeds `lastCC6Value` (no movement). Subsequent events move
+    /// the playhead by the signed CC6 step × sensitivity, bounded to the sample. Returns
+    /// the signed step (pre-invert; 0 on the seeding event).
+    @discardableResult
+    mutating func ingestCC6(_ value: Int) -> Int {
+        defer { lastCC6Value = value }
+        guard let last = lastCC6Value else {
+            lastCC6Step = 0
+            return 0 // seed only — never jump on the first value
+        }
+        let step = Self.cc6Step(from: last, to: value)
+        lastCC6Step = step
+        let signed = inverted ? -step : step
+        samplePosition = boundedPosition(samplePosition + Double(signed) * sampleSecondsPerStep)
+        return step
+    }
+
+    // MARK: - Pitch bend (diagnostic only — does NOT move the playhead)
+
+    /// Shortest signed distance from `last` to `current` on a ring of `modulus` ticks.
+    /// Result is in `(-modulus/2 ... modulus/2]`. Used for the diagnostic readout only.
+    static func wrappedDelta(from last: Int, to current: Int, modulus: Int = ticksPerRevolution) -> Int {
+        guard modulus > 0 else { return 0 }
+        var delta = (current - last) % modulus
+        if delta < 0 { delta += modulus }
+        if delta > modulus / 2 { delta -= modulus }
+        return delta
+    }
+
+    /// Classifies a single pitch-bend wrapped delta's aliasing risk (diagnostic readout).
     static func aliasRisk(forDelta delta: Int) -> ScratchDeltaAliasRisk {
         let magnitude = abs(delta)
         if magnitude > aliasFailThreshold { return .fail }
@@ -125,36 +185,42 @@ struct ScratchPlatterPlayheadMapper: Equatable {
         return .none
     }
 
-    /// Tracks one absolute 14-bit platter angle into `samplePosition`. The first event
-    /// only seeds `lastRawPitchBend` (no movement). Subsequent events move the playhead
-    /// by the wrapped delta × sensitivity (optionally capped), clamped to the sample.
-    /// Returns the wrapped (pre-invert, pre-cap) delta in ticks (0 on the seeding event).
+    /// Tracks one pitch-bend value for the diagnostic readout/recording ONLY. It updates
+    /// the wrapped-delta and alias diagnostics but never moves the playhead (CC6 does).
+    /// Returns the shortest wrapped delta (0 on a seeding event).
     @discardableResult
-    mutating func ingestPitchBend(_ raw: Int) -> Int {
+    mutating func trackPitchBend(_ raw: Int) -> Int {
         defer { lastRawPitchBend = raw }
         guard let last = lastRawPitchBend else {
             lastWrappedDelta = 0
             lastDeltaClamped = false
-            return 0 // seed only — never jump on the first value
+            return 0 // seed only
         }
         let delta = Self.wrappedDelta(from: last, to: raw)
         lastWrappedDelta = delta
         maxObservedDelta = Swift.max(maxObservedDelta, abs(delta))
-
-        var applied = delta
-        if let limit = deltaSafetyLimit, abs(applied) > limit {
-            applied = applied > 0 ? limit : -limit
-            lastDeltaClamped = true
-        } else {
-            lastDeltaClamped = false
-        }
-
-        let signed = inverted ? -applied : applied
-        samplePosition = Self.clampPosition(
-            samplePosition + Double(signed) * sampleSecondsPerTick,
-            duration: sampleDuration
-        )
+        lastDeltaClamped = deltaSafetyLimit.map { abs(delta) > $0 } ?? false
         return delta
+    }
+
+    // MARK: - Boundary / position
+
+    /// Applies the boundary mode to a candidate position: clamp to the sample, or wrap
+    /// around it (loop) so continuous rotation keeps cycling instead of sticking.
+    private func boundedPosition(_ value: TimeInterval) -> TimeInterval {
+        switch boundaryMode {
+        case .clamp: return Self.clampPosition(value, duration: sampleDuration)
+        case .loop:  return Self.wrapPosition(value, duration: sampleDuration)
+        }
+    }
+
+    /// Wraps a position into `0 ..< duration` (loop mode); 0 for non-positive duration.
+    /// Direction is preserved: a forward step past the end re-enters near the start, a
+    /// reverse step past the start re-enters near the end.
+    static func wrapPosition(_ value: TimeInterval, duration: TimeInterval) -> TimeInterval {
+        guard duration > 0 else { return 0 }
+        let m = value.truncatingRemainder(dividingBy: duration)
+        return m < 0 ? m + duration : m
     }
 
     /// Resets the playhead to the start of the sample (does not touch tracking).
@@ -162,9 +228,11 @@ struct ScratchPlatterPlayheadMapper: Equatable {
         samplePosition = 0
     }
 
-    /// Forgets the last raw value so the next event re-seeds without moving. Use after
-    /// a deck/source change or a pause, so a stale angle can't produce a giant delta.
+    /// Forgets the last CC6 and pitch-bend values so the next events re-seed without
+    /// moving. Use after a deck/source change or a pause.
     mutating func resetTracking() {
+        lastCC6Value = nil
+        lastCC6Step = 0
         lastRawPitchBend = nil
         lastWrappedDelta = 0
         lastDeltaClamped = false
@@ -192,6 +260,8 @@ struct ScratchPlatterPlayheadMapper: Equatable {
         return Swift.min(Swift.max(value, 0), duration)
     }
 
+    // MARK: - Crossfader + deck filtering (unchanged)
+
     /// Normalises a 7-bit CC value (0...127) to a `0...1` crossfader position.
     static func normalizedCrossfader(cc value: Int) -> Double {
         Swift.min(Swift.max(Double(value) / 127.0, 0), 1)
@@ -214,10 +284,9 @@ struct ScratchPlatterPlayheadMapper: Equatable {
     }
 }
 
-/// Pure accumulator for the "rotate one revolution" tick-measurement workflow. Feed it
-/// the wrapped per-event deltas while the user turns the platter exactly once; it
-/// reports how many ticks that revolution produced so the real sensitivity can be set
-/// from data instead of the (wrong) vinyl assumption.
+/// Pure accumulator for the "rotate one revolution" measurement. Fed the per-event CC6
+/// steps (±1) while the user turns the platter exactly once, it reports how many steps
+/// that revolution produced so the real sensitivity can be set from data (~3,932 steps).
 struct PlatterTickMeasurement: Equatable {
     private(set) var totalSignedTicks = 0
     private(set) var absoluteTickSum = 0
@@ -226,7 +295,7 @@ struct PlatterTickMeasurement: Equatable {
     /// True if any per-event delta exceeded the alias-fail threshold during measurement.
     private(set) var aliasObserved = false
 
-    /// Records one wrapped per-event delta (in ticks).
+    /// Records one per-event delta (CC6 steps in the live path; any delta in tests).
     mutating func record(delta: Int) {
         totalSignedTicks += delta
         absoluteTickSum += abs(delta)
@@ -237,10 +306,8 @@ struct PlatterTickMeasurement: Equatable {
         }
     }
 
-    /// Suggested `sampleSecondsPerTick` so that one measured revolution moves
-    /// `targetSeconds` of sample. Based on the absolute tick sum (the true distance
-    /// travelled in one turn, robust to the wrap that nets signed ticks back to ~0).
-    /// Returns nil before any motion has been recorded.
+    /// Suggested per-step sensitivity so one measured revolution moves `targetSeconds`
+    /// of sample. Based on the absolute step sum. Returns nil before any motion.
     func suggestedSampleSecondsPerTick(targetSeconds: TimeInterval) -> TimeInterval? {
         guard absoluteTickSum > 0, targetSeconds > 0 else { return nil }
         return targetSeconds / Double(absoluteTickSum)

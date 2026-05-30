@@ -155,6 +155,33 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         XCTAssertEqual(env.process(1.0, audible: true), 0.25, accuracy: accuracy)
     }
 
+    // MARK: - Loop seam: shorter-path target + frame wrap
+
+    func testLoopAwareTargetFollowsSeamForwardNotBackward() {
+        // Read head near the end (99), target wrapped to the start (5) on a 100-frame
+        // ring → follow forward across the seam (+6), NOT backward through the sample.
+        let t = ScratchPlaybackLabEngine.loopAwareTarget(start: 99, target: 5, total: 100)
+        XCTAssertEqual(t, 105, accuracy: 1e-9)        // start + 6, wraps to 5 on read
+        XCTAssertGreaterThan(t, 99)                   // forward, not a long backward sweep
+    }
+
+    func testLoopAwareTargetReverseAcrossStartSeam() {
+        // Near the start (2), target wrapped to the end (98) → follow backward (-4).
+        let t = ScratchPlaybackLabEngine.loopAwareTarget(start: 2, target: 98, total: 100)
+        XCTAssertEqual(t, -2, accuracy: 1e-9)         // start - 4, wraps to 98 on read
+    }
+
+    func testLoopAwareTargetLeavesShortMovesUnchanged() {
+        XCTAssertEqual(ScratchPlaybackLabEngine.loopAwareTarget(start: 40, target: 55, total: 100), 55, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlaybackLabEngine.loopAwareTarget(start: 55, target: 40, total: 100), 40, accuracy: 1e-9)
+    }
+
+    func testWrapFrameNormalisesIntoRing() {
+        XCTAssertEqual(ScratchPlaybackLabEngine.wrapFrame(105, total: 100), 5, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlaybackLabEngine.wrapFrame(-2, total: 100), 98, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlaybackLabEngine.wrapFrame(50, total: 0), 0, accuracy: 1e-9)
+    }
+
     // MARK: - Boundary: degenerate ramp length
 
     func testSubFrameRampDurationStillReachesFullGainInOneFrame() {

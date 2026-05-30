@@ -54,6 +54,8 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var rawPitchBend: Int = 0
     @Published private(set) var previousRawPitchBend: Int?
     @Published private(set) var wrappedDelta: Int = 0
+    /// Latest CC6 step (±1) — the primary platter movement signal. 0 when idle.
+    @Published private(set) var cc6Step: Int = 0
     @Published private(set) var samplePositionSeconds: TimeInterval = 0
     @Published private(set) var samplePositionFraction: Double = 0
     @Published private(set) var crossfader: Double = 0
@@ -107,11 +109,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published var deckChannel: Int = 0 {
         didSet { mapper.resetTracking() } // re-seed so a stale angle can't jump
     }
-    /// Sensitivity, expressed as sample-seconds moved per 1000 platter ticks (nicer
-    /// UI numbers than per-tick). The platter encoder is far finer than one
-    /// revolution per 16384 ticks, so the usable range is small.
-    @Published var sampleSecondsPer1000Ticks: Double = 0.01 {
-        didSet { mapper.sampleSecondsPerTick = sampleSecondsPer1000Ticks / 1000.0 }
+    /// Sensitivity, expressed as sample-seconds moved per 1000 CC6 steps (nicer UI
+    /// numbers than per-step). One platter revolution is ~3,932 CC6 steps, so the
+    /// default ~0.266 maps roughly one revolution onto a ~1 s sample.
+    @Published var sampleSecondsPer1000Ticks: Double = 0.266 {
+        didSet { mapper.sampleSecondsPerStep = sampleSecondsPer1000Ticks / 1000.0 }
     }
     /// Lab-only: flip platter direction if the hardware reports the opposite sign.
     @Published var inverted: Bool = false {
@@ -130,6 +132,15 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published var applyCrossfaderToVolume: Bool = false {
         didSet { applyOutputGain() }
     }
+    /// Loop the sample at its boundaries (default) instead of clamping at 0/end, so
+    /// continuous platter rotation keeps the sound cycling rather than sticking. Turn
+    /// off for the debug clamp behaviour.
+    @Published var loopPlayback: Bool = true {
+        didSet {
+            mapper.boundaryMode = loopPlayback ? .loop : .clamp
+            engine.setLoops(loopPlayback)
+        }
+    }
 
     /// CC number observed for the crossfader readout (RANE ONE MKII = CC8). Matched on
     /// any channel so the value surfaces even if the channel assumption is off; the
@@ -144,6 +155,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var displayTimer: Timer?
     private let rateWindow: TimeInterval = 1.0
     private let arrivingWindow: TimeInterval = 0.5
+    /// A gap longer than this between platter events means the platter effectively
+    /// stopped; re-seed tracking so the next event moves relative to the current angle.
+    private let idleResetInterval: TimeInterval = 0.1
 
     // Latest values stashed on the MIDI path; copied into @Published at display rate.
     private var rawPitchBendLatest: Int = 0
@@ -162,10 +176,18 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var measurement = PlatterTickMeasurement()
     private var recorder = RaneDiagnosticRecorder()
     private var recordingStartDate: Date?
+    /// Latest CC6 value (platter companion stream) — the primary platter movement signal.
+    /// Stashed on the MIDI path; also attached to each recorded diagnostic event.
+    private var lastCC6Value: Int?
+    /// Latest signed CC6 step (±1), published at display rate for the lab readout.
+    private var lastCC6StepLatest: Int = 0
+    /// Wall-clock time of the last platter event (either stream); drives idle re-seed.
+    private var lastPlatterEventDate: Date?
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
-        self.mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.01 / 1000.0, sampleDuration: 0)
+        self.mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.266 / 1000.0,
+                                                   sampleDuration: 0, boundaryMode: .loop)
         transport.onSourcedEvent = { [weak self] sourceName, event in
             MainActor.assumeIsolated { self?.ingest(sourceName: sourceName, event: event) }
         }
@@ -178,6 +200,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     func start() {
         loadSampleIfNeeded()
+        engine.setLoops(loopPlayback)
         transport.start()
         isListening = transport.isRunning
         engine.start()
@@ -338,21 +361,35 @@ final class ScratchPlaybackLabModel: ObservableObject {
         lastEventTypeLatest = parsed.messageType.displayName
 
         switch parsed.messageType {
+        case .controlChange where parsed.controlNumber == 6:
+            // PRIMARY platter driver: CC6 is a clean ±1 direction/step counter that does
+            // not alias (unlike the pitch bend). Each step advances the playhead.
+            guard let value = parsed.value else { return }
+            reseedIfIdle()
+            let wasSeeded = mapper.lastCC6Value != nil
+            let step = mapper.ingestCC6(value)
+            lastCC6Value = value
+            lastCC6StepLatest = step
+            engine.setTargetPosition(seconds: mapper.samplePosition)
+            // Tick measurement now counts CC6 steps over one revolution (~3,932).
+            if isMeasuringTicks, wasSeeded {
+                measurement.record(delta: step)
+            }
+            lastPlatterEventDate = Date()
+
         case .pitchBend where ScratchPlatterPlayheadMapper.isPitchBendChannel(parsed.channel, forDeck: deckChannel):
+            // Pitch bend is DIAGNOSTIC ONLY now — it no longer moves the playhead (CC6
+            // does). Tracked for the readout and the diagnostic recording.
             guard let raw = parsed.value else { return }
-            let wasSeeded = mapper.lastRawPitchBend != nil
+            reseedIfIdle()
             previousRawLatest = mapper.lastRawPitchBend
-            mapper.ingestPitchBend(raw)
+            mapper.trackPitchBend(raw)
             rawPitchBendLatest = raw
             wrappedDeltaLatest = mapper.lastWrappedDelta
-            engine.setTargetPosition(seconds: mapper.samplePosition)
-            // Tick measurement records only real (non-seeding) deltas.
-            if isMeasuringTicks, wasSeeded {
-                measurement.record(delta: mapper.lastWrappedDelta)
-            }
             let now = Date()
             pitchBendEventDates.append(now)
             lastPitchBendDate = now
+            lastPlatterEventDate = now
             // Diagnostic capture (no @Published writes here — surfaced at display rate).
             if isRecordingDiagnostics {
                 let elapsed = recordingStartDate.map { now.timeIntervalSince($0) } ?? 0
@@ -363,6 +400,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
                     wrappedDelta: mapper.lastWrappedDelta,
                     samplePositionSeconds: mapper.samplePosition,
                     crossfader: crossfaderValidLatest ? crossfaderLatest : nil,
+                    cc6: lastCC6Value,
                     deck: deckChannel,
                     sourceName: sourceName
                 ))
@@ -383,6 +421,14 @@ final class ScratchPlaybackLabModel: ObservableObject {
         }
     }
 
+    /// Re-seed tracking after an idle gap so a resume moves relative to the current
+    /// position rather than producing a jump from a stale value.
+    private func reseedIfIdle() {
+        if let last = lastPlatterEventDate, Date().timeIntervalSince(last) > idleResetInterval {
+            mapper.resetTracking()
+        }
+    }
+
     // MARK: - Display publish (≈60 Hz)
 
     private func publishDisplayState() {
@@ -391,6 +437,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
         rawPitchBend = rawPitchBendLatest
         previousRawPitchBend = previousRawLatest
         wrappedDelta = wrappedDeltaLatest
+        cc6Step = lastCC6StepLatest
         samplePositionSeconds = mapper.samplePosition
         samplePositionFraction = mapper.positionFraction
         isAtStart = mapper.isAtStart

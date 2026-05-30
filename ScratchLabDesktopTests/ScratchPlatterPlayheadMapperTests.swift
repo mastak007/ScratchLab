@@ -2,11 +2,9 @@ import XCTest
 @testable import ScratchLab
 
 /// Scratch Playback Lab — pure platter → sample-position mapping.
-/// No AVFoundation, no Core MIDI, no UI, and nothing from the capture/scoring/
-/// export pipeline is exercised here. The RANE platter pitch bend is an ABSOLUTE
-/// 14-bit angle, so the playhead tracks the wrapped *delta* between successive
-/// values, scaled by a small per-tick sensitivity:
-///   delta = wrappedDelta(last → raw, 16384) ; position += delta * sampleSecondsPerTick.
+/// No AVFoundation, no Core MIDI, no UI. The playhead is driven by the RANE platter's
+/// CC6 companion stream — a clean ±1 direction/step counter — NOT the aliasing 14-bit
+/// pitch bend, which is retained only as a diagnostic readout.
 final class ScratchPlatterPlayheadMapperTests: XCTestCase {
 
     // MARK: - Pitch-bend 14-bit decode (via the shared parser the lab consumes)
@@ -17,7 +15,120 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(parsed.value, 0x32 | (0x58 << 7)) // 11314
     }
 
-    // MARK: - Wrapped delta (the core of absolute-angle tracking)
+    // MARK: - CC6 step (the primary signal): ±1 ring delta on a 128-step ring
+
+    func testCC6StepForwardAndReverse() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.cc6Step(from: 50, to: 51), 1)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.cc6Step(from: 51, to: 50), -1)
+    }
+
+    func testCC6StepWrapsForwardAcrossBoundary() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.cc6Step(from: 127, to: 0), 1)
+    }
+
+    func testCC6StepWrapsReverseAcrossBoundary() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.cc6Step(from: 0, to: 127), -1)
+    }
+
+    // MARK: - CC6 drives the playhead (forward / reverse / wrap / seed / invert)
+
+    func testCC6ForwardAdvancesPosition() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 1.0)
+        XCTAssertEqual(m.ingestCC6(50), 0)                 // seed — no move
+        XCTAssertEqual(m.samplePosition, 1.0, accuracy: 1e-12)
+        XCTAssertEqual(m.ingestCC6(51), 1)                 // +1 step
+        XCTAssertEqual(m.samplePosition, 1.1, accuracy: 1e-9)
+    }
+
+    func testCC6ReverseMovesBackward() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 5.0)
+        m.ingestCC6(50)
+        XCTAssertEqual(m.ingestCC6(49), -1)
+        XCTAssertEqual(m.samplePosition, 4.9, accuracy: 1e-9)
+    }
+
+    func testCC6WrapForwardAdvances() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 2.0)
+        m.ingestCC6(127)
+        m.ingestCC6(0)                                     // 127 → 0 is +1
+        XCTAssertEqual(m.samplePosition, 2.1, accuracy: 1e-9)
+    }
+
+    func testCC6WrapReverseRetreats() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 2.0)
+        m.ingestCC6(0)
+        m.ingestCC6(127)                                   // 0 → 127 is -1
+        XCTAssertEqual(m.samplePosition, 1.9, accuracy: 1e-9)
+    }
+
+    func testCC6FirstEventSeedsOnly() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 3.0)
+        XCTAssertEqual(m.ingestCC6(40), 0)
+        XCTAssertEqual(m.samplePosition, 3.0, accuracy: 1e-12)
+    }
+
+    func testInvertFlipsCC6Direction() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100,
+                                             inverted: true, samplePosition: 5.0)
+        m.ingestCC6(50)
+        m.ingestCC6(51)                                    // +1 geometric, inverted → -0.1
+        XCTAssertEqual(m.samplePosition, 4.9, accuracy: 1e-9)
+    }
+
+    // MARK: - One revolution = 3932 CC6 steps → configured sample movement
+
+    func testOneRevolutionOf3932StepsMovesConfiguredSpan() {
+        let steps = ScratchPlatterPlayheadMapper.defaultStepsPerRevolution     // 3932
+        let stepSize = 1.0 / Double(steps)                                     // 1 rev → 1.0 s
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: stepSize, sampleDuration: 10, samplePosition: 0)
+        var v = 0
+        m.ingestCC6(v)                                                          // seed
+        for _ in 0..<steps { v = (v + 1) % 128; m.ingestCC6(v) }               // 3932 forward steps
+        XCTAssertEqual(m.samplePosition, 1.0, accuracy: 1e-6)
+    }
+
+    // MARK: - Reset clears the CC6 seed
+
+    func testResetTrackingClearsCC6Seed() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 2.0)
+        m.ingestCC6(50)
+        m.ingestCC6(51)                                    // → 2.1
+        m.resetTracking()
+        XCTAssertNil(m.lastCC6Value)
+        XCTAssertEqual(m.ingestCC6(80), 0, "first event after reset re-seeds, no move")
+        XCTAssertEqual(m.samplePosition, 2.1, accuracy: 1e-9)
+    }
+
+    // MARK: - Pitch bend is DIAGNOSTIC ONLY — it does not move the playhead
+
+    func testPitchBendTrackingDoesNotMovePlayhead() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100, samplePosition: 4.0)
+        m.trackPitchBend(2000)                             // seed
+        XCTAssertEqual(m.trackPitchBend(5000), 3000)       // wrapped delta reported…
+        XCTAssertEqual(m.lastWrappedDelta, 3000)
+        XCTAssertEqual(m.samplePosition, 4.0, accuracy: 1e-12, "…but the playhead must NOT move")
+    }
+
+    func testMaxObservedDeltaTracksLargestPitchBendDelta() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100)
+        m.trackPitchBend(5000)                             // seed
+        m.trackPitchBend(5500)                             // +500
+        m.trackPitchBend(2500)                             // -3000
+        XCTAssertEqual(m.maxObservedDelta, 3000)
+        m.resetMaxObservedDelta()
+        XCTAssertEqual(m.maxObservedDelta, 0)
+    }
+
+    func testDeltaSafetyLimitIsDiagnosticFlagOnly() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 100,
+                                             deltaSafetyLimit: 1000, samplePosition: 4.0)
+        m.trackPitchBend(0)
+        m.trackPitchBend(8000)                             // +8000 > 1000 → flagged, no move
+        XCTAssertTrue(m.lastDeltaClamped)
+        XCTAssertEqual(m.samplePosition, 4.0, accuracy: 1e-12)
+    }
+
+    // MARK: - Wrapped delta (diagnostic readout)
 
     func testWrappedDeltaForwardWithoutWrap() {
         XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 1000, to: 1500), 500)
@@ -35,86 +146,11 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 100, to: 16300), -184)
     }
 
-    // MARK: - Sensitivity scaling
-
-    func testLowerSensitivityProducesSmallerMovement() {
-        var hi = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.00001, sampleDuration: 100)
-        var lo = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.000001, sampleDuration: 100)
-        hi.ingestPitchBend(0); hi.ingestPitchBend(1000)
-        lo.ingestPitchBend(0); lo.ingestPitchBend(1000)
-        XCTAssertEqual(hi.samplePosition, 1000 * 0.00001, accuracy: 1e-12) // 0.01
-        XCTAssertEqual(lo.samplePosition, 1000 * 0.000001, accuracy: 1e-12) // 0.001
-        XCTAssertLessThan(lo.samplePosition, hi.samplePosition)
-    }
-
-    func testDefaultSensitivityDoesNotTraverseWholeSampleOnOneBigEvent() {
-        // The 4,700-tick single event from the hardware video must NOT sweep the
-        // whole ~1.047 s sample at default sensitivity.
-        var mapper = ScratchPlatterPlayheadMapper(sampleDuration: 1.047)
-        mapper.ingestPitchBend(5000)        // seed
-        mapper.ingestPitchBend(5000 + 4700) // +4700 ticks
-        XCTAssertEqual(mapper.samplePosition, 4700 * 0.00001, accuracy: 1e-9) // 0.047 s
-        XCTAssertLessThan(mapper.samplePosition, 0.1)
-        XCTAssertFalse(mapper.isAtEnd)
-    }
-
-    // MARK: - First event seeds / reset clears seed
-
-    func testFirstEventSeedsLastRawAndDoesNotMove() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleDuration: 10.0, samplePosition: 3.0)
-        let delta = mapper.ingestPitchBend(12000)
-        XCTAssertEqual(delta, 0)
-        XCTAssertEqual(mapper.samplePosition, 3.0, accuracy: 1e-12)
-        XCTAssertEqual(mapper.lastRawPitchBend, 12000)
-    }
-
-    func testResetTrackingMakesNextEventSeedAgain() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.0001, sampleDuration: 100.0)
-        mapper.ingestPitchBend(1000)
-        mapper.ingestPitchBend(2000) // moves
-        let moved = mapper.samplePosition
-        mapper.resetTracking()
-        XCTAssertNil(mapper.lastRawPitchBend)
-        let delta = mapper.ingestPitchBend(9000) // first after reset → seed, no move
-        XCTAssertEqual(delta, 0)
-        XCTAssertEqual(mapper.samplePosition, moved, accuracy: 1e-12)
-    }
-
-    // MARK: - Forward / reverse / invert
-
-    func testForwardAndReverseTracking() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.0001, sampleDuration: 100.0, samplePosition: 0.5)
-        mapper.ingestPitchBend(2000)          // seed
-        mapper.ingestPitchBend(3000)          // +1000 → +0.1
-        XCTAssertEqual(mapper.samplePosition, 0.6, accuracy: 1e-9)
-        mapper.ingestPitchBend(2000)          // -1000 → -0.1
-        XCTAssertEqual(mapper.samplePosition, 0.5, accuracy: 1e-9)
-    }
-
-    func testInvertFlipsTrackingDirection() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.00001, sampleDuration: 100.0,
-                                                  inverted: true, samplePosition: 0.5)
-        mapper.ingestPitchBend(0)             // seed
-        mapper.ingestPitchBend(1000)          // +1000 geometric, inverted → -0.01
-        XCTAssertEqual(mapper.samplePosition, 0.49, accuracy: 1e-9)
-    }
-
-    // MARK: - Max observed delta + alias risk
-
-    func testMaxObservedDeltaTracksLargestAbsDelta() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.00001, sampleDuration: 100.0)
-        mapper.ingestPitchBend(5000)  // seed
-        mapper.ingestPitchBend(5500)  // +500
-        mapper.ingestPitchBend(2500)  // -3000
-        XCTAssertEqual(mapper.maxObservedDelta, 3000)
-        mapper.resetMaxObservedDelta()
-        XCTAssertEqual(mapper.maxObservedDelta, 0)
-    }
+    // MARK: - Alias risk (diagnostic)
 
     func testAliasWarningThresholdAbove4096() {
         XCTAssertEqual(ScratchPlatterPlayheadMapper.aliasRisk(forDelta: 4096), .none)
         XCTAssertEqual(ScratchPlatterPlayheadMapper.aliasRisk(forDelta: 4097), .warn)
-        XCTAssertEqual(ScratchPlatterPlayheadMapper.aliasRisk(forDelta: -5000), .warn)
         XCTAssertEqual(ScratchPlatterPlayheadMapper.aliasRisk(forDelta: 8192), .warn)
     }
 
@@ -123,89 +159,72 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(ScratchPlatterPlayheadMapper.aliasRisk(forDelta: -9000), .fail)
     }
 
-    // MARK: - Optional delta safety cap
+    // MARK: - Loop / clamp boundary mode (via CC6)
 
-    func testDeltaSafetyLimitCapsAppliedMovementButKeepsRawDelta() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.0001, sampleDuration: 100.0,
-                                                  deltaSafetyLimit: 1000)
-        mapper.ingestPitchBend(0)     // seed
-        let delta = mapper.ingestPitchBend(8000) // +8000 raw, applied capped to +1000
-        XCTAssertEqual(delta, 8000)              // raw delta preserved
-        XCTAssertEqual(mapper.lastWrappedDelta, 8000)
-        XCTAssertTrue(mapper.lastDeltaClamped)
-        XCTAssertEqual(mapper.samplePosition, 1000 * 0.0001, accuracy: 1e-12) // 0.1, not 0.8
+    func testLoopModeWrapsForwardWithCC6() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 1.0,
+                                             boundaryMode: .loop, samplePosition: 0.95)
+        m.ingestCC6(50)
+        m.ingestCC6(51)                                    // +0.1 → 1.05 → wraps to 0.05
+        XCTAssertEqual(m.samplePosition, 0.05, accuracy: 1e-9)
+        XCTAssertFalse(m.isAtEnd)
     }
 
-    func testNoSafetyLimitDoesNotClamp() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.0001, sampleDuration: 100.0)
-        mapper.ingestPitchBend(0)
-        mapper.ingestPitchBend(8000)
-        XCTAssertFalse(mapper.lastDeltaClamped)
-        XCTAssertEqual(mapper.samplePosition, 8000 * 0.0001, accuracy: 1e-12) // 0.8
+    func testLoopModeWrapsReverseWithCC6() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 1.0,
+                                             boundaryMode: .loop, samplePosition: 0.05)
+        m.ingestCC6(50)
+        m.ingestCC6(49)                                    // -0.1 → -0.05 → wraps to 0.95
+        XCTAssertEqual(m.samplePosition, 0.95, accuracy: 1e-9)
     }
 
-    // MARK: - Clamp at start / end
-
-    func testClampAtEnd() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.001, sampleDuration: 1.0, samplePosition: 0.9)
-        mapper.ingestPitchBend(0)     // seed
-        mapper.ingestPitchBend(8000)  // huge forward → clamp to 1.0
-        XCTAssertEqual(mapper.samplePosition, 1.0, accuracy: 1e-12)
-        XCTAssertTrue(mapper.isAtEnd)
-        XCTAssertFalse(mapper.isAtStart)
+    func testClampModeClampsWithCC6() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.5, sampleDuration: 1.0,
+                                             boundaryMode: .clamp, samplePosition: 0.9)
+        m.ingestCC6(50)
+        m.ingestCC6(51)                                    // +0.5 → 1.4 → clamps to 1.0
+        XCTAssertEqual(m.samplePosition, 1.0, accuracy: 1e-12)
+        XCTAssertTrue(m.isAtEnd)
     }
 
-    func testClampAtStart() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.001, sampleDuration: 1.0, samplePosition: 0.1)
-        mapper.ingestPitchBend(8000)  // seed
-        mapper.ingestPitchBend(0)     // huge reverse → clamp to 0
-        XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
-        XCTAssertTrue(mapper.isAtStart)
-        XCTAssertFalse(mapper.isAtEnd)
+    func testWrapPositionHandlesMultipleAndNegativeWraps() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrapPosition(2.3, duration: 1.0), 0.3, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrapPosition(-0.25, duration: 1.0), 0.75, accuracy: 1e-9)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrapPosition(5.0, duration: 0), 0, accuracy: 1e-12)
     }
 
     func testResetPositionReturnsToStart() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleDuration: 10.0, samplePosition: 4.0)
-        mapper.resetPosition()
-        XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
+        var m = ScratchPlatterPlayheadMapper(sampleDuration: 10.0, samplePosition: 4.0)
+        m.resetPosition()
+        XCTAssertEqual(m.samplePosition, 0.0, accuracy: 1e-12)
     }
 
     func testZeroDurationKeepsPositionAndFractionAtZero() {
-        var mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.001, sampleDuration: 0)
-        mapper.ingestPitchBend(0)
-        mapper.ingestPitchBend(8000)
-        XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
-        XCTAssertEqual(mapper.positionFraction, 0.0, accuracy: 1e-12)
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 0)
+        m.ingestCC6(50)
+        m.ingestCC6(51)
+        XCTAssertEqual(m.samplePosition, 0.0, accuracy: 1e-12)
+        XCTAssertEqual(m.positionFraction, 0.0, accuracy: 1e-12)
     }
 
-    // MARK: - Tick measurement ("rotate one revolution")
+    // MARK: - "Rotate one revolution" measurement (now CC6 steps)
 
     func testTickMeasurementAccumulatesSignedAndAbsoluteTicks() {
         var measurement = PlatterTickMeasurement()
-        measurement.record(delta: 500)
-        measurement.record(delta: -300)
-        measurement.record(delta: 9000)
-        XCTAssertEqual(measurement.totalSignedTicks, 9200)
-        XCTAssertEqual(measurement.absoluteTickSum, 9800)
-    }
-
-    func testTickMeasurementRecordsMaxDeltaEventCountAndAlias() {
-        var measurement = PlatterTickMeasurement()
-        measurement.record(delta: 500)
-        measurement.record(delta: -300)
-        measurement.record(delta: 9000) // > 8192 → alias observed
-        XCTAssertEqual(measurement.maxPerEventDelta, 9000)
+        measurement.record(delta: 1)
+        measurement.record(delta: -1)
+        measurement.record(delta: 1)
+        XCTAssertEqual(measurement.totalSignedTicks, 1)
+        XCTAssertEqual(measurement.absoluteTickSum, 3)
         XCTAssertEqual(measurement.eventCount, 3)
-        XCTAssertTrue(measurement.aliasObserved)
     }
 
     func testTickMeasurementSuggestionAndEmptyState() {
         var measurement = PlatterTickMeasurement()
         XCTAssertNil(measurement.suggestedSampleSecondsPerTick(targetSeconds: 1.0))
-        measurement.record(delta: 500)
-        measurement.record(delta: 500) // absoluteTickSum = 1000
-        XCTAssertEqual(measurement.suggestedSampleSecondsPerTick(targetSeconds: 1.0)!, 1.0 / 1000.0, accuracy: 1e-12)
-        XCTAssertNil(measurement.suggestedSampleSecondsPerTick(targetSeconds: 0)) // no target
+        for _ in 0..<3932 { measurement.record(delta: 1) } // one revolution
+        XCTAssertEqual(measurement.suggestedSampleSecondsPerTick(targetSeconds: 1.0)!, 1.0 / 3932.0, accuracy: 1e-12)
+        XCTAssertNil(measurement.suggestedSampleSecondsPerTick(targetSeconds: 0))
     }
 
     // MARK: - Crossfader normalisation + no-value gating
