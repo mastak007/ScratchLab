@@ -4,6 +4,7 @@ private enum ScratchLabDesktopWindowID {
     static let mainWindow = "main-window"
     static let performerMonitor = "performer-monitor"
     static let controllerInspector = "controller-inspector"
+    static let scratchPlaybackLab = "scratch-playback-lab"
 }
 
 @main
@@ -64,6 +65,14 @@ struct ScratchLabDesktopApp: App {
             controllerInspectorContent
         }
         .windowResizability(.contentSize)
+
+        // Developer-facing scratch sample playback experiment: bundled ahhh.wav with
+        // a platter-driven playhead. Display + isolated playback only; opened from the
+        // Window menu and suppressed under test hosting like the other scenes.
+        Window("Scratch Playback Lab", id: ScratchLabDesktopWindowID.scratchPlaybackLab) {
+            scratchPlaybackLabContent
+        }
+        .windowResizability(.contentSize)
     }
 
     @ViewBuilder
@@ -109,6 +118,16 @@ struct ScratchLabDesktopApp: App {
             ControllerInspectorView()
         }
     }
+
+    @ViewBuilder
+    private var scratchPlaybackLabContent: some View {
+        if isRunningTests {
+            Color.clear
+                .frame(width: 1, height: 1)
+        } else {
+            ScratchPlaybackLabView()
+        }
+    }
 }
 
 private struct ScratchLabDesktopCommands: Commands {
@@ -147,6 +166,10 @@ private struct ScratchLabDesktopCommands: Commands {
 
             Button("Controller Inspector") {
                 openWindow(id: ScratchLabDesktopWindowID.controllerInspector)
+            }
+
+            Button("Scratch Playback Lab") {
+                openWindow(id: ScratchLabDesktopWindowID.scratchPlaybackLab)
             }
         }
     }
