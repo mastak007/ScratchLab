@@ -243,9 +243,15 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: false, crossfaderValid: true, crossfader: 0.0), 1.0)
     }
 
-    func testGatingAppliesAfterValueReceived() {
+    func testGatingIsHardCutNotLinearSlope() {
+        // Off only at the very off end; full gain across the rest of the throw (no slope).
         XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 0.0), 0.0)
-        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 0.5), 0.5, accuracy: 1e-6)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 0.5), 1.0, accuracy: 1e-6)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 0.70), 1.0, accuracy: 1e-6)
+        // Inside the narrow cut zone it ramps (click-safe), reaching full by cutWidth.
+        let half = ScratchPlatterPlayheadMapper.crossfaderCutWidth / 2
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: half), 0.5, accuracy: 1e-6)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: ScratchPlatterPlayheadMapper.crossfaderCutWidth), 1.0, accuracy: 1e-6)
     }
 
     // MARK: - Per-deck pitch-bend filtering

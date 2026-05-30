@@ -267,12 +267,20 @@ struct ScratchPlatterPlayheadMapper: Equatable {
         Swift.min(Swift.max(Double(value) / 127.0, 0), 1)
     }
 
-    /// Output gain for optional crossfader volume gating. Full gain (1.0) unless
-    /// gating is enabled AND a valid crossfader value has arrived — so audio is never
-    /// muted before the first crossfader CC is received.
+    /// Width (fraction of crossfader travel) of the cut-in zone at the off end — a small
+    /// transition keeps the hard cut click-safe without being an audible slope.
+    static let crossfaderCutWidth = 0.05
+
+    /// Output gain for optional crossfader volume gating. Full gain (1.0) unless gating
+    /// is enabled AND a valid crossfader value has arrived (never mutes before the first
+    /// CC). Uses a HARD-CUT (scratch) curve, not a linear slope: full gain across the
+    /// whole throw, dropping to silence only within `crossfaderCutWidth` of the off (0)
+    /// end. So at rest (e.g. 0.70) the deck is fully on, and it cuts sharply near 0.
     static func outputGain(applyGating: Bool, crossfaderValid: Bool, crossfader: Double) -> Float {
         guard applyGating, crossfaderValid else { return 1.0 }
-        return Float(Swift.min(Swift.max(crossfader, 0), 1))
+        let position = Swift.min(Swift.max(crossfader, 0), 1)
+        guard crossfaderCutWidth > 0 else { return position > 0 ? 1.0 : 0.0 }
+        return Float(Swift.min(1.0, position / crossfaderCutWidth))
     }
 
     /// Whether a raw pitch-bend channel belongs to the selected deck. Only raw
