@@ -99,6 +99,12 @@ final class ScratchPlaybackLabEngine {
         targetFrame.withLock { $0 = frames }
     }
 
+    /// Output gain `0...1` for the whole lab (used optionally to gate sample volume by
+    /// crossfader position). Applied on the main mixer — isolated to this engine.
+    func setOutputGain(_ gain: Float) {
+        engine.mainMixerNode.outputVolume = Swift.min(Swift.max(gain, 0), 1)
+    }
+
     // MARK: - Lifecycle
 
     func start() {

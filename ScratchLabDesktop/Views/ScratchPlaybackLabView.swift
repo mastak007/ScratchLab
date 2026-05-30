@@ -25,13 +25,22 @@ struct ScratchPlaybackLabView: View {
             toolbar
             Divider()
             waveform
-                .frame(minHeight: 220)
+                .frame(minHeight: 200)
                 .padding(16)
             Divider()
-            readouts
-                .padding(16)
+            HStack(alignment: .top, spacing: 20) {
+                readouts
+                Divider()
+                qaChecklist
+                    .frame(width: 300)
+            }
+            .padding(16)
+            Divider()
+            controlsRow
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
         }
-        .frame(minWidth: 880, minHeight: 560)
+        .frame(minWidth: 920, minHeight: 640)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
     }
@@ -131,6 +140,13 @@ struct ScratchPlaybackLabView: View {
 
     private var readouts: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !model.baselineCalibrated {
+                Label("Baseline not calibrated — using fallback hint (\(ScratchPlatterPlayheadMapper.defaultMotorBaseline)). Spin the motor untouched and press Calibrate.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             HStack(spacing: 28) {
                 readout("Raw pitch bend", String(model.rawPitchBend))
                 readout("Baseline", String(model.baseline))
@@ -141,19 +157,13 @@ struct ScratchPlaybackLabView: View {
                 readout("Position", String(format: "%.3f s", model.samplePositionSeconds))
                 readout("Position %", String(format: "%.1f%%", model.samplePositionFraction * 100))
                 readout("Duration", String(format: "%.3f s", model.sampleDuration))
-                readout("Crossfader", model.hasCrossfader ? String(format: "%.2f", model.crossfader) : "—")
+                readout("Clamp", clampLabel)
             }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Rate scale")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(String(format: "1 / %.0f", model.rateScale > 0 ? 1.0 / model.rateScale : 0))
-                        .font(.system(.caption, design: .monospaced))
-                }
-                Slider(value: $model.rateScale, in: (1.0 / 32_768.0)...(1.0 / 256.0))
-                    .frame(maxWidth: 360)
+            HStack(spacing: 28) {
+                readout("Crossfader", model.hasCrossfader ? String(format: "%.2f", model.crossfader) : "—")
+                readout("Crossfader CC8", model.hasCrossfader ? "\(model.crossfaderRaw)" : "—")
+                readout("XF channel", model.crossfaderChannel.map { "ch \($0 + 1)" } ?? "—")
+                readout("Last event", model.lastEventType)
             }
 
             Text("Audio is owned by ScratchLab (bundled ahhh.wav, not Serato). Clamp at sample ends; no wrap, no beat layer yet.")
@@ -163,6 +173,12 @@ struct ScratchPlaybackLabView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var clampLabel: String {
+        if model.isAtStart { return "at start" }
+        if model.isAtEnd { return "at end" }
+        return "—"
+    }
+
     private func readout(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -170,6 +186,78 @@ struct ScratchPlaybackLabView: View {
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(.body, design: .monospaced))
+        }
+    }
+
+    // MARK: - Controls
+
+    private var controlsRow: some View {
+        HStack(spacing: 24) {
+            Toggle("Invert direction", isOn: $model.inverted)
+
+            HStack(spacing: 6) {
+                Text("Deadband")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Stepper(value: $model.velocityDeadband, in: 0...512, step: 4) {
+                    Text("\(model.velocityDeadband)")
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minWidth: 36, alignment: .trailing)
+                }
+                .frame(maxWidth: 150)
+            }
+
+            Toggle("Apply crossfader to volume", isOn: $model.applyCrossfaderToVolume)
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                Text("Rate scale")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(String(format: "1 / %.0f", model.rateScale > 0 ? 1.0 / model.rateScale : 0))
+                    .font(.system(.caption, design: .monospaced))
+                Slider(value: $model.rateScale, in: (1.0 / 32_768.0)...(1.0 / 256.0))
+                    .frame(width: 240)
+            }
+        }
+    }
+
+    // MARK: - Manual QA checklist
+
+    private var qaChecklist: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Manual QA")
+                .font(.headline)
+            checklistRow("Selected source", value: model.selectedSourceName ?? "All sources",
+                         ok: model.selectedSourceName != nil)
+            checklistRow("Source unique ID", value: model.selectedSourceID.map(String.init) ?? "—",
+                         ok: model.selectedSourceID != nil)
+            checklistRow("Deck", value: model.deckChannel == 0 ? "Left" : "Right", ok: true)
+            checklistRow("Baseline calibrated", value: model.baselineCalibrated ? "yes" : "no",
+                         ok: model.baselineCalibrated)
+            checklistRow("Pitch Bend arriving", value: model.pitchBendArriving ? "yes" : "no",
+                         ok: model.pitchBendArriving)
+            checklistRow("Crossfader arriving", value: model.crossfaderArriving ? "yes" : "no",
+                         ok: model.crossfaderArriving)
+            checklistRow("Playhead moving", value: model.playheadMoving ? "yes" : "no",
+                         ok: model.playheadMoving)
+            checklistRow("Audio engine running", value: model.audioRunning ? "yes" : "no",
+                         ok: model.audioRunning)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func checklistRow(_ label: String, value: String, ok: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ok ? Color.green : Color.secondary)
+            Text(label)
+                .font(.caption)
+            Spacer()
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
         }
     }
 }

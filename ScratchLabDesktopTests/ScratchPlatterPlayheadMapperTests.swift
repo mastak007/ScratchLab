@@ -123,4 +123,96 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
         XCTAssertEqual(mapper.positionFraction, 0.0, accuracy: 1e-12)
     }
+
+    // MARK: - Deadband (idle-jitter guard)
+
+    func testDeadbandForcesZeroRateWithinBand() {
+        let mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0, sampleDuration: 10.0, velocityDeadband: 16)
+        // Inside ±16 of baseline → zero, regardless of sign.
+        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 + 16), 0, accuracy: 1e-12)
+        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 - 16), 0, accuracy: 1e-12)
+        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314), 0, accuracy: 1e-12)
+    }
+
+    func testDeadbandPassesValuesOutsideBand() {
+        let mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0, sampleDuration: 10.0, velocityDeadband: 16)
+        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 + 17), 17, accuracy: 1e-12)
+        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 - 17), -17, accuracy: 1e-12)
+    }
+
+    func testCalibratedIdleDoesNotCreep() {
+        // Calibrated baseline + jitter within the deadband → position never moves.
+        var mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0 / 4096.0, sampleDuration: 10.0,
+                                                  maxIntegrationStep: 10.0, velocityDeadband: 16, samplePosition: 3.0)
+        for jitter in [-8, 4, -2, 12, -16, 16, 0, 7] {
+            mapper.ingestPitchBend(11314 + jitter, dt: 0.1)
+        }
+        XCTAssertEqual(mapper.samplePosition, 3.0, accuracy: 1e-12)
+    }
+
+    // MARK: - Invert direction (lab-only escape hatch)
+
+    func testInvertFlipsRateSign() {
+        let normal = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0)
+        let flipped = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0, inverted: true)
+        XCTAssertEqual(normal.playbackRate(forPitchBend: 8192 + 4096), 1.0, accuracy: 1e-12)
+        XCTAssertEqual(flipped.playbackRate(forPitchBend: 8192 + 4096), -1.0, accuracy: 1e-12)
+        XCTAssertEqual(flipped.playbackRate(forPitchBend: 8192 - 4096), 1.0, accuracy: 1e-12)
+    }
+
+    func testInvertReversesIntegrationDirection() {
+        var mapper = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0,
+                                                  maxIntegrationStep: 10.0, inverted: true, samplePosition: 5.0)
+        // Forward platter (+) now retreats the playhead.
+        mapper.ingestPitchBend(8192 + 4096, dt: 0.5)
+        XCTAssertEqual(mapper.samplePosition, 4.5, accuracy: 1e-9)
+    }
+
+    // MARK: - Clamp-edge flags
+
+    func testIsAtStartAndIsAtEndReflectClamp() {
+        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 1.0,
+                                                  maxIntegrationStep: 10.0, samplePosition: 0.5)
+        XCTAssertFalse(mapper.isAtStart)
+        XCTAssertFalse(mapper.isAtEnd)
+
+        mapper.ingestPitchBend(-100, dt: 1.0) // drive hard negative → clamp to start
+        XCTAssertTrue(mapper.isAtStart)
+        XCTAssertFalse(mapper.isAtEnd)
+
+        mapper.ingestPitchBend(100, dt: 1.0) // drive hard positive → clamp to end
+        XCTAssertTrue(mapper.isAtEnd)
+        XCTAssertFalse(mapper.isAtStart)
+    }
+
+    func testZeroDurationIsNeitherStartNorEndForEnd() {
+        let mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 0)
+        XCTAssertTrue(mapper.isAtStart)   // position 0 <= 0
+        XCTAssertFalse(mapper.isAtEnd)    // no end when there is no duration
+    }
+
+    // MARK: - Per-deck pitch-bend filtering
+
+    func testIsPitchBendChannelMatchesOnlySelectedDeck() {
+        // Left deck (0) accepts raw channel 0 only; right deck (1) accepts channel 1 only.
+        XCTAssertTrue(ScratchPlatterPlayheadMapper.isPitchBendChannel(0, forDeck: 0))
+        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(1, forDeck: 0))
+        XCTAssertTrue(ScratchPlatterPlayheadMapper.isPitchBendChannel(1, forDeck: 1))
+        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(0, forDeck: 1))
+    }
+
+    func testIsPitchBendChannelRejectsNonPlatterChannelsAndNil() {
+        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(15, forDeck: 0))
+        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(nil, forDeck: 0))
+        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(2, forDeck: 2)) // deck 2 is not a platter
+    }
+
+    func testDeckForRawChannelMapping() {
+        XCTAssertEqual(ScratchPlatterDeck.forRawChannel(0), .left)
+        XCTAssertEqual(ScratchPlatterDeck.forRawChannel(1), .right)
+        XCTAssertNil(ScratchPlatterDeck.forRawChannel(2))
+        XCTAssertNil(ScratchPlatterDeck.forRawChannel(15))
+        XCTAssertEqual(ScratchPlatterDeck.left.rawChannel, 0)
+        XCTAssertEqual(ScratchPlatterDeck.right.rawChannel, 1)
+    }
 }
