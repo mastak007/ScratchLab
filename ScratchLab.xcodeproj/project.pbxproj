@@ -115,6 +115,7 @@
 		SPL0MOD0MAC00001 /* ScratchPlaybackLabModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0MOD0FREF0001 /* ScratchPlaybackLabModel.swift */; };
 		SPL0VUE0MAC00001 /* ScratchPlaybackLabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0VUE0FREF0001 /* ScratchPlaybackLabView.swift */; };
 		SPL0TST0TBF00001 /* ScratchPlatterPlayheadMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0TST0FREF0001 /* ScratchPlatterPlayheadMapperTests.swift */; };
+		RPLENV00TST00BUILDFILE01 /* ScratchPlaybackLabRenderEnvelopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPLENV00TST00FILEREF0001 /* ScratchPlaybackLabRenderEnvelopeTests.swift */; };
 		SPL0VPRESMAC00001 /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
 		A1000006 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
 		A1000007 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* AudioEngine.swift */; };
@@ -509,6 +510,7 @@
 		SPL0MOD0FREF0001 /* ScratchPlaybackLabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabModel.swift; sourceTree = "<group>"; };
 		SPL0VUE0FREF0001 /* ScratchPlaybackLabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabView.swift; sourceTree = "<group>"; };
 		SPL0TST0FREF0001 /* ScratchPlatterPlayheadMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterPlayheadMapperTests.swift; sourceTree = "<group>"; };
+		RPLENV00TST00FILEREF0001 /* ScratchPlaybackLabRenderEnvelopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlaybackLabRenderEnvelopeTests.swift; sourceTree = "<group>"; };
 		CI00TREF0002 /* ControllerInspectorParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerInspectorParsingTests.swift; sourceTree = "<group>"; };
 		A2000006 /* GameState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameState.swift; sourceTree = "<group>"; };
 		A2000007 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
@@ -817,6 +819,7 @@
 				CI00TREF0001 /* ScratchControllerInputModelTests.swift */,
 				CI00TREF0002 /* ControllerInspectorParsingTests.swift */,
 				SPL0TST0FREF0001 /* ScratchPlatterPlayheadMapperTests.swift */,
+				RPLENV00TST00FILEREF0001 /* ScratchPlaybackLabRenderEnvelopeTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CEP2010000CEP002CEP00001 /* CoachingEventPacerTests.swift */,
@@ -1750,6 +1753,7 @@
 				SARF0001000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift in Sources */,
 				VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */,
 				SPL0TST0TBF00001 /* ScratchPlatterPlayheadMapperTests.swift in Sources */,
+				RPLENV00TST00BUILDFILE01 /* ScratchPlaybackLabRenderEnvelopeTests.swift in Sources */,
 				PPT0011000PPT001PPT00001 /* PlatterPositionTimelineTests.swift in Sources */,
 				LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */,
 				PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */,

@@ -40,10 +40,12 @@ final class ScratchPlaybackLabEngine {
     private let targetFrame = OSAllocatedUnfairLock(initialState: 0.0)
     /// Read head the render block last reached (file frames). Audio-thread-owned.
     private var renderFrame: Double = 0
-    /// Below this per-output-frame step magnitude the platter is treated as stopped
-    /// and the node emits silence — a stopped record makes no sound, and this avoids
-    /// holding a DC value (which would click/buzz).
-    private let silenceStepThreshold = 1.0e-4
+    /// Tiny pitch-bend jitter from play/stop should not become audible as short
+    /// static bursts. Wait until the target is meaningfully away from the render
+    /// head before opening the audio envelope.
+    private let minimumAudibleDeltaFrames = 8.0
+    private var outputSampleRate: Double = 44_100
+    private var envelope = ScratchPlaybackLabRenderEnvelope(sampleRate: 44_100)
 
     // MARK: - Loading
 
@@ -80,6 +82,7 @@ final class ScratchPlaybackLabEngine {
         sampleRate = format.sampleRate
         renderFrame = 0
         targetFrame.withLock { $0 = 0 }
+        envelope.reset()
         return true
     }
 
@@ -110,6 +113,8 @@ final class ScratchPlaybackLabEngine {
     func start() {
         guard !isRunning, !monoSamples.isEmpty else { return }
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+        outputSampleRate = outputFormat.sampleRate > 0 ? outputFormat.sampleRate : sampleRate
+        envelope = ScratchPlaybackLabRenderEnvelope(sampleRate: outputSampleRate)
         let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList in
             guard let self else { return noErr }
             return self.render(frameCount: frameCount, audioBufferList: audioBufferList)
@@ -155,15 +160,18 @@ final class ScratchPlaybackLabEngine {
         let target = targetFrame.withLock { $0 }
         let start = renderFrame
         let step = (target - start) / Double(frames)
-        let stopped = abs(step) < silenceStepThreshold
+        let audible = abs(target - start) >= minimumAudibleDeltaFrames
 
         monoSamples.withUnsafeBufferPointer { samples in
             for frameIndex in 0..<frames {
-                var value: Float = 0
-                if !stopped {
+                let sourceValue: Float
+                if audible {
                     let position = start + step * Double(frameIndex)
-                    value = Self.interpolate(samples, at: position)
+                    sourceValue = Self.interpolate(samples, at: position)
+                } else {
+                    sourceValue = 0
                 }
+                let value = envelope.process(sourceValue, audible: audible)
                 for buffer in buffers {
                     guard let data = buffer.mData else { continue }
                     data.assumingMemoryBound(to: Float.self)[frameIndex] = value
@@ -171,7 +179,7 @@ final class ScratchPlaybackLabEngine {
             }
         }
 
-        renderFrame = stopped ? start : target
+        renderFrame = audible ? target : start
         return noErr
     }
 
@@ -185,6 +193,46 @@ final class ScratchPlaybackLabEngine {
         if lower >= maxIndex { return samples[maxIndex] }
         let fraction = Float(clamped - Double(lower))
         return samples[lower] * (1 - fraction) + samples[lower + 1] * fraction
+    }
+}
+
+/// Small render-thread envelope for the playback lab source node.
+///
+/// The source switches between silence and arbitrary positions inside `ahhh.wav`.
+/// Without a ramp, the first/last emitted frame can jump between `0` and a non-zero
+/// sample value, which is heard as a click/static tick when pressing play/stop or
+/// when platter MIDI jitters around rest.
+struct ScratchPlaybackLabRenderEnvelope {
+    private let rampStep: Float
+    private(set) var gain: Float = 0
+    private(set) var lastAudibleSample: Float = 0
+
+    init(sampleRate: Double, rampDuration: TimeInterval = 0.004) {
+        let frames = max(1, Int(sampleRate * max(rampDuration, 0.0005)))
+        self.rampStep = 1.0 / Float(frames)
+    }
+
+    mutating func reset() {
+        gain = 0
+        lastAudibleSample = 0
+    }
+
+    mutating func process(_ sample: Float, audible: Bool) -> Float {
+        let targetGain: Float = audible ? 1 : 0
+        if gain < targetGain {
+            gain = min(targetGain, gain + rampStep)
+        } else if gain > targetGain {
+            gain = max(targetGain, gain - rampStep)
+        }
+
+        let source = audible ? sample : lastAudibleSample
+        let output = source * gain
+        if audible {
+            lastAudibleSample = sample
+        } else if gain == 0 {
+            lastAudibleSample = 0
+        }
+        return output
     }
 }
 #endif
