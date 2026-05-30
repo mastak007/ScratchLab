@@ -76,19 +76,44 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var isAtStart = true
     @Published private(set) var isAtEnd = false
 
+    // Scale / aliasing diagnostics.
+    @Published private(set) var maxObservedDelta = 0
+    @Published private(set) var aliasRisk: ScratchDeltaAliasRisk = .none
+    @Published private(set) var deltaClamped = false
+
+    // Tick-measurement ("rotate one revolution") workflow.
+    @Published private(set) var isMeasuringTicks = false
+    @Published private(set) var hasTickResult = false
+    @Published private(set) var tickTotalSigned = 0
+    @Published private(set) var tickAbsoluteSum = 0
+    @Published private(set) var tickMaxDelta = 0
+    @Published private(set) var tickEventCount = 0
+    @Published private(set) var tickAliasObserved = false
+    /// Suggested sensitivity (sample-seconds per 1000 ticks) from the last measurement.
+    @Published private(set) var tickSuggestedPer1000: Double?
+
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
     @Published var deckChannel: Int = 0 {
         didSet { mapper.resetTracking() } // re-seed so a stale angle can't jump
     }
-    /// Seconds of sample swept by one full platter revolution (tunable feel).
-    @Published var secondsPerRevolution: TimeInterval = 1.8 {
-        didSet { mapper.secondsPerRevolution = secondsPerRevolution }
+    /// Sensitivity, expressed as sample-seconds moved per 1000 platter ticks (nicer
+    /// UI numbers than per-tick). The platter encoder is far finer than one
+    /// revolution per 16384 ticks, so the usable range is small.
+    @Published var sampleSecondsPer1000Ticks: Double = 0.01 {
+        didSet { mapper.sampleSecondsPerTick = sampleSecondsPer1000Ticks / 1000.0 }
     }
     /// Lab-only: flip platter direction if the hardware reports the opposite sign.
     @Published var inverted: Bool = false {
         didSet { mapper.inverted = inverted }
+    }
+    /// Optional anti-explosion cap on the per-event delta applied to the playhead.
+    /// Off by default so real behaviour is visible; the raw delta stays on display.
+    @Published var limitDeltaForSafety: Bool = false {
+        didSet {
+            mapper.deltaSafetyLimit = limitDeltaForSafety ? ScratchPlatterPlayheadMapper.aliasFailThreshold : nil
+        }
     }
     /// Optional, off by default: gate sample output volume by crossfader position.
     /// Only takes effect once a valid crossfader CC has been received (never mutes
@@ -125,10 +150,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var lastPitchBendDate: Date?
     private var lastCrossfaderDate: Date?
     private var lastPublishedPosition: TimeInterval = 0
+    private var measurement = PlatterTickMeasurement()
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
-        self.mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 0)
+        self.mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerTick: 0.01 / 1000.0, sampleDuration: 0)
         transport.onSourcedEvent = { [weak self] sourceName, event in
             MainActor.assumeIsolated { self?.ingest(sourceName: sourceName, event: event) }
         }
@@ -172,6 +198,44 @@ final class ScratchPlaybackLabModel: ObservableObject {
         engine.setTargetPosition(seconds: mapper.samplePosition)
     }
 
+    /// Clears the running max-observed-delta / alias diagnostic.
+    func resetMaxDelta() {
+        mapper.resetMaxObservedDelta()
+    }
+
+    // MARK: - Tick measurement ("rotate one revolution")
+
+    /// Begins accumulating wrapped per-event deltas. Re-seeds tracking so the first
+    /// event during measurement does not record a giant delta from a stale angle.
+    func startTickMeasurement() {
+        measurement = PlatterTickMeasurement()
+        isMeasuringTicks = true
+        hasTickResult = false
+        mapper.resetTracking()
+        publishTickState()
+    }
+
+    /// Stops accumulating and freezes the measured result.
+    func finishTickMeasurement() {
+        isMeasuringTicks = false
+        hasTickResult = measurement.eventCount > 0
+        publishTickState()
+    }
+
+    private func publishTickState() {
+        tickTotalSigned = measurement.totalSignedTicks
+        tickAbsoluteSum = measurement.absoluteTickSum
+        tickMaxDelta = measurement.maxPerEventDelta
+        tickEventCount = measurement.eventCount
+        tickAliasObserved = measurement.aliasObserved
+        // Suggest a sensitivity that maps one measured revolution to the whole sample.
+        if let perTick = measurement.suggestedSampleSecondsPerTick(targetSeconds: max(mapper.sampleDuration, 0.001)) {
+            tickSuggestedPer1000 = perTick * 1000.0
+        } else {
+            tickSuggestedPer1000 = nil
+        }
+    }
+
     // MARK: - Gain
 
     /// Applies the lab output gain: crossfader position when gating is on AND a valid
@@ -207,11 +271,16 @@ final class ScratchPlaybackLabModel: ObservableObject {
         switch parsed.messageType {
         case .pitchBend where ScratchPlatterPlayheadMapper.isPitchBendChannel(parsed.channel, forDeck: deckChannel):
             guard let raw = parsed.value else { return }
+            let wasSeeded = mapper.lastRawPitchBend != nil
             previousRawLatest = mapper.lastRawPitchBend
             mapper.ingestPitchBend(raw)
             rawPitchBendLatest = raw
             wrappedDeltaLatest = mapper.lastWrappedDelta
             engine.setTargetPosition(seconds: mapper.samplePosition)
+            // Tick measurement records only real (non-seeding) deltas.
+            if isMeasuringTicks, wasSeeded {
+                measurement.record(delta: mapper.lastWrappedDelta)
+            }
             let now = Date()
             pitchBendEventDates.append(now)
             lastPitchBendDate = now
@@ -243,6 +312,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
         samplePositionFraction = mapper.positionFraction
         isAtStart = mapper.isAtStart
         isAtEnd = mapper.isAtEnd
+
+        maxObservedDelta = mapper.maxObservedDelta
+        aliasRisk = ScratchPlatterPlayheadMapper.aliasRisk(forDelta: mapper.maxObservedDelta)
+        deltaClamped = mapper.lastDeltaClamped
+        if isMeasuringTicks { publishTickState() }
 
         crossfader = crossfaderLatest
         crossfaderRaw = crossfaderRawLatest

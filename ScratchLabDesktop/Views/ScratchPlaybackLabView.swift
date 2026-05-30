@@ -36,11 +36,15 @@ struct ScratchPlaybackLabView: View {
             }
             .padding(16)
             Divider()
+            calibrationRow
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            Divider()
             controlsRow
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
         }
-        .frame(minWidth: 920, minHeight: 640)
+        .frame(minWidth: 940, minHeight: 720)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
     }
@@ -152,10 +156,21 @@ struct ScratchPlaybackLabView: View {
                 readout("Clamp", clampLabel)
             }
             HStack(spacing: 28) {
-                readout("Sec / revolution", String(format: "%.2f s", model.secondsPerRevolution))
+                readout("Sensitivity", String(format: "%.4f s / 1k", model.sampleSecondsPer1000Ticks))
+                readout("Max |delta|", String(model.maxObservedDelta), tint: aliasTint)
+                readout("Alias", aliasLabel, tint: aliasTint)
+                readout("Delta clamped", model.deltaClamped ? "yes" : "no")
+            }
+            HStack(spacing: 28) {
                 readout("Crossfader", model.crossfaderValid ? String(format: "%.2f", model.crossfader) : "—")
                 readout("Crossfader valid", model.crossfaderValid ? "yes" : "no")
                 readout("XF channel", model.crossfaderChannel.map { "ch \($0 + 1)" } ?? "—")
+            }
+
+            if let warning = aliasWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(aliasTint ?? .secondary)
             }
 
             Text("RANE platter tracked as absolute angle → sample position (delta-with-wrap). Audio owned by ScratchLab (bundled ahhh.wav, not Serato). Clamp at sample ends; no wrap, no beat layer yet.")
@@ -171,35 +186,101 @@ struct ScratchPlaybackLabView: View {
         return "—"
     }
 
-    private func readout(_ label: String, _ value: String) -> some View {
+    private var aliasLabel: String {
+        switch model.aliasRisk {
+        case .none: return "ok"
+        case .warn: return "warn"
+        case .fail: return "ALIAS"
+        }
+    }
+
+    private var aliasTint: Color? {
+        switch model.aliasRisk {
+        case .none: return nil
+        case .warn: return .orange
+        case .fail: return .red
+        }
+    }
+
+    private var aliasWarning: String? {
+        switch model.aliasRisk {
+        case .none:
+            return nil
+        case .warn:
+            return "Max per-event delta exceeded \(ScratchPlatterPlayheadMapper.aliasWarnThreshold) ticks — motion is getting large relative to the wrap window."
+        case .fail:
+            return "Max per-event delta exceeded \(ScratchPlatterPlayheadMapper.aliasFailThreshold) ticks — direction may alias. Scratch slower, lower sensitivity, or re-check platter resolution."
+        }
+    }
+
+    private func readout(_ label: String, _ value: String, tint: Color? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(.body, design: .monospaced))
+                .foregroundStyle(tint ?? .primary)
+        }
+    }
+
+    // MARK: - Calibration (rotate one revolution)
+
+    private var calibrationRow: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Measure platter ticks")
+                    .font(.subheadline.weight(.semibold))
+                Text("Start, rotate the platter exactly one full revolution, then Finish.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.isMeasuringTicks {
+                Button("Finish tick measurement") { model.finishTickMeasurement() }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Start tick measurement") { model.startTickMeasurement() }
+            }
+
+            if model.isMeasuringTicks || model.hasTickResult {
+                Divider().frame(height: 34)
+                HStack(spacing: 22) {
+                    readout("Signed ticks", String(model.tickTotalSigned))
+                    readout("Abs ticks", String(model.tickAbsoluteSum))
+                    readout("Max delta", String(model.tickMaxDelta))
+                    readout("Events", String(model.tickEventCount))
+                    readout("Alias seen", model.tickAliasObserved ? "yes" : "no",
+                            tint: model.tickAliasObserved ? .red : nil)
+                    readout("Suggested",
+                            model.tickSuggestedPer1000.map { String(format: "%.4f s/1k", $0) } ?? "—")
+                }
+            }
+
+            Spacer()
         }
     }
 
     // MARK: - Controls
 
     private var controlsRow: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 20) {
             Toggle("Invert direction", isOn: $model.inverted)
-
+            Toggle("Limit delta (safety)", isOn: $model.limitDeltaForSafety)
             Toggle("Apply crossfader to volume", isOn: $model.applyCrossfaderToVolume)
+            Button("Reset max delta") { model.resetMaxDelta() }
 
             Spacer()
 
             HStack(spacing: 6) {
-                Text("Seconds / revolution")
+                Text("Sensitivity")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(String(format: "%.2f s", model.secondsPerRevolution))
+                Text(String(format: "%.4f s/1k", model.sampleSecondsPer1000Ticks))
                     .font(.system(.caption, design: .monospaced))
-                    .frame(minWidth: 48, alignment: .trailing)
-                Slider(value: $model.secondsPerRevolution, in: 0.2...6.0)
-                    .frame(width: 240)
+                    .frame(minWidth: 70, alignment: .trailing)
+                Slider(value: $model.sampleSecondsPer1000Ticks, in: 0.002...0.12)
+                    .frame(width: 220)
             }
         }
     }
