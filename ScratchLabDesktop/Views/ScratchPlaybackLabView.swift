@@ -40,6 +40,10 @@ struct ScratchPlaybackLabView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
+            diagnosticsRow
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            Divider()
             controlsRow
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -258,6 +262,76 @@ struct ScratchPlaybackLabView: View {
             }
 
             Spacer()
+        }
+    }
+
+    // MARK: - RANE diagnostic recorder (capture raw events → JSON)
+
+    private var diagnosticsRow: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Diagnostic recorder")
+                    .font(.subheadline.weight(.semibold))
+                Text("Capture raw platter events to JSON. Calibration = rotate one revolution for a ticks/rev estimate.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.isRecordingDiagnostics {
+                Button("Stop recording") { model.stopDiagnosticRecording() }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Record") { model.startDiagnosticRecording() }
+                Button("Calibration record") { model.startDiagnosticRecording(calibration: true) }
+            }
+
+            Button("Export JSON") { model.exportDiagnostics() }
+                .disabled(model.isRecordingDiagnostics || model.diagnosticEventCount == 0)
+
+            Divider().frame(height: 34)
+
+            HStack(spacing: 22) {
+                readout("State", model.isRecordingDiagnostics
+                        ? (model.isCalibrationRecording ? "calibrating" : "recording")
+                        : "idle",
+                        tint: model.isRecordingDiagnostics ? .green : nil)
+                readout("Events", String(model.diagnosticEventCount),
+                        tint: model.diagnosticReachedCapacity ? .red : nil)
+                if let summary = model.diagnosticSummary {
+                    readout("Wraps", String(summary.wrapCount))
+                    readout("Max delta", String(summary.maxAbsoluteDelta),
+                            tint: summary.aliasFailCount > 0 ? .red : nil)
+                    readout("Ticks/rev",
+                            summary.estimatedTicksPerRevolution.map(String.init) ?? "—")
+                }
+            }
+
+            Spacer()
+        }
+        .overlay(alignment: .bottomLeading) {
+            diagnosticExportStatus
+        }
+    }
+
+    @ViewBuilder
+    private var diagnosticExportStatus: some View {
+        if model.diagnosticReachedCapacity {
+            Text("Capacity cap reached (\(RaneDiagnosticRecorder.maxEvents) events) — recording stopped.")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .offset(y: 18)
+        } else if let error = model.lastDiagnosticExportError {
+            Text("Export failed: \(error)")
+                .font(.caption2)
+                .foregroundStyle(.red)
+                .offset(y: 18)
+        } else if let path = model.lastDiagnosticExportPath {
+            Text("Exported → \(path)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .offset(y: 18)
         }
     }
 
