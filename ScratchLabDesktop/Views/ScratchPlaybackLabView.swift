@@ -68,7 +68,6 @@ struct ScratchPlaybackLabView: View {
 
             Spacer()
 
-            Button("Calibrate baseline") { model.calibrateBaselineFromCurrent() }
             Button("Reset playhead") { model.resetPlayhead() }
         }
         .padding(.horizontal, 16)
@@ -140,17 +139,10 @@ struct ScratchPlaybackLabView: View {
 
     private var readouts: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !model.baselineCalibrated {
-                Label("Baseline not calibrated — using fallback hint (\(ScratchPlatterPlayheadMapper.defaultMotorBaseline)). Spin the motor untouched and press Calibrate.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
             HStack(spacing: 28) {
                 readout("Raw pitch bend", String(model.rawPitchBend))
-                readout("Baseline", String(model.baseline))
-                readout("Platter velocity", String(format: "%+.3f×", model.platterRate))
+                readout("Previous raw", model.previousRawPitchBend.map(String.init) ?? "—")
+                readout("Wrapped delta", String(format: "%+d", model.wrappedDelta))
                 readout("Event rate", String(format: "%.0f Hz", model.eventRateHz))
             }
             HStack(spacing: 28) {
@@ -160,13 +152,13 @@ struct ScratchPlaybackLabView: View {
                 readout("Clamp", clampLabel)
             }
             HStack(spacing: 28) {
-                readout("Crossfader", model.hasCrossfader ? String(format: "%.2f", model.crossfader) : "—")
-                readout("Crossfader CC8", model.hasCrossfader ? "\(model.crossfaderRaw)" : "—")
+                readout("Sec / revolution", String(format: "%.2f s", model.secondsPerRevolution))
+                readout("Crossfader", model.crossfaderValid ? String(format: "%.2f", model.crossfader) : "—")
+                readout("Crossfader valid", model.crossfaderValid ? "yes" : "no")
                 readout("XF channel", model.crossfaderChannel.map { "ch \($0 + 1)" } ?? "—")
-                readout("Last event", model.lastEventType)
             }
 
-            Text("Audio is owned by ScratchLab (bundled ahhh.wav, not Serato). Clamp at sample ends; no wrap, no beat layer yet.")
+            Text("RANE platter tracked as absolute angle → sample position (delta-with-wrap). Audio owned by ScratchLab (bundled ahhh.wav, not Serato). Clamp at sample ends; no wrap, no beat layer yet.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -195,29 +187,18 @@ struct ScratchPlaybackLabView: View {
         HStack(spacing: 24) {
             Toggle("Invert direction", isOn: $model.inverted)
 
-            HStack(spacing: 6) {
-                Text("Deadband")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Stepper(value: $model.velocityDeadband, in: 0...512, step: 4) {
-                    Text("\(model.velocityDeadband)")
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minWidth: 36, alignment: .trailing)
-                }
-                .frame(maxWidth: 150)
-            }
-
             Toggle("Apply crossfader to volume", isOn: $model.applyCrossfaderToVolume)
 
             Spacer()
 
             HStack(spacing: 6) {
-                Text("Rate scale")
+                Text("Seconds / revolution")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(String(format: "1 / %.0f", model.rateScale > 0 ? 1.0 / model.rateScale : 0))
+                Text(String(format: "%.2f s", model.secondsPerRevolution))
                     .font(.system(.caption, design: .monospaced))
-                Slider(value: $model.rateScale, in: (1.0 / 32_768.0)...(1.0 / 256.0))
+                    .frame(minWidth: 48, alignment: .trailing)
+                Slider(value: $model.secondsPerRevolution, in: 0.2...6.0)
                     .frame(width: 240)
             }
         }
@@ -234,8 +215,6 @@ struct ScratchPlaybackLabView: View {
             checklistRow("Source unique ID", value: model.selectedSourceID.map(String.init) ?? "—",
                          ok: model.selectedSourceID != nil)
             checklistRow("Deck", value: model.deckChannel == 0 ? "Left" : "Right", ok: true)
-            checklistRow("Baseline calibrated", value: model.baselineCalibrated ? "yes" : "no",
-                         ok: model.baselineCalibrated)
             checklistRow("Pitch Bend arriving", value: model.pitchBendArriving ? "yes" : "no",
                          ok: model.pitchBendArriving)
             checklistRow("Crossfader arriving", value: model.crossfaderArriving ? "yes" : "no",

@@ -1,23 +1,25 @@
 import Foundation
 
-// Scratch Playback Lab (first slice): pure platter → sample-position mapping.
+// Scratch Playback Lab: pure platter → sample-position mapping.
 //
 // Scope guardrails (deliberate):
 // - Pure value type + pure functions only. No AVFoundation, no Core MIDI, no device
 //   I/O, no Serato, no DVS. This is the unit the Scratch Playback Lab tests exercise.
-// - Maps a controller's 14-bit platter pitch-bend stream to a sample-playback
-//   position. It is the single source of truth for the playhead; the audio engine
-//   *follows* the position this produces.
 //
-// Model:
-//   delta        = rawPitchBend - baseline
-//   delta        = 0 when |delta| <= velocityDeadband     // idle-jitter guard
-//   playbackRate = (inverted ? -delta : delta) * rateScale // 1.0 == realtime
-//   samplePosition += playbackRate * dt                    // seconds
-//   samplePosition = clamp(samplePosition, 0 ... sampleDuration)
+// Decode model (RANE ONE MKII, confirmed from the platter-scrub video):
+//   The platter pitch bend is an ABSOLUTE 14-bit angle (0…16383 = one revolution),
+//   not a velocity. It holds its value at rest and sweeps the full range as the
+//   platter turns. So the playhead tracks the *change* in angle, not an integrated
+//   offset-from-baseline:
 //
-// Clamp behaviour is deliberately *clamp*, not *wrap*: the playhead stops at the
-// start and end of the sample. Relative / looping platter position is a later slice.
+//     delta          = wrappedDelta(lastRaw → raw, modulus: 16384)   // shortest signed path
+//     delta          = -delta when inverted
+//     samplePosition += delta / 16384 * secondsPerRevolution         // seconds
+//     samplePosition  = clamp(samplePosition, 0 ... sampleDuration)
+//
+// The first event only seeds `lastRawPitchBend` (no movement), so a stale value can
+// never produce a giant first jump. Clamp is deliberately *clamp*, not *wrap*:
+// looping platter position is a later slice.
 
 /// The two platters, identified by raw MIDI pitch-bend channel (RANE ONE MKII:
 /// left = raw channel 0x0, right = raw channel 0x1).
@@ -34,86 +36,87 @@ enum ScratchPlatterDeck: Int, CaseIterable, Equatable {
     }
 }
 
-/// Pure, testable mapping from a 14-bit platter pitch-bend value to a sample
-/// position in seconds. Forward platter motion advances the position (playhead
-/// moves right); reverse motion retreats it (playhead moves left).
+/// Pure, testable mapping from an absolute 14-bit platter angle to a sample position
+/// in seconds. Forward platter rotation advances the position (playhead moves right);
+/// reverse rotation retreats it (playhead moves left).
 struct ScratchPlatterPlayheadMapper: Equatable {
-    /// Provisional RANE ONE MKII motor baseline: the pitch-bend value reported with
-    /// the platter spinning untouched at motor speed. Measured ≈ 11314 but
-    /// UNCONFIRMED — the lab exposes a "Calibrate" action to capture it live.
-    static let defaultMotorBaseline = 11314
+    /// Resolution of the platter's absolute angle: ticks per full revolution.
+    static let ticksPerRevolution = 16384
 
-    /// 14-bit pitch-bend centre, a neutral fallback baseline.
-    static let pitchBendCenter = 8192
-
-    /// Pitch-bend value treated as zero platter velocity.
-    var baseline: Int
-    /// Converts `(rawPitchBend - baseline)` into a playback-rate multiplier
-    /// (rate per pitch-bend unit). Tunable from the lab UI; not assumed correct.
-    var rateScale: Double
+    /// Seconds of sample advanced by one full platter revolution. The default is the
+    /// real-vinyl figure (one revolution at 33⅓ rpm = 1.8 s of audio); tunable in the
+    /// lab to taste. Larger = more sample per turn (coarser); smaller = finer.
+    var secondsPerRevolution: TimeInterval
     /// Sample length in seconds — the upper clamp bound.
     var sampleDuration: TimeInterval
-    /// Largest `dt` honoured in one integration step, so a long gap between events
-    /// (e.g. the platter paused) cannot fling the playhead.
-    var maxIntegrationStep: TimeInterval
-    /// Half-width (in pitch-bend units) of a dead zone around `baseline` in which the
-    /// platter is treated as idle and the rate is forced to zero. Absorbs motor
-    /// jitter so an untouched, calibrated platter does not creep.
-    var velocityDeadband: Int
-    /// When true, the platter direction is flipped (forward motion retreats the
+    /// When true, platter direction is flipped (forward rotation retreats the
     /// playhead). A lab-only escape hatch if the hardware reports the opposite sign.
     var inverted: Bool
 
     /// Current sample-playback position in seconds, clamped to `0...sampleDuration`.
     private(set) var samplePosition: TimeInterval
+    /// The most recent raw pitch-bend value, or nil until the first event seeds it.
+    private(set) var lastRawPitchBend: Int?
+    /// The wrapped signed delta (in ticks, pre-invert) applied on the most recent
+    /// ingest; 0 on a seeding event. Exposed for the lab readout.
+    private(set) var lastWrappedDelta: Int
 
     init(
-        baseline: Int = ScratchPlatterPlayheadMapper.defaultMotorBaseline,
-        rateScale: Double = 1.0 / 4096.0,
+        secondsPerRevolution: TimeInterval = 1.8,
         sampleDuration: TimeInterval,
-        maxIntegrationStep: TimeInterval = 0.05,
-        velocityDeadband: Int = 0,
         inverted: Bool = false,
-        samplePosition: TimeInterval = 0
+        samplePosition: TimeInterval = 0,
+        lastRawPitchBend: Int? = nil
     ) {
-        self.baseline = baseline
-        self.rateScale = rateScale
+        self.secondsPerRevolution = max(0, secondsPerRevolution)
         self.sampleDuration = max(0, sampleDuration)
-        self.maxIntegrationStep = max(0, maxIntegrationStep)
-        self.velocityDeadband = max(0, velocityDeadband)
         self.inverted = inverted
         self.samplePosition = Self.clampPosition(samplePosition, duration: self.sampleDuration)
+        self.lastRawPitchBend = lastRawPitchBend
+        self.lastWrappedDelta = 0
     }
 
-    /// Playback-rate multiplier for a raw 14-bit pitch-bend value. Positive = forward
-    /// (playhead moves right), negative = reverse (playhead moves left), 0 at baseline
-    /// or anywhere inside the deadband. Honours `inverted`.
-    func playbackRate(forPitchBend raw: Int) -> Double {
-        let delta = raw - baseline
-        if abs(delta) <= velocityDeadband { return 0 }
-        let signed = inverted ? -delta : delta
-        return Double(signed) * rateScale
+    /// Shortest signed distance from `last` to `current` on a ring of `modulus` ticks.
+    /// Result is in `(-modulus/2 ... modulus/2]`; positive = forward across the ring,
+    /// so crossing the 16383→0 boundary forward yields a small positive delta (not a
+    /// near-full-range negative one).
+    static func wrappedDelta(from last: Int, to current: Int, modulus: Int = ticksPerRevolution) -> Int {
+        guard modulus > 0 else { return 0 }
+        var delta = (current - last) % modulus
+        if delta < 0 { delta += modulus }          // 0 ..< modulus
+        if delta > modulus / 2 { delta -= modulus } // fold to (-modulus/2 ... modulus/2]
+        return delta
     }
 
-    /// Integrates one pitch-bend sample over `dt` seconds into `samplePosition`,
-    /// clamping to `0...sampleDuration`. Negative `dt` is ignored; large `dt` is
-    /// capped at `maxIntegrationStep`. Returns the playback rate that was applied.
+    /// Tracks one absolute 14-bit platter angle into `samplePosition`. The first event
+    /// only seeds `lastRawPitchBend` (no movement). Subsequent events move the playhead
+    /// by the wrapped delta scaled by `secondsPerRevolution`, clamped to the sample.
+    /// Returns the wrapped (pre-invert) delta applied, in ticks (0 on the seeding event).
     @discardableResult
-    mutating func ingestPitchBend(_ raw: Int, dt: TimeInterval) -> Double {
-        let rate = playbackRate(forPitchBend: raw)
-        let step = max(0, min(dt, maxIntegrationStep))
-        samplePosition = Self.clampPosition(samplePosition + rate * step, duration: sampleDuration)
-        return rate
+    mutating func ingestPitchBend(_ raw: Int) -> Int {
+        defer { lastRawPitchBend = raw }
+        guard let last = lastRawPitchBend else {
+            lastWrappedDelta = 0
+            return 0 // seed only — never jump on the first value
+        }
+        let delta = Self.wrappedDelta(from: last, to: raw)
+        lastWrappedDelta = delta
+        let signed = inverted ? -delta : delta
+        let movement = Double(signed) / Double(Self.ticksPerRevolution) * secondsPerRevolution
+        samplePosition = Self.clampPosition(samplePosition + movement, duration: sampleDuration)
+        return delta
     }
 
-    /// Sets the baseline to a raw value (calibration from the live idle stream).
-    mutating func calibrate(toBaseline raw: Int) {
-        baseline = raw
-    }
-
-    /// Resets the playhead to the start of the sample.
+    /// Resets the playhead to the start of the sample (does not touch tracking).
     mutating func resetPosition() {
         samplePosition = 0
+    }
+
+    /// Forgets the last raw value so the next event re-seeds without moving. Use after
+    /// a deck/source change or a pause, so a stale angle can't produce a giant delta.
+    mutating func resetTracking() {
+        lastRawPitchBend = nil
+        lastWrappedDelta = 0
     }
 
     /// Position as a fraction `0...1` of the sample (0 if duration is non-positive).
@@ -136,6 +139,14 @@ struct ScratchPlatterPlayheadMapper: Equatable {
     /// Normalises a 7-bit CC value (0...127) to a `0...1` crossfader position.
     static func normalizedCrossfader(cc value: Int) -> Double {
         Swift.min(Swift.max(Double(value) / 127.0, 0), 1)
+    }
+
+    /// Output gain for optional crossfader volume gating. Full gain (1.0) unless
+    /// gating is enabled AND a valid crossfader value has arrived — so audio is never
+    /// muted before the first crossfader CC is received.
+    static func outputGain(applyGating: Bool, crossfaderValid: Bool, crossfader: Double) -> Float {
+        guard applyGating, crossfaderValid else { return 1.0 }
+        return Float(Swift.min(Swift.max(crossfader, 0), 1))
     }
 
     /// Whether a raw pitch-bend channel belongs to the selected deck. Only raw

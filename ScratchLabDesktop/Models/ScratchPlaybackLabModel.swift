@@ -2,15 +2,14 @@
 import Foundation
 import Combine
 
-// Scratch Playback Lab (first slice): macOS view model.
+// Scratch Playback Lab: macOS view model.
 //
 // Scope guardrails (deliberate):
 // - Display + isolated playback only. Owns a `CoreMIDIInputTransport` (input-only,
-//   same pattern as the Controller Inspector), the pure platter integrator
+//   same pattern as the Controller Inspector), the pure platter mapper
 //   (`ScratchPlatterPlayheadMapper`), and the isolated `ScratchPlaybackLabEngine`.
 //   It writes nothing to disk or to any device, and changes no existing behaviour.
-// - NOT notation, NOT replay, NOT coaching, NOT capture/scoring/export. The
-//   crossfader is read for display only; audio is not gated by it in this slice.
+// - NOT notation, NOT replay, NOT coaching, NOT capture/scoring/export.
 //
 // TODO (next slice): add a separate beat layer (its own player, NOT
 // ScratchLabBeatEngine / capture timing) with an on/off toggle.
@@ -52,14 +51,15 @@ struct WaveformPeak: Equatable {
 @MainActor
 final class ScratchPlaybackLabModel: ObservableObject {
     // Live readouts (published at display rate, not per-MIDI-event).
-    @Published private(set) var rawPitchBend: Int = ScratchPlatterPlayheadMapper.defaultMotorBaseline
-    @Published private(set) var platterRate: Double = 0
+    @Published private(set) var rawPitchBend: Int = 0
+    @Published private(set) var previousRawPitchBend: Int?
+    @Published private(set) var wrappedDelta: Int = 0
     @Published private(set) var samplePositionSeconds: TimeInterval = 0
     @Published private(set) var samplePositionFraction: Double = 0
     @Published private(set) var crossfader: Double = 0
     @Published private(set) var crossfaderRaw: Int = 0
     @Published private(set) var crossfaderChannel: Int?
-    @Published private(set) var hasCrossfader = false
+    @Published private(set) var crossfaderValid = false
     @Published private(set) var eventRateHz: Double = 0
     @Published private(set) var sources: [MIDISourceInfo] = []
     @Published private(set) var isListening = false
@@ -75,30 +75,24 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var audioRunning = false
     @Published private(set) var isAtStart = true
     @Published private(set) var isAtEnd = false
-    /// Whether the *current* deck's baseline has been calibrated live (vs the fallback hint).
-    @Published private(set) var baselineCalibrated = false
 
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
     @Published var deckChannel: Int = 0 {
-        didSet { loadDeckConfig(deckChannel) }
+        didSet { mapper.resetTracking() } // re-seed so a stale angle can't jump
     }
-    @Published var baseline: Int = ScratchPlatterPlayheadMapper.defaultMotorBaseline {
-        didSet { mapper.calibrate(toBaseline: baseline) }
-    }
-    @Published var rateScale: Double = 1.0 / 4096.0 {
-        didSet { mapper.rateScale = rateScale }
-    }
-    /// Pitch-bend units of dead zone around baseline; absorbs idle motor jitter.
-    @Published var velocityDeadband: Int = 16 {
-        didSet { mapper.velocityDeadband = velocityDeadband }
+    /// Seconds of sample swept by one full platter revolution (tunable feel).
+    @Published var secondsPerRevolution: TimeInterval = 1.8 {
+        didSet { mapper.secondsPerRevolution = secondsPerRevolution }
     }
     /// Lab-only: flip platter direction if the hardware reports the opposite sign.
     @Published var inverted: Bool = false {
         didSet { mapper.inverted = inverted }
     }
     /// Optional, off by default: gate sample output volume by crossfader position.
+    /// Only takes effect once a valid crossfader CC has been received (never mutes
+    /// to silence before then).
     @Published var applyCrossfaderToVolume: Bool = false {
         didSet { applyOutputGain() }
     }
@@ -113,25 +107,18 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var mapper: ScratchPlatterPlayheadMapper
     private let engine = ScratchPlaybackLabEngine()
     private let transport: CoreMIDIInputTransport
-    private var lastEventTimestamp: TimeInterval?
     private var displayTimer: Timer?
     private let rateWindow: TimeInterval = 1.0
     private let arrivingWindow: TimeInterval = 0.5
 
-    // Per-deck baseline state (index by deck: 0 = left, 1 = right).
-    private var deckBaselines: [Int] = [
-        ScratchPlatterPlayheadMapper.defaultMotorBaseline,
-        ScratchPlatterPlayheadMapper.defaultMotorBaseline,
-    ]
-    private var deckBaselineCalibrated: [Bool] = [false, false]
-
     // Latest values stashed on the MIDI path; copied into @Published at display rate.
-    private var rawPitchBendLatest = ScratchPlatterPlayheadMapper.defaultMotorBaseline
-    private var platterRateLatest: Double = 0
+    private var rawPitchBendLatest: Int = 0
+    private var previousRawLatest: Int?
+    private var wrappedDeltaLatest: Int = 0
     private var crossfaderLatest: Double = 0
     private var crossfaderRawLatest: Int = 0
     private var crossfaderChannelLatest: Int?
-    private var hasCrossfaderLatest = false
+    private var crossfaderValidLatest = false
     private var lastEventTypeLatest = "—"
     // Wall-clock event stamps for rate and "arriving" liveness (pruned each tick).
     private var pitchBendEventDates: [Date] = []
@@ -141,10 +128,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
-        self.mapper = ScratchPlatterPlayheadMapper(
-            sampleDuration: 0,
-            velocityDeadband: 16
-        )
+        self.mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 0)
         transport.onSourcedEvent = { [weak self] sourceName, event in
             MainActor.assumeIsolated { self?.ingest(sourceName: sourceName, event: event) }
         }
@@ -180,38 +164,26 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     // MARK: - Actions
 
-    /// Sets the *current deck's* motor baseline to the most recent raw pitch-bend
-    /// value (calibrate from the live idle stream while the platter spins untouched).
-    func calibrateBaselineFromCurrent() {
-        let deck = clampedDeck(deckChannel)
-        deckBaselines[deck] = rawPitchBendLatest
-        deckBaselineCalibrated[deck] = true
-        baseline = rawPitchBendLatest      // didSet → mapper.calibrate
-        baselineCalibrated = true
-    }
-
-    /// Returns the playhead to the start of the sample.
+    /// Returns the playhead to the start of the sample and re-seeds tracking so the
+    /// next platter event moves relative to the current angle (no jump).
     func resetPlayhead() {
         mapper.resetPosition()
+        mapper.resetTracking()
         engine.setTargetPosition(seconds: mapper.samplePosition)
     }
 
-    // MARK: - Deck / gain helpers
+    // MARK: - Gain
 
-    private func clampedDeck(_ channel: Int) -> Int {
-        (channel == 0 || channel == 1) ? channel : 0
-    }
-
-    /// Loads the selected deck's stored baseline + calibration flag into the mapper.
-    private func loadDeckConfig(_ channel: Int) {
-        let deck = clampedDeck(channel)
-        baseline = deckBaselines[deck]     // didSet → mapper.calibrate
-        baselineCalibrated = deckBaselineCalibrated[deck]
-    }
-
-    /// Applies the lab output gain: crossfader position when gating is on, else full.
+    /// Applies the lab output gain: crossfader position when gating is on AND a valid
+    /// crossfader value has been received; full gain otherwise (never mutes blindly).
     private func applyOutputGain() {
-        engine.setOutputGain(applyCrossfaderToVolume ? Float(crossfaderLatest) : 1.0)
+        engine.setOutputGain(
+            ScratchPlatterPlayheadMapper.outputGain(
+                applyGating: applyCrossfaderToVolume,
+                crossfaderValid: crossfaderValidLatest,
+                crossfader: crossfaderLatest
+            )
+        )
     }
 
     // MARK: - Sample
@@ -235,11 +207,10 @@ final class ScratchPlaybackLabModel: ObservableObject {
         switch parsed.messageType {
         case .pitchBend where ScratchPlatterPlayheadMapper.isPitchBendChannel(parsed.channel, forDeck: deckChannel):
             guard let raw = parsed.value else { return }
-            let dt: TimeInterval
-            if let last = lastEventTimestamp { dt = event.timestamp - last } else { dt = 0 }
-            lastEventTimestamp = event.timestamp
+            previousRawLatest = mapper.lastRawPitchBend
+            mapper.ingestPitchBend(raw)
             rawPitchBendLatest = raw
-            platterRateLatest = mapper.ingestPitchBend(raw, dt: dt)
+            wrappedDeltaLatest = mapper.lastWrappedDelta
             engine.setTargetPosition(seconds: mapper.samplePosition)
             let now = Date()
             pitchBendEventDates.append(now)
@@ -250,7 +221,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
                 crossfaderLatest = ScratchPlatterPlayheadMapper.normalizedCrossfader(cc: value)
                 crossfaderRawLatest = value
                 crossfaderChannelLatest = parsed.channel
-                hasCrossfaderLatest = true
+                crossfaderValidLatest = true
                 lastCrossfaderDate = Date()
                 if applyCrossfaderToVolume { applyOutputGain() }
             }
@@ -266,7 +237,8 @@ final class ScratchPlaybackLabModel: ObservableObject {
         let now = Date()
 
         rawPitchBend = rawPitchBendLatest
-        platterRate = platterRateLatest
+        previousRawPitchBend = previousRawLatest
+        wrappedDelta = wrappedDeltaLatest
         samplePositionSeconds = mapper.samplePosition
         samplePositionFraction = mapper.positionFraction
         isAtStart = mapper.isAtStart
@@ -275,7 +247,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
         crossfader = crossfaderLatest
         crossfaderRaw = crossfaderRawLatest
         crossfaderChannel = crossfaderChannelLatest
-        hasCrossfader = hasCrossfaderLatest
+        crossfaderValid = crossfaderValidLatest
 
         lastEventType = lastEventTypeLatest
         selectedSourceID = sources.first { $0.name == selectedSourceName }?.id

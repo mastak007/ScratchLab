@@ -1,11 +1,15 @@
 import XCTest
 @testable import ScratchLab
 
-/// Scratch Playback Lab (first slice) — pure platter → sample-position mapping.
+/// Scratch Playback Lab — pure platter → sample-position mapping.
 /// No AVFoundation, no Core MIDI, no UI, and nothing from the capture/scoring/
-/// export pipeline is exercised here. Mirrors the documented model:
-///   rate = (raw - baseline) * rateScale ; position += rate * dt ; clamp 0…duration.
+/// export pipeline is exercised here. The RANE platter pitch bend is an ABSOLUTE
+/// 14-bit angle, so the playhead tracks the wrapped *delta* between successive
+/// values (no velocity integration, no baseline):
+///   delta = wrappedDelta(last → raw, 16384) ; position += delta/16384 * secPerRev.
 final class ScratchPlatterPlayheadMapperTests: XCTestCase {
+
+    private let mod = ScratchPlatterPlayheadMapper.ticksPerRevolution // 16384
 
     // MARK: - Pitch-bend 14-bit decode (via the shared parser the lab consumes)
 
@@ -16,90 +20,142 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(parsed.value, 0x32 | (0x58 << 7)) // 11314
     }
 
-    func testProvisionalMotorBaselineMatchesMeasuredValue() {
-        // 11314 ≈ 0x32 | (0x58 << 7); the provisional RANE motor baseline.
-        XCTAssertEqual(ScratchPlatterPlayheadMapper.defaultMotorBaseline, 0x32 | (0x58 << 7))
+    func testTicksPerRevolutionIs14Bit() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.ticksPerRevolution, 16384)
     }
 
-    // MARK: - Baseline subtraction → playback rate
+    // MARK: - Wrapped delta (the core of absolute-angle tracking)
 
-    func testRateIsZeroAtBaseline() {
-        let mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0 / 4096.0, sampleDuration: 1.0)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314), 0, accuracy: 1e-12)
+    func testWrappedDeltaForwardWithoutWrap() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 1000, to: 1500), 500)
     }
 
-    func testRateIsPositiveAboveBaselineAndNegativeBelow() {
-        let mapper = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 1.0)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 8192 + 4096), 1.0, accuracy: 1e-12)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 8192 - 4096), -1.0, accuracy: 1e-12)
+    func testWrappedDeltaReverseWithoutWrap() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 1500, to: 1000), -500)
     }
 
-    // MARK: - Integration: forward and reverse velocity
-
-    func testForwardMotionAdvancesPosition() {
-        // maxIntegrationStep raised so this exercises integration, not the dt cap.
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0, maxIntegrationStep: 10.0)
-        // rate = +1.0 (realtime), dt = 0.5 → +0.5s.
-        mapper.ingestPitchBend(8192 + 4096, dt: 0.5)
-        XCTAssertEqual(mapper.samplePosition, 0.5, accuracy: 1e-9)
-        XCTAssertGreaterThan(mapper.positionFraction, 0)
+    func testWrappedDeltaForwardAcrossBoundary() {
+        // 16300 → 100 forward is +184 (16384 - 16300 + 100), not -16200.
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 16300, to: 100), 184)
     }
 
-    func testReverseMotionRetreatsPosition() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0, maxIntegrationStep: 10.0, samplePosition: 2.0)
-        // rate = -1.0, dt = 0.5 → -0.5s → 1.5s.
-        mapper.ingestPitchBend(8192 - 4096, dt: 0.5)
-        XCTAssertEqual(mapper.samplePosition, 1.5, accuracy: 1e-9)
+    func testWrappedDeltaReverseAcrossBoundary() {
+        // 100 → 16300 reverse is -184, not +16200.
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 100, to: 16300), -184)
     }
 
-    func testIntegrationAccumulatesAcrossEvents() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 100.0, maxIntegrationStep: 10.0)
-        mapper.ingestPitchBend(2, dt: 1.0) // +2
-        mapper.ingestPitchBend(3, dt: 1.0) // +3 → 5
-        XCTAssertEqual(mapper.samplePosition, 5.0, accuracy: 1e-9)
+    func testWrappedDeltaHalfRevolutionTakesPositiveBranch() {
+        // Exactly half a revolution folds to +8192 (boundary is inclusive on +side).
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.wrappedDelta(from: 0, to: 8192), 8192)
     }
 
-    // MARK: - Clamp behaviour (clamp, not wrap)
+    // MARK: - First event seeds without jumping
 
-    func testPositionClampsAtUpperBound() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 1.0, samplePosition: 0.9)
-        mapper.ingestPitchBend(10, dt: 1.0) // would reach 10.9 → clamp to 1.0
+    func testFirstEventSeedsLastRawAndDoesNotMove() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 10.0, samplePosition: 3.0)
+        let delta = mapper.ingestPitchBend(12000) // far from anything, but it's the first
+        XCTAssertEqual(delta, 0)
+        XCTAssertEqual(mapper.samplePosition, 3.0, accuracy: 1e-12)
+        XCTAssertEqual(mapper.lastRawPitchBend, 12000)
+    }
+
+    // MARK: - Forward / reverse tracking
+
+    func testForwardRotationAdvancesPosition() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.6384, sampleDuration: 100.0)
+        mapper.ingestPitchBend(0)       // seed
+        mapper.ingestPitchBend(1000)    // +1000 ticks
+        // 1000/16384 * 1.6384 = 0.1 s
+        XCTAssertEqual(mapper.samplePosition, 0.1, accuracy: 1e-9)
+    }
+
+    func testReverseRotationRetreatsPosition() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.6384, sampleDuration: 100.0, samplePosition: 0.5)
+        mapper.ingestPitchBend(2000)    // seed
+        mapper.ingestPitchBend(1000)    // -1000 ticks → -0.1 s
+        XCTAssertEqual(mapper.samplePosition, 0.4, accuracy: 1e-9)
+    }
+
+    func testOneFullRevolutionEqualsSecondsPerRevolution() {
+        // Walk a full turn in quarter-turn steps (each <= half a revolution so no fold).
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 100.0)
+        mapper.ingestPitchBend(0)       // seed
+        for tick in [4096, 8192, 12288, 16383] {
+            mapper.ingestPitchBend(tick)
+        }
+        // 0 → 16383 is one tick short of a full turn; add the final tick to complete it.
+        mapper.ingestPitchBend(0)       // 16383 → 0 forward is +1 tick (completes the turn)
+        XCTAssertEqual(mapper.samplePosition, 1.8, accuracy: 1e-6)
+    }
+
+    // MARK: - Wrap boundary does not jump to the end
+
+    func testCrossingBoundaryForwardDoesNotJump() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 10.0)
+        mapper.ingestPitchBend(16300)   // seed near the top
+        mapper.ingestPitchBend(100)     // forward across 16383→0: +184 ticks only
+        let expected = Double(184) / 16384.0 * 1.8
+        XCTAssertEqual(mapper.samplePosition, expected, accuracy: 1e-9)
+        XCTAssertFalse(mapper.isAtEnd)
+    }
+
+    // MARK: - Invert direction
+
+    func testInvertFlipsTrackingDirection() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.6384, sampleDuration: 100.0,
+                                                  inverted: true, samplePosition: 0.5)
+        mapper.ingestPitchBend(0)       // seed
+        mapper.ingestPitchBend(1000)    // +1000 geometrically, inverted → -0.1 s
+        XCTAssertEqual(mapper.samplePosition, 0.4, accuracy: 1e-9)
+    }
+
+    // MARK: - Clamp at start / end
+
+    func testClampAtEnd() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 1.0, samplePosition: 0.9)
+        mapper.ingestPitchBend(0)       // seed
+        mapper.ingestPitchBend(8000)    // big forward delta → clamp to 1.0
         XCTAssertEqual(mapper.samplePosition, 1.0, accuracy: 1e-12)
+        XCTAssertTrue(mapper.isAtEnd)
+        XCTAssertFalse(mapper.isAtStart)
     }
 
-    func testPositionClampsAtLowerBound() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 1.0, samplePosition: 0.2)
-        mapper.ingestPitchBend(-10, dt: 1.0) // would reach -9.8 → clamp to 0
+    func testClampAtStart() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 1.0, samplePosition: 0.1)
+        mapper.ingestPitchBend(8000)    // seed
+        mapper.ingestPitchBend(0)       // big reverse delta → clamp to 0
         XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
+        XCTAssertTrue(mapper.isAtStart)
+        XCTAssertFalse(mapper.isAtEnd)
     }
 
-    // MARK: - dt guarding
+    // MARK: - Reset / tracking re-seed
 
-    func testNegativeDtIsIgnored() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 10.0, samplePosition: 1.0)
-        mapper.ingestPitchBend(5, dt: -2.0)
-        XCTAssertEqual(mapper.samplePosition, 1.0, accuracy: 1e-12)
+    func testResetTrackingMakesNextEventSeedAgain() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 10.0)
+        mapper.ingestPitchBend(1000)
+        mapper.ingestPitchBend(2000)    // moved
+        let moved = mapper.samplePosition
+        mapper.resetTracking()
+        let delta = mapper.ingestPitchBend(9000) // first after reset → seed, no move
+        XCTAssertEqual(delta, 0)
+        XCTAssertEqual(mapper.samplePosition, moved, accuracy: 1e-12)
     }
 
-    func testLargeDtIsCappedAtMaxIntegrationStep() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 100.0, maxIntegrationStep: 0.05)
-        // rate = 1.0, dt = 10s but capped to 0.05 → +0.05.
-        mapper.ingestPitchBend(1, dt: 10.0)
-        XCTAssertEqual(mapper.samplePosition, 0.05, accuracy: 1e-9)
-    }
-
-    // MARK: - Calibration / reset
-
-    func testCalibrateMovesTheZeroVelocityPoint() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0, sampleDuration: 1.0)
-        mapper.calibrate(toBaseline: 12000)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 12000), 0, accuracy: 1e-12)
-    }
-
-    func testResetReturnsToStart() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 10.0, samplePosition: 4.0)
+    func testResetPositionReturnsToStart() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 10.0, samplePosition: 4.0)
         mapper.resetPosition()
         XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
+    }
+
+    // MARK: - Degenerate sample duration
+
+    func testZeroDurationKeepsPositionAndFractionAtZero() {
+        var mapper = ScratchPlatterPlayheadMapper(secondsPerRevolution: 1.8, sampleDuration: 0)
+        mapper.ingestPitchBend(0)
+        mapper.ingestPitchBend(8000)
+        XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
+        XCTAssertEqual(mapper.positionFraction, 0.0, accuracy: 1e-12)
     }
 
     // MARK: - Crossfader normalisation (CC / 127)
@@ -115,86 +171,26 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(ScratchPlatterPlayheadMapper.normalizedCrossfader(cc: 200), 1.0, accuracy: 1e-12)
     }
 
-    // MARK: - Degenerate sample duration
+    // MARK: - Crossfader volume gating (never mutes before a value arrives)
 
-    func testZeroDurationKeepsPositionAndFractionAtZero() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 0)
-        mapper.ingestPitchBend(100, dt: 1.0)
-        XCTAssertEqual(mapper.samplePosition, 0.0, accuracy: 1e-12)
-        XCTAssertEqual(mapper.positionFraction, 0.0, accuracy: 1e-12)
+    func testGatingDoesNotMuteBeforeFirstValue() {
+        // Gating on, but no valid crossfader yet → full gain, not silence.
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: false, crossfader: 0.0), 1.0)
     }
 
-    // MARK: - Deadband (idle-jitter guard)
-
-    func testDeadbandForcesZeroRateWithinBand() {
-        let mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0, sampleDuration: 10.0, velocityDeadband: 16)
-        // Inside ±16 of baseline → zero, regardless of sign.
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 + 16), 0, accuracy: 1e-12)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 - 16), 0, accuracy: 1e-12)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314), 0, accuracy: 1e-12)
+    func testGatingOffIsAlwaysFullGain() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: false, crossfaderValid: true, crossfader: 0.0), 1.0)
     }
 
-    func testDeadbandPassesValuesOutsideBand() {
-        let mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0, sampleDuration: 10.0, velocityDeadband: 16)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 + 17), 17, accuracy: 1e-12)
-        XCTAssertEqual(mapper.playbackRate(forPitchBend: 11314 - 17), -17, accuracy: 1e-12)
-    }
-
-    func testCalibratedIdleDoesNotCreep() {
-        // Calibrated baseline + jitter within the deadband → position never moves.
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 11314, rateScale: 1.0 / 4096.0, sampleDuration: 10.0,
-                                                  maxIntegrationStep: 10.0, velocityDeadband: 16, samplePosition: 3.0)
-        for jitter in [-8, 4, -2, 12, -16, 16, 0, 7] {
-            mapper.ingestPitchBend(11314 + jitter, dt: 0.1)
-        }
-        XCTAssertEqual(mapper.samplePosition, 3.0, accuracy: 1e-12)
-    }
-
-    // MARK: - Invert direction (lab-only escape hatch)
-
-    func testInvertFlipsRateSign() {
-        let normal = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0)
-        let flipped = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0, inverted: true)
-        XCTAssertEqual(normal.playbackRate(forPitchBend: 8192 + 4096), 1.0, accuracy: 1e-12)
-        XCTAssertEqual(flipped.playbackRate(forPitchBend: 8192 + 4096), -1.0, accuracy: 1e-12)
-        XCTAssertEqual(flipped.playbackRate(forPitchBend: 8192 - 4096), 1.0, accuracy: 1e-12)
-    }
-
-    func testInvertReversesIntegrationDirection() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 8192, rateScale: 1.0 / 4096.0, sampleDuration: 10.0,
-                                                  maxIntegrationStep: 10.0, inverted: true, samplePosition: 5.0)
-        // Forward platter (+) now retreats the playhead.
-        mapper.ingestPitchBend(8192 + 4096, dt: 0.5)
-        XCTAssertEqual(mapper.samplePosition, 4.5, accuracy: 1e-9)
-    }
-
-    // MARK: - Clamp-edge flags
-
-    func testIsAtStartAndIsAtEndReflectClamp() {
-        var mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 1.0,
-                                                  maxIntegrationStep: 10.0, samplePosition: 0.5)
-        XCTAssertFalse(mapper.isAtStart)
-        XCTAssertFalse(mapper.isAtEnd)
-
-        mapper.ingestPitchBend(-100, dt: 1.0) // drive hard negative → clamp to start
-        XCTAssertTrue(mapper.isAtStart)
-        XCTAssertFalse(mapper.isAtEnd)
-
-        mapper.ingestPitchBend(100, dt: 1.0) // drive hard positive → clamp to end
-        XCTAssertTrue(mapper.isAtEnd)
-        XCTAssertFalse(mapper.isAtStart)
-    }
-
-    func testZeroDurationIsNeitherStartNorEndForEnd() {
-        let mapper = ScratchPlatterPlayheadMapper(baseline: 0, rateScale: 1.0, sampleDuration: 0)
-        XCTAssertTrue(mapper.isAtStart)   // position 0 <= 0
-        XCTAssertFalse(mapper.isAtEnd)    // no end when there is no duration
+    func testGatingAppliesAfterValueReceived() {
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 0.0), 0.0)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 1.0), 1.0)
+        XCTAssertEqual(ScratchPlatterPlayheadMapper.outputGain(applyGating: true, crossfaderValid: true, crossfader: 0.5), 0.5, accuracy: 1e-6)
     }
 
     // MARK: - Per-deck pitch-bend filtering
 
     func testIsPitchBendChannelMatchesOnlySelectedDeck() {
-        // Left deck (0) accepts raw channel 0 only; right deck (1) accepts channel 1 only.
         XCTAssertTrue(ScratchPlatterPlayheadMapper.isPitchBendChannel(0, forDeck: 0))
         XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(1, forDeck: 0))
         XCTAssertTrue(ScratchPlatterPlayheadMapper.isPitchBendChannel(1, forDeck: 1))
@@ -204,7 +200,7 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
     func testIsPitchBendChannelRejectsNonPlatterChannelsAndNil() {
         XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(15, forDeck: 0))
         XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(nil, forDeck: 0))
-        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(2, forDeck: 2)) // deck 2 is not a platter
+        XCTAssertFalse(ScratchPlatterPlayheadMapper.isPitchBendChannel(2, forDeck: 2))
     }
 
     func testDeckForRawChannelMapping() {
