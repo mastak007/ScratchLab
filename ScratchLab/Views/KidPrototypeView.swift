@@ -146,18 +146,20 @@ private struct KidPrototypeContentView: View {
                 lastEventTime = now
 
                 // Map horizontal pixels to a normalized position delta.
+                // The audio read head is delta-driven within a small anchor
+                // window (not mapped 0…1 across the full sample).
                 let normalizedDelta = Double(pixelDelta / width)
                 input.update(delta: normalizedDelta, deltaTime: deltaTime)
-                audio.player.setPosition(input.position)
+                audio.player.moveReadHead(by: normalizedDelta)
             }
             .onEnded { _ in
                 isScrubbing = false
                 lastTranslation = 0
                 lastEventTime = nil
                 // Finger lifted: register a still frame so the read-out shows
-                // idle and the audio head holds (silence).
+                // idle. The audio read head holds and the de-click gain ramp
+                // fades to silence — no explicit player call needed.
                 input.update(delta: 0, deltaTime: 0)
-                audio.player.setPosition(input.position)
             }
     }
 

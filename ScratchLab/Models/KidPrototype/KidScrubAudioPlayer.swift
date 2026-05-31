@@ -1,25 +1,26 @@
 // KidScrubAudioPlayer.swift
-// ScratchLab — Kid Mode Validation Prototype (Batch 1, Slice 3).
+// ScratchLab — Kid Mode Validation Prototype (Batch 1).
 //
-// Self-contained scrub audio player. Proves the one thing Slice 3 must prove:
-// finger -> sound. It is the prototype's ONE audio pipeline and is fully
-// isolated — it does NOT touch AudioEngine.swift, ScratchPlaybackLabEngine, the
-// capture / notation / scoring / export pipeline, or any ML. Delete the
-// KidPrototype folder + flag and production is byte-identical.
+// Self-contained scrub audio player. Proves the one thing the prototype must
+// prove: finger -> recognisable "ahh" sound. It is the prototype's ONE audio
+// pipeline and is fully isolated — it does NOT touch AudioEngine.swift,
+// ScratchPlaybackLabEngine, the capture / notation / scoring / export pipeline,
+// or any ML. Delete the KidPrototype folder + flag and production is
+// byte-identical.
 //
-// Approach: an AVAudioSourceNode reads a single bundled sample at a floating
-// read head that chases a caller-set normalized position. Because the head is
-// driven directly by the user's position, playback pitch and DIRECTION emerge
-// from how fast (and which way) the position moves — forward motion plays
-// forward, backward motion plays in reverse, and a held finger produces
-// silence. This is a real signed scrub, not a one-shot.
+// Batch 1.5, Part C — Anchored micro-scrub model:
+// Touch-position 0…1 mapping across the full sample has been replaced. Touch
+// deltas now drive the read head within a small (~300 ms) window anchored at
+// the cleanest part of the "ahh" sample. The read-head rate is clamped to ±3×
+// so fast flicks stay recognisably vocal instead of turning into high-frequency
+// buzz. When the finger stops the read head holds and the de-click gain ramp
+// fades to silence.
 //
-// HONEST SCOPE NOTE (Risk R1 in the validation plan): this is the minimal
-// position-following path. It interpolates linearly and silences when the head
-// is still; it does NOT yet apply anti-zipper smoothing across render blocks,
-// and motion-to-sound latency on a stock device has not been benchmarked here.
-// That smoothing + on-device latency bench is explicitly Slice 4 / next-batch
-// work, not Slice 3.
+// This is NOT a full scratch engine. It is a prototype training-feedback model:
+// forward drag  → forward "ahh"
+// backward drag → reverse-ish "ahh"
+// hold / lift   → silence (de-clicked)
+// fast flick    → faster "ahh" (rate-clamped, not buzz)
 
 import Foundation
 import AVFoundation
@@ -34,18 +35,32 @@ final class KidScrubAudioPlayer {
     private var frameCount: Int = 0
     private var sampleRate: Double = 44_100
 
-    /// Real-time shared state. `targetPosition` is written from the UI thread
-    /// and read on the audio render thread under `stateLock`. `readIndex` and
-    /// `gainRamp` are only ever touched on the render thread, so they need no
-    /// lock.
+    /// Anchor window within the source sample (frame indices). The read head is
+    /// confined to this region so the output always stays inside the vocal
+    /// "ahh" — no silence tail, no attack transient.
+    private var anchorStart: Double = 0
+    private var anchorEnd: Double = 0
+    private var windowFrames: Double = 0
+
+    /// Real-time shared state. `targetReadHead` is written from the UI thread
+    /// (via `moveReadHead(by:)`) and read on the audio render thread under
+    /// `stateLock`.
     private var stateLock = os_unfair_lock_s()
-    private var targetPosition: Double = 0
+    private var targetReadHead: Double = 0
     private var readIndex: Double = 0
+
+    /// How many audio frames one unit of normalised delta moves the read head.
+    /// sensitivity=2.0 means a full pad-width swipe traverses the window twice,
+    /// giving roughly 1× playback at comfortable drag speeds.
+    private let sensitivity: Double = 2.0
+
+    /// Maximum playback rate multiplier. Clamped so fast flicks stay
+    /// recognisably "ahh" instead of turning into high-frequency buzz.
+    private let maxRate: Double = 3.0
 
     /// Per-sample de-click gain envelope (Batch 1.5, Part A). Glides toward 1.0
     /// while the head moves and 0.0 while it is held, so starts/stops/reversals
-    /// fade instead of stepping. Initialised in `configureEngine` once the
-    /// sample rate is known.
+    /// fade instead of stepping.
     private var gainRamp = KidGainRamp(step: 1.0)
 
     private var isStarted = false
@@ -97,12 +112,15 @@ final class KidScrubAudioPlayer {
         #endif
     }
 
-    /// Set the normalized platter position (`0.0...1.0`). The render thread
-    /// chases this; the resulting pitch/direction follow how it changes.
-    func setPosition(_ normalized: Double) {
-        let clamped = normalized.isFinite ? min(1.0, max(0.0, normalized)) : 0.5
+    /// Move the read-head target by `normalizedDelta` within the anchor window.
+    /// Positive delta = forward, negative = backward. The render thread chases
+    /// this target at ≤ `maxRate`. Called from the UI drag-gesture handler once
+    /// per touch event.
+    func moveReadHead(by normalizedDelta: Double) {
+        let safeDelta = normalizedDelta.isFinite ? normalizedDelta : 0
+        let frameDelta = safeDelta * sensitivity * windowFrames
         os_unfair_lock_lock(&stateLock)
-        targetPosition = clamped
+        targetReadHead = min(anchorEnd, max(anchorStart, targetReadHead + frameDelta))
         os_unfair_lock_unlock(&stateLock)
     }
 
@@ -161,6 +179,22 @@ final class KidScrubAudioPlayer {
         samples = mono
         frameCount = frames
         sampleRate = format.sampleRate
+
+        // Anchor the scrub window at the loudest, most recognisable part of the
+        // "ahh". The sample envelope peaks from ~50 ms to ~420 ms; a 300 ms
+        // window starting at 100 ms keeps the read head inside the strong vocal
+        // formant region.
+        let windowDuration: Double = 0.300     // 300 ms
+        let windowStartSecond: Double = 0.100  // start 100 ms in
+        anchorStart = windowStartSecond * sampleRate
+        anchorEnd = min(Double(frameCount - 1), anchorStart + windowDuration * sampleRate)
+        windowFrames = anchorEnd - anchorStart
+
+        // Park the read head at the centre of the window so the user hears the
+        // strongest "ahh" on first touch without any movement.
+        let centre = anchorStart + windowFrames / 2.0
+        readIndex = centre
+        targetReadHead = centre
     }
 
     private func configureEngine() {
@@ -196,22 +230,24 @@ final class KidScrubAudioPlayer {
         }
 
         os_unfair_lock_lock(&stateLock)
-        let target = targetPosition
+        let target = targetReadHead
         os_unfair_lock_unlock(&stateLock)
 
-        let lastFrame = Double(frameCount - 1)
-        let startIndex = readIndex
-        let endIndex = target * lastFrame
         let blockFrames = Int(frames)
-        let perFrameRate = blockFrames > 0 ? (endIndex - startIndex) / Double(blockFrames) : 0
+        let startIndex = readIndex
+
+        // Chase the target at no more than ±maxRate (audio frames per output
+        // sample). A rate of 1.0 = normal speed, 3.0 = 3× speed.
+        let rawRate = blockFrames > 0 ? (target - startIndex) / Double(blockFrames) : 0
+        let clampedRate = min(max(rawRate, -maxRate), maxRate)
+        let endIndex = startIndex + clampedRate * Double(blockFrames)
+
         // Target the de-click envelope: full level while the head moves, silence
         // while it is held. The ramp turns the on/off edges into short fades.
-        let gainTarget: Double = abs(perFrameRate) >= silenceRateThreshold ? 1.0 : 0.0
+        let gainTarget: Double = abs(clampedRate) >= silenceRateThreshold ? 1.0 : 0.0
 
         for frame in 0..<blockFrames {
-            // Hold the read position when idle so the fade-out plays the last
-            // groove position decaying to true silence (no jump).
-            let idx = startIndex + perFrameRate * Double(frame)
+            let idx = startIndex + clampedRate * Double(frame)
             let gain = Float(gainRamp.advance(toward: gainTarget))
             let value = sampleValue(at: idx) * gain
             for buffer in bufferList {
