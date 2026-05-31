@@ -44,6 +44,10 @@ struct ScratchPlaybackLabView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
+            capturedNotation
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            Divider()
             controlsRow
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -366,6 +370,68 @@ struct ScratchPlaybackLabView: View {
                 .truncationMode(.middle)
                 .offset(y: 18)
         }
+    }
+
+    // MARK: - Captured notation preview (read-only)
+
+    // Renders the live `ScratchSampleTimelineNotation.path` through the shared
+    // `ScratchMotionRenderer`, so the captured travel is drawn as notation here
+    // the same way Practice/Review draw it. Read-only and preview-only: no PNG,
+    // no save, no export. Sample position maps straight onto lane height — a
+    // partial scratch reads as partial height, never renormalised to full.
+    private var capturedNotation: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Captured notation")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("absolute sample position · preview only")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(white: 0.10))
+                if model.timelineEventCount == 0 {
+                    Text("Scratch to capture notation.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Canvas { context, size in
+                        drawCapturedNotation(context: context, size: size)
+                    }
+                    .padding(8)
+                }
+            }
+            .frame(height: 120)
+        }
+    }
+
+    private func drawCapturedNotation(context: GraphicsContext, size: CGSize) {
+        let notation = model.timelineNotation
+        guard !notation.isEmpty else { return }
+
+        // Fit the WHOLE captured timeline left→right: the first sample sits at
+        // the leading edge, the last at the trailing edge. A horizontal lane
+        // maps sample position onto height (0 = bottom/rest, 1 = top/full),
+        // straight through with no renormalisation.
+        let range = notation.path.timeRange
+        let duration = max(range.upperBound - range.lowerBound, 0.001)
+        let viewport = LaneViewport(size: size, now: range.lowerBound, axis: .horizontal,
+                                    actionLineFraction: 0, secondsAhead: duration)
+
+        // Subtle muted indicators: crossfader-closed spans get a faint band so
+        // their timing is visible without dropping any travel from the path.
+        for span in notation.mutedSpans {
+            let x0 = viewport.pos(for: span.lowerBound)
+            let x1 = viewport.pos(for: span.upperBound)
+            let rect = CGRect(x: min(x0, x1), y: 0,
+                              width: max(abs(x1 - x0), 1), height: size.height)
+            context.fill(Path(rect), with: .color(.white.opacity(0.06)))
+        }
+
+        ScratchMotionRenderer.draw(notation.path, in: context,
+                                   viewport: viewport, style: .user)
     }
 
     // MARK: - Controls

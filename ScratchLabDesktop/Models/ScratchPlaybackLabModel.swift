@@ -262,6 +262,16 @@ final class ScratchPlaybackLabModel: ObservableObject {
         timelineReachedCapacity = false
     }
 
+    /// Notation geometry derived from the live captured timeline — the absolute
+    /// sample-position path the preview renders (0 = sample start / rest edge,
+    /// 1 = sample end / full travel; partial travel is NOT renormalised). Pure
+    /// and derived; nothing is persisted and no export schema is touched. The
+    /// preview reads this on each redraw; `timelineEventCount` is the published
+    /// trigger that drives those redraws while scratching.
+    var timelineNotation: ScratchSampleTimelineNotation {
+        ScratchSampleTimelineNotation(timeline: timeline)
+    }
+
     /// Writes the currently held sample-position timeline to a timestamped JSON file in
     /// ~/Downloads (same explicit-user-action pattern as `exportDiagnostics()` — never
     /// called automatically). The raw travel is enough to regenerate notation later; no
