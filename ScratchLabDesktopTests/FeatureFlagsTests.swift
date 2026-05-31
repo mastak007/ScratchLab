@@ -54,4 +54,41 @@ final class FeatureFlagsTests: XCTestCase {
         XCTAssertTrue(FeatureFlags.isOn("X",  releaseDefault: true,  debugDefault: false, environment: [:]))
         #endif
     }
+
+    // MARK: - Kid Mode prototype gate (Batch 1.6: dev-default-on)
+
+    /// The flag's configured defaults: ON in DEBUG, OFF in release, with the
+    /// env override still able to force either way. Uses the same KIDPROTOTYPE
+    /// key + defaults as `FeatureFlags.kidPrototypeEnabled`.
+    func testKidPrototypeDefaultsAndOverride() {
+        // Env override forces on/off regardless of build config.
+        XCTAssertTrue(FeatureFlags.isOn(
+            "KIDPROTOTYPE", releaseDefault: false, debugDefault: true,
+            environment: ["SCRATCHLAB_FF_KIDPROTOTYPE": "1"]))
+        XCTAssertFalse(FeatureFlags.isOn(
+            "KIDPROTOTYPE", releaseDefault: false, debugDefault: true,
+            environment: ["SCRATCHLAB_FF_KIDPROTOTYPE": "0"]))
+
+        // No override → build-config default: DEBUG on, release off.
+        #if DEBUG
+        XCTAssertTrue(FeatureFlags.isOn(
+            "KIDPROTOTYPE", releaseDefault: false, debugDefault: true, environment: [:]))
+        #else
+        XCTAssertFalse(FeatureFlags.isOn(
+            "KIDPROTOTYPE", releaseDefault: false, debugDefault: true, environment: [:]))
+        #endif
+    }
+
+    /// Pin the real property: in a DEBUG test run with no env override set, the
+    /// Kid Mode prototype flag must be on.
+    func testKidPrototypeEnabledPropertyDefaultsOnInDebug() {
+        guard ProcessInfo.processInfo.environment["SCRATCHLAB_FF_KIDPROTOTYPE"] == nil else {
+            return // an explicit override is in effect; default not under test
+        }
+        #if DEBUG
+        XCTAssertTrue(FeatureFlags.kidPrototypeEnabled)
+        #else
+        XCTAssertFalse(FeatureFlags.kidPrototypeEnabled)
+        #endif
+    }
 }

@@ -84,12 +84,13 @@ enum FeatureFlags {
 
     // MARK: Kid Mode validation prototype
 
-    // Hidden, off-everywhere gate for the Kid Mode validation prototype
-    // (analysis/kid_mode/KID_MODE_PROTOTYPE_VALIDATION_PLAN.md). Off in release
-    // AND DEBUG so it is invisible until a researcher sets
-    // SCRATCHLAB_FF_KIDPROTOTYPE=1. Deleting this flag + the KidPrototype folder
-    // leaves production byte-identical.
-    static var kidPrototypeEnabled: Bool { isOn("KIDPROTOTYPE", releaseDefault: false, debugDefault: false) }
+    // Gate for the Kid Mode validation prototype
+    // (analysis/kid_mode/KID_MODE_PROTOTYPE_VALIDATION_PLAN.md). ON by default in
+    // DEBUG (dev/simulator/device builds show it when tapped normally), OFF in
+    // release so TestFlight/App Store builds never expose it. The env override
+    // SCRATCHLAB_FF_KIDPROTOTYPE still wins either way. Deleting this flag + the
+    // KidPrototype folder leaves production byte-identical.
+    static var kidPrototypeEnabled: Bool { isOn("KIDPROTOTYPE", releaseDefault: false, debugDefault: true) }
 
     // MARK: Resolution
 
