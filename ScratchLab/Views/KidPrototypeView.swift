@@ -1,26 +1,18 @@
 // KidPrototypeView.swift
-// ScratchLab — Kid Mode Validation Prototype (Batch 1, Slices 1 + 3).
+// ScratchLab — Kid Mode Validation Prototype (Batch 1).
 //
-// A hidden, feature-flagged iOS screen used only to validate the Kid Mode
-// prototype assumptions (see analysis/kid_mode/
-// KID_MODE_PROTOTYPE_VALIDATION_PLAN.md). It is reachable only when
-// FeatureFlags.kidPrototypeEnabled is on, and re-checks the flag itself so the
-// screen is inert if it is ever pushed with the flag off.
+// Reachable only when FeatureFlags.kidPrototypeEnabled is on.
 //
-// Batch 1 scope only: finger -> position/velocity/direction (KidScrubInput)
-// -> scrub audio (KidScrubAudioPlayer), plus a small read-out to confirm it
-// responds. Deliberately NO ribbon renderer, NO trace buffer, NO target ghost,
-// NO presentation modes, NO scoring, NO research logging — those are later
-// batches.
+// Batch 1.5 — Touch-only manual scrub:
+// A ribbon scrolls visually past 12 / AHH START so the user can anticipate
+// the grab. Audio only plays while the user is touching; release fades to
+// silence. No autoplay audio. No BPM grid. No scoring.
 //
-// To remove the prototype: delete this file, the ScratchLab/Models/KidPrototype
-// folder, and the FeatureFlags.kidPrototypeEnabled flag; remove the flag-gated
-// entry in MainMenuView. Production is then byte-identical.
+// Delete this file + KidPrototype folder + flag to remove the prototype.
 
 import SwiftUI
 
 struct KidPrototypeView: View {
-
     var body: some View {
         Group {
             if FeatureFlags.kidPrototypeEnabled {
@@ -34,8 +26,6 @@ struct KidPrototypeView: View {
     }
 }
 
-// MARK: - Unavailable (flag off)
-
 private struct KidPrototypeUnavailableView: View {
     var body: some View {
         ZStack {
@@ -48,166 +38,240 @@ private struct KidPrototypeUnavailableView: View {
     }
 }
 
-// MARK: - Content (flag on)
+// MARK: - Content
 
 private struct KidPrototypeContentView: View {
 
     @State private var input = KidScrubInput()
     @StateObject private var audio = KidScrubAudioHolder()
 
-    /// Last drag translation consumed, so we can derive per-event deltas.
-    @State private var lastTranslation: CGFloat = 0
-    /// Timestamp of the last drag event, for deltaTime.
-    @State private var lastEventTime: TimeInterval?
+    // How-to-play card.
+    @State private var hasStarted = false
+    @State private var showingHelp = false
+
+    // Ribbon auto-scroll (visual only — no audio coupling).
+    @State private var ribbonPhase: Double = 0.0
+    private let twelveFraction: Double = 0.50       // 12 line at middle
+    private let cycleDuration: Double = 1.8          // bottom→top visual period
+    private let timer = Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()
+
+    // Drag state.
+    @State private var isGrabbing = false
     @State private var isScrubbing = false
+    @State private var accumLastTranslation: CGFloat = 0
+    @State private var accumLastEventTime: TimeInterval?
 
     var body: some View {
         ZStack {
             BackgroundView()
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 22) {
-                    intro
-                    scrubPad
-                    telemetry
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 36)
+            VStack(spacing: 0) {
+                intro
+                    .padding(.horizontal, 20).padding(.top, 8)
+                ribbonLane
+                    .padding(.horizontal, 20).padding(.vertical, 8)
+                telemetry
+                    .padding(.horizontal, 20).padding(.bottom, 8)
             }
+            .allowsHitTesting(hasStarted && !showingHelp)
+
+            if !hasStarted || showingHelp { howToPlayCard }
         }
         .onAppear { audio.player.start() }
         .onDisappear { audio.player.stop() }
+        .onReceive(timer) { _ in
+            guard hasStarted, !showingHelp, !isGrabbing else { return }
+            ribbonPhase += (1.0 / 60.0) / cycleDuration
+            if ribbonPhase >= 1.0 { ribbonPhase = 0.0 }
+        }
     }
+
+    // MARK: - Intro
 
     private var intro: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Kid Mode Validation Prototype")
-                .font(.system(size: 26, weight: .semibold))
-                .foregroundColor(.white)
-
-            Text("Internal validation prototype. Drag across the pad below to scrub the bundled sample. This proves finger → sound; it is not a finished feature and records nothing.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.72))
-                .fixedSize(horizontal: false, vertical: true)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Kid Mode Prototype")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                Text("Touch to grab · Swipe up = forward · Swipe down = reverse")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.45))
+            }
+            Spacer()
+            Button { showingHelp = true } label: {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(.white.opacity(0.5))
+            }
         }
     }
 
-    private var scrubPad: some View {
+    // MARK: - Ribbon Lane
+
+    private var ribbonLane: some View {
         GeometryReader { proxy in
-            let width = max(proxy.size.width, 1)
+            let h = max(proxy.size.height, 1)
+            let w = max(proxy.size.width, 1)
+            let twelveY = h * twelveFraction
+            let ribbonY = h * (1.0 - ribbonPhase)
+            let ribbonH: CGFloat = 36
 
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(isScrubbing ? 0.12 : 0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-                .overlay(positionIndicator(width: width))
-                .overlay(
-                    Text("Drag here")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.4))
-                )
-                .contentShape(Rectangle())
-                .gesture(dragGesture(width: width))
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(isGrabbing ? 0.10 : 0.04))
+
+                // 12 / AHH START grab line.
+                Rectangle().fill(Color.white.opacity(0.30))
+                    .frame(height: 2)
+                    .position(x: w / 2, y: twelveY)
+                Text("12 / AHH START")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white.opacity(0.60))
+                    .position(x: w / 2 + 62, y: twelveY - 11)
+
+                // Labels.
+                Text("↑ forward")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.white.opacity(0.18))
+                    .position(x: w / 2, y: 14)
+                Text("↓ reverse")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.white.opacity(0.18))
+                    .position(x: w / 2, y: h - 14)
+
+                // Ribbon: amber when grabbed or above 12, dim when below.
+                Capsule()
+                    .fill(ribbonPhase >= twelveFraction || isGrabbing
+                        ? Color(hex: "F59E0B").opacity(isGrabbing ? 1.0 : 0.75)
+                        : Color(hex: "F59E0B").opacity(0.3))
+                    .frame(width: w - 6, height: ribbonH)
+                    .position(x: w / 2, y: ribbonY)
+
+                if isGrabbing {
+                    Circle().fill(Color.white)
+                        .frame(width: 8, height: 8)
+                        .position(x: 22, y: ribbonY)
+                }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(isGrabbing ? 0.18 : 0.08), lineWidth: 1))
+            .contentShape(Rectangle())
+            .gesture(dragGesture(height: h))
+            .clipped()
         }
-        .frame(height: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func positionIndicator(width: CGFloat) -> some View {
-        GeometryReader { proxy in
-            Capsule()
-                .fill(directionColor)
-                .frame(width: 4)
-                .position(
-                    x: CGFloat(input.position) * proxy.size.width,
-                    y: proxy.size.height / 2
-                )
-        }
-    }
+    // MARK: - Drag
 
-    private func dragGesture(width: CGFloat) -> some Gesture {
+    private func dragGesture(height: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                isScrubbing = true
                 let now = ProcessInfo.processInfo.systemUptime
-                let translation = value.translation.width
+                let translation = value.translation.height
+                let px = translation - accumLastTranslation
+                accumLastTranslation = translation
 
-                let pixelDelta = translation - lastTranslation
-                lastTranslation = translation
+                let dt: TimeInterval
+                if let last = accumLastEventTime { dt = now - last }
+                else { dt = 0 }
+                accumLastEventTime = now
 
-                let deltaTime: TimeInterval
-                if let last = lastEventTime {
-                    deltaTime = now - last
-                } else {
-                    deltaTime = 0
+                // Negate: SwiftUI height + down → swipe UP = phase increase.
+                let nd = -Double(px / height)
+                input.update(delta: nd, deltaTime: dt)
+
+                if !isGrabbing {
+                    isGrabbing = true
+                    audio.player.beginGrab()
+                    audio.player.jumpTo(t: ribbonPhase)
                 }
-                lastEventTime = now
 
-                // Map horizontal pixels to a normalized position delta.
-                // The audio read head is delta-driven within a small anchor
-                // window (not mapped 0…1 across the full sample).
-                let normalizedDelta = Double(pixelDelta / width)
-                input.update(delta: normalizedDelta, deltaTime: deltaTime)
-                audio.player.moveReadHead(by: normalizedDelta)
+                isScrubbing = true
+                audio.player.moveReadHead(by: nd)
+                ribbonPhase = min(1.0, max(0.0, ribbonPhase + nd))
             }
             .onEnded { _ in
+                isGrabbing = false
                 isScrubbing = false
-                lastTranslation = 0
-                lastEventTime = nil
-                // Finger lifted: register a still frame so the read-out shows
-                // idle. The audio read head holds and the de-click gain ramp
-                // fades to silence — no explicit player call needed.
+                accumLastTranslation = 0
+                accumLastEventTime = nil
+                audio.player.endGrab()
                 input.update(delta: 0, deltaTime: 0)
             }
     }
 
+    // MARK: - Telemetry
+
     private var telemetry: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            telemetryRow(title: "Position", value: String(format: "%.3f", input.position))
-            telemetryRow(title: "Velocity", value: String(format: "%+.2f /s", input.velocity))
-            telemetryRow(title: "Direction", value: directionLabel)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-
-    private func telemetryRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
-                .foregroundColor(.white.opacity(0.46))
-            Spacer()
-            Text(value)
-                .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white)
+        HStack(spacing: 24) {
+            chip("PHASE", String(format: "%.2f", ribbonPhase))
+            chip("VEL",   String(format: "%+.1f", input.velocity))
+            chip("DIR",   dirLabel)
         }
     }
-
-    private var directionLabel: String {
+    private func chip(_ l: String, _ v: String) -> some View {
+        HStack(spacing: 6) {
+            Text(l).font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.35))
+            Text(v).font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundColor(.white)
+        }
+    }
+    private var dirLabel: String {
         switch input.direction {
-        case .forward: return "Forward"
-        case .backward: return "Backward"
-        case .idle: return "Idle"
+        case .forward: return "FWD"
+        case .backward: return "REV"
+        case .idle: return "—"
         }
     }
 
-    private var directionColor: Color {
-        switch input.direction {
-        case .forward: return Color(hex: "22C55E")
-        case .backward: return Color(hex: "F59E0B")
-        case .idle: return Color(hex: "64748B")
+    // MARK: - How-to-play
+
+    private var howToPlayCard: some View {
+        Color.black.opacity(0.55).ignoresSafeArea().overlay {
+            VStack(spacing: 0) {
+                Spacer()
+                VStack(spacing: 24) {
+                    Text("How to play")
+                        .font(.system(size: 22, weight: .bold)).foregroundColor(.white)
+                    VStack(alignment: .leading, spacing: 20) {
+                        step(1, "Watch for the ribbon", "It loops past the 12 / AHH START line.")
+                        step(2, "Grab the ahh", "Touch when the ribbon reaches 12.")
+                        step(3, "Move the sound", "Swipe up for forward. Swipe down for reverse. Hold for silence.")
+                    }
+                    Button {
+                        hasStarted = true; showingHelp = false
+                        ribbonPhase = 0.0
+                        audio.player.jumpTo(t: 0.0)
+                    } label: {
+                        Text("Start Practice")
+                            .font(.system(size: 17, weight: .semibold)).foregroundColor(.black)
+                            .padding(.horizontal, 40).padding(.vertical, 14)
+                            .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+                .padding(28)
+                .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color(white: 0.15)))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+                .padding(.horizontal, 24)
+                Spacer()
+            }
+        }
+    }
+
+    private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text("\(n)").font(.system(size: 15, weight: .bold)).foregroundColor(.black)
+                .frame(width: 26, height: 26)
+                .background(Color.white.opacity(0.9), in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
+                Text(detail).font(.system(size: 13, weight: .medium)).foregroundColor(.white.opacity(0.55))
+            }
         }
     }
 }
 
-/// Owns the prototype audio player for the lifetime of the screen.
 private final class KidScrubAudioHolder: ObservableObject {
     let player = KidScrubAudioPlayer()
 }
@@ -215,10 +279,8 @@ private final class KidScrubAudioHolder: ObservableObject {
 #if DEBUG
 struct KidPrototypeView_Previews: PreviewProvider {
     static var previews: some View {
-        NavigationStack {
-            KidPrototypeView()
-        }
-        .preferredColorScheme(.dark)
+        NavigationStack { KidPrototypeView() }
+            .preferredColorScheme(.dark)
     }
 }
 #endif
