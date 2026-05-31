@@ -72,6 +72,8 @@ struct ScratchPlaybackLabView: View {
         HStack(spacing: 16) {
             activityIndicator
 
+            controllerProfileLabel
+
             Picker("Source", selection: $model.selectedSourceName) {
                 Text("All Sources").tag(String?.none)
                 ForEach(model.sources) { source in
@@ -93,6 +95,19 @@ struct ScratchPlaybackLabView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    // Read-only active controller profile ("RANE ONE MKII" or "Unverified"). No editor
+    // and no MIDI learn yet — this just surfaces which mapping the lab is trusting.
+    private var controllerProfileLabel: some View {
+        let profile = model.activeControllerProfile
+        return HStack(spacing: 6) {
+            Image(systemName: profile.isVerified ? "checkmark.seal.fill" : "questionmark.diamond.fill")
+                .foregroundStyle(profile.isVerified ? Color.green : Color.orange)
+            Text("Controller profile: \(profile.displayName)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // Tester-safety banner: shown only when the active MIDI source is not the verified

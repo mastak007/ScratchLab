@@ -158,16 +158,23 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     var sampleDuration: TimeInterval { mapper.sampleDuration }
 
-    /// Warning shown when the active MIDI source does not look like the controller the
-    /// Scratch Playback Lab's mapping was built around (RANE ONE / ONE MKII); nil when the
-    /// active source is recognized. Pure and derived from `selectedSourceName` + `sources`
-    /// (both @Published, so the view refreshes it automatically). Display-only: it never
-    /// touches the mapper, timeline capture, or any export.
-    var controllerWarning: String? {
-        ControllerRecognition.warning(
+    /// The controller profile currently treated as active — the verified built-in RANE
+    /// profile when the active source is recognized, otherwise `.unverified`. Purely
+    /// derived from `selectedSourceName` + `sources` (both @Published, so the view
+    /// refreshes it automatically); it stores nothing and mutates no timeline/capture/
+    /// export state. Switching source (and therefore active profile) cannot alter captured
+    /// data because this is read-only.
+    var activeControllerProfile: ActiveControllerProfile {
+        ActiveControllerProfile.resolve(
             selectedSourceName: selectedSourceName,
             availableSourceNames: sources.map(\.name)
         )
+    }
+
+    /// Warning shown when the active controller profile is unverified; nil when verified.
+    /// Routed through `activeControllerProfile` so it always matches the displayed profile.
+    var controllerWarning: String? {
+        activeControllerProfile.warning
     }
 
     private var mapper: ScratchPlatterPlayheadMapper

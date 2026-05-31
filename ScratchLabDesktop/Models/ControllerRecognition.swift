@@ -50,4 +50,45 @@ enum ControllerRecognition {
             : unverifiedWarning
     }
 }
+
+/// The controller profile the Scratch Playback Lab is currently treating as active.
+/// Initially just the verified built-in profile or "Unverified" — there is no profile
+/// editor and no MIDI learn yet. The unknown-controller warning is routed through this
+/// state so there is one source of truth for "is the active mapping trustworthy".
+enum ActiveControllerProfile: Equatable {
+    /// A verified, built-in profile (currently only RANE ONE MKII).
+    case builtIn(ControllerProfile)
+    /// The active source does not match a verified profile; captured notation may be invalid.
+    case unverified
+
+    /// Name for the read-only "Controller profile: …" UI line.
+    var displayName: String {
+        switch self {
+        case .builtIn(let profile): return profile.displayName
+        case .unverified: return "Unverified"
+        }
+    }
+
+    /// Whether the active profile is verified (current behaviour) versus unverified (warn).
+    var isVerified: Bool {
+        if case .builtIn = self { return true }
+        return false
+    }
+
+    /// The tester warning for an unverified active profile, or nil when verified. Routing
+    /// the warning through here keeps it consistent with the displayed profile.
+    var warning: String? {
+        isVerified ? nil : ControllerRecognition.unverifiedWarning
+    }
+
+    /// Resolves the active profile purely from the live MIDI selection: a recognized
+    /// RANE-like selection is the built-in RANE profile, anything else is unverified.
+    /// Pure and side-effect free — it touches no timeline, capture, or export state.
+    static func resolve(selectedSourceName: String?, availableSourceNames: [String]) -> ActiveControllerProfile {
+        ControllerRecognition.isRecognized(
+            selectedSourceName: selectedSourceName,
+            availableSourceNames: availableSourceNames
+        ) ? .builtIn(.raneOneMKII) : .unverified
+    }
+}
 #endif

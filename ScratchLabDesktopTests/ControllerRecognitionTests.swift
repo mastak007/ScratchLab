@@ -83,3 +83,79 @@ final class ControllerRecognitionTests: XCTestCase {
         )
     }
 }
+
+/// Active controller profile state (Slice 3): the verified built-in or "Unverified",
+/// with the unknown-controller warning routed through it. Pure and side-effect free.
+final class ActiveControllerProfileTests: XCTestCase {
+
+    func testRecognizedSelectionResolvesToVerifiedRaneAndAllowsFlow() {
+        let active = ActiveControllerProfile.resolve(
+            selectedSourceName: "RANE ONE",
+            availableSourceNames: ["RANE ONE"]
+        )
+        XCTAssertEqual(active, .builtIn(.raneOneMKII))
+        XCTAssertTrue(active.isVerified)
+        XCTAssertEqual(active.displayName, "RANE ONE MKII")
+        XCTAssertNil(active.warning) // current flow, no warning
+    }
+
+    func testUnknownSelectionResolvesToUnverifiedAndWarns() {
+        let active = ActiveControllerProfile.resolve(
+            selectedSourceName: "Pioneer DDJ-GRV6",
+            availableSourceNames: ["Pioneer DDJ-GRV6"]
+        )
+        XCTAssertEqual(active, .unverified)
+        XCTAssertFalse(active.isVerified)
+        XCTAssertEqual(active.displayName, "Unverified")
+        XCTAssertEqual(active.warning, ControllerRecognition.unverifiedWarning)
+    }
+
+    func testWarningRoutesThroughActiveProfile() {
+        // The active-profile warning must equal the standalone recognition warning so
+        // there is a single source of truth for "is the mapping trustworthy".
+        for (selected, available) in [
+            (Optional("RANE ONE"), ["RANE ONE", "IAC Driver Bus 1"]),
+            (Optional("Pioneer DDJ-GRV6"), ["Pioneer DDJ-GRV6"]),
+            (Optional<String>.none, ["RANE ONE MKII"]),
+            (Optional<String>.none, ["IAC Driver Bus 1"]),
+            (Optional<String>.none, [])
+        ] {
+            let viaActive = ActiveControllerProfile
+                .resolve(selectedSourceName: selected, availableSourceNames: available).warning
+            let viaRecognition = ControllerRecognition
+                .warning(selectedSourceName: selected, availableSourceNames: available)
+            XCTAssertEqual(viaActive, viaRecognition)
+        }
+    }
+
+    func testResolutionIsPureAndDeterministic() {
+        // Same inputs → same result, repeatedly (no hidden state, nothing to mutate).
+        let first = ActiveControllerProfile.resolve(
+            selectedSourceName: nil, availableSourceNames: ["RANE ONE"]
+        )
+        let second = ActiveControllerProfile.resolve(
+            selectedSourceName: nil, availableSourceNames: ["RANE ONE"]
+        )
+        XCTAssertEqual(first, second)
+    }
+
+    @MainActor
+    func testSwitchingActiveProfileViaModelDoesNotMutateTimeline() {
+        // The model is not started here (no MIDI/audio); we only flip the source so the
+        // derived active profile changes, and assert the captured timeline is untouched.
+        let model = ScratchPlaybackLabModel()
+        let before = model.timelineEventCount
+
+        model.selectedSourceName = "RANE ONE"
+        let verified = model.activeControllerProfile
+        XCTAssertTrue(verified.isVerified)
+        XCTAssertEqual(model.timelineEventCount, before)
+
+        model.selectedSourceName = "Pioneer DDJ-GRV6"
+        let unverified = model.activeControllerProfile
+        XCTAssertFalse(unverified.isVerified)
+        XCTAssertEqual(model.timelineEventCount, before, "switching profile must not touch timeline")
+
+        XCTAssertNotEqual(verified, unverified)
+    }
+}
