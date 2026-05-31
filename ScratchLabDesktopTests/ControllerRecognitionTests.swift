@@ -313,3 +313,71 @@ final class ControllerMappingInferenceTests: XCTestCase {
         XCTAssertEqual(ControllerMappingInference.infer(stream), ControllerMappingInference.infer(stream))
     }
 }
+
+/// Guided mapping check state machine (Slice 6): walks spin-platter → move-crossfader →
+/// review → confirm, collecting MIDI and inferring controls. Pure; memory only.
+final class GuidedMappingSessionTests: XCTestCase {
+
+    private func cc(_ number: Int, _ value: Int) -> ParsedMIDIMessage {
+        MIDIMessageParsing.parse([0xB0, UInt8(number), UInt8(value)])
+    }
+
+    func testFlowProgressesThroughStepsAndInfers() {
+        var session = GuidedMappingSession()
+        XCTAssertEqual(session.step, .idle)
+        XCTAssertFalse(session.isCollecting)
+
+        session.start()
+        XCTAssertEqual(session.step, .spinPlatter)
+        XCTAssertTrue(session.isCollecting)
+
+        // Spin the platter: a ±1 ring ramp on CC6.
+        for value in 40...80 { session.record(cc(6, value)) }
+        session.advance()
+        XCTAssertEqual(session.step, .moveCrossfader)
+
+        // Move the crossfader: a broad sweep on CC8.
+        for value in [0, 20, 40, 60, 80, 100, 120, 127, 64] { session.record(cc(8, value)) }
+        session.advance()
+
+        guard case .review(let candidates) = session.step else {
+            return XCTFail("expected review step")
+        }
+        XCTAssertEqual(candidates.platter?.signal, .controlChange(number: 6))
+        XCTAssertEqual(candidates.crossfader?.signal, .controlChange(number: 8))
+        XCTAssertNotNil(session.inferred)
+        XCTAssertNil(session.confirmedMapping)
+
+        session.advance()
+        XCTAssertNotNil(session.confirmedMapping)
+        if case .confirmed = session.step {} else { XCTFail("expected confirmed step") }
+    }
+
+    func testRecordIgnoredWhenNotCollecting() {
+        var session = GuidedMappingSession()
+        session.record(cc(6, 40)) // idle → ignored
+        session.start()
+        session.advance() // moveCrossfader still collecting
+        session.advance() // review — no longer collecting
+        let countAtReview = session.collected.count
+        session.record(cc(6, 41)) // ignored at review
+        XCTAssertEqual(session.collected.count, countAtReview)
+    }
+
+    func testCancelResetsToIdle() {
+        var session = GuidedMappingSession()
+        session.start()
+        session.record(cc(6, 40))
+        session.cancel()
+        XCTAssertEqual(session.step, .idle)
+        XCTAssertTrue(session.collected.isEmpty)
+    }
+
+    func testConfirmIsTerminal() {
+        var session = GuidedMappingSession()
+        session.start(); session.advance(); session.advance(); session.advance() // → confirmed
+        let confirmed = session.step
+        session.advance() // no-op
+        XCTAssertEqual(session.step, confirmed)
+    }
+}

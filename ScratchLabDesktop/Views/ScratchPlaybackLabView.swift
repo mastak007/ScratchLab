@@ -53,6 +53,10 @@ struct ScratchPlaybackLabView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
+            guidedMappingRow
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            Divider()
             capturedNotation
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
@@ -405,6 +409,116 @@ struct ScratchPlaybackLabView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .offset(y: 18)
+        }
+    }
+
+    // MARK: - Guided controller mapping check (experimental; memory only)
+
+    // A first-pass guided flow so a tester on unsupported gear can spin the platter and
+    // move the crossfader, see what ScratchLab inferred, and confirm it. The result is an
+    // EXPERIMENTAL mapping held in memory only — it drives no capture, persistence, or export.
+    private var guidedMappingRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Verify controller mapping")
+                    .font(.subheadline.weight(.semibold))
+                Text("experimental")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.18), in: Capsule())
+                    .foregroundStyle(.orange)
+                Spacer()
+            }
+            guidedMappingBody
+        }
+    }
+
+    @ViewBuilder
+    private var guidedMappingBody: some View {
+        switch model.guidedMappingStep {
+        case .idle:
+            HStack(spacing: 12) {
+                Text("Check what ScratchLab thinks your platter and crossfader are. Builds an experimental mapping only — it is not used for capture yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Start mapping check") { model.startGuidedMapping() }
+            }
+        case .spinPlatter:
+            guidedStepRow(
+                title: "Step 1 of 2 — Spin the platter forward and back.",
+                nextTitle: "Next: crossfader"
+            )
+        case .moveCrossfader:
+            guidedStepRow(
+                title: "Step 2 of 2 — Move the crossfader fully open and closed.",
+                nextTitle: "See result"
+            )
+        case .review(let candidates):
+            guidedReview(candidates, confirmed: false)
+        case .confirmed(let candidates):
+            guidedReview(candidates, confirmed: true)
+        }
+    }
+
+    private func guidedStepRow(title: String, nextTitle: String) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.caption.weight(.medium))
+                Text("\(model.guidedCollectedCount) MIDI events captured")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Cancel") { model.cancelGuidedMapping() }
+            Button(nextTitle) { model.advanceGuidedMapping() }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func guidedReview(_ candidates: InferredMappingCandidates, confirmed: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            inferredControlLine(label: "Platter", candidate: candidates.platter)
+            inferredControlLine(label: "Crossfader", candidate: candidates.crossfader)
+            ForEach(candidates.notes, id: \.self) { note in
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                if confirmed {
+                    Label("Experimental mapping confirmed (memory only).",
+                          systemImage: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                    Spacer()
+                    Button("Done") { model.cancelGuidedMapping() }
+                } else {
+                    Spacer()
+                    Button("Cancel") { model.cancelGuidedMapping() }
+                    Button("Confirm experimental mapping") { model.advanceGuidedMapping() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private func inferredControlLine(label: String, candidate: InferredControlCandidate?) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: candidate != nil ? "dot.radiowaves.left.and.right" : "questionmark.circle")
+                .foregroundStyle(candidate != nil ? Color.green : Color.secondary)
+            Text("\(label):").font(.caption.weight(.medium))
+            if let candidate {
+                Text(signalDescription(candidate.signal))
+                    .font(.system(.caption, design: .monospaced))
+                Text(String(format: "(%.0f%% confidence)", candidate.confidence * 100))
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Text("not detected").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func signalDescription(_ signal: ControllerControlSignal) -> String {
+        switch signal {
+        case .controlChange(let number): return "CC\(number)"
+        case .pitchBend: return "Pitch bend"
         }
     }
 

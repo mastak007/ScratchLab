@@ -103,6 +103,12 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var lastDiagnosticExportPath: String?
     @Published private(set) var lastDiagnosticExportError: String?
 
+    // Guided controller mapping check (experimental). A pure state machine walks the tester
+    // through moving each control, infers candidate bindings, and lets them confirm. Held in
+    // memory only — it drives no capture, persistence, or export.
+    @Published private(set) var guidedMappingStep: GuidedMappingStep = .idle
+    @Published private(set) var guidedCollectedCount = 0
+
     // Live sample-position timeline (notation is derived from real sample travel, not
     // from inferred full-stroke notes). Captured on every CC6 platter step.
     @Published private(set) var timelineEventCount = 0
@@ -219,6 +225,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var lastCC6StepLatest: Int = 0
     /// Wall-clock time of the last platter event (either stream); drives idle re-seed.
     private var lastPlatterEventDate: Date?
+    /// Guided mapping check state machine (experimental; memory only). The MIDI path feeds
+    /// it parsed events while collecting; step transitions happen on explicit user actions.
+    private var guidedSession = GuidedMappingSession()
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
@@ -327,6 +336,30 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Clears the running max-observed-delta / alias diagnostic.
     func resetMaxDelta() {
         mapper.resetMaxObservedDelta()
+    }
+
+    // MARK: - Guided controller mapping check (experimental; memory only)
+
+    /// Starts the guided mapping check at its first step (spin the platter).
+    func startGuidedMapping() {
+        guidedSession.start()
+        guidedMappingStep = guidedSession.step
+        guidedCollectedCount = guidedSession.collected.count
+    }
+
+    /// Advances the guided mapping check: platter step → crossfader step → inference review
+    /// → confirm. Inference runs when leaving the crossfader step.
+    func advanceGuidedMapping() {
+        guidedSession.advance()
+        guidedMappingStep = guidedSession.step
+        guidedCollectedCount = guidedSession.collected.count
+    }
+
+    /// Cancels the guided mapping check and clears its in-memory collection.
+    func cancelGuidedMapping() {
+        guidedSession.cancel()
+        guidedMappingStep = guidedSession.step
+        guidedCollectedCount = 0
     }
 
     // MARK: - Tick measurement ("rotate one revolution")
@@ -451,6 +484,10 @@ final class ScratchPlaybackLabModel: ObservableObject {
         if let selected = selectedSourceName, selected != sourceName { return }
         let parsed = MIDIMessageParsing.parse(event.bytes)
         lastEventTypeLatest = parsed.messageType.displayName
+
+        // Feed the guided mapping check while it is collecting (no @Published writes here;
+        // the live count surfaces at display rate). Independent of capture/playback below.
+        guidedSession.record(parsed)
 
         switch parsed.messageType {
         case .controlChange where parsed.controlNumber == 6:
@@ -590,6 +627,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
         timelineEventCount = timeline.count
         timelinePositionSpan = timeline.positionSpan
         timelineReachedCapacity = timeline.didReachCapacity
+
+        // Guided mapping check: surface the live collected-event count while collecting.
+        if guidedSession.isCollecting {
+            guidedCollectedCount = guidedSession.collected.count
+        }
 
         // Diagnostic recorder: surface live count and reflect an auto-stop at capacity
         // (the MIDI path never writes @Published state).

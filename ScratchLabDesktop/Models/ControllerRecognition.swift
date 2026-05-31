@@ -307,4 +307,80 @@ enum ControllerMappingInference {
         return InferredMappingCandidates(platter: platter, crossfader: crossfader, notes: notes)
     }
 }
+
+/// One step of the guided mapping check. The flow walks a tester through moving each
+/// control, then shows the inferred result for confirmation.
+enum GuidedMappingStep: Equatable {
+    case idle
+    /// "Spin the platter forward and back."
+    case spinPlatter
+    /// "Move the crossfader fully open and closed."
+    case moveCrossfader
+    /// Inference has run; the tester reviews the guessed controls.
+    case review(InferredMappingCandidates)
+    /// The tester accepted the guess. Held in memory only — no persistence, no export.
+    case confirmed(InferredMappingCandidates)
+}
+
+/// A pure state machine for the guided "verify your controller" flow. It collects MIDI
+/// while the tester moves each control, infers candidate bindings, and lets them confirm.
+/// EXPERIMENTAL mapping only: the result is held in memory and never drives capture,
+/// persistence, or any export in this slice.
+struct GuidedMappingSession: Equatable {
+    private(set) var step: GuidedMappingStep = .idle
+    /// MIDI collected across the platter and crossfader steps, fed to inference at review.
+    private(set) var collected: [ParsedMIDIMessage] = []
+
+    /// True while the flow is actively collecting controller motion.
+    var isCollecting: Bool { step == .spinPlatter || step == .moveCrossfader }
+
+    /// The inferred candidates once the flow reaches review/confirmed, else nil.
+    var inferred: InferredMappingCandidates? {
+        switch step {
+        case .review(let candidates), .confirmed(let candidates): return candidates
+        default: return nil
+        }
+    }
+
+    /// The confirmed mapping (memory only), or nil until the tester confirms.
+    var confirmedMapping: InferredMappingCandidates? {
+        if case .confirmed(let candidates) = step { return candidates }
+        return nil
+    }
+
+    /// Begins the flow at the first step, discarding any prior collection.
+    mutating func start() {
+        step = .spinPlatter
+        collected = []
+    }
+
+    /// Records one parsed MIDI message — only while collecting (other steps ignore it).
+    mutating func record(_ message: ParsedMIDIMessage) {
+        guard isCollecting else { return }
+        collected.append(message)
+    }
+
+    /// Advances to the next step. From the crossfader step this runs inference; from
+    /// review it confirms. Idle starts the flow; confirmed is terminal.
+    mutating func advance() {
+        switch step {
+        case .idle:
+            start()
+        case .spinPlatter:
+            step = .moveCrossfader
+        case .moveCrossfader:
+            step = .review(ControllerMappingInference.infer(collected))
+        case .review(let candidates):
+            step = .confirmed(candidates)
+        case .confirmed:
+            break
+        }
+    }
+
+    /// Cancels the flow and clears everything back to idle.
+    mutating func cancel() {
+        step = .idle
+        collected = []
+    }
+}
 #endif
