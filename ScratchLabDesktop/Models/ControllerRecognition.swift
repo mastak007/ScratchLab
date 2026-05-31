@@ -308,6 +308,61 @@ enum ControllerMappingInference {
     }
 }
 
+/// Where the Scratch Playback Lab gets its position signal. The RANE platter is driven by
+/// CC6 (its pitch bend aliases and stays diagnostic-only); Scratch Visualizer's "SV Midi Out"
+/// instead sends a CLEAN 14-bit pitch bend that is an absolute position.
+enum PlaybackLabSourceMode: String, CaseIterable, Equatable {
+    /// Detect Scratch Visualizer by source name; everything else stays RANE/CC6.
+    case auto
+    /// Force Scratch Visualizer mirror (pitch-bend → absolute position).
+    case mirrorSV
+    /// Force RANE mode (CC6 drives; pitch bend stays diagnostic-only).
+    case rane
+
+    var displayName: String {
+        switch self {
+        case .auto: return "Auto"
+        case .mirrorSV: return "Mirror SV"
+        case .rane: return "RANE (CC6)"
+        }
+    }
+}
+
+/// Pure Scratch Visualizer mirror logic: source detection plus the clean pitch-bend →
+/// absolute sample-position mapping. SV sends position as 14-bit pitch bend where 8192
+/// (pitch-bend centre) = sample start and 16383 (max) = sample end. This is NEVER applied to
+/// RANE hardware in Auto mode (RANE's platter pitch bend aliases and must stay CC6-driven).
+enum ScratchVisualizerMirror {
+    /// Pitch-bend value mapped to sample start (0) and sample end (1).
+    static let positionStartBend = 8192
+    static let positionEndBend = 16383
+
+    /// Absolute sample position (0...1) from a clean SV pitch-bend value. Partial travel
+    /// stays partial — there is no session-relative renormalisation.
+    static func positionFraction(pitchBend raw: Int) -> Double {
+        let span = Double(positionEndBend - positionStartBend)
+        guard span > 0 else { return 0 }
+        return Swift.min(Swift.max(Double(raw - positionStartBend) / span, 0), 1)
+    }
+
+    /// Whether a source display name looks like Scratch Visualizer's MIDI out.
+    static func isScratchVisualizerSource(name: String?) -> Bool {
+        guard let name = name?.lowercased() else { return false }
+        return name.contains("sv midi") || name.contains("scratch visualizer")
+    }
+
+    /// Whether SV-mirror should be active for an event from `sourceName` under `mode`.
+    /// Auto mirrors ONLY recognised SV sources (so RANE hardware is never auto-mirrored);
+    /// `.mirrorSV` / `.rane` are explicit user overrides.
+    static func isActive(mode: PlaybackLabSourceMode, sourceName: String?) -> Bool {
+        switch mode {
+        case .mirrorSV: return true
+        case .rane: return false
+        case .auto: return isScratchVisualizerSource(name: sourceName)
+        }
+    }
+}
+
 /// One step of the guided mapping check. The flow walks a tester through moving each
 /// control, then shows the inferred result for confirmation.
 enum GuidedMappingStep: Equatable {

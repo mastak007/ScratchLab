@@ -412,3 +412,52 @@ final class TesterOnboardingContentTests: XCTestCase {
         }
     }
 }
+
+/// Scratch Visualizer mirror: SV's clean 14-bit pitch bend maps to absolute sample position,
+/// and Auto mode mirrors ONLY SV — never the RANE hardware (whose pitch bend aliases).
+final class ScratchVisualizerMirrorTests: XCTestCase {
+
+    private let span = Double(ScratchVisualizerMirror.positionEndBend - ScratchVisualizerMirror.positionStartBend)
+
+    // MARK: - Pitch bend → absolute position (8192 = start, 16383 = end)
+
+    func testCenterIsStartAndMaxIsEnd() {
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 8192), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 16383), 1.0, accuracy: 1e-9)
+    }
+
+    func testClampsBelowStartAndAboveEnd() {
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 0), 0.0, accuracy: 1e-9)
+        // 8162 = the observed session floor, just below centre → clamps to start.
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 8162), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 30000), 1.0, accuracy: 1e-9)
+    }
+
+    func testMatchesObservedScratch() {
+        // Cue ~11634 → ~0.42; peak 15155 → ~0.85 (partial travel stays partial).
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 11634),
+                       (11634.0 - 8192) / span, accuracy: 1e-9)
+        XCTAssertEqual(ScratchVisualizerMirror.positionFraction(pitchBend: 15155), 0.85, accuracy: 0.01)
+    }
+
+    // MARK: - Mode resolution (Auto mirrors SV, never RANE)
+
+    func testSourceDetection() {
+        XCTAssertTrue(ScratchVisualizerMirror.isScratchVisualizerSource(name: "SV Midi Out"))
+        XCTAssertTrue(ScratchVisualizerMirror.isScratchVisualizerSource(name: "Scratch Visualizer"))
+        XCTAssertFalse(ScratchVisualizerMirror.isScratchVisualizerSource(name: "Rane ONE MKII"))
+        XCTAssertFalse(ScratchVisualizerMirror.isScratchVisualizerSource(name: nil))
+    }
+
+    func testAutoMirrorsSVButNeverRane() {
+        XCTAssertTrue(ScratchVisualizerMirror.isActive(mode: .auto, sourceName: "SV Midi Out"))
+        XCTAssertFalse(ScratchVisualizerMirror.isActive(mode: .auto, sourceName: "Rane ONE MKII"))
+        XCTAssertFalse(ScratchVisualizerMirror.isActive(mode: .auto, sourceName: nil))
+    }
+
+    func testForcedModesOverrideRegardlessOfSource() {
+        XCTAssertTrue(ScratchVisualizerMirror.isActive(mode: .mirrorSV, sourceName: "Rane ONE MKII"))
+        XCTAssertTrue(ScratchVisualizerMirror.isActive(mode: .mirrorSV, sourceName: nil))
+        XCTAssertFalse(ScratchVisualizerMirror.isActive(mode: .rane, sourceName: "SV Midi Out"))
+    }
+}

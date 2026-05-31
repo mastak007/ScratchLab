@@ -163,6 +163,16 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published var deckChannel: Int = 0 {
         didSet { mapper.resetTracking() } // re-seed so a stale angle can't jump
     }
+    /// Position-signal mode. `.auto` mirrors Scratch Visualizer ("SV Midi Out", clean
+    /// pitch-bend position) automatically and leaves the RANE on CC6; `.mirrorSV` / `.rane`
+    /// are manual overrides. Changing it re-seeds tracking so nothing jumps.
+    @Published var sourceMode: PlaybackLabSourceMode = .auto {
+        didSet {
+            mapper.resetTracking()
+            velocityEstimator.reset()
+            lastSVEventTimestamp = nil // re-anchor SV audio after a mode change
+        }
+    }
     /// Sensitivity, expressed as sample-seconds moved per 1000 CC6 steps (nicer UI
     /// numbers than per-step). One platter revolution is ~3,932 CC6 steps, so the
     /// default ~0.266 maps roughly one revolution onto a ~1 s sample.
@@ -222,6 +232,20 @@ final class ScratchPlaybackLabModel: ObservableObject {
         activeControllerProfile.warning
     }
 
+    /// Whether the lab is (or will be) mirroring Scratch Visualizer's pitch-bend position
+    /// rather than driving the playhead from CC6. True when forced, or in Auto when an SV
+    /// source is selected/available. Display-only hint; the per-event decision is authoritative.
+    var isMirroringScratchVisualizer: Bool {
+        switch sourceMode {
+        case .mirrorSV: return true
+        case .rane: return false
+        case .auto:
+            if ScratchVisualizerMirror.isScratchVisualizerSource(name: selectedSourceName) { return true }
+            return selectedSourceName == nil
+                && sources.contains { ScratchVisualizerMirror.isScratchVisualizerSource(name: $0.name) }
+        }
+    }
+
     private var mapper: ScratchPlatterPlayheadMapper
     private let engine = ScratchPlaybackLabEngine()
     private let transport: CoreMIDIInputTransport
@@ -269,6 +293,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Guided mapping check state machine (experimental; memory only). The MIDI path feeds
     /// it parsed events while collecting; step transitions happen on explicit user actions.
     private var guidedSession = GuidedMappingSession()
+    /// Real (CoreMIDI) timestamp of the previous Scratch Visualizer pitch-bend event, used to
+    /// glide the audio at the instantaneous rate between SV position samples. nil = re-anchor.
+    private var lastSVEventTimestamp: TimeInterval?
     /// Captured-timeline replay clock (review only); advanced by the display tick.
     private var replay = CapturedTimelineReplay(timeline: ScratchSampleTimeline())
     /// Wall-clock time of the last replay advance, for the real-time delta.
@@ -321,6 +348,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
         mapper.resetPosition()
         mapper.resetTracking()
         velocityEstimator.reset()
+        lastSVEventTimestamp = nil
         engine.setVelocity(0)
         engine.setTargetPosition(seconds: mapper.samplePosition) // seek/snap to 0
         clearTimeline()
@@ -743,9 +771,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
         guidedSession.record(parsed)
 
         switch parsed.messageType {
-        case .controlChange where parsed.controlNumber == 6:
-            // PRIMARY platter driver: CC6 is a clean ±1 direction/step counter that does
-            // not alias (unlike the pitch bend). Each step advances the playhead.
+        case .controlChange where parsed.controlNumber == 6
+            && !ScratchVisualizerMirror.isActive(mode: sourceMode, sourceName: sourceName):
+            // PRIMARY platter driver (RANE): CC6 is a clean ±1 direction/step counter that
+            // does not alias (unlike the pitch bend). Each step advances the playhead. Skipped
+            // while mirroring Scratch Visualizer, whose position comes from pitch bend instead.
             guard let value = parsed.value else { return }
             reseedIfIdle()
             let wasSeeded = mapper.lastCC6Value != nil
@@ -775,9 +805,76 @@ final class ScratchPlaybackLabModel: ObservableObject {
             }
             lastPlatterEventDate = Date()
 
+        case .pitchBend where ScratchVisualizerMirror.isActive(mode: sourceMode, sourceName: sourceName):
+            // SCRATCH VISUALIZER MIRROR: SV's clean 14-bit pitch bend is an ABSOLUTE sample
+            // position (8192 = start, 16383 = end). Seek the playhead there and capture it so
+            // the same timeline / notation / replay / PNG pipeline mirrors SV. RANE hardware
+            // never reaches this branch in Auto (its platter pitch bend aliases — it stays
+            // CC6-driven below). SV has no crossfader, so the segment is left open (nil),
+            // never marked muted.
+            guard let raw = parsed.value else { return }
+            let svNow = Date()
+            let lastFraction = mapper.positionFraction
+            let fraction = ScratchVisualizerMirror.positionFraction(pitchBend: raw)
+            mapper.seek(toPositionFraction: fraction)
+            // AUDIO: glide at the INSTANTANEOUS rate (ΔP / Δt) between SV position samples.
+            // SV emits ~56 events/sec (~17 ms apart) — sparser than the ~12 ms audio quantum —
+            // so snapping to each position would gate the audio into a machine-gun chop. A
+            // continuous glide at the exact per-segment rate fills the gaps smoothly AND stays
+            // locked to SV's position (per-segment displacement = ΔP, no drift). Raw, not
+            // EMA-smoothed, so fast reversals are not smeared. After an idle gap we re-anchor
+            // (snap-seek, no glide) so a resume doesn't start from a stale spot.
+            let svMoved = (fraction - lastFraction) * mapper.sampleDuration
+            if let last = lastSVEventTimestamp {
+                let dt = event.timestamp - last
+                if dt > 0 && dt <= velocityIdleTimeout {
+                    engine.setVelocity(svMoved / dt)
+                } else {
+                    engine.setVelocity(0)
+                    engine.setTargetPosition(seconds: mapper.samplePosition) // re-anchor
+                }
+            } else {
+                engine.setTargetPosition(seconds: mapper.samplePosition) // first event: anchor
+            }
+            lastSVEventTimestamp = event.timestamp
+            // Smoothed velocity kept only for the timeline's direction sign / notation.
+            let svVelocity = velocityEstimator.ingest(sampleSeconds: svMoved, at: event.timestamp)
+            // Diagnostic readout (tracking does NOT move the playhead — the seek above did).
+            previousRawLatest = mapper.lastRawPitchBend
+            mapper.trackPitchBend(raw)
+            rawPitchBendLatest = raw
+            wrappedDeltaLatest = mapper.lastWrappedDelta
+            lastCC6StepLatest = 0
+            pitchBendEventDates.append(svNow)
+            lastPitchBendDate = svNow
+            lastPlatterEventDate = svNow
+            timeline.append(
+                timeSeconds: event.timestamp,
+                position: mapper.positionFraction,
+                velocity: svVelocity,
+                crossfader: nil,
+                cc6Step: nil
+            )
+            // SV can be recorded too (this is how SV diagnostic captures are made).
+            if isRecordingDiagnostics {
+                let elapsed = recordingStartDate.map { svNow.timeIntervalSince($0) } ?? 0
+                recorder.record(RaneDiagnosticEvent(
+                    timestamp: elapsed,
+                    rawPitchBend: raw,
+                    previousRawPitchBend: previousRawLatest,
+                    wrappedDelta: mapper.lastWrappedDelta,
+                    samplePositionSeconds: mapper.samplePosition,
+                    crossfader: nil,
+                    cc6: nil,
+                    deck: parsed.channel ?? deckChannel,
+                    sourceName: sourceName,
+                    hostTime: event.timestamp
+                ))
+            }
+
         case .pitchBend where ScratchPlatterPlayheadMapper.isPitchBendChannel(parsed.channel, forDeck: deckChannel):
-            // Pitch bend is DIAGNOSTIC ONLY now — it no longer moves the playhead (CC6
-            // does). Tracked for the readout and the diagnostic recording.
+            // Pitch bend is DIAGNOSTIC ONLY for the RANE — it no longer moves the playhead
+            // (CC6 does). Tracked for the readout and the diagnostic recording.
             guard let raw = parsed.value else { return }
             reseedIfIdle()
             previousRawLatest = mapper.lastRawPitchBend

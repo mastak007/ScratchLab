@@ -228,6 +228,14 @@ struct ScratchPlatterPlayheadMapper: Equatable {
         samplePosition = 0
     }
 
+    /// Seeks the playhead to an ABSOLUTE fraction (0...1) of the sample. Used by external
+    /// absolute-position sources (e.g. a clean pitch-bend position from Scratch Visualizer);
+    /// the RANE path never calls this — it advances the playhead by CC6 steps instead.
+    mutating func seek(toPositionFraction fraction: Double) {
+        let clamped = Swift.min(Swift.max(fraction, 0), 1)
+        samplePosition = clamped * sampleDuration
+    }
+
     /// Forgets the last CC6 and pitch-bend values so the next events re-seed without
     /// moving. Use after a deck/source change or a pause.
     mutating func resetTracking() {

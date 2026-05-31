@@ -276,4 +276,26 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(ScratchPlatterDeck.left.rawChannel, 0)
         XCTAssertEqual(ScratchPlatterDeck.right.rawChannel, 1)
     }
+
+    // MARK: - RANE pitch bend stays diagnostic-only; SV uses the absolute seek
+
+    func testTrackPitchBendNeverMovesThePlayhead() {
+        // RANE invariant: tracking pitch bend updates diagnostics but never the position,
+        // even on a huge (aliasing) jump — only CC6 moves the RANE playhead.
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 10, samplePosition: 3.0)
+        m.trackPitchBend(2000)
+        m.trackPitchBend(9000)   // ~7000-tick alias jump
+        m.trackPitchBend(150)
+        XCTAssertEqual(m.samplePosition, 3.0, accuracy: 1e-12)
+    }
+
+    func testSeekToPositionFractionSetsAbsolutePositionAndClamps() {
+        var m = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.1, sampleDuration: 10)
+        m.seek(toPositionFraction: 0.5)
+        XCTAssertEqual(m.samplePosition, 5.0, accuracy: 1e-12)
+        m.seek(toPositionFraction: 2.0)  // clamp high
+        XCTAssertEqual(m.samplePosition, 10.0, accuracy: 1e-12)
+        m.seek(toPositionFraction: -1.0) // clamp low
+        XCTAssertEqual(m.samplePosition, 0.0, accuracy: 1e-12)
+    }
 }
