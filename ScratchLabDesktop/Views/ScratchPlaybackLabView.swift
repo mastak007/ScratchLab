@@ -20,6 +20,11 @@ import SwiftUI
 struct ScratchPlaybackLabView: View {
     @StateObject private var model = ScratchPlaybackLabModel()
 
+    /// Display-only render foundation (roadmap R0). The single source of truth
+    /// the notation previews read for style/density. Defaults reproduce the
+    /// current render exactly; no UI controls are surfaced yet.
+    @State private var renderConfig = PlaybackLabRenderConfig()
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -418,7 +423,8 @@ struct ScratchPlaybackLabView: View {
         let range = notation.path.timeRange
         let duration = max(range.upperBound - range.lowerBound, 0.001)
         let viewport = LaneViewport(size: size, now: range.lowerBound, axis: .horizontal,
-                                    actionLineFraction: 0, secondsAhead: duration)
+                                    actionLineFraction: 0,
+                                    secondsAhead: renderConfig.secondsAhead(forDuration: duration))
 
         // Subtle muted indicators: crossfader-closed spans get a faint band so
         // their timing is visible without dropping any travel from the path.
@@ -427,11 +433,11 @@ struct ScratchPlaybackLabView: View {
             let x1 = viewport.pos(for: span.upperBound)
             let rect = CGRect(x: min(x0, x1), y: 0,
                               width: max(abs(x1 - x0), 1), height: size.height)
-            context.fill(Path(rect), with: .color(.white.opacity(0.06)))
+            context.fill(Path(rect), with: .color(.white.opacity(renderConfig.mutedAlpha)))
         }
 
         ScratchMotionRenderer.draw(notation.path, in: context,
-                                   viewport: viewport, style: .user)
+                                   viewport: viewport, style: renderConfig.motionStyle)
     }
 
     // MARK: - Controls
