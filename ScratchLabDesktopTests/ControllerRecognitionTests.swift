@@ -251,3 +251,65 @@ final class ControllerMappingValidationTests: XCTestCase {
         XCTAssertEqual(observation.pitchBendEventCount, 1)
     }
 }
+
+/// Pure MIDI-learn inference (Slice 5): guess the platter (±1 ring) and crossfader
+/// (broad 0...127 sweep) from an observed stream. Model only, no UI, no persistence.
+final class ControllerMappingInferenceTests: XCTestCase {
+
+    private func ccStream(cc: Int, values: [Int]) -> [ParsedMIDIMessage] {
+        values.map { MIDIMessageParsing.parse([0xB0 | UInt8(0), UInt8(cc), UInt8($0)]) }
+    }
+
+    private func pitchBendStream(count: Int) -> [ParsedMIDIMessage] {
+        (0..<count).map { i in
+            let raw = 4000 + i * 7
+            return MIDIMessageParsing.parse([0xE0, UInt8(raw & 0x7F), UInt8((raw >> 7) & 0x7F)])
+        }
+    }
+
+    func testCC6PlusOneStreamInfersPlatter() {
+        // A clean ±1 ring ramp on CC6 — the RANE platter fingerprint.
+        let values = Array(40...80) // 41 values, 40 ±1 transitions
+        let result = ControllerMappingInference.infer(ccStream(cc: 6, values: values))
+        XCTAssertEqual(result.platter?.signal, .controlChange(number: 6))
+        XCTAssertGreaterThan(result.platter?.confidence ?? 0, 0.9)
+        XCTAssertNil(result.crossfader)
+    }
+
+    func testCC8SweepInfersCrossfader() {
+        // A broad sweep across the 0...127 range, in big jumps (not ±1).
+        let values = [0, 20, 40, 60, 80, 100, 120, 127, 100, 60, 20, 0]
+        let result = ControllerMappingInference.infer(ccStream(cc: 8, values: values))
+        XCTAssertEqual(result.crossfader?.signal, .controlChange(number: 8))
+        XCTAssertGreaterThan(result.crossfader?.confidence ?? 0, 0.9)
+        XCTAssertNil(result.platter) // a sweep is not a ±1 platter
+    }
+
+    func testPitchBendOnlyStreamIsNotAcceptedAsPlatter() {
+        let result = ControllerMappingInference.infer(pitchBendStream(count: 40))
+        XCTAssertNil(result.platter, "pitch bend is diagnostic-only and must not be a platter candidate")
+        XCTAssertNil(result.crossfader)
+        XCTAssertTrue(result.notes.contains { $0.contains("diagnostic-only") })
+    }
+
+    func testNoisyUnrelatedCCIsIgnored() {
+        // A jittery CC with no ±1 ring run and a narrow range — neither platter nor fader.
+        let values = [64, 70, 62, 68, 66, 64, 69, 63, 65, 67]
+        let result = ControllerMappingInference.infer(ccStream(cc: 20, values: values))
+        XCTAssertNil(result.platter)
+        XCTAssertNil(result.crossfader)
+    }
+
+    func testCombinedStreamInfersBothControls() {
+        var stream = ccStream(cc: 6, values: Array(40...80))
+        stream += ccStream(cc: 8, values: [0, 20, 40, 60, 80, 100, 120, 127, 64])
+        let result = ControllerMappingInference.infer(stream)
+        XCTAssertEqual(result.platter?.signal, .controlChange(number: 6))
+        XCTAssertEqual(result.crossfader?.signal, .controlChange(number: 8))
+    }
+
+    func testInferenceIsDeterministic() {
+        let stream = ccStream(cc: 6, values: Array(40...80))
+        XCTAssertEqual(ControllerMappingInference.infer(stream), ControllerMappingInference.infer(stream))
+    }
+}

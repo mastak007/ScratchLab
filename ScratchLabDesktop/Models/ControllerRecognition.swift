@@ -192,4 +192,119 @@ struct ControllerMappingValidation: Equatable {
         return ControllerMappingValidation(validity: validity, reasons: reasons)
     }
 }
+
+/// A control binding inferred from an observed MIDI stream, with a 0...1 confidence and
+/// the human-readable reasons behind it.
+struct InferredControlCandidate: Equatable {
+    let signal: ControllerControlSignal
+    let confidence: Double
+    let reasons: [String]
+}
+
+/// The platter and crossfader candidates inferred from an observed MIDI stream, plus any
+/// overall notes (e.g. that pitch-bend motion was ignored for platter inference).
+struct InferredMappingCandidates: Equatable {
+    let platter: InferredControlCandidate?
+    let crossfader: InferredControlCandidate?
+    let notes: [String]
+}
+
+/// Pure inference of likely platter / crossfader bindings from an observed MIDI stream.
+/// Model only — no UI, no persistence, and nothing here drives capture. It exists so a
+/// tester on unsupported gear can be SHOWN a guess to confirm; it is never trusted blindly.
+enum ControllerMappingInference {
+    /// CC ring modulus used to detect ±1 platter steps (matches the RANE CC6 ring).
+    static let ringModulus = 128
+    /// Minimum value transitions on a CC before it is considered at all.
+    static let minTransitions = 8
+    /// Minimum ±1 ring steps for a CC to be platter-like.
+    static let minPlatterRingSteps = 16
+    /// Minimum fraction of transitions that must be ±1 ring steps for a platter candidate.
+    static let platterRingStepRatio = 0.75
+    /// Minimum fraction of the full 0...127 range a CC must sweep to be crossfader-like.
+    static let crossfaderSweepFraction = 0.7
+
+    private struct CCFeatures {
+        let cc: Int
+        let transitions: Int
+        let ringStepOnes: Int
+        let sweepFraction: Double
+        var ringStepRatio: Double { transitions > 0 ? Double(ringStepOnes) / Double(transitions) : 0 }
+    }
+
+    /// Infers platter and crossfader candidates from a parsed MIDI stream.
+    /// - A platter-like CC shows rapid ±1 ring changes (RANE CC6 fingerprint).
+    /// - A crossfader-like CC sweeps broadly across 0...127.
+    /// Pitch bend is never offered as a platter candidate — it is diagnostic-only — even
+    /// when it is the only motion in the stream.
+    static func infer(_ messages: [ParsedMIDIMessage]) -> InferredMappingCandidates {
+        // Group CC values in arrival order; count pitch-bend events separately.
+        var valuesByCC: [Int: [Int]] = [:]
+        var pitchBendCount = 0
+        for message in messages {
+            switch message.messageType {
+            case .controlChange:
+                if let cc = message.controlNumber, let value = message.value {
+                    valuesByCC[cc, default: []].append(value)
+                }
+            case .pitchBend:
+                pitchBendCount += 1
+            default:
+                break
+            }
+        }
+
+        let features = valuesByCC.map { cc, values -> CCFeatures in
+            var ringStepOnes = 0
+            for index in 1..<max(values.count, 1) where values.count > 1 {
+                let step = ScratchPlatterPlayheadMapper.cc6Step(from: values[index - 1], to: values[index], modulus: ringModulus)
+                if abs(step) == 1 { ringStepOnes += 1 }
+            }
+            let lo = values.min() ?? 0
+            let hi = values.max() ?? 0
+            return CCFeatures(
+                cc: cc,
+                transitions: max(values.count - 1, 0),
+                ringStepOnes: ringStepOnes,
+                sweepFraction: Double(hi - lo) / 127.0
+            )
+        }
+
+        var notes: [String] = []
+
+        // Platter: the CC with the most ±1 ring steps, above the ratio/count thresholds.
+        let platterFeature = features
+            .filter { $0.transitions >= minTransitions && $0.ringStepOnes >= minPlatterRingSteps && $0.ringStepRatio >= platterRingStepRatio }
+            .max { $0.ringStepOnes < $1.ringStepOnes }
+        let platter = platterFeature.map { feature in
+            InferredControlCandidate(
+                signal: .controlChange(number: feature.cc),
+                confidence: min(feature.ringStepRatio, 1.0),
+                reasons: ["CC\(feature.cc): \(feature.ringStepOnes) ±1 ring steps (\(Int((feature.ringStepRatio * 100).rounded()))% of transitions) — platter-like."]
+            )
+        }
+
+        // Crossfader: the non-platter CC with the broadest 0...127 sweep that is NOT itself
+        // ±1-ring-dominated (so a platter is never mistaken for a fader).
+        let crossfaderFeature = features
+            .filter { $0.cc != platterFeature?.cc && $0.transitions >= minTransitions && $0.sweepFraction >= crossfaderSweepFraction && $0.ringStepRatio < platterRingStepRatio }
+            .max { $0.sweepFraction < $1.sweepFraction }
+        let crossfader = crossfaderFeature.map { feature in
+            InferredControlCandidate(
+                signal: .controlChange(number: feature.cc),
+                confidence: min(feature.sweepFraction, 1.0),
+                reasons: ["CC\(feature.cc): swept \(Int((feature.sweepFraction * 100).rounded()))% of the 0–127 range — crossfader-like."]
+            )
+        }
+
+        if pitchBendCount > 0 {
+            notes.append("Pitch-bend events seen but ignored for platter inference — pitch bend is diagnostic-only.")
+        }
+        if platter == nil {
+            notes.append("No platter-like CC detected — capture needs a ±1 ring platter signal.")
+        }
+
+        return InferredMappingCandidates(platter: platter, crossfader: crossfader, notes: notes)
+    }
+}
 #endif
