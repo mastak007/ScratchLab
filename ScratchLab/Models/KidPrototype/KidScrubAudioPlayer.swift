@@ -36,6 +36,10 @@ final class KidScrubAudioPlayer {
     /// When false, render self-advances at 1× through the window.
     private var isGrabbing = false
 
+    /// When false, audio output is forced to silence regardless of grab state.
+    /// The read head still moves — only gain is affected.
+    private var audioGateOpen = false
+
     /// Touch-driven target (only used when isGrabbing).
     private var targetReadHead: Double = 0
 
@@ -118,6 +122,16 @@ final class KidScrubAudioPlayer {
     func endGrab() {
         os_unfair_lock_lock(&stateLock)
         isGrabbing = false
+        audioGateOpen = false
+        os_unfair_lock_unlock(&stateLock)
+    }
+
+    /// Open/close the audio gate. When closed, the render loop produces
+    /// silence regardless of grab state. The read head continues to track
+    /// position so there is no discontinuity when the gate re-opens.
+    func setAudioGate(_ open: Bool) {
+        os_unfair_lock_lock(&stateLock)
+        audioGateOpen = open
         os_unfair_lock_unlock(&stateLock)
     }
 
@@ -195,6 +209,7 @@ final class KidScrubAudioPlayer {
 
         os_unfair_lock_lock(&stateLock)
         let grabbing = isGrabbing
+        let gateOpen = audioGateOpen
         let target = targetReadHead
         os_unfair_lock_unlock(&stateLock)
 
@@ -203,7 +218,7 @@ final class KidScrubAudioPlayer {
         let rate: Double
         let gainTarget: Double
 
-        if grabbing {
+        if grabbing && gateOpen {
             let raw = n > 0 ? (target - start) / Double(n) : 0
             rate = min(max(raw, -maxTouchRate), maxTouchRate)
             gainTarget = abs(rate) >= silenceRateThreshold ? 1.0 : 0.0

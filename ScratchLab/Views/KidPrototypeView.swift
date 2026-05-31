@@ -42,6 +42,7 @@ private struct KidPrototypeUnavailableView: View {
 
 private struct KidPrototypeContentView: View {
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var input = KidScrubInput()
     @StateObject private var audio = KidScrubAudioHolder()
 
@@ -52,6 +53,7 @@ private struct KidPrototypeContentView: View {
     // Ribbon auto-scroll (visual only — no audio coupling).
     @State private var ribbonPhase: Double = 0.0
     private let twelveFraction: Double = 0.50       // 12 line at middle
+    private let audioStopPhase: Double = 0.98       // silence just before wrap
     private let cycleDuration: Double = 1.8          // bottom→top visual period
     private let timer = Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()
 
@@ -60,6 +62,8 @@ private struct KidPrototypeContentView: View {
     @State private var isScrubbing = false
     @State private var accumLastTranslation: CGFloat = 0
     @State private var accumLastEventTime: TimeInterval?
+    @State private var lastDragEventTime: TimeInterval = 0
+    private let grabTimeout: TimeInterval = 1.0      // only catch truly stuck/cancelled gestures
 
     var body: some View {
         ZStack {
@@ -78,9 +82,27 @@ private struct KidPrototypeContentView: View {
             if !hasStarted || showingHelp { howToPlayCard }
         }
         .onAppear { audio.player.start() }
-        .onDisappear { audio.player.stop() }
+        .onDisappear {
+            endTouchInteraction(reason: "disappear")
+            audio.player.stop()
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .inactive || phase == .background {
+                endTouchInteraction(reason: "scene-\(phase)")
+            }
+        }
         .onReceive(timer) { _ in
-            guard hasStarted, !showingHelp, !isGrabbing else { return }
+            guard hasStarted, !showingHelp else { return }
+
+            // Timeout fail-safe: reset if touch state lingers with no movement.
+            if isGrabbing {
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastDragEventTime > grabTimeout {
+                    endTouchInteraction(reason: "timeout")
+                }
+                return
+            }
+
             ribbonPhase += (1.0 / 60.0) / cycleDuration
             if ribbonPhase >= 1.0 { ribbonPhase = 0.0 }
         }
@@ -169,6 +191,7 @@ private struct KidPrototypeContentView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 let now = ProcessInfo.processInfo.systemUptime
+                lastDragEventTime = now
                 let translation = value.translation.height
                 let px = translation - accumLastTranslation
                 accumLastTranslation = translation
@@ -189,17 +212,36 @@ private struct KidPrototypeContentView: View {
                 }
 
                 isScrubbing = true
-                audio.player.moveReadHead(by: nd)
-                ribbonPhase = min(1.0, max(0.0, ribbonPhase + nd))
+
+                let nextPhase = min(1.0, max(0.0, ribbonPhase + nd))
+                let gated = nextPhase >= twelveFraction && nextPhase <= audioStopPhase
+                audio.player.setAudioGate(gated)
+
+                if gated {
+                    audio.player.moveReadHead(by: nd)
+                }
+
+                ribbonPhase = nextPhase
             }
             .onEnded { _ in
-                isGrabbing = false
-                isScrubbing = false
-                accumLastTranslation = 0
-                accumLastEventTime = nil
-                audio.player.endGrab()
-                input.update(delta: 0, deltaTime: 0)
+                endTouchInteraction(reason: "dragEnded")
             }
+    }
+
+    // MARK: - Touch Reset
+
+    /// Single panic/reset path for all touch-exit scenarios.
+    /// Call from onEnded, onDisappear, scene background, timeout, and
+    /// any Start/Stop/Pause button.
+    private func endTouchInteraction(reason: String) {
+        isGrabbing = false
+        isScrubbing = false
+        accumLastTranslation = 0
+        accumLastEventTime = nil
+        lastDragEventTime = 0
+        audio.player.endGrab()
+        audio.player.setAudioGate(false)
+        input.update(delta: 0, deltaTime: 0)
     }
 
     // MARK: - Telemetry
@@ -240,6 +282,7 @@ private struct KidPrototypeContentView: View {
                         step(3, "Move the sound", "Swipe up for forward. Swipe down for reverse. Hold for silence.")
                     }
                     Button {
+                        endTouchInteraction(reason: "startPractice")
                         hasStarted = true; showingHelp = false
                         ribbonPhase = 0.0
                         audio.player.jumpTo(t: 0.0)
