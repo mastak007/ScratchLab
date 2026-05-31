@@ -91,4 +91,105 @@ enum ActiveControllerProfile: Equatable {
         ) ? .builtIn(.raneOneMKII) : .unverified
     }
 }
+
+/// A bucketed summary of what was observed on a controller's expected controls, counted
+/// against an active profile's platter / crossfader / pitch-bend bindings. Pure data.
+struct ControllerSignalObservation: Equatable {
+    /// Events seen on the profile's platter control (RANE ONE = CC6) — the capture driver.
+    var platterEventCount: Int = 0
+    /// Events seen on the profile's crossfader control (RANE ONE = CC8).
+    var crossfaderEventCount: Int = 0
+    /// Pitch-bend events seen (RANE ONE platter companion stream; diagnostic-only).
+    var pitchBendEventCount: Int = 0
+
+    init(platterEventCount: Int = 0, crossfaderEventCount: Int = 0, pitchBendEventCount: Int = 0) {
+        self.platterEventCount = platterEventCount
+        self.crossfaderEventCount = crossfaderEventCount
+        self.pitchBendEventCount = pitchBendEventCount
+    }
+
+    /// Buckets a stream of parsed MIDI messages against a profile's expected bindings.
+    /// Pure: a CC matching the platter binding counts as platter motion, a CC matching the
+    /// crossfader binding counts as crossfader motion, and pitch-bend is counted separately
+    /// (it is diagnostic-only and must not be mistaken for a capture-grade platter signal).
+    static func observe(_ messages: [ParsedMIDIMessage], profile: ControllerProfile) -> ControllerSignalObservation {
+        let platterCC = profile.deck.platter.ccNumber
+        let crossfaderCC = profile.deck.crossfader.ccNumber
+        var observation = ControllerSignalObservation()
+        for message in messages {
+            switch message.messageType {
+            case .controlChange:
+                if let cc = message.controlNumber {
+                    if cc == platterCC { observation.platterEventCount += 1 }
+                    else if cc == crossfaderCC { observation.crossfaderEventCount += 1 }
+                }
+            case .pitchBend:
+                observation.pitchBendEventCount += 1
+            default:
+                break
+            }
+        }
+        return observation
+    }
+}
+
+/// Whether an observed mapping is safe enough to capture from.
+enum ControllerMappingValidity: Int, Equatable, Comparable {
+    /// Capture is trustworthy (verified profile, platter present).
+    case valid = 0
+    /// Capture can proceed but something is degraded or unverified — treat as experimental.
+    case warning = 1
+    /// Capture must not be trusted (no usable platter signal).
+    case invalid = 2
+
+    static func < (lhs: ControllerMappingValidity, rhs: ControllerMappingValidity) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+/// The result of validating a detected mapping: an overall verdict plus the human-readable
+/// reasons behind it. Pure and deterministic.
+struct ControllerMappingValidation: Equatable {
+    let validity: ControllerMappingValidity
+    let reasons: [String]
+
+    /// Validates an observed mapping against the active profile. Pure and deterministic:
+    /// the same inputs always yield the same verdict and reasons, and nothing is mutated.
+    ///
+    /// Rules (the verdict is the most severe that applies):
+    /// - An unverified active profile is at least a warning (experimental capture).
+    /// - No platter motion at all is invalid — capture needs a platter signal.
+    /// - Pitch-bend-only platter motion is invalid — pitch bend is diagnostic-only and
+    ///   cannot drive capture (CC6 is the ground-truth driver).
+    /// - No crossfader motion is a warning — muted-section timing will be unavailable.
+    static func validate(
+        observation: ControllerSignalObservation,
+        sourceName: String,
+        activeProfile: ActiveControllerProfile
+    ) -> ControllerMappingValidation {
+        var validity = ControllerMappingValidity.valid
+        var reasons: [String] = []
+
+        if !activeProfile.isVerified {
+            validity = max(validity, .warning)
+            reasons.append("Controller \"\(sourceName)\" is not a verified profile — treat captured notation as experimental.")
+        }
+
+        if observation.platterEventCount == 0 {
+            validity = max(validity, .invalid)
+            if observation.pitchBendEventCount > 0 {
+                reasons.append("Only pitch-bend platter motion was seen; pitch bend is diagnostic-only and cannot drive capture.")
+            } else {
+                reasons.append("No platter motion observed — a platter signal is required to capture.")
+            }
+        }
+
+        if observation.crossfaderEventCount == 0 {
+            validity = max(validity, .warning)
+            reasons.append("No crossfader motion observed — crossfader-muted timing will be unavailable.")
+        }
+
+        return ControllerMappingValidation(validity: validity, reasons: reasons)
+    }
+}
 #endif

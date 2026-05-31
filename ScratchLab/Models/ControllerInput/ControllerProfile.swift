@@ -38,6 +38,12 @@ struct ControllerControlBinding: Codable, Equatable {
         self.ringModulus = ringModulus
         self.isDiagnosticOnly = isDiagnosticOnly
     }
+
+    /// The CC number this control uses, or nil if it is not a Control Change (e.g. pitch bend).
+    var ccNumber: Int? {
+        if case .controlChange(let number) = signal { return number }
+        return nil
+    }
 }
 
 /// The per-deck control mapping: the platter driver, the crossfader, and the
