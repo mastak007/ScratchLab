@@ -242,6 +242,22 @@
 		NGG1001000NGG001NGG00002 /* Notation/Presentation/NotationGridlineGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG1000000NGG001NGG00001 /* Notation/Presentation/NotationGridlineGeometry.swift */; };
 		NGG2011000NGG002NGG00001 /* NotationGridlineGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */; };
 		NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */; };
+		NGP1001000NGP001NGP00001 /* Notation/Grammar/NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* Notation/Grammar/NotationPrimitive.swift */; };
+		NGP1001000NGP001NGP00002 /* Notation/Grammar/NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* Notation/Grammar/NotationPrimitive.swift */; };
+		NGP2001000NGP002NGP00001 /* Notation/Grammar/GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* Notation/Grammar/GrammarParameters.swift */; };
+		NGP2001000NGP002NGP00002 /* Notation/Grammar/GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* Notation/Grammar/GrammarParameters.swift */; };
+		NGP3001000NGP003NGP00001 /* Notation/Grammar/NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* Notation/Grammar/NotationPrimitiveDerivation.swift */; };
+		NGP3001000NGP003NGP00002 /* Notation/Grammar/NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* Notation/Grammar/NotationPrimitiveDerivation.swift */; };
+		GAN1001000GAN001GAN00001 /* Notation/Timing/GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* Notation/Timing/GridAnnotation.swift */; };
+		GAN1001000GAN001GAN00002 /* Notation/Timing/GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* Notation/Timing/GridAnnotation.swift */; };
+		TGN1001000TGN001TGN00001 /* Notation/Timing/TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* Notation/Timing/TimingGrid.swift */; };
+		TGN1001000TGN001TGN00002 /* Notation/Timing/TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* Notation/Timing/TimingGrid.swift */; };
+		TWE1001000TWE001TWE00001 /* Notation/Timing/TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* Notation/Timing/TimingWindow.swift */; };
+		TWE1001000TWE001TWE00002 /* Notation/Timing/TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* Notation/Timing/TimingWindow.swift */; };
+		PHR1001000PHR001PHR00001 /* Notation/Timing/Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Notation/Timing/Phrase.swift */; };
+		PHR1001000PHR001PHR00002 /* Notation/Timing/Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Notation/Timing/Phrase.swift */; };
+		ETM1001000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift */; };
+		ETM1001000ETM001ETM00002 /* Notation/Timing/ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift */; };
 		NLG1001000NLG001NLG00001 /* Notation/Presentation/NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* Notation/Presentation/NotationLaneGeometry.swift */; };
 		NLG1001000NLG001NLG00002 /* Notation/Presentation/NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* Notation/Presentation/NotationLaneGeometry.swift */; };
 		NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */; };
@@ -621,6 +637,14 @@
 		NGG1000000NGG001NGG00001 /* Notation/Presentation/NotationGridlineGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationGridlineGeometry.swift; sourceTree = "<group>"; };
 		NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGridlineGeometryTests.swift; sourceTree = "<group>"; };
 		NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarTests.swift; sourceTree = "<group>"; };
+		NGP1000000NGP001NGP00001 /* Notation/Grammar/NotationPrimitive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitive.swift; sourceTree = "<group>"; };
+		NGP2000000NGP002NGP00001 /* Notation/Grammar/GrammarParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/GrammarParameters.swift; sourceTree = "<group>"; };
+		NGP3000000NGP003NGP00001 /* Notation/Grammar/NotationPrimitiveDerivation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitiveDerivation.swift; sourceTree = "<group>"; };
+		GAN1000000GAN001GAN00001 /* Notation/Timing/GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
+		TGN1000000TGN001TGN00001 /* Notation/Timing/TimingGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingGrid.swift; sourceTree = "<group>"; };
+		TWE1000000TWE001TWE00001 /* Notation/Timing/TimingWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingWindow.swift; sourceTree = "<group>"; };
+		PHR1000000PHR001PHR00001 /* Notation/Timing/Phrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/Phrase.swift; sourceTree = "<group>"; };
+		ETM1000000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/ExpectedTiming.swift; sourceTree = "<group>"; };
 		NLG1000000NLG001NLG00001 /* Notation/Presentation/NotationLaneGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationLaneGeometry.swift; sourceTree = "<group>"; };
 		NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryTests.swift; sourceTree = "<group>"; };
 		NLH1000000NLH001NLH00001 /* Notation/DebugNotationLaneHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugNotationLaneHostView.swift; sourceTree = "<group>"; };
@@ -1022,6 +1046,14 @@
 				SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */,
 				SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */,
 				PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */,
+				NGP1000000NGP001NGP00001 /* Notation/Grammar/NotationPrimitive.swift */,
+				NGP2000000NGP002NGP00001 /* Notation/Grammar/GrammarParameters.swift */,
+				NGP3000000NGP003NGP00001 /* Notation/Grammar/NotationPrimitiveDerivation.swift */,
+				TGN1000000TGN001TGN00001 /* Notation/Timing/TimingGrid.swift */,
+				GAN1000000GAN001GAN00001 /* Notation/Timing/GridAnnotation.swift */,
+				TWE1000000TWE001TWE00001 /* Notation/Timing/TimingWindow.swift */,
+				PHR1000000PHR001PHR00001 /* Notation/Timing/Phrase.swift */,
+				ETM1000000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift */,
 				PTS1000000PTS001PTS00001 /* Notation/Timing/PhraseTimingSummary.swift */,
 				APS1000000APS001APS00001 /* Notation/Phrasing/AudioPhraseSummary.swift */,
 				APG1000000APG001APG00001 /* Notation/Phrasing/AudioPhraseGridProjection.swift */,
@@ -1476,6 +1508,14 @@
 				SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */,
 				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
+				NGP1001000NGP001NGP00001 /* Notation/Grammar/NotationPrimitive.swift in Sources */,
+				NGP2001000NGP002NGP00001 /* Notation/Grammar/GrammarParameters.swift in Sources */,
+				NGP3001000NGP003NGP00001 /* Notation/Grammar/NotationPrimitiveDerivation.swift in Sources */,
+				TGN1001000TGN001TGN00001 /* Notation/Timing/TimingGrid.swift in Sources */,
+				GAN1001000GAN001GAN00001 /* Notation/Timing/GridAnnotation.swift in Sources */,
+				TWE1001000TWE001TWE00001 /* Notation/Timing/TimingWindow.swift in Sources */,
+				PHR1001000PHR001PHR00001 /* Notation/Timing/Phrase.swift in Sources */,
+				ETM1001000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift in Sources */,
 				PTS1001000PTS001PTS00001 /* Notation/Timing/PhraseTimingSummary.swift in Sources */,
 				APS1001000APS001APS00001 /* Notation/Phrasing/AudioPhraseSummary.swift in Sources */,
 				APG1001000APG001APG00001 /* Notation/Phrasing/AudioPhraseGridProjection.swift in Sources */,
@@ -1634,6 +1674,14 @@
 				SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
+				NGP1001000NGP001NGP00002 /* Notation/Grammar/NotationPrimitive.swift in Sources */,
+				NGP2001000NGP002NGP00002 /* Notation/Grammar/GrammarParameters.swift in Sources */,
+				NGP3001000NGP003NGP00002 /* Notation/Grammar/NotationPrimitiveDerivation.swift in Sources */,
+				TGN1001000TGN001TGN00002 /* Notation/Timing/TimingGrid.swift in Sources */,
+				GAN1001000GAN001GAN00002 /* Notation/Timing/GridAnnotation.swift in Sources */,
+				TWE1001000TWE001TWE00002 /* Notation/Timing/TimingWindow.swift in Sources */,
+				PHR1001000PHR001PHR00002 /* Notation/Timing/Phrase.swift in Sources */,
+				ETM1001000ETM001ETM00002 /* Notation/Timing/ExpectedTiming.swift in Sources */,
 				PTS1001000PTS001PTS00002 /* Notation/Timing/PhraseTimingSummary.swift in Sources */,
 				APS1001000APS001APS00002 /* Notation/Phrasing/AudioPhraseSummary.swift in Sources */,
 				APG1001000APG001APG00002 /* Notation/Phrasing/AudioPhraseGridProjection.swift in Sources */,
