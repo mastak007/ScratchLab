@@ -109,6 +109,8 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Span of sample actually travelled so far, `0...1` (the truthful stroke height).
     @Published private(set) var timelinePositionSpan: Double = 0
     @Published private(set) var timelineReachedCapacity = false
+    @Published private(set) var lastTimelineExportPath: String?
+    @Published private(set) var lastTimelineExportError: String?
 
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
@@ -258,6 +260,39 @@ final class ScratchPlaybackLabModel: ObservableObject {
         timelineEventCount = 0
         timelinePositionSpan = 0
         timelineReachedCapacity = false
+    }
+
+    /// Writes the currently held sample-position timeline to a timestamped JSON file in
+    /// ~/Downloads (same explicit-user-action pattern as `exportDiagnostics()` — never
+    /// called automatically). The raw travel is enough to regenerate notation later; no
+    /// strokes are invented. Errors surface via `lastTimelineExportError`, success via
+    /// `lastTimelineExportPath`.
+    func exportTimeline() {
+        lastTimelineExportError = nil
+        guard !timeline.isEmpty else {
+            lastTimelineExportPath = nil
+            lastTimelineExportError = "No timeline events to export."
+            return
+        }
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            lastTimelineExportPath = nil
+            lastTimelineExportError = "Could not locate the Downloads folder."
+            return
+        }
+        let now = Date()
+        let export = ScratchSampleTimelineExport(
+            timeline: timeline,
+            exportedAtEpochSeconds: now.timeIntervalSince1970
+        )
+        let url = downloads.appendingPathComponent("ScratchTimeline-\(Int(now.timeIntervalSince1970)).json")
+        do {
+            let data = try export.jsonData()
+            try data.write(to: url, options: .atomic)
+            lastTimelineExportPath = url.path
+        } catch {
+            lastTimelineExportPath = nil
+            lastTimelineExportError = error.localizedDescription
+        }
     }
 
     /// Clears the running max-observed-delta / alias diagnostic.

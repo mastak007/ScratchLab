@@ -309,10 +309,40 @@ struct ScratchPlaybackLabView: View {
                 }
             }
 
+            Divider().frame(height: 34)
+
+            // Sample-position timeline export (captured travel → JSON; no notation yet).
+            VStack(alignment: .leading, spacing: 2) {
+                Button("Export timeline JSON") { model.exportTimeline() }
+                    .disabled(model.timelineEventCount == 0)
+                timelineExportStatus
+            }
+
             Spacer()
         }
         .overlay(alignment: .bottomLeading) {
             diagnosticExportStatus
+        }
+    }
+
+    @ViewBuilder
+    private var timelineExportStatus: some View {
+        if let error = model.lastTimelineExportError {
+            Text("Timeline export failed: \(error)")
+                .font(.caption2)
+                .foregroundStyle(.red)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else if let path = model.lastTimelineExportPath {
+            Text("Timeline → \(path)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else {
+            Text("\(model.timelineEventCount) samples captured")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 

@@ -24,8 +24,9 @@ import Foundation
 //   - position is clamped to 0...1.
 
 /// One captured point of live scratch travel: where the playhead is in the sample, when,
-/// and which way / how fast it is moving. Pure value type, fully deterministic.
-struct ScratchSampleTimelineEvent: Equatable {
+/// and which way / how fast it is moving. Pure value type, fully deterministic. Codable
+/// so a captured timeline can be exported to JSON and reloaded to regenerate notation.
+struct ScratchSampleTimelineEvent: Equatable, Codable {
     /// Travel direction at this sample, derived from the signed scrub velocity.
     enum Direction: Equatable {
         case forward   // velocity > 0: moving toward the end of the sample
@@ -64,7 +65,7 @@ struct ScratchSampleTimelineEvent: Equatable {
 /// model) appends one event per platter step; the timeline clamps/orders the data and
 /// exposes travel geometry (span, reversals) that notation can be derived from. No file
 /// or device I/O lives here.
-struct ScratchSampleTimeline: Equatable {
+struct ScratchSampleTimeline: Equatable, Codable {
     /// Hard ceiling on captured events. At ~935 platter events/sec this is a few minutes
     /// of continuous scrub, bounding memory so a forgotten capture can't grow without
     /// limit. Appending stops (and `didReachCapacity` is set) once the cap is reached.
@@ -178,6 +179,68 @@ struct ScratchSampleTimeline: Equatable {
     /// True when every captured position is within `0...1` (the clamp invariant holds).
     var isPositionClamped: Bool {
         events.allSatisfy { $0.position >= 0 && $0.position <= 1 }
+    }
+}
+
+/// Pure summary of a captured timeline, derived entirely from its events. Encodable so it
+/// travels inside the exported JSON alongside the raw travel. All figures are read from
+/// the timeline's existing (tested) geometry — nothing is invented.
+struct ScratchSampleTimelineSummary: Equatable, Codable {
+    let eventCount: Int
+    /// Seconds from the first to the last captured sample (0 for fewer than two events).
+    let durationSeconds: TimeInterval
+    /// Lowest / highest normalised sample position visited (nil when empty).
+    let minPosition: Double?
+    let maxPosition: Double?
+    /// Span of sample actually travelled (`max - min`), the truthful stroke height.
+    let positionSpan: Double
+    /// Number of forward↔reverse turn points in the captured travel.
+    let reversalCount: Int
+    /// Samples captured while the crossfader was closed (the muted segments).
+    let mutedEventCount: Int
+
+    init(timeline: ScratchSampleTimeline) {
+        let events = timeline.events
+        eventCount = events.count
+        if let first = events.first, let last = events.last {
+            durationSeconds = Swift.max(0, last.timeSeconds - first.timeSeconds)
+        } else {
+            durationSeconds = 0
+        }
+        minPosition = timeline.minPosition
+        maxPosition = timeline.maxPosition
+        positionSpan = timeline.positionSpan
+        reversalCount = timeline.reversalEvents.count
+        mutedEventCount = events.filter { $0.muted }.count
+    }
+}
+
+/// Codable export envelope: a schema-versioned header, a derived summary, and the full
+/// captured event list. Encoded as deterministic pretty JSON for offline, diffable
+/// exports. The raw per-event travel preserves enough to regenerate notation later —
+/// notation strokes are NOT synthesised here.
+struct ScratchSampleTimelineExport: Equatable, Codable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    /// Wall-clock export time (epoch seconds), supplied by the host. Optional so the
+    /// envelope stays deterministic in tests.
+    let exportedAtEpochSeconds: TimeInterval?
+    let summary: ScratchSampleTimelineSummary
+    let events: [ScratchSampleTimelineEvent]
+
+    init(timeline: ScratchSampleTimeline, exportedAtEpochSeconds: TimeInterval? = nil) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.exportedAtEpochSeconds = exportedAtEpochSeconds
+        self.summary = ScratchSampleTimelineSummary(timeline: timeline)
+        self.events = timeline.events
+    }
+
+    /// Encodes to deterministic pretty-printed JSON (sorted keys) so exports diff cleanly.
+    func jsonData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(self)
     }
 }
 #endif
