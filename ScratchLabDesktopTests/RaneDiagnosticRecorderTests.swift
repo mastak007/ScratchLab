@@ -250,3 +250,69 @@ final class RaneDiagnosticRecorderTests: XCTestCase {
         XCTAssertEqual(first, second, "sorted-keys pretty JSON must be byte-stable")
     }
 }
+
+/// Tester diagnostics bundle (Slice 10): the file set a pro-DJ tester sends back.
+/// Pure builder + a thin folder write to a temporary directory. No network.
+final class TesterDiagnosticsBundleTests: XCTestCase {
+
+    private let profileJSON = Data("{\"format\":\"controller_profile_v1\"}".utf8)
+    private let appInfo = "App: ScratchLab\nVersion: 1.0 (build 1)"
+    private let sourceInfo = "Selected source: RANE ONE"
+    private let readme = "ScratchLab — tester diagnostics bundle"
+
+    func testBundleContainsExpectedFilesWhenAllPresent() {
+        let bundle = TesterDiagnosticsBundle(
+            timelineJSON: Data("[]".utf8),
+            raneDiagnosticJSON: Data("{}".utf8),
+            controllerProfileJSON: profileJSON,
+            appBuildInfo: appInfo, midiSourceInfo: sourceInfo, readme: readme
+        )
+        XCTAssertEqual(bundle.fileNames, [
+            "ScratchTimeline.json", "RaneDiagnostic.json", "ControllerProfile.json",
+            "app-build-info.txt", "midi-source-info.txt", "README.txt"
+        ])
+    }
+
+    func testOptionalFilesOmittedWhenMissing() {
+        let bundle = TesterDiagnosticsBundle(
+            timelineJSON: nil, raneDiagnosticJSON: nil,
+            controllerProfileJSON: profileJSON,
+            appBuildInfo: appInfo, midiSourceInfo: sourceInfo, readme: readme
+        )
+        XCTAssertEqual(bundle.fileNames, [
+            "ControllerProfile.json", "app-build-info.txt", "midi-source-info.txt", "README.txt"
+        ])
+        XCTAssertFalse(bundle.fileNames.contains("ScratchTimeline.json"))
+        XCTAssertFalse(bundle.fileNames.contains("RaneDiagnostic.json"))
+    }
+
+    func testNoUnrelatedFilesIncluded() {
+        // The bundle must include ONLY the known set — nothing private/unrelated leaks in.
+        let allowed: Set<String> = [
+            "ScratchTimeline.json", "RaneDiagnostic.json", "ControllerProfile.json",
+            "app-build-info.txt", "midi-source-info.txt", "README.txt"
+        ]
+        let bundle = TesterDiagnosticsBundle(
+            timelineJSON: Data("[]".utf8), raneDiagnosticJSON: Data("{}".utf8),
+            controllerProfileJSON: profileJSON,
+            appBuildInfo: appInfo, midiSourceInfo: sourceInfo, readme: readme
+        )
+        XCTAssertTrue(Set(bundle.fileNames).isSubset(of: allowed))
+    }
+
+    func testWriteProducesFolderWithFilesOnDisk() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("BundleTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let bundle = TesterDiagnosticsBundle(
+            timelineJSON: Data("[]".utf8), raneDiagnosticJSON: nil,
+            controllerProfileJSON: profileJSON,
+            appBuildInfo: appInfo, midiSourceInfo: sourceInfo, readme: readme
+        )
+        let folder = try bundle.write(to: tempDir, folderName: "ScratchLab-Diagnostics-1")
+        let written = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        XCTAssertEqual(Set(written), Set(bundle.fileNames))
+        // The omitted optional must not appear on disk.
+        XCTAssertFalse(written.contains("RaneDiagnostic.json"))
+    }
+}

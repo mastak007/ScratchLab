@@ -540,9 +540,22 @@ struct ScratchPlaybackLabView: View {
                 Spacer()
                 Button("Export RANE template") { model.exportRaneProfileTemplate() }
                 Button("Import profile…") { presentProfileImportPanel() }
+                Button("Export tester bundle") { model.exportTesterDiagnostics() }
             }
             profileExportStatus
             profileImportStatus
+            diagnosticsBundleStatus
+        }
+    }
+
+    @ViewBuilder
+    private var diagnosticsBundleStatus: some View {
+        if let error = model.lastDiagnosticsBundleError {
+            Text("Tester bundle failed: \(error)")
+                .font(.caption2).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
+        } else if let path = model.lastDiagnosticsBundlePath {
+            Text("Tester bundle → \(path)")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
     }
 

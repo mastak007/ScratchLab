@@ -184,4 +184,56 @@ struct RaneDiagnosticSessionExport: Equatable, Codable {
         return try encoder.encode(self)
     }
 }
+
+/// One named file in the tester diagnostics bundle.
+struct DiagnosticsBundleFile: Equatable {
+    let name: String
+    let data: Data
+}
+
+/// Pure builder of a tester diagnostics bundle for pro-DJ testers to send back. It gathers
+/// ONLY the explicitly provided pieces — captured timeline, RANE diagnostic, the controller
+/// profile in effect, app/build info, detected MIDI source info, and a README. Optional
+/// inputs are omitted when absent; no private or unrelated files are ever included, and no
+/// network upload happens here. Building the file set is pure; writing is a thin step.
+struct TesterDiagnosticsBundle: Equatable {
+    let files: [DiagnosticsBundleFile]
+
+    init(
+        timelineJSON: Data?,
+        raneDiagnosticJSON: Data?,
+        controllerProfileJSON: Data,
+        appBuildInfo: String,
+        midiSourceInfo: String,
+        readme: String
+    ) {
+        var files: [DiagnosticsBundleFile] = []
+        if let timelineJSON {
+            files.append(DiagnosticsBundleFile(name: "ScratchTimeline.json", data: timelineJSON))
+        }
+        if let raneDiagnosticJSON {
+            files.append(DiagnosticsBundleFile(name: "RaneDiagnostic.json", data: raneDiagnosticJSON))
+        }
+        files.append(DiagnosticsBundleFile(name: "ControllerProfile.json", data: controllerProfileJSON))
+        files.append(DiagnosticsBundleFile(name: "app-build-info.txt", data: Data(appBuildInfo.utf8)))
+        files.append(DiagnosticsBundleFile(name: "midi-source-info.txt", data: Data(midiSourceInfo.utf8)))
+        files.append(DiagnosticsBundleFile(name: "README.txt", data: Data(readme.utf8)))
+        self.files = files
+    }
+
+    /// The file names included, for verification / display.
+    var fileNames: [String] { files.map(\.name) }
+
+    /// Writes the bundle as a folder under `directory`, returning the folder URL. Each file
+    /// is written by its declared name; nothing else is added.
+    @discardableResult
+    func write(to directory: URL, folderName: String, fileManager: FileManager = .default) throws -> URL {
+        let folder = directory.appendingPathComponent(folderName, isDirectory: true)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        for file in files {
+            try file.data.write(to: folder.appendingPathComponent(file.name), options: .atomic)
+        }
+        return folder
+    }
+}
 #endif

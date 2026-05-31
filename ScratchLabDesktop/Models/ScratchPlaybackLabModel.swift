@@ -140,6 +140,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var lastNotationPNGExportPath: String?
     @Published private(set) var lastNotationPNGExportError: String?
 
+    // Tester diagnostics bundle status (Slice 10). One folder of the pieces a pro-DJ tester
+    // can send back. No network upload; touches no existing export schema.
+    @Published private(set) var lastDiagnosticsBundlePath: String?
+    @Published private(set) var lastDiagnosticsBundleError: String?
+
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
@@ -411,6 +416,100 @@ final class ScratchPlaybackLabModel: ObservableObject {
         } catch {
             lastProfileImportError = error.localizedDescription
         }
+    }
+
+    // MARK: - Tester diagnostics bundle
+
+    /// The controller profile actually in effect (built-in RANE constants drive the lab even
+    /// when the active source is unverified).
+    private var effectiveProfile: ControllerProfile {
+        if case .builtIn(let profile) = activeControllerProfile { return profile }
+        return .raneOneMKII
+    }
+
+    /// Builds and writes a tester diagnostics bundle to ~/Downloads as a folder: the captured
+    /// timeline JSON (if any), the RANE diagnostic JSON (if any), the controller profile in
+    /// effect, app/build info, detected MIDI source info, and a README. No network upload;
+    /// no existing export schema is touched. Explicit user action only.
+    func exportTesterDiagnostics() {
+        lastDiagnosticsBundleError = nil
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            lastDiagnosticsBundlePath = nil
+            lastDiagnosticsBundleError = "Could not locate the Downloads folder."
+            return
+        }
+        let now = Date()
+        let timelineJSON = timeline.isEmpty
+            ? nil
+            : try? ScratchSampleTimelineExport(timeline: timeline, exportedAtEpochSeconds: now.timeIntervalSince1970).jsonData()
+        let raneJSON = recorder.events.isEmpty
+            ? nil
+            : try? RaneDiagnosticSessionExport(events: recorder.events, isCalibration: recorder.isCalibration, exportedAtEpochSeconds: now.timeIntervalSince1970).jsonData()
+        do {
+            let profileJSON = try ControllerProfileStore.encodeDocument(effectiveProfile)
+            let bundle = TesterDiagnosticsBundle(
+                timelineJSON: timelineJSON,
+                raneDiagnosticJSON: raneJSON,
+                controllerProfileJSON: profileJSON,
+                appBuildInfo: Self.appBuildInfoText(),
+                midiSourceInfo: midiSourceInfoText(),
+                readme: Self.testerReadmeText()
+            )
+            let folder = try bundle.write(to: downloads, folderName: "ScratchLab-Diagnostics-\(Int(now.timeIntervalSince1970))")
+            lastDiagnosticsBundlePath = folder.path
+        } catch {
+            lastDiagnosticsBundlePath = nil
+            lastDiagnosticsBundleError = error.localizedDescription
+        }
+    }
+
+    /// App name / version / build and OS version for the bundle (no user identifiers).
+    private static func appBuildInfoText() -> String {
+        let info = Bundle.main.infoDictionary
+        let name = info?["CFBundleName"] as? String ?? "ScratchLab"
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        return """
+        App: \(name)
+        Version: \(version) (build \(build))
+        macOS: \(os)
+        """
+    }
+
+    /// Detected MIDI source info + active profile context for the bundle.
+    private func midiSourceInfoText() -> String {
+        let sourceLines = sources.isEmpty
+            ? "  (none connected)"
+            : sources.map { "  - \($0.name) (id \($0.id))" }.joined(separator: "\n")
+        let warning = controllerWarning.map { "\nWarning: \($0)" } ?? ""
+        return """
+        Selected source: \(selectedSourceName ?? "All sources")
+        Active controller profile: \(activeControllerProfile.displayName)
+        Available MIDI sources:
+        \(sourceLines)\(warning)
+        """
+    }
+
+    /// PROFILE.md-safe README describing the bundle for a tester.
+    private static func testerReadmeText() -> String {
+        """
+        ScratchLab — tester diagnostics bundle
+
+        This folder contains an estimated, on-device capture from the Scratch Playback Lab,
+        for review by the ScratchLab team. It contains no account details and no audio.
+
+        Files (present only when captured):
+        - ScratchTimeline.json   Captured sample-position travel (the notation preview source).
+        - RaneDiagnostic.json    Raw platter diagnostic events, if a recording was made.
+        - ControllerProfile.json The controller mapping ScratchLab applied (controller_profile_v1).
+        - app-build-info.txt     App version / build / macOS version.
+        - midi-source-info.txt   Detected MIDI sources and the active profile.
+
+        Notes:
+        - Captured notation is an estimated preview, not a scored result.
+        - Nothing here is uploaded anywhere; you choose what to send back.
+        """
     }
 
     // MARK: - Captured-timeline replay (review only)
