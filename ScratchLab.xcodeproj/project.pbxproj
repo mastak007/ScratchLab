@@ -52,6 +52,9 @@
 		51DF6B532FCC621500A6C749 /* ClickPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DF6B512FCC621500A6C749 /* ClickPlacement.swift */; };
 		KIDSCRUBINPUTBUILDIOS001 /* KidScrubInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */; };
 		KIDSCRUBINPUTBUILDMAC001 /* KidScrubInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */; };
+		KIDSMOOTHINGBUILDIOS0001 /* KidScrubSmoothing.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSMOOTHINGFILEREF00001 /* KidScrubSmoothing.swift */; };
+		KIDSMOOTHINGBUILDMAC0001 /* KidScrubSmoothing.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSMOOTHINGFILEREF00001 /* KidScrubSmoothing.swift */; };
+		KIDSMOOTHINGTESTBLD00001 /* KidScrubSmoothingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSMOOTHINGTESTFREF0001 /* KidScrubSmoothingTests.swift */; };
 		KIDSCRUBAUDIOBUILDIOS001 /* KidScrubAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */; };
 		KIDPROTOVIEWBUILDIOS0001 /* KidPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDPROTOVIEWFILEREF00001 /* KidPrototypeView.swift */; };
 		KIDINPUTTESTBUILDSRC0001 /* KidScrubInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDINPUTTESTFILEREF00001 /* KidScrubInputTests.swift */; };
@@ -494,6 +497,7 @@
 		51DF6B512FCC621500A6C749 /* ClickPlacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClickPlacement.swift; path = Notation/Grammar/ClickPlacement.swift; sourceTree = "<group>"; };
 		KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubInput.swift; path = KidPrototype/KidScrubInput.swift; sourceTree = "<group>"; };
 		KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubAudioPlayer.swift; path = KidPrototype/KidScrubAudioPlayer.swift; sourceTree = "<group>"; };
+		KIDSMOOTHINGFILEREF00001 /* KidScrubSmoothing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubSmoothing.swift; path = KidPrototype/KidScrubSmoothing.swift; sourceTree = "<group>"; };
 		60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+BackingConfiguration.swift"; sourceTree = "<group>"; };
 		66649EBF865FFA9347DA6AC9 /* FileManager+ZIPDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIPDeprecated.swift"; sourceTree = "<group>"; };
 		6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+Serialization.swift"; sourceTree = "<group>"; };
@@ -634,6 +638,7 @@
 		FFL0000000FFL001FFL00001 /* FeatureFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlags.swift; sourceTree = "<group>"; };
 		FFT2010000FFT002FFT00001 /* FeatureFlagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlagsTests.swift; sourceTree = "<group>"; };
 		KIDINPUTTESTFILEREF00001 /* KidScrubInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidScrubInputTests.swift; sourceTree = "<group>"; };
+		KIDSMOOTHINGTESTFREF0001 /* KidScrubSmoothingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidScrubSmoothingTests.swift; sourceTree = "<group>"; };
 		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
 		LJD2010000LJD002LJD00001 /* LaneJudgmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneJudgmentTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
@@ -837,6 +842,7 @@
 				VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */,
 				FFT2010000FFT002FFT00001 /* FeatureFlagsTests.swift */,
 				KIDINPUTTESTFILEREF00001 /* KidScrubInputTests.swift */,
+				KIDSMOOTHINGTESTFREF0001 /* KidScrubSmoothingTests.swift */,
 				PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */,
 				LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */,
 				PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */,
@@ -1115,6 +1121,7 @@
 				51DF6B512FCC621500A6C749 /* ClickPlacement.swift */,
 				KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */,
 				KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */,
+				KIDSMOOTHINGFILEREF00001 /* KidScrubSmoothing.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1646,6 +1653,7 @@
 				A5000065 /* NotationCandidateDiagnostics.swift in Sources */,
 				51DF6B532FCC621500A6C749 /* ClickPlacement.swift in Sources */,
 				KIDSCRUBINPUTBUILDMAC001 /* KidScrubInput.swift in Sources */,
+				KIDSMOOTHINGBUILDMAC0001 /* KidScrubSmoothing.swift in Sources */,
 				A5000066 /* ReviewAudioOnsetPreview.swift in Sources */,
 			);
 		};
@@ -1714,6 +1722,7 @@
 				NLG1001000NLG001NLG00002 /* Notation/Presentation/NotationLaneGeometry.swift in Sources */,
 				51DF6B522FCC621500A6C749 /* ClickPlacement.swift in Sources */,
 				KIDSCRUBINPUTBUILDIOS001 /* KidScrubInput.swift in Sources */,
+				KIDSMOOTHINGBUILDIOS0001 /* KidScrubSmoothing.swift in Sources */,
 				KIDSCRUBAUDIOBUILDIOS001 /* KidScrubAudioPlayer.swift in Sources */,
 				KIDPROTOVIEWBUILDIOS0001 /* KidPrototypeView.swift in Sources */,
 				NPH1001000NPH001NPH00002 /* Notation/Presentation/NotationPlayheadGeometry.swift in Sources */,
@@ -1903,6 +1912,7 @@
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 				FFT2011000FFT002FFT00001 /* FeatureFlagsTests.swift in Sources */,
 				KIDINPUTTESTBUILDSRC0001 /* KidScrubInputTests.swift in Sources */,
+				KIDSMOOTHINGTESTBLD00001 /* KidScrubSmoothingTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

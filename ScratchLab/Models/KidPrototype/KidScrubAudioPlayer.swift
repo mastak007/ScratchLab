@@ -35,17 +35,27 @@ final class KidScrubAudioPlayer {
     private var sampleRate: Double = 44_100
 
     /// Real-time shared state. `targetPosition` is written from the UI thread
-    /// and read on the audio render thread under `stateLock`. `readIndex` is
-    /// only ever touched on the render thread, so it needs no lock.
+    /// and read on the audio render thread under `stateLock`. `readIndex` and
+    /// `gainRamp` are only ever touched on the render thread, so they need no
+    /// lock.
     private var stateLock = os_unfair_lock_s()
     private var targetPosition: Double = 0
     private var readIndex: Double = 0
+
+    /// Per-sample de-click gain envelope (Batch 1.5, Part A). Glides toward 1.0
+    /// while the head moves and 0.0 while it is held, so starts/stops/reversals
+    /// fade instead of stepping. Initialised in `configureEngine` once the
+    /// sample rate is known.
+    private var gainRamp = KidGainRamp(step: 1.0)
 
     private var isStarted = false
 
     /// Below this per-output-frame head movement we treat the record as held
     /// still and emit silence (a stationary groove makes no sound).
     private let silenceRateThreshold: Double = 1e-4
+
+    /// De-click fade length. ~6 ms is click-free yet adds negligible latency.
+    private let fadeSeconds: Double = 0.006
 
     init() {
         loadBundledSample()
@@ -162,6 +172,9 @@ final class KidScrubAudioPlayer {
             return
         }
 
+        // Now that the real sample rate is known, build the de-click ramp.
+        gainRamp = KidGainRamp(fadeSeconds: fadeSeconds, sampleRate: sampleRate)
+
         let node = AVAudioSourceNode { [weak self] _, _, frameCountToFill, audioBufferList -> OSStatus in
             guard let self else { return noErr }
             return self.render(frameCount: frameCountToFill, into: audioBufferList)
@@ -191,16 +204,16 @@ final class KidScrubAudioPlayer {
         let endIndex = target * lastFrame
         let blockFrames = Int(frames)
         let perFrameRate = blockFrames > 0 ? (endIndex - startIndex) / Double(blockFrames) : 0
-        let moving = abs(perFrameRate) >= silenceRateThreshold
+        // Target the de-click envelope: full level while the head moves, silence
+        // while it is held. The ramp turns the on/off edges into short fades.
+        let gainTarget: Double = abs(perFrameRate) >= silenceRateThreshold ? 1.0 : 0.0
 
         for frame in 0..<blockFrames {
-            let value: Float
-            if moving {
-                let idx = startIndex + perFrameRate * Double(frame)
-                value = sampleValue(at: idx)
-            } else {
-                value = 0
-            }
+            // Hold the read position when idle so the fade-out plays the last
+            // groove position decaying to true silence (no jump).
+            let idx = startIndex + perFrameRate * Double(frame)
+            let gain = Float(gainRamp.advance(toward: gainTarget))
+            let value = sampleValue(at: idx) * gain
             for buffer in bufferList {
                 let out = buffer.mData!.assumingMemoryBound(to: Float.self)
                 out[frame] = value
