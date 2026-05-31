@@ -103,6 +103,13 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var lastDiagnosticExportPath: String?
     @Published private(set) var lastDiagnosticExportError: String?
 
+    // Live sample-position timeline (notation is derived from real sample travel, not
+    // from inferred full-stroke notes). Captured on every CC6 platter step.
+    @Published private(set) var timelineEventCount = 0
+    /// Span of sample actually travelled so far, `0...1` (the truthful stroke height).
+    @Published private(set) var timelinePositionSpan: Double = 0
+    @Published private(set) var timelineReachedCapacity = false
+
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
@@ -181,6 +188,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private let velocityIdleTimeout: TimeInterval = 0.18
     private var recorder = RaneDiagnosticRecorder()
     private var recordingStartDate: Date?
+    /// Live sample-position travel capture. Appended on each CC6 step using the real
+    /// sample position the platter reached, so notation can be derived from actual travel.
+    private var timeline = ScratchSampleTimeline()
     /// Latest CC6 value (platter companion stream) — the primary platter movement signal.
     /// Stashed on the MIDI path; also attached to each recorded diagnostic event.
     private var lastCC6Value: Int?
@@ -205,6 +215,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     func start() {
         loadSampleIfNeeded()
+        clearTimeline()
         engine.setLoops(loopPlayback)
         transport.start()
         isListening = transport.isRunning
@@ -237,6 +248,16 @@ final class ScratchPlaybackLabModel: ObservableObject {
         velocityEstimator.reset()
         engine.setVelocity(0)
         engine.setTargetPosition(seconds: mapper.samplePosition) // seek/snap to 0
+        clearTimeline()
+    }
+
+    /// Discards the captured sample-position timeline (the travel record), starting a
+    /// fresh capture. Does not touch the playhead or audio.
+    func clearTimeline() {
+        timeline.clear()
+        timelineEventCount = 0
+        timelinePositionSpan = 0
+        timelineReachedCapacity = false
     }
 
     /// Clears the running max-observed-delta / alias diagnostic.
@@ -382,6 +403,18 @@ final class ScratchPlaybackLabModel: ObservableObject {
             let moved = Double(inverted ? -step : step) * mapper.sampleSecondsPerStep
             velocityEstimator.ingest(sampleSeconds: moved, at: event.timestamp)
             engine.setVelocity(velocityEstimator.velocity)
+            // Capture the real sample position the platter reached, so notation can be
+            // derived from actual travel rather than inferred full-stroke notes. Only on
+            // a true move (skip the seeding event, which does not advance the playhead).
+            if wasSeeded {
+                timeline.append(
+                    timeSeconds: event.timestamp,
+                    position: mapper.positionFraction,
+                    velocity: velocityEstimator.velocity,
+                    crossfader: crossfaderValidLatest ? crossfaderLatest : nil,
+                    cc6Step: step
+                )
+            }
             // Tick measurement now counts CC6 steps over one revolution (~3,932).
             if isMeasuringTicks, wasSeeded {
                 measurement.record(delta: step)
@@ -487,6 +520,12 @@ final class ScratchPlaybackLabModel: ObservableObject {
         // Playhead is "moving" if the position changed since the last publish.
         playheadMoving = abs(mapper.samplePosition - lastPublishedPosition) > 1.0e-6
         lastPublishedPosition = mapper.samplePosition
+
+        // Sample-position timeline: surface live travel stats (the MIDI path never
+        // writes @Published state). Notation will later be derived from this capture.
+        timelineEventCount = timeline.count
+        timelinePositionSpan = timeline.positionSpan
+        timelineReachedCapacity = timeline.didReachCapacity
 
         // Diagnostic recorder: surface live count and reflect an auto-stop at capacity
         // (the MIDI path never writes @Published state).
