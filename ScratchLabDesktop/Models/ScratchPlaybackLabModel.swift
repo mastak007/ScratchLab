@@ -158,6 +158,18 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     var sampleDuration: TimeInterval { mapper.sampleDuration }
 
+    /// Warning shown when the active MIDI source does not look like the controller the
+    /// Scratch Playback Lab's mapping was built around (RANE ONE / ONE MKII); nil when the
+    /// active source is recognized. Pure and derived from `selectedSourceName` + `sources`
+    /// (both @Published, so the view refreshes it automatically). Display-only: it never
+    /// touches the mapper, timeline capture, or any export.
+    var controllerWarning: String? {
+        ControllerRecognition.warning(
+            selectedSourceName: selectedSourceName,
+            availableSourceNames: sources.map(\.name)
+        )
+    }
+
     private var mapper: ScratchPlatterPlayheadMapper
     private let engine = ScratchPlaybackLabEngine()
     private let transport: CoreMIDIInputTransport

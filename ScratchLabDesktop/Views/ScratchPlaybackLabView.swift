@@ -29,6 +29,10 @@ struct ScratchPlaybackLabView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            if let warning = model.controllerWarning {
+                controllerWarningBanner(warning)
+                Divider()
+            }
             waveform
                 .frame(minHeight: 200)
                 .padding(16)
@@ -89,6 +93,18 @@ struct ScratchPlaybackLabView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    // Tester-safety banner: shown only when the active MIDI source is not the verified
+    // controller, so captured notation from unsupported gear is never read as ground truth.
+    private func controllerWarningBanner(_ warning: String) -> some View {
+        Label(warning, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout.weight(.medium))
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.12))
     }
 
     private var activityIndicator: some View {
