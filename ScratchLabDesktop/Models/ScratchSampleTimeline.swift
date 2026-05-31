@@ -243,4 +243,66 @@ struct ScratchSampleTimelineExport: Equatable, Codable {
         return try encoder.encode(self)
     }
 }
+
+/// Minimal, pure replay clock for a captured timeline. It advances a playhead time across
+/// the captured span on an external tick (play / pause / reset / scrub). It copies ONLY the
+/// time bounds from the timeline at construction — it never holds or mutates the timeline,
+/// so replaying can never alter the captured data. No target overlay; review only.
+struct CapturedTimelineReplay: Equatable {
+    private(set) var startTime: TimeInterval
+    private(set) var endTime: TimeInterval
+    private(set) var currentTime: TimeInterval
+    private(set) var isPlaying: Bool
+
+    /// Builds a replay over a timeline's captured span (start = first event time, end =
+    /// last). An empty timeline yields a zero-length, immediately-finished replay.
+    init(timeline: ScratchSampleTimeline) {
+        let times = timeline.events.map(\.timeSeconds)
+        startTime = times.first ?? 0
+        endTime = times.last ?? 0
+        currentTime = startTime
+        isPlaying = false
+    }
+
+    /// Total replay duration (0 for empty / single-event captures).
+    var duration: TimeInterval { Swift.max(0, endTime - startTime) }
+
+    /// Progress across the span, `0...1` (0 when there is no duration).
+    var fraction: Double {
+        guard duration > 0 else { return 0 }
+        return (currentTime - startTime) / duration
+    }
+
+    /// True once the playhead has reached the end of the span.
+    var isAtEnd: Bool { currentTime >= endTime }
+
+    /// Starts (or resumes) playback. If already at the end, restarts from the beginning.
+    mutating func play() {
+        if isAtEnd { currentTime = startTime }
+        isPlaying = duration > 0
+    }
+
+    /// Pauses playback, holding the current position.
+    mutating func pause() { isPlaying = false }
+
+    /// Advances the playhead by real elapsed seconds while playing, clamped to the end
+    /// where it stops. No-op when paused. Deterministic given the delta.
+    mutating func tick(deltaSeconds: TimeInterval) {
+        guard isPlaying, duration > 0 else { return }
+        currentTime = Swift.min(endTime, currentTime + Swift.max(0, deltaSeconds))
+        if currentTime >= endTime { isPlaying = false }
+    }
+
+    /// Returns to the start and pauses.
+    mutating func reset() {
+        currentTime = startTime
+        isPlaying = false
+    }
+
+    /// Scrubs to a fraction `0...1` of the span (clamped). Pure and simple.
+    mutating func seek(toFraction fraction: Double) {
+        let clamped = Swift.min(Swift.max(fraction, 0), 1)
+        currentTime = startTime + clamped * duration
+    }
+}
 #endif

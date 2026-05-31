@@ -103,6 +103,15 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var lastDiagnosticExportPath: String?
     @Published private(set) var lastDiagnosticExportError: String?
 
+    // Captured-timeline replay (Slice 9). A pure clock reviews the in-memory captured
+    // timeline (play/pause/reset/scrub). It snapshots only the time bounds and never mutates
+    // the timeline or any export.
+    @Published private(set) var replayActive = false
+    @Published private(set) var replayIsPlaying = false
+    @Published private(set) var replayFraction: Double = 0
+    @Published private(set) var replayCurrentTime: TimeInterval = 0
+    @Published private(set) var replayDuration: TimeInterval = 0
+
     // Guided controller mapping check (experimental). A pure state machine walks the tester
     // through moving each control, infers candidate bindings, and lets them confirm. Held in
     // memory only — it drives no capture, persistence, or export.
@@ -243,6 +252,10 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Guided mapping check state machine (experimental; memory only). The MIDI path feeds
     /// it parsed events while collecting; step transitions happen on explicit user actions.
     private var guidedSession = GuidedMappingSession()
+    /// Captured-timeline replay clock (review only); advanced by the display tick.
+    private var replay = CapturedTimelineReplay(timeline: ScratchSampleTimeline())
+    /// Wall-clock time of the last replay advance, for the real-time delta.
+    private var lastReplayTickDate: Date?
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
@@ -398,6 +411,60 @@ final class ScratchPlaybackLabModel: ObservableObject {
         } catch {
             lastProfileImportError = error.localizedDescription
         }
+    }
+
+    // MARK: - Captured-timeline replay (review only)
+
+    /// Begins a replay session over a snapshot of the current captured timeline and starts
+    /// playing. Does nothing useful (zero-duration) if fewer than two samples are captured.
+    func startReplay() {
+        replay = CapturedTimelineReplay(timeline: timeline)
+        replay.play()
+        replayActive = true
+        lastReplayTickDate = Date()
+        publishReplayState()
+    }
+
+    /// Toggles play/pause on the active replay (no-op if no replay session).
+    func toggleReplayPlayback() {
+        guard replayActive else { return }
+        if replay.isPlaying {
+            replay.pause()
+        } else {
+            replay.play()
+            lastReplayTickDate = Date()
+        }
+        publishReplayState()
+    }
+
+    /// Returns the replay playhead to the start and pauses.
+    func resetReplay() {
+        replay.reset()
+        lastReplayTickDate = nil
+        publishReplayState()
+    }
+
+    /// Scrubs the replay playhead to a fraction `0...1` of the captured span.
+    func seekReplay(toFraction fraction: Double) {
+        guard replayActive else { return }
+        replay.seek(toFraction: fraction)
+        lastReplayTickDate = Date()
+        publishReplayState()
+    }
+
+    /// Ends the replay session (clears the review overlay).
+    func endReplay() {
+        replayActive = false
+        replay.pause()
+        lastReplayTickDate = nil
+        publishReplayState()
+    }
+
+    private func publishReplayState() {
+        replayIsPlaying = replay.isPlaying
+        replayFraction = replay.fraction
+        replayCurrentTime = replay.currentTime - replay.startTime
+        replayDuration = replay.duration
     }
 
     // MARK: - Captured notation PNG export
@@ -726,6 +793,14 @@ final class ScratchPlaybackLabModel: ObservableObject {
         // Guided mapping check: surface the live collected-event count while collecting.
         if guidedSession.isCollecting {
             guidedCollectedCount = guidedSession.collected.count
+        }
+
+        // Captured-timeline replay: advance the playhead by the real elapsed delta.
+        if replayActive, replay.isPlaying {
+            let last = lastReplayTickDate ?? now
+            replay.tick(deltaSeconds: now.timeIntervalSince(last))
+            lastReplayTickDate = now
+            publishReplayState()
         }
 
         // Diagnostic recorder: surface live count and reflect an auto-stop at capacity

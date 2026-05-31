@@ -157,3 +157,93 @@ final class ScratchSampleTimelineTests: XCTestCase {
         XCTAssertFalse(timeline.didReachCapacity)
     }
 }
+
+/// Captured-timeline replay clock (Slice 9): deterministic play/pause/reset/scrub over a
+/// captured span. Pure; it never mutates the timeline it was built from.
+final class CapturedTimelineReplayTests: XCTestCase {
+
+    private func spanTimeline() -> ScratchSampleTimeline {
+        var timeline = ScratchSampleTimeline()
+        // Five samples spanning t = 0 ... 0.4 s (duration 0.4).
+        for index in 0..<5 {
+            timeline.append(timeSeconds: Double(index) * 0.1, position: Double(index) * 0.2, velocity: 1.0)
+        }
+        return timeline
+    }
+
+    func testReplayAdvancesDeterministically() {
+        var replay = CapturedTimelineReplay(timeline: spanTimeline())
+        XCTAssertEqual(replay.duration, 0.4, accuracy: 1e-12)
+        XCTAssertEqual(replay.fraction, 0, accuracy: 1e-12)
+
+        replay.play()
+        XCTAssertTrue(replay.isPlaying)
+        replay.tick(deltaSeconds: 0.1)
+        XCTAssertEqual(replay.currentTime, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(replay.fraction, 0.25, accuracy: 1e-12)
+        replay.tick(deltaSeconds: 0.1)
+        XCTAssertEqual(replay.fraction, 0.5, accuracy: 1e-12)
+    }
+
+    func testPausedReplayDoesNotAdvance() {
+        var replay = CapturedTimelineReplay(timeline: spanTimeline())
+        replay.play()
+        replay.tick(deltaSeconds: 0.1)
+        let held = replay.currentTime
+        replay.pause()
+        replay.tick(deltaSeconds: 0.2)
+        XCTAssertEqual(replay.currentTime, held, accuracy: 1e-12)
+    }
+
+    func testReplayStopsAtEndAndRestartsOnPlay() {
+        var replay = CapturedTimelineReplay(timeline: spanTimeline())
+        replay.play()
+        replay.tick(deltaSeconds: 10.0) // overshoot
+        XCTAssertEqual(replay.currentTime, replay.endTime, accuracy: 1e-12)
+        XCTAssertFalse(replay.isPlaying)
+        XCTAssertTrue(replay.isAtEnd)
+        replay.play() // at end → restart
+        XCTAssertEqual(replay.fraction, 0, accuracy: 1e-12)
+        XCTAssertTrue(replay.isPlaying)
+    }
+
+    func testResetReturnsToStart() {
+        var replay = CapturedTimelineReplay(timeline: spanTimeline())
+        replay.play()
+        replay.tick(deltaSeconds: 0.2)
+        replay.reset()
+        XCTAssertEqual(replay.currentTime, replay.startTime, accuracy: 1e-12)
+        XCTAssertEqual(replay.fraction, 0, accuracy: 1e-12)
+        XCTAssertFalse(replay.isPlaying)
+    }
+
+    func testSeekClampsToRange() {
+        var replay = CapturedTimelineReplay(timeline: spanTimeline())
+        replay.seek(toFraction: 0.5)
+        XCTAssertEqual(replay.fraction, 0.5, accuracy: 1e-12)
+        replay.seek(toFraction: 2.0)
+        XCTAssertEqual(replay.fraction, 1.0, accuracy: 1e-12)
+        replay.seek(toFraction: -1.0)
+        XCTAssertEqual(replay.fraction, 0.0, accuracy: 1e-12)
+    }
+
+    func testReplayDoesNotMutateTimeline() throws {
+        let timeline = spanTimeline()
+        let before = try ScratchSampleTimelineExport(timeline: timeline).jsonData()
+        var replay = CapturedTimelineReplay(timeline: timeline)
+        replay.play()
+        replay.tick(deltaSeconds: 0.3)
+        replay.reset()
+        let after = try ScratchSampleTimelineExport(timeline: timeline).jsonData()
+        XCTAssertEqual(before, after)
+    }
+
+    func testEmptyTimelineHasZeroDurationReplay() {
+        var replay = CapturedTimelineReplay(timeline: ScratchSampleTimeline())
+        XCTAssertEqual(replay.duration, 0, accuracy: 1e-12)
+        replay.play()
+        XCTAssertFalse(replay.isPlaying) // nothing to play
+        replay.tick(deltaSeconds: 1.0)
+        XCTAssertEqual(replay.fraction, 0, accuracy: 1e-12)
+    }
+}

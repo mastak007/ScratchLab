@@ -613,12 +613,49 @@ struct ScratchPlaybackLabView: View {
                 }
             }
             .frame(height: 120)
+            replayTransport
+        }
+    }
+
+    // Minimal replay transport for reviewing the captured timeline (no target overlay yet).
+    private var replayTransport: some View {
+        HStack(spacing: 12) {
+            if model.replayActive {
+                Button(model.replayIsPlaying ? "Pause" : "Play") { model.toggleReplayPlayback() }
+                    .buttonStyle(.borderedProminent)
+                Button("Reset") { model.resetReplay() }
+                Slider(
+                    value: Binding(get: { model.replayFraction },
+                                   set: { model.seekReplay(toFraction: $0) }),
+                    in: 0...1
+                )
+                .frame(maxWidth: 280)
+                Text(String(format: "%.2f / %.2f s", model.replayCurrentTime, model.replayDuration))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Button("Close") { model.endReplay() }
+            } else {
+                Button("Replay captured timeline") { model.startReplay() }
+                    .disabled(model.timelineEventCount < 2)
+                Text("Review the captured travel (play / pause / scrub). Does not change the capture.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
         }
     }
 
     private func drawCapturedNotation(context: GraphicsContext, size: CGSize) {
         CapturedNotationRenderer.draw(model.timelineNotation, renderConfig: renderConfig,
                                       in: context, size: size)
+        // Replay playhead (review only) — drawn here, not in the shared renderer, so the
+        // exported PNG never carries the transient playhead line.
+        if model.replayActive {
+            let x = CGFloat(model.replayFraction) * size.width
+            var line = Path()
+            line.move(to: CGPoint(x: x, y: 0))
+            line.addLine(to: CGPoint(x: x, y: size.height))
+            context.stroke(line, with: .color(.yellow.opacity(0.9)), lineWidth: 1.5)
+        }
     }
 
     @ViewBuilder
