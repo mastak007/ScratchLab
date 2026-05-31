@@ -73,49 +73,56 @@ struct ScratchPlaybackLabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Toolbar (source + deck pickers) and the controller warning stay pinned at the
+            // top so they are always visible; the dense body scrolls. Without this the stacked
+            // rows overflow the window and clip the toolbar off the top.
             toolbar
             Divider()
             if let warning = model.controllerWarning {
                 controllerWarningBanner(warning)
                 Divider()
             }
-            waveform
-                .frame(minHeight: 200)
-                .padding(16)
-            Divider()
-            HStack(alignment: .top, spacing: 20) {
-                readouts
-                Divider()
-                qaChecklist
-                    .frame(width: 300)
+            ScrollView {
+                VStack(spacing: 0) {
+                    waveform
+                        .frame(minHeight: 200)
+                        .padding(16)
+                    Divider()
+                    HStack(alignment: .top, spacing: 20) {
+                        readouts
+                        Divider()
+                        qaChecklist
+                            .frame(width: 300)
+                    }
+                    .padding(16)
+                    Divider()
+                    calibrationRow
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    Divider()
+                    diagnosticsRow
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    Divider()
+                    guidedMappingRow
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    Divider()
+                    controllerProfilesRow
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    Divider()
+                    capturedNotation
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    Divider()
+                    controlsRow
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
             }
-            .padding(16)
-            Divider()
-            calibrationRow
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-            Divider()
-            diagnosticsRow
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-            Divider()
-            guidedMappingRow
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-            Divider()
-            controllerProfilesRow
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-            Divider()
-            capturedNotation
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-            Divider()
-            controlsRow
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
         }
-        .frame(minWidth: 940, minHeight: 720)
+        .frame(minWidth: 1040, minHeight: 720)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
         .sheet(isPresented: $showingOnboarding) { onboardingSheet }
@@ -138,11 +145,28 @@ struct ScratchPlaybackLabView: View {
             .frame(maxWidth: 240)
 
             Picker("Deck", selection: $model.deckChannel) {
-                Text("Left (ch 1)").tag(0)
-                Text("Right (ch 2)").tag(1)
+                Text("Left").tag(0)
+                Text("Right").tag(1)
             }
             .pickerStyle(.segmented)
-            .frame(maxWidth: 200)
+            .frame(width: 140)
+            .help("Platter deck: Left = MIDI channel 1, Right = channel 2")
+
+            Picker("Mode", selection: $model.sourceMode) {
+                ForEach(PlaybackLabSourceMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 230)
+            .help("Position source. Auto mirrors Scratch Visualizer (SV Midi Out) and leaves the RANE on CC6; Mirror SV / RANE force it.")
+
+            if model.isMirroringScratchVisualizer {
+                Label("Mirroring SV", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.cyan)
+                    .help("Driving the playhead from Scratch Visualizer's pitch-bend position")
+            }
 
             Spacer()
 
@@ -193,10 +217,14 @@ struct ScratchPlaybackLabView: View {
         return HStack(spacing: 6) {
             Image(systemName: profile.isVerified ? "checkmark.seal.fill" : "questionmark.diamond.fill")
                 .foregroundStyle(profile.isVerified ? Color.green : Color.orange)
-            Text("Controller profile: \(profile.displayName)")
+            Text(profile.displayName)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
+        .layoutPriority(-1) // yield width to the pickers before truncating
+        .help("Active controller profile: \(profile.displayName)")
     }
 
     // Tester-safety banner: shown only when the active MIDI source is not the verified
