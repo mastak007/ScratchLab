@@ -38,12 +38,34 @@ private struct KidPrototypeUnavailableView: View {
     }
 }
 
+// MARK: - Lane Geometry (shared by drawing and audio gate)
+
+/// Single source of truth for all y-position math in the lane.
+/// iOS y=0 at top, increases downward: smaller y = visually higher.
+private struct KidLaneGeometry {
+    let height: CGFloat
+    let twelveFraction: Double   // 0.50
+    let audioStopPhase: Double   // 0.98
+
+    var twelveY: CGFloat { height * CGFloat(twelveFraction) }
+    var topStopY: CGFloat { height * CGFloat(1.0 - audioStopPhase) }
+
+    func ribbonCenterY(for phase: Double) -> CGFloat {
+        height * CGFloat(1.0 - phase)
+    }
+
+    /// True when the ribbon centre is at/above the 12 line AND below the top-stop zone.
+    func visualAudioAllowed(for phase: Double) -> Bool {
+        let y = ribbonCenterY(for: phase)
+        return y <= twelveY && y >= topStopY
+    }
+}
+
 // MARK: - Content
 
 private struct KidPrototypeContentView: View {
 
     @Environment(\.scenePhase) private var scenePhase
-    @State private var input = KidScrubInput()
     @StateObject private var audio = KidScrubAudioHolder()
 
     // How-to-play card.
@@ -59,11 +81,11 @@ private struct KidPrototypeContentView: View {
 
     // Drag state.
     @State private var isGrabbing = false
-    @State private var isScrubbing = false
+    @State private var scratchArmed = false
     @State private var accumLastTranslation: CGFloat = 0
-    @State private var accumLastEventTime: TimeInterval?
-    @State private var lastDragEventTime: TimeInterval = 0
-    private let grabTimeout: TimeInterval = 1.0      // only catch truly stuck/cancelled gestures
+
+    // Gate dedup — avoid redundant setAudioGate lock calls.
+    @State private var lastAudioGate: Bool = false
 
     var body: some View {
         ZStack {
@@ -92,16 +114,7 @@ private struct KidPrototypeContentView: View {
             }
         }
         .onReceive(timer) { _ in
-            guard hasStarted, !showingHelp else { return }
-
-            // Timeout fail-safe: reset if touch state lingers with no movement.
-            if isGrabbing {
-                let now = ProcessInfo.processInfo.systemUptime
-                if now - lastDragEventTime > grabTimeout {
-                    endTouchInteraction(reason: "timeout")
-                }
-                return
-            }
+            guard hasStarted, !showingHelp, !isGrabbing else { return }
 
             ribbonPhase += (1.0 / 60.0) / cycleDuration
             if ribbonPhase >= 1.0 { ribbonPhase = 0.0 }
@@ -135,9 +148,14 @@ private struct KidPrototypeContentView: View {
         GeometryReader { proxy in
             let h = max(proxy.size.height, 1)
             let w = max(proxy.size.width, 1)
-            let twelveY = h * twelveFraction
-            let ribbonY = h * (1.0 - ribbonPhase)
+            let geo = KidLaneGeometry(
+                height: h,
+                twelveFraction: twelveFraction,
+                audioStopPhase: audioStopPhase
+            )
+            let ribbonY = geo.ribbonCenterY(for: ribbonPhase)
             let ribbonH: CGFloat = 36
+            let allowed = geo.visualAudioAllowed(for: ribbonPhase)
 
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -146,11 +164,11 @@ private struct KidPrototypeContentView: View {
                 // 12 / AHH START grab line.
                 Rectangle().fill(Color.white.opacity(0.30))
                     .frame(height: 2)
-                    .position(x: w / 2, y: twelveY)
+                    .position(x: w / 2, y: geo.twelveY)
                 Text("12 / AHH START")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.white.opacity(0.60))
-                    .position(x: w / 2 + 62, y: twelveY - 11)
+                    .position(x: w / 2 + 62, y: geo.twelveY - 11)
 
                 // Labels.
                 Text("↑ forward")
@@ -162,11 +180,10 @@ private struct KidPrototypeContentView: View {
                     .foregroundColor(.white.opacity(0.18))
                     .position(x: w / 2, y: h - 14)
 
-                // Ribbon: amber when grabbed or above 12, dim when below.
+                // Ribbon: green when audio allowed; red when grabbing but
+                // not allowed; amber when auto-scrolling above 12; dim otherwise.
                 Capsule()
-                    .fill(ribbonPhase >= twelveFraction || isGrabbing
-                        ? Color(hex: "F59E0B").opacity(isGrabbing ? 1.0 : 0.75)
-                        : Color(hex: "F59E0B").opacity(0.3))
+                    .fill(ribbonFill(allowed: allowed))
                     .frame(width: w - 6, height: ribbonH)
                     .position(x: w / 2, y: ribbonY)
 
@@ -179,31 +196,37 @@ private struct KidPrototypeContentView: View {
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(isGrabbing ? 0.18 : 0.08), lineWidth: 1))
             .contentShape(Rectangle())
-            .gesture(dragGesture(height: h))
+            .gesture(dragGesture(geo: geo))
             .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Ribbon colour matches what the user hears:
+    /// - grabbing + audio allowed → green
+    /// - grabbing + not allowed  → red
+    /// - auto-scroll: allowed    → amber (above 12, below top stop)
+    /// - auto-scroll: not allowed → grey (below 12 or in top stop zone)
+    private func ribbonFill(allowed: Bool) -> Color {
+        if isGrabbing {
+            return allowed ? Color.green : Color.red
+        }
+        // Auto-scroll — visual only, no audio. Use the same geometry check
+        // as the audio gate so the colour always matches eligibility.
+        return allowed ? Color(hex: "F59E0B").opacity(0.75) : Color(hex: "F59E0B").opacity(0.3)
+    }
+
     // MARK: - Drag
 
-    private func dragGesture(height: CGFloat) -> some Gesture {
+    private func dragGesture(geo: KidLaneGeometry) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                let now = ProcessInfo.processInfo.systemUptime
-                lastDragEventTime = now
                 let translation = value.translation.height
                 let px = translation - accumLastTranslation
                 accumLastTranslation = translation
 
-                let dt: TimeInterval
-                if let last = accumLastEventTime { dt = now - last }
-                else { dt = 0 }
-                accumLastEventTime = now
-
                 // Negate: SwiftUI height + down → swipe UP = phase increase.
-                let nd = -Double(px / height)
-                input.update(delta: nd, deltaTime: dt)
+                let nd = -Double(px / geo.height)
 
                 if !isGrabbing {
                     isGrabbing = true
@@ -211,17 +234,42 @@ private struct KidPrototypeContentView: View {
                     audio.player.jumpTo(t: ribbonPhase)
                 }
 
-                isScrubbing = true
+                if scratchArmed {
+                    // Active scratch — bounce inside the allowed band.
+                    // Audio tracks the touch delta regardless of visual clamp.
+                    let proposed = ribbonPhase + nd
+                    if proposed > audioStopPhase {
+                        ribbonPhase = audioStopPhase
+                    } else if proposed < twelveFraction {
+                        ribbonPhase = twelveFraction
+                    } else {
+                        ribbonPhase = proposed
+                    }
 
-                let nextPhase = min(1.0, max(0.0, ribbonPhase + nd))
-                let gated = nextPhase >= twelveFraction && nextPhase <= audioStopPhase
-                audio.player.setAudioGate(gated)
-
-                if gated {
+                    if !lastAudioGate {
+                        lastAudioGate = true
+                        audio.player.setAudioGate(true)
+                    }
                     audio.player.moveReadHead(by: nd)
+                } else {
+                    // Not armed — must visually enter the allowed zone first.
+                    // Below 12 or in top-stop = silent.  No audio arm.
+                    let proposed = min(1.0, max(0.0, ribbonPhase + nd))
+                    if geo.visualAudioAllowed(for: proposed) {
+                        scratchArmed = true
+                        if !lastAudioGate {
+                            lastAudioGate = true
+                            audio.player.setAudioGate(true)
+                        }
+                        audio.player.moveReadHead(by: nd)
+                    } else {
+                        if lastAudioGate {
+                            lastAudioGate = false
+                            audio.player.setAudioGate(false)
+                        }
+                    }
+                    ribbonPhase = proposed
                 }
-
-                ribbonPhase = nextPhase
             }
             .onEnded { _ in
                 endTouchInteraction(reason: "dragEnded")
@@ -235,13 +283,11 @@ private struct KidPrototypeContentView: View {
     /// any Start/Stop/Pause button.
     private func endTouchInteraction(reason: String) {
         isGrabbing = false
-        isScrubbing = false
+        scratchArmed = false
         accumLastTranslation = 0
-        accumLastEventTime = nil
-        lastDragEventTime = 0
+        lastAudioGate = false
         audio.player.endGrab()
         audio.player.setAudioGate(false)
-        input.update(delta: 0, deltaTime: 0)
     }
 
     // MARK: - Telemetry
@@ -249,21 +295,12 @@ private struct KidPrototypeContentView: View {
     private var telemetry: some View {
         HStack(spacing: 24) {
             chip("PHASE", String(format: "%.2f", ribbonPhase))
-            chip("VEL",   String(format: "%+.1f", input.velocity))
-            chip("DIR",   dirLabel)
         }
     }
     private func chip(_ l: String, _ v: String) -> some View {
         HStack(spacing: 6) {
             Text(l).font(.system(size: 9, weight: .bold)).foregroundColor(.white.opacity(0.35))
             Text(v).font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundColor(.white)
-        }
-    }
-    private var dirLabel: String {
-        switch input.direction {
-        case .forward: return "FWD"
-        case .backward: return "REV"
-        case .idle: return "—"
         }
     }
 
