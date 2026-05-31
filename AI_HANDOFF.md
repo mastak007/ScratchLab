@@ -1,5 +1,96 @@
 # AI Handoff
 
+## 2026-06-01 — Kid Prototype touch-audio gate STABILISED (HEAD `aee94d8`, pushed to `origin/release/testflight-1`)
+
+The Kid Mode Prototype's touch-driven "ahh" audio gate is now stable on
+device. Hard, sustained up/down scratching no longer freezes or drops
+into a dead grey-yellow state; the ribbon clamps/bounces inside the
+allowed band and audio continues. This is a prototype validation aid,
+not a production scratch engine — accepted behaviour is touch-only
+"ahh" manipulation with **no autoplay audio**.
+
+### Current branch and commit
+
+- Branch: **`release/testflight-1`**
+- HEAD = `origin/release/testflight-1` = **`aee94d8`** — `Kid prototype: stabilize touch audio gate`
+- Pushed to origin (local HEAD and origin HEAD both `aee94d8`).
+- Recent Kid-prototype commit chain:
+  - `aee94d8` — Kid prototype: stabilize touch audio gate
+  - `de70cfb` — Kid prototype: guard touch audio state
+  - `56b323b` — Kid prototype: make ahh audio touch-only
+  - `7735a1e` — Kid prototype: constrain scrub audio window
+  - `83ea49f` — Kid prototype: show dev entry in DEBUG
+
+### Kid Prototype current behaviour (accepted)
+
+- A **DEBUG-visible** "Kid Mode Prototype" entry exists.
+- **No autoplay audio.**
+- The visual ribbon may move silently.
+- Audio plays **only while touching/grabbing**.
+- A fresh touch **below 12** is silent.
+- Crossing/entering the **12 → top allowed zone** starts audio.
+- Once armed, sustained hard scratching **clamps/bounces inside the
+  allowed band** instead of dying.
+- Release / lift / cancel closes the gate and silences.
+- Swipe **up = forward**, swipe **down = reverse**.
+
+### Architecture / safety constraints
+
+- Kid audio remains **isolated to Kid Prototype files**.
+- **No Batch 2** ribbon/agent/hybrid expansion has been started.
+- No BPM grid, crossfader, scoring, logging, capture, notation, export,
+  AR, or AudioEngine changes.
+- `KidScrubAudioPlayer.swift` was **not changed** by the final stability
+  commit.
+- The final stability commit (`aee94d8`) touched
+  **`ScratchLab/Views/KidPrototypeView.swift` only**.
+
+### Known remaining design context
+
+- The touch-audio model is still a **prototype validation aid**, not a
+  production scratch engine.
+- Current accepted behaviour is **touch-only "ahh" manipulation**, not
+  autoplay audio.
+- Any future visual/instruction work must preserve:
+  - no touch = silence
+  - below 12 fresh touch = silence
+  - touch in allowed zone = audio
+  - release = silence
+  - no sustained-scratch freeze
+
+### Verification status
+
+- **Manual iPhone K test passed**:
+  - touch below 12 = silence
+  - drag upward across 12 = audio starts
+  - hard up/down scratching for 30 s = no freeze / no hang / no dead
+    grey-yellow state
+  - hard downward past 12 while armed = ribbon clamps/bounces, audio
+    continues
+  - hard upward near top stop while armed = ribbon clamps/bounces, audio
+    continues
+  - release mid-scratch = silence, ribbon resumes visual-only movement
+  - touch below 12 again after release = silent fresh start
+  - swipe up = forward, swipe down = reverse
+- **Build gate passed**:
+  - iOS Debug build: succeeded
+  - macOS build: succeeded
+  - macOS build-for-testing: succeeded
+  - focused smoke tests: 35 tests, 0 failures
+- Branch pushed and verified on `origin/release/testflight-1`.
+- Working tree may still contain **unrelated dirty/untracked planning
+  docs** (`DEV_LOG.md`, `TASKS.md`, `analysis/`, `docs/`,
+  `deep-research-skills/`). These are pre-existing and were not touched.
+
+### Next recommended move
+
+A small, low-risk slice only — **do not start Batch 2 by default.** See
+`AI_HANDOFF/next_prompt.md`: the recommended next slice is Kid Prototype
+instruction / onboarding card polish, with the accepted touch-audio
+rules preserved exactly.
+
+---
+
 ## 2026-05-27 — Notation track safe stop point reached (Sections 1–9 closed; HEAD `f1b3b7b`, in sync with `origin/main`)
 
 The notation/timing/semantics/coaching/presentation/replay/debug-Review
