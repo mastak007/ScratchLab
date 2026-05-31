@@ -81,7 +81,6 @@ private struct KidPrototypeContentView: View {
 
     // Drag state.
     @State private var isGrabbing = false
-    @State private var scratchArmed = false
     @State private var accumLastTranslation: CGFloat = 0
 
     // Gate dedup — avoid redundant setAudioGate lock calls.
@@ -234,42 +233,22 @@ private struct KidPrototypeContentView: View {
                     audio.player.jumpTo(t: ribbonPhase)
                 }
 
-                if scratchArmed {
-                    // Active scratch — bounce inside the allowed band.
-                    // Audio tracks the touch delta regardless of visual clamp.
-                    let proposed = ribbonPhase + nd
-                    if proposed > audioStopPhase {
-                        ribbonPhase = audioStopPhase
-                    } else if proposed < twelveFraction {
-                        ribbonPhase = twelveFraction
-                    } else {
-                        ribbonPhase = proposed
-                    }
+                let previous = ribbonPhase
+                let proposed = min(1.0, max(0.0, previous + nd))
+                let audioAllowed = geo.visualAudioAllowed(for: proposed)
 
-                    if !lastAudioGate {
-                        lastAudioGate = true
-                        audio.player.setAudioGate(true)
-                    }
-                    audio.player.moveReadHead(by: nd)
-                } else {
-                    // Not armed — must visually enter the allowed zone first.
-                    // Below 12 or in top-stop = silent.  No audio arm.
-                    let proposed = min(1.0, max(0.0, ribbonPhase + nd))
-                    if geo.visualAudioAllowed(for: proposed) {
-                        scratchArmed = true
-                        if !lastAudioGate {
-                            lastAudioGate = true
-                            audio.player.setAudioGate(true)
-                        }
-                        audio.player.moveReadHead(by: nd)
-                    } else {
-                        if lastAudioGate {
-                            lastAudioGate = false
-                            audio.player.setAudioGate(false)
-                        }
-                    }
-                    ribbonPhase = proposed
+                if lastAudioGate != audioAllowed {
+                    lastAudioGate = audioAllowed
+                    audio.player.setAudioGate(audioAllowed)
                 }
+
+                if audioAllowed {
+                    let audibleStart = min(audioStopPhase, max(twelveFraction, previous))
+                    let audibleEnd = min(audioStopPhase, max(twelveFraction, proposed))
+                    audio.player.moveReadHead(by: audibleEnd - audibleStart)
+                }
+
+                ribbonPhase = proposed
             }
             .onEnded { _ in
                 endTouchInteraction(reason: "dragEnded")
@@ -283,7 +262,6 @@ private struct KidPrototypeContentView: View {
     /// any Start/Stop/Pause button.
     private func endTouchInteraction(reason: String) {
         isGrabbing = false
-        scratchArmed = false
         accumLastTranslation = 0
         lastAudioGate = false
         audio.player.endGrab()
