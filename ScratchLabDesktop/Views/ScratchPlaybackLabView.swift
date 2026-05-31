@@ -1,5 +1,7 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 // Scratch Playback Lab (first slice): macOS developer surface.
 //
@@ -54,6 +56,10 @@ struct ScratchPlaybackLabView: View {
                 .padding(.vertical, 10)
             Divider()
             guidedMappingRow
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            Divider()
+            controllerProfilesRow
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
@@ -520,6 +526,56 @@ struct ScratchPlaybackLabView: View {
         case .controlChange(let number): return "CC\(number)"
         case .pitchBend: return "Pitch bend"
         }
+    }
+
+    // MARK: - Controller profiles (import / export)
+
+    // Export the built-in RANE profile as an editable controller_profile_v1 template, or
+    // import a profile JSON to persist for this tester. No timeline/session export is touched.
+    private var controllerProfilesRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Text("Controller profiles")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("Export RANE template") { model.exportRaneProfileTemplate() }
+                Button("Import profile…") { presentProfileImportPanel() }
+            }
+            profileExportStatus
+            profileImportStatus
+        }
+    }
+
+    @ViewBuilder
+    private var profileExportStatus: some View {
+        if let error = model.lastProfileExportError {
+            Text("Profile export failed: \(error)")
+                .font(.caption2).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
+        } else if let path = model.lastProfileExportPath {
+            Text("Template → \(path)")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+        }
+    }
+
+    @ViewBuilder
+    private var profileImportStatus: some View {
+        if let error = model.lastProfileImportError {
+            Text("Profile import failed: \(error)")
+                .font(.caption2).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
+        } else if let name = model.lastProfileImportName {
+            Text("Imported: \(name)")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+        }
+    }
+
+    private func presentProfileImportPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import controller profile"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.importProfile(from: url)
     }
 
     // MARK: - Captured notation preview (read-only)

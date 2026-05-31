@@ -104,3 +104,105 @@ final class ControllerProfileTests: XCTestCase {
         XCTAssertNoThrow(try ControllerProfile.decode(from: data))
     }
 }
+
+/// Controller profile persistence + import/export (Slice 7). File I/O against an injected
+/// temporary directory. Touches no timeline/session export schema.
+final class ControllerProfileStoreTests: XCTestCase {
+
+    private var tempDir: URL!
+    private var store: ControllerProfileStore!
+
+    /// A custom (non-built-in) profile derived from RANE with a different identifier.
+    private func customProfile(identifier: String = "custom-test") -> ControllerProfile {
+        let rane = ControllerProfile.raneOneMKII
+        return ControllerProfile(
+            schemaVersion: ControllerProfile.currentSchemaVersion,
+            identifier: identifier,
+            displayName: "Custom Test Controller",
+            deck: rane.deck,
+            stepsPerRevolution: rane.stepsPerRevolution,
+            pitchBendTicksPerRevolution: rane.pitchBendTicksPerRevolution,
+            aliasWarnThreshold: rane.aliasWarnThreshold,
+            aliasFailThreshold: rane.aliasFailThreshold,
+            crossfaderCutWidth: rane.crossfaderCutWidth
+        )
+    }
+
+    override func setUpWithError() throws {
+        tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("ControllerProfileStoreTests-\(UUID().uuidString)")
+        store = ControllerProfileStore(directory: tempDir)
+    }
+
+    override func tearDownWithError() throws {
+        if let tempDir { try? FileManager.default.removeItem(at: tempDir) }
+    }
+
+    func testSaveLoadRoundtrip() throws {
+        let profile = customProfile()
+        let url = try store.save(profile)
+        let loaded = try store.load(at: url)
+        XCTAssertEqual(loaded, profile)
+    }
+
+    func testEncodeIsDeterministic() throws {
+        let profile = customProfile()
+        let a = try ControllerProfileStore.encodeDocument(profile)
+        let b = try ControllerProfileStore.encodeDocument(profile)
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(try ControllerProfileStore.decodeDocument(a), profile)
+    }
+
+    func testExportWritesLoadableFile() throws {
+        let url = try store.export(.raneOneMKII, to: tempDir)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try store.load(at: url), .raneOneMKII)
+    }
+
+    func testUnknownFormatRejected() throws {
+        let document = ControllerProfileDocument(format: "controller_profile_v99", profile: customProfile())
+        let data = try JSONEncoder().encode(document)
+        XCTAssertThrowsError(try ControllerProfileStore.decodeDocument(data)) { error in
+            XCTAssertEqual(error as? ControllerProfileStore.StoreError, .unsupportedFormat("controller_profile_v99"))
+        }
+    }
+
+    func testUnknownSchemaVersionRejected() throws {
+        let future = ControllerProfile(
+            schemaVersion: ControllerProfile.currentSchemaVersion + 1,
+            identifier: "future", displayName: "Future",
+            deck: ControllerProfile.raneOneMKII.deck,
+            stepsPerRevolution: 4000, pitchBendTicksPerRevolution: 16384,
+            aliasWarnThreshold: 4096, aliasFailThreshold: 8192, crossfaderCutWidth: 0.05
+        )
+        let data = try JSONEncoder().encode(ControllerProfileDocument(profile: future))
+        XCTAssertThrowsError(try ControllerProfileStore.decodeDocument(data)) { error in
+            XCTAssertEqual(
+                error as? ControllerProfileStore.StoreError,
+                .unsupportedSchemaVersion(ControllerProfile.currentSchemaVersion + 1)
+            )
+        }
+    }
+
+    func testMissingFormatKeyFailsClosed() throws {
+        // A JSON object with only the profile (no `format`) must not be assumed current.
+        let inner = try JSONEncoder().encode(ControllerProfile.raneOneMKII)
+        let json = "{\"profile\":\(String(data: inner, encoding: .utf8)!)}"
+        XCTAssertThrowsError(try ControllerProfileStore.decodeDocument(Data(json.utf8)))
+    }
+
+    func testBuiltInProfileCannotBeOverwritten() {
+        XCTAssertThrowsError(try store.save(.raneOneMKII)) { error in
+            XCTAssertEqual(
+                error as? ControllerProfileStore.StoreError,
+                .builtInProfileReadOnly(ControllerProfile.raneOneMKII.identifier)
+            )
+        }
+    }
+
+    func testListSavedReturnsSavedProfiles() throws {
+        try store.save(customProfile(identifier: "alpha"))
+        try store.save(customProfile(identifier: "beta"))
+        let identifiers = Set(store.listSaved().map(\.identifier))
+        XCTAssertEqual(identifiers, ["alpha", "beta"])
+    }
+}

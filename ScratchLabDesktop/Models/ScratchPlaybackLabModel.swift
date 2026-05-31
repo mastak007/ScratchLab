@@ -118,6 +118,13 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var lastTimelineExportPath: String?
     @Published private(set) var lastTimelineExportError: String?
 
+    // Controller profile import/export status (Slice 7). Separate from timeline/session
+    // exports; touches no existing export schema.
+    @Published private(set) var lastProfileExportPath: String?
+    @Published private(set) var lastProfileExportError: String?
+    @Published private(set) var lastProfileImportName: String?
+    @Published private(set) var lastProfileImportError: String?
+
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
@@ -215,6 +222,8 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private let velocityIdleTimeout: TimeInterval = 0.18
     private var recorder = RaneDiagnosticRecorder()
     private var recordingStartDate: Date?
+    /// Controller profile persistence store (Application Support/ScratchLab/ControllerProfiles).
+    private let profileStore = ControllerProfileStore(directory: ScratchPlaybackLabModel.controllerProfilesDirectory)
     /// Live sample-position travel capture. Appended on each CC6 step using the real
     /// sample position the platter reached, so notation can be derived from actual travel.
     private var timeline = ScratchSampleTimeline()
@@ -336,6 +345,53 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Clears the running max-observed-delta / alias diagnostic.
     func resetMaxDelta() {
         mapper.resetMaxObservedDelta()
+    }
+
+    // MARK: - Controller profile import / export
+
+    /// Application Support directory for saved controller profiles.
+    static var controllerProfilesDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("ScratchLab/ControllerProfiles", isDirectory: true)
+    }
+
+    /// Exports the built-in RANE profile to ~/Downloads as a `controller_profile_v1` JSON
+    /// template a tester can edit and send back. Explicit user action; never automatic.
+    func exportRaneProfileTemplate() {
+        lastProfileExportError = nil
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            lastProfileExportPath = nil
+            lastProfileExportError = "Could not locate the Downloads folder."
+            return
+        }
+        do {
+            let url = try profileStore.export(.raneOneMKII, to: downloads)
+            lastProfileExportPath = url.path
+        } catch {
+            lastProfileExportPath = nil
+            lastProfileExportError = error.localizedDescription
+        }
+    }
+
+    /// Imports a controller profile from a file URL: validates it (fails closed on unknown
+    /// format/version), and persists custom profiles to the store. The built-in RANE profile
+    /// cannot be overwritten. Touches no timeline/session export schema.
+    func importProfile(from url: URL) {
+        lastProfileImportError = nil
+        lastProfileImportName = nil
+        do {
+            let profile = try profileStore.load(at: url)
+            if ControllerProfileStore.builtInIdentifiers.contains(profile.identifier) {
+                // Valid file, but it is the read-only built-in — surface it without saving.
+                lastProfileImportName = "\(profile.displayName) (built-in — not overwritten)"
+            } else {
+                try profileStore.save(profile)
+                lastProfileImportName = profile.displayName
+            }
+        } catch {
+            lastProfileImportError = error.localizedDescription
+        }
     }
 
     // MARK: - Guided controller mapping check (experimental; memory only)

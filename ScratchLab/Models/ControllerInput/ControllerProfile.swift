@@ -120,6 +120,107 @@ extension ControllerProfile {
     )
 }
 
+/// On-disk envelope for a controller profile. `format` is the file-format version
+/// ("controller_profile_v1"); decoding fails closed on an unknown format or an unsupported
+/// inner profile schema version, so a future file can never be silently misread.
+struct ControllerProfileDocument: Codable, Equatable {
+    /// The file format this build writes and accepts.
+    static let currentFormat = "controller_profile_v1"
+
+    /// File-format identifier. A default is provided for the memberwise initializer, but
+    /// decoding still REQUIRES the key (synthesized Decodable does not apply defaults), so a
+    /// file missing `format` fails closed rather than being assumed current.
+    var format: String = Self.currentFormat
+    /// The wrapped profile.
+    var profile: ControllerProfile
+}
+
+/// Persists, imports, and exports controller profiles as `controller_profile_v1` JSON.
+/// Pure Foundation (cross-platform); the directory is injected so it is fully testable.
+/// Built-in profiles are read-only — they can be exported as a template but never saved
+/// over. Touches NO timeline/session export schema.
+final class ControllerProfileStore {
+    enum StoreError: Error, Equatable {
+        case unsupportedFormat(String)
+        case unsupportedSchemaVersion(Int)
+        case builtInProfileReadOnly(String)
+    }
+
+    /// Identifiers of built-in profiles that a saved file must never overwrite.
+    static let builtInIdentifiers: Set<String> = [ControllerProfile.raneOneMKII.identifier]
+
+    private let directory: URL
+    private let fileManager: FileManager
+
+    init(directory: URL, fileManager: FileManager = .default) {
+        self.directory = directory
+        self.fileManager = fileManager
+    }
+
+    /// Deterministic encoder (sorted keys + pretty) so files diff cleanly and round-trip
+    /// byte-stably — two encodes of the same profile are identical.
+    private static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        return encoder
+    }
+
+    /// Encodes a profile document deterministically.
+    static func encodeDocument(_ profile: ControllerProfile) throws -> Data {
+        try makeEncoder().encode(ControllerProfileDocument(profile: profile))
+    }
+
+    /// Decodes and validates a profile document, failing closed on an unknown file format
+    /// or an unsupported inner profile schema version.
+    static func decodeDocument(_ data: Data) throws -> ControllerProfile {
+        let document = try JSONDecoder().decode(ControllerProfileDocument.self, from: data)
+        guard document.format == ControllerProfileDocument.currentFormat else {
+            throw StoreError.unsupportedFormat(document.format)
+        }
+        guard document.profile.schemaVersion == ControllerProfile.currentSchemaVersion else {
+            throw StoreError.unsupportedSchemaVersion(document.profile.schemaVersion)
+        }
+        return document.profile
+    }
+
+    /// Saves a custom profile to the store directory as `<identifier>.json`. Refuses to
+    /// overwrite a built-in profile so the verified RANE mapping cannot be clobbered.
+    @discardableResult
+    func save(_ profile: ControllerProfile) throws -> URL {
+        guard !Self.builtInIdentifiers.contains(profile.identifier) else {
+            throw StoreError.builtInProfileReadOnly(profile.identifier)
+        }
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("\(profile.identifier).json")
+        try Self.encodeDocument(profile).write(to: url, options: .atomic)
+        return url
+    }
+
+    /// Loads and validates a profile from a file URL (import).
+    func load(at url: URL) throws -> ControllerProfile {
+        try Self.decodeDocument(Data(contentsOf: url))
+    }
+
+    /// Exports a profile document to a directory (e.g. Downloads), returning the file URL.
+    /// Allowed for built-in profiles too — exporting the RANE profile gives testers a
+    /// template to edit. Does not save into the store.
+    @discardableResult
+    func export(_ profile: ControllerProfile, to exportDirectory: URL) throws -> URL {
+        try fileManager.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+        let url = exportDirectory.appendingPathComponent("\(profile.identifier).controller_profile_v1.json")
+        try Self.encodeDocument(profile).write(to: url, options: .atomic)
+        return url
+    }
+
+    /// Lists saved custom profiles (best-effort; skips any file that fails to decode).
+    func listSaved() -> [ControllerProfile] {
+        guard let urls = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return urls.filter { $0.pathExtension == "json" }.compactMap { try? load(at: $0) }
+    }
+}
+
 extension ScratchPlatterPlayheadMapper {
     /// Builds a mapper for a controller profile, defaulting to the built-in RANE profile.
     /// Every shipped profile currently carries the same platter constants the mapper uses
