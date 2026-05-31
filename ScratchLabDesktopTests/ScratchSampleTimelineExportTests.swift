@@ -130,3 +130,89 @@ final class ScratchSampleTimelineExportTests: XCTestCase {
         XCTAssertEqual(try export.jsonData(), try export.jsonData())
     }
 }
+
+/// Sandbox-safe export wiring: suggested default names are deterministic, and the model
+/// export methods write to an INJECTED destination URL (no direct ~/Downloads writes), with
+/// empty-export guards intact. No schema changes are exercised here.
+final class PlaybackLabExportTests: XCTestCase {
+
+    // MARK: - Suggested default filenames (preserved, pure)
+
+    func testSuggestedNamesPreserveExistingPatterns() {
+        XCTAssertEqual(PlaybackLabExport.timelineFilename(epoch: 123), "ScratchTimeline-123.json")
+        XCTAssertEqual(PlaybackLabExport.diagnosticFilename(epoch: 123), "RaneDiagnostic-123.json")
+        XCTAssertEqual(PlaybackLabExport.notationPNGFilename(epoch: 123), "ScratchNotation-123.png")
+        XCTAssertEqual(PlaybackLabExport.testerBundleFolderName(epoch: 123), "ScratchLab-Diagnostics-123")
+        XCTAssertEqual(PlaybackLabExport.raneProfileTemplateFilename, "rane-one-mkii.controller_profile_v1.json")
+    }
+
+    // MARK: - Model writes to an injected destination (happy paths that need no capture)
+
+    @MainActor
+    func testExportRaneProfileTemplateWritesToInjectedURL() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PLExport-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let url = dir.appendingPathComponent(PlaybackLabExport.raneProfileTemplateFilename)
+        let model = ScratchPlaybackLabModel()
+        model.exportRaneProfileTemplate(to: url)
+
+        XCTAssertNil(model.lastProfileExportError)
+        XCTAssertEqual(model.lastProfileExportPath, url.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        // Round-trips back to the built-in RANE profile.
+        XCTAssertEqual(try ControllerProfileStore.decodeDocument(Data(contentsOf: url)), .raneOneMKII)
+    }
+
+    @MainActor
+    func testExportTesterDiagnosticsWritesFolderToInjectedURL() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PLExport-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let folderURL = dir.appendingPathComponent("ScratchLab-Diagnostics-1")
+        let model = ScratchPlaybackLabModel()
+        model.exportTesterDiagnostics(toFolder: folderURL)
+
+        XCTAssertNil(model.lastDiagnosticsBundleError)
+        XCTAssertEqual(model.lastDiagnosticsBundlePath, folderURL.path)
+        let written = try FileManager.default.contentsOfDirectory(atPath: folderURL.path)
+        // No capture → timeline / RANE diagnostic omitted; the always-present pieces remain.
+        XCTAssertTrue(written.contains("ControllerProfile.json"))
+        XCTAssertTrue(written.contains("README.txt"))
+        XCTAssertFalse(written.contains("ScratchTimeline.json"))
+    }
+
+    // MARK: - Empty-export guards still hold (and never write)
+
+    @MainActor
+    func testEmptyTimelineExportGuardDoesNotWrite() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("should-not-exist-\(UUID().uuidString).json")
+        let model = ScratchPlaybackLabModel()
+        model.exportTimeline(to: url)
+        XCTAssertNotNil(model.lastTimelineExportError)
+        XCTAssertNil(model.lastTimelineExportPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @MainActor
+    func testEmptyDiagnosticExportGuardDoesNotWrite() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("should-not-exist-\(UUID().uuidString).json")
+        let model = ScratchPlaybackLabModel()
+        model.exportDiagnostics(to: url)
+        XCTAssertNotNil(model.lastDiagnosticExportError)
+        XCTAssertNil(model.lastDiagnosticExportPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @MainActor
+    func testNilPNGExportGuardDoesNotWrite() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("should-not-exist-\(UUID().uuidString).png")
+        let model = ScratchPlaybackLabModel()
+        model.exportCapturedNotationPNG(nil, to: url) // empty timeline + nil data
+        XCTAssertNotNil(model.lastNotationPNGExportError)
+        XCTAssertNil(model.lastNotationPNGExportPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+}

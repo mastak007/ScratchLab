@@ -45,7 +45,7 @@ enum TesterOnboardingContent {
             "Other gear shows an \"unverified mapping\" warning — run Verify controller mapping to check it."
         ]),
         Section(title: "Export diagnostics", body: [
-            "Use Export tester bundle to save a folder of captured data to Downloads.",
+            "Use Export tester bundle to save a folder of captured data to a location you choose.",
             "Nothing is uploaded — you choose what to send back."
         ]),
         Section(title: "Report issues", body: [
@@ -417,8 +417,11 @@ struct ScratchPlaybackLabView: View {
                 Button("Calibration record") { model.startDiagnosticRecording(calibration: true) }
             }
 
-            Button("Export JSON") { model.exportDiagnostics() }
-                .disabled(model.isRecordingDiagnostics || model.diagnosticEventCount == 0)
+            Button("Export JSON") {
+                presentSavePanel(suggestedName: PlaybackLabExport.diagnosticFilename(epoch: exportEpoch()),
+                                 contentTypes: [.json]) { model.exportDiagnostics(to: $0) }
+            }
+            .disabled(model.isRecordingDiagnostics || model.diagnosticEventCount == 0)
 
             Divider().frame(height: 34)
 
@@ -442,8 +445,11 @@ struct ScratchPlaybackLabView: View {
 
             // Sample-position timeline export (captured travel → JSON; no notation yet).
             VStack(alignment: .leading, spacing: 2) {
-                Button("Export timeline JSON") { model.exportTimeline() }
-                    .disabled(model.timelineEventCount == 0)
+                Button("Export timeline JSON") {
+                    presentSavePanel(suggestedName: PlaybackLabExport.timelineFilename(epoch: exportEpoch()),
+                                     contentTypes: [.json]) { model.exportTimeline(to: $0) }
+                }
+                .disabled(model.timelineEventCount == 0)
                 timelineExportStatus
             }
 
@@ -617,9 +623,15 @@ struct ScratchPlaybackLabView: View {
                 Text("Controller profiles")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Button("Export RANE template") { model.exportRaneProfileTemplate() }
+                Button("Export RANE template") {
+                    presentSavePanel(suggestedName: PlaybackLabExport.raneProfileTemplateFilename,
+                                     contentTypes: [.json]) { model.exportRaneProfileTemplate(to: $0) }
+                }
                 Button("Import profile…") { presentProfileImportPanel() }
-                Button("Export tester bundle") { model.exportTesterDiagnostics() }
+                Button("Export tester bundle") {
+                    presentSavePanel(suggestedName: PlaybackLabExport.testerBundleFolderName(epoch: exportEpoch()),
+                                     contentTypes: []) { model.exportTesterDiagnostics(toFolder: $0) }
+                }
             }
             profileExportStatus
             profileImportStatus
@@ -668,6 +680,24 @@ struct ScratchPlaybackLabView: View {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         model.importProfile(from: url)
+    }
+
+    /// Current epoch seconds for the save-panel default file/folder names.
+    private func exportEpoch() -> Int { Int(Date().timeIntervalSince1970) }
+
+    /// Presents a save panel and calls `write` with the user-chosen URL. Sandbox-safe: the
+    /// app only writes where the user pointed it (powerbox grants access to that URL), so no
+    /// broad Downloads entitlement is needed. `contentTypes` empty = no extension restriction
+    /// (used for the diagnostics folder).
+    private func presentSavePanel(suggestedName: String,
+                                  contentTypes: [UTType],
+                                  write: (URL) -> Void) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        if !contentTypes.isEmpty { panel.allowedContentTypes = contentTypes }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        write(url)
     }
 
     // MARK: - Captured notation preview (read-only)
@@ -762,14 +792,16 @@ struct ScratchPlaybackLabView: View {
     }
 
     // Renders the captured notation to a PNG at a wide aspect (matching the preview's
-    // truthful left→right layout) and hands it to the model to write to Downloads.
+    // truthful left→right layout), then asks for a user-selected destination (sandbox-safe)
+    // and hands the bytes to the model to write there.
     private func exportCapturedNotationPNG() {
         let data = CapturedNotationImage.pngData(
             notation: model.timelineNotation,
             renderConfig: renderConfig,
             size: CGSize(width: 1200, height: 300)
         )
-        model.exportCapturedNotationPNG(data)
+        presentSavePanel(suggestedName: PlaybackLabExport.notationPNGFilename(epoch: exportEpoch()),
+                         contentTypes: [.png]) { model.exportCapturedNotationPNG(data, to: $0) }
     }
 
     // MARK: - Controls

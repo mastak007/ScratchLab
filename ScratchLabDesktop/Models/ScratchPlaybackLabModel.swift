@@ -48,6 +48,18 @@ struct WaveformPeak: Equatable {
     }
 }
 
+/// Pure, deterministic suggested default names for the Scratch Playback Lab exports. These
+/// are the names the save panel pre-fills; the user picks the actual destination (so writes
+/// are sandbox-safe). Preserving these keeps exported filenames identical to before.
+enum PlaybackLabExport {
+    static func timelineFilename(epoch: Int) -> String { "ScratchTimeline-\(epoch).json" }
+    static func diagnosticFilename(epoch: Int) -> String { "RaneDiagnostic-\(epoch).json" }
+    static func notationPNGFilename(epoch: Int) -> String { "ScratchNotation-\(epoch).png" }
+    static func testerBundleFolderName(epoch: Int) -> String { "ScratchLab-Diagnostics-\(epoch)" }
+    /// The RANE template file name (matches the previous `<identifier>.controller_profile_v1.json`).
+    static let raneProfileTemplateFilename = "rane-one-mkii.controller_profile_v1.json"
+}
+
 @MainActor
 final class ScratchPlaybackLabModel: ObservableObject {
     // Live readouts (published at display rate, not per-MIDI-event).
@@ -333,29 +345,22 @@ final class ScratchPlaybackLabModel: ObservableObject {
         ScratchSampleTimelineNotation(timeline: timeline)
     }
 
-    /// Writes the currently held sample-position timeline to a timestamped JSON file in
-    /// ~/Downloads (same explicit-user-action pattern as `exportDiagnostics()` — never
-    /// called automatically). The raw travel is enough to regenerate notation later; no
-    /// strokes are invented. Errors surface via `lastTimelineExportError`, success via
-    /// `lastTimelineExportPath`.
-    func exportTimeline() {
+    /// Writes the currently held sample-position timeline as JSON to a user-selected
+    /// destination `url` (chosen via a save panel, so it is sandbox-safe — the app only
+    /// writes where the user pointed it, never blindly to ~/Downloads). Explicit user action
+    /// only. The raw travel is enough to regenerate notation later; no strokes are invented.
+    /// Errors surface via `lastTimelineExportError`, success via `lastTimelineExportPath`.
+    func exportTimeline(to url: URL) {
         lastTimelineExportError = nil
         guard !timeline.isEmpty else {
             lastTimelineExportPath = nil
             lastTimelineExportError = "No timeline events to export."
             return
         }
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            lastTimelineExportPath = nil
-            lastTimelineExportError = "Could not locate the Downloads folder."
-            return
-        }
-        let now = Date()
         let export = ScratchSampleTimelineExport(
             timeline: timeline,
-            exportedAtEpochSeconds: now.timeIntervalSince1970
+            exportedAtEpochSeconds: Date().timeIntervalSince1970
         )
-        let url = downloads.appendingPathComponent("ScratchTimeline-\(Int(now.timeIntervalSince1970)).json")
         do {
             let data = try export.jsonData()
             try data.write(to: url, options: .atomic)
@@ -380,17 +385,14 @@ final class ScratchPlaybackLabModel: ObservableObject {
         return base.appendingPathComponent("ScratchLab/ControllerProfiles", isDirectory: true)
     }
 
-    /// Exports the built-in RANE profile to ~/Downloads as a `controller_profile_v1` JSON
-    /// template a tester can edit and send back. Explicit user action; never automatic.
-    func exportRaneProfileTemplate() {
+    /// Exports the built-in RANE profile as a `controller_profile_v1` JSON template to a
+    /// user-selected destination `url` (chosen via a save panel; sandbox-safe). A tester can
+    /// edit it and send it back. Explicit user action; never automatic.
+    func exportRaneProfileTemplate(to url: URL) {
         lastProfileExportError = nil
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            lastProfileExportPath = nil
-            lastProfileExportError = "Could not locate the Downloads folder."
-            return
-        }
         do {
-            let url = try profileStore.export(.raneOneMKII, to: downloads)
+            let data = try ControllerProfileStore.encodeDocument(.raneOneMKII)
+            try data.write(to: url, options: .atomic)
             lastProfileExportPath = url.path
         } catch {
             lastProfileExportPath = nil
@@ -427,17 +429,14 @@ final class ScratchPlaybackLabModel: ObservableObject {
         return .raneOneMKII
     }
 
-    /// Builds and writes a tester diagnostics bundle to ~/Downloads as a folder: the captured
-    /// timeline JSON (if any), the RANE diagnostic JSON (if any), the controller profile in
-    /// effect, app/build info, detected MIDI source info, and a README. No network upload;
-    /// no existing export schema is touched. Explicit user action only.
-    func exportTesterDiagnostics() {
+    /// Builds and writes a tester diagnostics bundle as a folder at the user-selected
+    /// destination `folderURL` (chosen via a save panel; sandbox-safe — the folder is created
+    /// exactly where the user pointed it). Contents: the captured timeline JSON (if any), the
+    /// RANE diagnostic JSON (if any), the controller profile in effect, app/build info,
+    /// detected MIDI source info, and a README. No network upload; no existing export schema
+    /// is touched. Explicit user action only.
+    func exportTesterDiagnostics(toFolder folderURL: URL) {
         lastDiagnosticsBundleError = nil
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            lastDiagnosticsBundlePath = nil
-            lastDiagnosticsBundleError = "Could not locate the Downloads folder."
-            return
-        }
         let now = Date()
         let timelineJSON = timeline.isEmpty
             ? nil
@@ -455,7 +454,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
                 midiSourceInfo: midiSourceInfoText(),
                 readme: Self.testerReadmeText()
             )
-            let folder = try bundle.write(to: downloads, folderName: "ScratchLab-Diagnostics-\(Int(now.timeIntervalSince1970))")
+            // Reuse the tested bundle writer: create the user-chosen folder and write into it.
+            let folder = try bundle.write(
+                to: folderURL.deletingLastPathComponent(),
+                folderName: folderURL.lastPathComponent
+            )
             lastDiagnosticsBundlePath = folder.path
         } catch {
             lastDiagnosticsBundlePath = nil
@@ -568,11 +571,12 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     // MARK: - Captured notation PNG export
 
-    /// Writes a pre-rendered captured-notation PNG to ~/Downloads. The image is rendered in
-    /// the view (SwiftUI ImageRenderer) from the same notation/renderer as the live preview,
-    /// so absolute positions stay truthful. Guards an empty timeline and a nil render. Does
-    /// not touch the timeline JSON export. Explicit user action only.
-    func exportCapturedNotationPNG(_ pngData: Data?) {
+    /// Writes a pre-rendered captured-notation PNG to a user-selected destination `url`
+    /// (chosen via a save panel; sandbox-safe). The image is rendered in the view (SwiftUI
+    /// ImageRenderer) from the same notation/renderer as the live preview, so absolute
+    /// positions stay truthful. Guards an empty timeline and a nil/empty render. Does not
+    /// touch the timeline JSON export. Explicit user action only.
+    func exportCapturedNotationPNG(_ pngData: Data?, to url: URL) {
         lastNotationPNGExportError = nil
         guard !timeline.isEmpty else {
             lastNotationPNGExportPath = nil
@@ -584,12 +588,6 @@ final class ScratchPlaybackLabModel: ObservableObject {
             lastNotationPNGExportError = "Could not render the captured notation image."
             return
         }
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            lastNotationPNGExportPath = nil
-            lastNotationPNGExportError = "Could not locate the Downloads folder."
-            return
-        }
-        let url = downloads.appendingPathComponent("ScratchNotation-\(Int(Date().timeIntervalSince1970)).png")
         do {
             try pngData.write(to: url, options: .atomic)
             lastNotationPNGExportPath = url.path
@@ -682,28 +680,22 @@ final class ScratchPlaybackLabModel: ObservableObject {
         diagnosticSummary = recorder.summary
     }
 
-    /// Writes the captured session to a timestamped JSON file in ~/Downloads. Explicit
-    /// user action only — never called automatically. Errors are surfaced via
-    /// `lastDiagnosticExportError`; success via `lastDiagnosticExportPath`.
-    func exportDiagnostics() {
+    /// Writes the captured RANE diagnostic session as JSON to a user-selected destination
+    /// `url` (chosen via a save panel; sandbox-safe). Explicit user action only — never called
+    /// automatically. Errors surface via `lastDiagnosticExportError`; success via
+    /// `lastDiagnosticExportPath`.
+    func exportDiagnostics(to url: URL) {
         lastDiagnosticExportError = nil
         guard !recorder.events.isEmpty else {
             lastDiagnosticExportPath = nil
             lastDiagnosticExportError = "No diagnostic events to export."
             return
         }
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            lastDiagnosticExportPath = nil
-            lastDiagnosticExportError = "Could not locate the Downloads folder."
-            return
-        }
-        let now = Date()
         let export = RaneDiagnosticSessionExport(
             events: recorder.events,
             isCalibration: recorder.isCalibration,
-            exportedAtEpochSeconds: now.timeIntervalSince1970
+            exportedAtEpochSeconds: Date().timeIntervalSince1970
         )
-        let url = downloads.appendingPathComponent("RaneDiagnostic-\(Int(now.timeIntervalSince1970)).json")
         do {
             let data = try export.jsonData()
             try data.write(to: url, options: .atomic)
