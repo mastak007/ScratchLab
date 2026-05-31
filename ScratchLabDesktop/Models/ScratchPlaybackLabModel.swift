@@ -125,6 +125,12 @@ final class ScratchPlaybackLabModel: ObservableObject {
     @Published private(set) var lastProfileImportName: String?
     @Published private(set) var lastProfileImportError: String?
 
+    // Captured notation PNG export status (Slice 8). The image is rendered in the view via
+    // the shared notation renderer; this only guards and writes the file. Does NOT touch the
+    // timeline JSON export.
+    @Published private(set) var lastNotationPNGExportPath: String?
+    @Published private(set) var lastNotationPNGExportError: String?
+
     // Config (bindable from the UI).
     @Published var selectedSourceName: String?
     /// Pitch-bend channel that drives the playhead: 0 = left platter, 1 = right.
@@ -391,6 +397,39 @@ final class ScratchPlaybackLabModel: ObservableObject {
             }
         } catch {
             lastProfileImportError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Captured notation PNG export
+
+    /// Writes a pre-rendered captured-notation PNG to ~/Downloads. The image is rendered in
+    /// the view (SwiftUI ImageRenderer) from the same notation/renderer as the live preview,
+    /// so absolute positions stay truthful. Guards an empty timeline and a nil render. Does
+    /// not touch the timeline JSON export. Explicit user action only.
+    func exportCapturedNotationPNG(_ pngData: Data?) {
+        lastNotationPNGExportError = nil
+        guard !timeline.isEmpty else {
+            lastNotationPNGExportPath = nil
+            lastNotationPNGExportError = "No captured notation to export."
+            return
+        }
+        guard let pngData, !pngData.isEmpty else {
+            lastNotationPNGExportPath = nil
+            lastNotationPNGExportError = "Could not render the captured notation image."
+            return
+        }
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            lastNotationPNGExportPath = nil
+            lastNotationPNGExportError = "Could not locate the Downloads folder."
+            return
+        }
+        let url = downloads.appendingPathComponent("ScratchNotation-\(Int(Date().timeIntervalSince1970)).png")
+        do {
+            try pngData.write(to: url, options: .atomic)
+            lastNotationPNGExportPath = url.path
+        } catch {
+            lastNotationPNGExportPath = nil
+            lastNotationPNGExportError = error.localizedDescription
         }
     }
 

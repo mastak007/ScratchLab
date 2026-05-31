@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 @testable import ScratchLab
 
 /// Scratch Playback Lab — sample-position timeline → notation geometry adapter.
@@ -151,5 +152,59 @@ final class ScratchSampleTimelineNotationTests: XCTestCase {
         XCTAssertEqual(notation.path.position(at: 0.0), 0.3, accuracy: 1e-9)
         XCTAssertEqual(notation.path.position(at: 99.0), 0.3, accuracy: 1e-9)
         XCTAssertTrue(notation.mutedSpans.isEmpty)
+    }
+}
+
+/// Captured notation PNG export (Slice 8). Renders the same notation as the live preview
+/// to PNG, guards the empty case, and proves the raw timeline JSON export is untouched.
+@MainActor
+final class CapturedNotationPNGExportTests: XCTestCase {
+
+    private func travelTimeline() -> ScratchSampleTimeline {
+        var timeline = ScratchSampleTimeline()
+        // A small forward-then-reverse stroke so the path has real travel to draw.
+        let samples: [(TimeInterval, Double, Double)] = [
+            (0.0, 0.10, 1.0), (0.1, 0.30, 1.0), (0.2, 0.55, 1.0),
+            (0.3, 0.70, 1.0), (0.4, 0.50, -1.0), (0.5, 0.25, -1.0)
+        ]
+        for (t, position, velocity) in samples {
+            timeline.append(timeSeconds: t, position: position, velocity: velocity)
+        }
+        return timeline
+    }
+
+    func testPNGExportProducesNonEmptyImage() {
+        let notation = ScratchSampleTimelineNotation(timeline: travelTimeline())
+        let data = CapturedNotationImage.pngData(
+            notation: notation, renderConfig: PlaybackLabRenderConfig(),
+            size: CGSize(width: 600, height: 200)
+        )
+        XCTAssertNotNil(data)
+        XCTAssertGreaterThan(data?.count ?? 0, 0)
+        // PNG signature: 0x89 'P' 'N' 'G'.
+        XCTAssertEqual(Array(data!.prefix(4)), [0x89, 0x50, 0x4E, 0x47])
+    }
+
+    func testEmptyTimelineIsGuarded() {
+        let empty = ScratchSampleTimelineNotation(timeline: ScratchSampleTimeline())
+        XCTAssertNil(CapturedNotationImage.pngData(
+            notation: empty, renderConfig: PlaybackLabRenderConfig(),
+            size: CGSize(width: 600, height: 200)
+        ))
+    }
+
+    func testRawTimelineJSONUnaffectedByPNGExport() throws {
+        let timeline = travelTimeline()
+        let before = try ScratchSampleTimelineExport(timeline: timeline).jsonData()
+
+        // Render a PNG from the same timeline's notation.
+        let notation = ScratchSampleTimelineNotation(timeline: timeline)
+        _ = CapturedNotationImage.pngData(
+            notation: notation, renderConfig: PlaybackLabRenderConfig(),
+            size: CGSize(width: 600, height: 200)
+        )
+
+        let after = try ScratchSampleTimelineExport(timeline: timeline).jsonData()
+        XCTAssertEqual(before, after, "PNG export must not mutate the captured timeline / its JSON")
     }
 }

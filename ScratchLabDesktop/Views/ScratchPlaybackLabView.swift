@@ -594,7 +594,10 @@ struct ScratchPlaybackLabView: View {
                 Text("absolute sample position · preview only")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                Button("Export PNG") { exportCapturedNotationPNG() }
+                    .disabled(model.timelineEventCount == 0)
             }
+            notationPNGExportStatus
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(white: 0.10))
@@ -614,31 +617,30 @@ struct ScratchPlaybackLabView: View {
     }
 
     private func drawCapturedNotation(context: GraphicsContext, size: CGSize) {
-        let notation = model.timelineNotation
-        guard !notation.isEmpty else { return }
+        CapturedNotationRenderer.draw(model.timelineNotation, renderConfig: renderConfig,
+                                      in: context, size: size)
+    }
 
-        // Fit the WHOLE captured timeline left→right: the first sample sits at
-        // the leading edge, the last at the trailing edge. A horizontal lane
-        // maps sample position onto height (0 = bottom/rest, 1 = top/full),
-        // straight through with no renormalisation.
-        let range = notation.path.timeRange
-        let duration = max(range.upperBound - range.lowerBound, 0.001)
-        let viewport = LaneViewport(size: size, now: range.lowerBound, axis: .horizontal,
-                                    actionLineFraction: 0,
-                                    secondsAhead: renderConfig.secondsAhead(forDuration: duration))
-
-        // Subtle muted indicators: crossfader-closed spans get a faint band so
-        // their timing is visible without dropping any travel from the path.
-        for span in notation.mutedSpans {
-            let x0 = viewport.pos(for: span.lowerBound)
-            let x1 = viewport.pos(for: span.upperBound)
-            let rect = CGRect(x: min(x0, x1), y: 0,
-                              width: max(abs(x1 - x0), 1), height: size.height)
-            context.fill(Path(rect), with: .color(.white.opacity(renderConfig.mutedAlpha)))
+    @ViewBuilder
+    private var notationPNGExportStatus: some View {
+        if let error = model.lastNotationPNGExportError {
+            Text("PNG export failed: \(error)")
+                .font(.caption2).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
+        } else if let path = model.lastNotationPNGExportPath {
+            Text("PNG → \(path)")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
+    }
 
-        ScratchMotionRenderer.draw(notation.path, in: context,
-                                   viewport: viewport, style: renderConfig.motionStyle)
+    // Renders the captured notation to a PNG at a wide aspect (matching the preview's
+    // truthful left→right layout) and hands it to the model to write to Downloads.
+    private func exportCapturedNotationPNG() {
+        let data = CapturedNotationImage.pngData(
+            notation: model.timelineNotation,
+            renderConfig: renderConfig,
+            size: CGSize(width: 1200, height: 300)
+        )
+        model.exportCapturedNotationPNG(data)
     }
 
     // MARK: - Controls
@@ -701,6 +703,74 @@ struct ScratchPlaybackLabView: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// Shared captured-notation drawing, so the live preview and the PNG export render the
+// SAME geometry through the SAME renderer — truthful absolute positions, no Fit-to-View
+// and no vertical compression. Sample position maps straight onto lane height.
+enum CapturedNotationRenderer {
+    static func draw(_ notation: ScratchSampleTimelineNotation,
+                     renderConfig: PlaybackLabRenderConfig,
+                     in context: GraphicsContext,
+                     size: CGSize) {
+        guard !notation.isEmpty else { return }
+
+        // Fit the WHOLE captured timeline left→right: first sample at the leading edge,
+        // last at the trailing edge. A horizontal lane maps sample position onto height
+        // (0 = bottom/rest, 1 = top/full), straight through with no renormalisation.
+        let range = notation.path.timeRange
+        let duration = max(range.upperBound - range.lowerBound, 0.001)
+        let viewport = LaneViewport(size: size, now: range.lowerBound, axis: .horizontal,
+                                    actionLineFraction: 0,
+                                    secondsAhead: renderConfig.secondsAhead(forDuration: duration))
+
+        // Subtle muted indicators: crossfader-closed spans get a faint band so their
+        // timing is visible without dropping any travel from the path.
+        for span in notation.mutedSpans {
+            let x0 = viewport.pos(for: span.lowerBound)
+            let x1 = viewport.pos(for: span.upperBound)
+            let rect = CGRect(x: min(x0, x1), y: 0,
+                              width: max(abs(x1 - x0), 1), height: size.height)
+            context.fill(Path(rect), with: .color(.white.opacity(renderConfig.mutedAlpha)))
+        }
+
+        ScratchMotionRenderer.draw(notation.path, in: context,
+                                   viewport: viewport, style: renderConfig.motionStyle)
+    }
+}
+
+/// A standalone Canvas of the captured notation, used both inline and (via ImageRenderer)
+/// for PNG export.
+struct CapturedNotationCanvas: View {
+    let notation: ScratchSampleTimelineNotation
+    let renderConfig: PlaybackLabRenderConfig
+
+    var body: some View {
+        Canvas { context, size in
+            CapturedNotationRenderer.draw(notation, renderConfig: renderConfig, in: context, size: size)
+        }
+    }
+}
+
+/// Off-screen PNG rendering of the captured notation. Reuses the same canvas/renderer as
+/// the live preview so the exported image is truthful (no Fit-to-View, no compression).
+enum CapturedNotationImage {
+    /// Renders the captured notation to PNG data, or nil if there is nothing to draw.
+    @MainActor
+    static func pngData(notation: ScratchSampleTimelineNotation,
+                        renderConfig: PlaybackLabRenderConfig,
+                        size: CGSize,
+                        scale: CGFloat = 2.0) -> Data? {
+        guard !notation.isEmpty else { return nil }
+        let content = CapturedNotationCanvas(notation: notation, renderConfig: renderConfig)
+            .frame(width: size.width, height: size.height)
+            .background(Color(white: 0.10))
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = scale
+        guard let cgImage = renderer.cgImage else { return nil }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        return rep.representation(using: .png, properties: [:])
     }
 }
 
