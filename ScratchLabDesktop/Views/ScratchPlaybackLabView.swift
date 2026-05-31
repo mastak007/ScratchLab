@@ -19,8 +19,52 @@ import UniformTypeIdentifiers
 // TODO (next slice): add a separate beat layer with an on/off toggle (its own
 // player, kept apart from ScratchLabBeatEngine and capture timing).
 
+/// Honest onboarding/help copy for the private tester build. Pure text content, so the copy
+/// can be asserted PROFILE.md-safe (no overclaiming) in tests. No marketing language.
+enum TesterOnboardingContent {
+    struct Section: Equatable {
+        let title: String
+        let body: [String]
+    }
+
+    static let title = "ScratchLab — private tester build"
+
+    static let sections: [Section] = [
+        Section(title: "What it does now", body: [
+            "Captures platter and crossfader motion from a connected controller.",
+            "Shows an estimated captured-notation preview of your scratch travel.",
+            "Lets you replay and export the captured preview."
+        ]),
+        Section(title: "What it does not do yet", body: [
+            "It does not score or grade your scratching.",
+            "It does not name scratch techniques or claim exact technique detection.",
+            "Captured notation is a preview — not a saved, scored, or final result."
+        ]),
+        Section(title: "Connect your controller", body: [
+            "Connect a class-compliant MIDI controller (verified: RANE ONE / ONE MKII).",
+            "Other gear shows an \"unverified mapping\" warning — run Verify controller mapping to check it."
+        ]),
+        Section(title: "Export diagnostics", body: [
+            "Use Export tester bundle to save a folder of captured data to Downloads.",
+            "Nothing is uploaded — you choose what to send back."
+        ]),
+        Section(title: "Report issues", body: [
+            "Send the diagnostics bundle with a short note on what you did and what you saw."
+        ])
+    ]
+
+    /// Phrases that must never appear in user-facing tester copy (PROFILE.md safety).
+    static let forbiddenPhrases = ["AI detects exactly", "real-time AI coach", "deep learning"]
+
+    /// Every line of copy (title + section titles + bodies), for safety assertions.
+    static var allText: [String] {
+        [title] + sections.flatMap { [$0.title] + $0.body }
+    }
+}
+
 struct ScratchPlaybackLabView: View {
     @StateObject private var model = ScratchPlaybackLabModel()
+    @State private var showingOnboarding = false
 
     /// Display-only render foundation (roadmap R0). The single source of truth
     /// the notation previews read for style/density. Defaults reproduce the
@@ -74,6 +118,7 @@ struct ScratchPlaybackLabView: View {
         .frame(minWidth: 940, minHeight: 720)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
+        .sheet(isPresented: $showingOnboarding) { onboardingSheet }
     }
 
     // MARK: - Toolbar
@@ -102,9 +147,43 @@ struct ScratchPlaybackLabView: View {
             Spacer()
 
             Button("Reset playhead") { model.resetPlayhead() }
+            Button { showingOnboarding = true } label: {
+                Label("Help", systemImage: "questionmark.circle")
+            }
+            .help("What this tester build does and doesn't do")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    // Honest onboarding/help sheet for the private tester build.
+    private var onboardingSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(TesterOnboardingContent.title)
+                .font(.title3.weight(.semibold))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(TesterOnboardingContent.sections, id: \.title) { section in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(section.title).font(.headline)
+                            ForEach(section.body, id: \.self) { line in
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("•").foregroundStyle(.secondary)
+                                    Text(line).font(.callout)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Got it") { showingOnboarding = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 520, height: 480)
     }
 
     // Read-only active controller profile ("RANE ONE MKII" or "Unverified"). No editor

@@ -381,3 +381,34 @@ final class GuidedMappingSessionTests: XCTestCase {
         XCTAssertEqual(session.step, confirmed)
     }
 }
+
+/// Tester onboarding copy (Slice 11): the private-build help text must be honest and
+/// PROFILE.md-safe — no overclaiming, and it must frame captured notation as a preview.
+final class TesterOnboardingContentTests: XCTestCase {
+
+    func testNoForbiddenOverclaimingPhrases() {
+        let joined = TesterOnboardingContent.allText.joined(separator: "\n").lowercased()
+        for phrase in TesterOnboardingContent.forbiddenPhrases {
+            XCTAssertFalse(joined.contains(phrase.lowercased()), "tester copy must not contain \"\(phrase)\"")
+        }
+    }
+
+    func testCopyFramesCaptureAsEstimatedPreview() {
+        let joined = TesterOnboardingContent.allText.joined(separator: "\n").lowercased()
+        XCTAssertTrue(joined.contains("estimated"))
+        XCTAssertTrue(joined.contains("preview"))
+    }
+
+    func testCopyStatesItDoesNotScore() {
+        let joined = TesterOnboardingContent.allText.joined(separator: "\n").lowercased()
+        XCTAssertTrue(joined.contains("does not score") || joined.contains("not a saved, scored"))
+    }
+
+    func testSectionsAreNonEmpty() {
+        XCTAssertFalse(TesterOnboardingContent.sections.isEmpty)
+        for section in TesterOnboardingContent.sections {
+            XCTAssertFalse(section.title.isEmpty)
+            XCTAssertFalse(section.body.isEmpty)
+        }
+    }
+}
