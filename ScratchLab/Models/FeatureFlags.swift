@@ -82,6 +82,15 @@ enum FeatureFlags {
 
     // MARK: Phase F — long-term AR (no concrete flag names yet; sketch only)
 
+    // MARK: Kid Mode validation prototype
+
+    // Hidden, off-everywhere gate for the Kid Mode validation prototype
+    // (analysis/kid_mode/KID_MODE_PROTOTYPE_VALIDATION_PLAN.md). Off in release
+    // AND DEBUG so it is invisible until a researcher sets
+    // SCRATCHLAB_FF_KIDPROTOTYPE=1. Deleting this flag + the KidPrototype folder
+    // leaves production byte-identical.
+    static var kidPrototypeEnabled: Bool { isOn("KIDPROTOTYPE", releaseDefault: false, debugDefault: false) }
+
     // MARK: Resolution
 
     static func isOn(

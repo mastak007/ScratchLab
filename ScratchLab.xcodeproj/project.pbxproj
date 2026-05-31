@@ -50,6 +50,11 @@
 		51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */; };
 		51DF6B522FCC621500A6C749 /* ClickPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DF6B512FCC621500A6C749 /* ClickPlacement.swift */; };
 		51DF6B532FCC621500A6C749 /* ClickPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DF6B512FCC621500A6C749 /* ClickPlacement.swift */; };
+		KIDSCRUBINPUTBUILDIOS001 /* KidScrubInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */; };
+		KIDSCRUBINPUTBUILDMAC001 /* KidScrubInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */; };
+		KIDSCRUBAUDIOBUILDIOS001 /* KidScrubAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */; };
+		KIDPROTOVIEWBUILDIOS0001 /* KidPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDPROTOVIEWFILEREF00001 /* KidPrototypeView.swift */; };
+		KIDINPUTTESTBUILDSRC0001 /* KidScrubInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDINPUTTESTFILEREF00001 /* KidScrubInputTests.swift */; };
 		5242E17A90BAFAD885F7DBA7 /* Archive+ReadingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */; };
 		5740240314B808EF52D6123D /* ScratchLabNotificationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000028 /* ScratchLabNotificationController.swift */; };
 		5E99E314C614D039721A33ED /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
@@ -487,6 +492,8 @@
 		51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachPreviewView.swift; sourceTree = "<group>"; };
 		51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Coach/Coach.usdz; sourceTree = "<group>"; };
 		51DF6B512FCC621500A6C749 /* ClickPlacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClickPlacement.swift; path = Notation/Grammar/ClickPlacement.swift; sourceTree = "<group>"; };
+		KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubInput.swift; path = KidPrototype/KidScrubInput.swift; sourceTree = "<group>"; };
+		KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubAudioPlayer.swift; path = KidPrototype/KidScrubAudioPlayer.swift; sourceTree = "<group>"; };
 		60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+BackingConfiguration.swift"; sourceTree = "<group>"; };
 		66649EBF865FFA9347DA6AC9 /* FileManager+ZIPDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIPDeprecated.swift"; sourceTree = "<group>"; };
 		6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+Serialization.swift"; sourceTree = "<group>"; };
@@ -626,6 +633,7 @@
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FFL0000000FFL001FFL00001 /* FeatureFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlags.swift; sourceTree = "<group>"; };
 		FFT2010000FFT002FFT00001 /* FeatureFlagsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlagsTests.swift; sourceTree = "<group>"; };
+		KIDINPUTTESTFILEREF00001 /* KidScrubInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidScrubInputTests.swift; sourceTree = "<group>"; };
 		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
 		LJD2010000LJD002LJD00001 /* LaneJudgmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneJudgmentTests.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
@@ -769,6 +777,7 @@
 		TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingWindowTests.swift; sourceTree = "<group>"; };
 		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
 		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
+		KIDPROTOVIEWFILEREF00001 /* KidPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KidPrototypeView.swift; sourceTree = "<group>"; };
 		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
 		VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -827,6 +836,7 @@
 				SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */,
 				VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */,
 				FFT2010000FFT002FFT00001 /* FeatureFlagsTests.swift */,
+				KIDINPUTTESTFILEREF00001 /* KidScrubInputTests.swift */,
 				PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */,
 				LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */,
 				PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */,
@@ -1024,6 +1034,7 @@
 				A2000033 /* ScratchCoachViews.swift */,
 				C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */,
 				VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */,
+				KIDPROTOVIEWFILEREF00001 /* KidPrototypeView.swift */,
 				NLV1000000NLV001NLV00001 /* Notation/NotationLaneGeometryView.swift */,
 				NLP1000000NLP001NLP00001 /* Notation/NotationLaneGeometryViewPreview.swift */,
 				NLH1000000NLH001NLH00001 /* Notation/DebugNotationLaneHostView.swift */,
@@ -1102,6 +1113,8 @@
 				AMK1000000AMK001AMK00001 /* ScratchNotationAttackMarkers.swift */,
 				CI00GRP00001 /* ControllerInput */,
 				51DF6B512FCC621500A6C749 /* ClickPlacement.swift */,
+				KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */,
+				KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1632,6 +1645,7 @@
 				A5000064 /* NotationCandidateBuilder.swift in Sources */,
 				A5000065 /* NotationCandidateDiagnostics.swift in Sources */,
 				51DF6B532FCC621500A6C749 /* ClickPlacement.swift in Sources */,
+				KIDSCRUBINPUTBUILDMAC001 /* KidScrubInput.swift in Sources */,
 				A5000066 /* ReviewAudioOnsetPreview.swift in Sources */,
 			);
 		};
@@ -1699,6 +1713,9 @@
 				NPM1001000NPM001NPM00002 /* Notation/Presentation/NotationPresentationModel.swift in Sources */,
 				NLG1001000NLG001NLG00002 /* Notation/Presentation/NotationLaneGeometry.swift in Sources */,
 				51DF6B522FCC621500A6C749 /* ClickPlacement.swift in Sources */,
+				KIDSCRUBINPUTBUILDIOS001 /* KidScrubInput.swift in Sources */,
+				KIDSCRUBAUDIOBUILDIOS001 /* KidScrubAudioPlayer.swift in Sources */,
+				KIDPROTOVIEWBUILDIOS0001 /* KidPrototypeView.swift in Sources */,
 				NPH1001000NPH001NPH00002 /* Notation/Presentation/NotationPlayheadGeometry.swift in Sources */,
 				CED1001000CED001CED00002 /* Notation/Presentation/CoachingEventDisplayability.swift in Sources */,
 				RLR1001000RLR001RLR00002 /* Notation/Presentation/ReplayLoopRange.swift in Sources */,
@@ -1885,6 +1902,7 @@
 				CPROT0BFIL0TST00001 /* ControllerProfileTests.swift in Sources */,
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 				FFT2011000FFT002FFT00001 /* FeatureFlagsTests.swift in Sources */,
+				KIDINPUTTESTBUILDSRC0001 /* KidScrubInputTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

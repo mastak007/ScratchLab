@@ -16,6 +16,7 @@ struct MainMenuView: View {
     @State private var showingCapturePlaceholder = false
     @State private var showingReviewPlaceholder = false
     @State private var showingAdvancedHub = false
+    @State private var showingKidPrototype = false
     // Orphan routes — AdvancedHubView owns its own copy of this state and
     // its own navigationDestinations. Left here so no view/destination wiring
     // is deleted in this slice; safe to remove in a future cleanup pass.
@@ -81,6 +82,13 @@ struct MainMenuView: View {
         }
         .navigationDestination(isPresented: $showingDemoMode) {
             DemoModeView()
+        }
+        .navigationDestination(isPresented: $showingKidPrototype) {
+            // Re-check the flag at the destination so the screen is unreachable
+            // if it is ever pushed with the flag off.
+            if FeatureFlags.kidPrototypeEnabled {
+                KidPrototypeView()
+            }
         }
         #if DEBUG
         .navigationDestination(isPresented: $showingVirtualPlatterPrototype) {
@@ -252,6 +260,16 @@ struct MainMenuView: View {
                 accent: Color(hex: "64748B"),
                 action: { showingAdvancedHub = true }
             )
+
+            if FeatureFlags.kidPrototypeEnabled {
+                MenuButton(
+                    title: "Kid Mode Prototype",
+                    subtitle: "Internal validation prototype (hidden)",
+                    icon: "hand.draw",
+                    accent: ScratchLabPalette.link,
+                    action: { showingKidPrototype = true }
+                )
+            }
         }
     }
 
