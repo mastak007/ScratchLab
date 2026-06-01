@@ -2962,6 +2962,15 @@ struct ResultsOverlayView: View {
                         .animation(.easeOut(duration: 0.25), value: effectiveStage)
                 }
 
+                if FeatureFlags.actionableCoachingCardEnabled,
+                   let summary = driftCoachingSummary,
+                   !summary.items.isEmpty {
+                    ActionableCoachingCard(summary: summary, attempts: attempts)
+                        .padding(.horizontal, 32)
+                        .opacity(visible(3) ? 1 : 0)
+                        .animation(.easeOut(duration: 0.25), value: effectiveStage)
+                }
+
                 if FeatureFlags.milestonesEnabled, let milestone {
                     MilestoneCallout(milestone: milestone)
                         .padding(.horizontal, 32)
@@ -3280,6 +3289,97 @@ fileprivate struct MilestoneCallout: View {
                 count: count
             )
         }
+    }
+}
+
+/// "What to work on next" card. Reframes the same drift-coaching
+/// findings as actionable guidance with "try to" language. Shows
+/// a capture-confidence disclaimer when the take had fewer than
+/// 3 mic attempts so the user knows the suggestions carry extra
+/// uncertainty.
+///
+/// Data source: the same `DriftCoachingSummary` that feeds
+/// `DriftCoachingSummaryCard`. No new pipeline — pure presentation.
+fileprivate struct ActionableCoachingCard: View {
+    let summary: DriftCoachingSummary
+    let attempts: Int
+
+    private static let maxItems: Int = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(CoachCopy.ActionableCoaching.header)
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.55))
+
+            VStack(alignment: .leading, spacing: 8) {
+                let visibleItems = Array(summary.items.prefix(Self.maxItems))
+                ForEach(Array(visibleItems.enumerated()), id: \.offset) { entry in
+                    row(for: entry.element)
+                }
+            }
+
+            if attempts < 3 {
+                disclaimerRow
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    @ViewBuilder
+    private func row(for item: DriftCoachingSummary.Item) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.forward.circle.fill")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(ScratchLabPalette.info)
+                .padding(.top, 2)
+            Text(copy(for: item))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var disclaimerRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.45))
+                .padding(.top, 2)
+            Text(CoachCopy.ActionableCoaching.lowConfidenceDisclaimer)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// PROFILE.md-compliant copy routing. Each actionable string was
+    /// audited against the vocabulary rules — no "AI detects", no
+    /// "deep learning", no grading verbs, no classifier claims.
+    private func copy(for item: DriftCoachingSummary.Item) -> String {
+        switch item.kind {
+        case .lateReversal:  return CoachCopy.ActionableCoaching.lateReversalAction
+        case .earlyReversal: return CoachCopy.ActionableCoaching.earlyReversalAction
+        default:             return CoachCopy.ActionableCoaching.fallbackAction(for: item.kind)
+        }
+    }
+
+    private var accessibilityText: String {
+        let items = summary.items.prefix(Self.maxItems).map { copy(for: $0) }
+        var parts = ["\(CoachCopy.ActionableCoaching.header)."] + items
+        if attempts < 3 {
+            parts.append(CoachCopy.ActionableCoaching.lowConfidenceDisclaimer)
+        }
+        return parts.joined(separator: ". ")
     }
 }
 

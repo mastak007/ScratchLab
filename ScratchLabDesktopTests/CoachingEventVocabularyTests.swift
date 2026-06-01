@@ -197,4 +197,60 @@ final class CoachingEventVocabularyTests: XCTestCase {
         }
         XCTAssertEqual(CoachingEventCatalog.all, CoachingEventCatalog.all)
     }
+
+    // MARK: - 17. ActionableCoaching copy strings are non-empty
+
+    func testActionableCoachingCopyStringsAreNonEmpty() {
+        XCTAssertFalse(CoachCopy.ActionableCoaching.header.isEmpty)
+        XCTAssertFalse(CoachCopy.ActionableCoaching.lowConfidenceDisclaimer.isEmpty)
+        XCTAssertFalse(CoachCopy.ActionableCoaching.lateReversalAction.isEmpty)
+        XCTAssertFalse(CoachCopy.ActionableCoaching.earlyReversalAction.isEmpty)
+    }
+
+    // MARK: - 18. ActionableCoaching copy is PROFILE.md-compliant
+
+    func testActionableCoachingCopyUsesNoBannedVocabulary() {
+        let banned: [String] = [
+            "AI detects",
+            "deep learning",
+            "real-time AI coach",
+            "perfectly detects",
+        ]
+        let strings: [String] = [
+            CoachCopy.ActionableCoaching.header,
+            CoachCopy.ActionableCoaching.lowConfidenceDisclaimer,
+            CoachCopy.ActionableCoaching.lateReversalAction,
+            CoachCopy.ActionableCoaching.earlyReversalAction,
+        ]
+        for string in strings {
+            let lower = string.lowercased()
+            for phrase in banned {
+                XCTAssertFalse(
+                    lower.contains(phrase.lowercased()),
+                    "ActionableCoaching string \"\(string.prefix(40))...\" contains banned phrase \"\(phrase)\""
+                )
+            }
+        }
+    }
+
+    // MARK: - 19. ActionableCoaching late/early reversal copy is distinct
+
+    func testActionableCoachingLateAndEarlyReversalCopyAreDistinct() {
+        XCTAssertNotEqual(
+            CoachCopy.ActionableCoaching.lateReversalAction,
+            CoachCopy.ActionableCoaching.earlyReversalAction,
+            "Late and early reversal actionable copy must be distinct"
+        )
+    }
+
+    // MARK: - 20. ActionableCoaching fallbackAction returns catalog body
+
+    func testActionableCoachingFallbackActionReturnsCatalogBody() {
+        for kind in CoachingEventKind.allCases {
+            let fallback = CoachCopy.ActionableCoaching.fallbackAction(for: kind)
+            let expected = CoachingEventCatalog.descriptor(for: kind).body
+            XCTAssertEqual(fallback, expected,
+                           "fallbackAction(for: .\(kind.rawValue)) must return the catalog descriptor body")
+        }
+    }
 }

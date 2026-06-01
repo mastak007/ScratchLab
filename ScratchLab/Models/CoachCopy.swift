@@ -366,4 +366,36 @@ enum CoachCopy {
         static let previewSuffix   = "(preview)"
         static let disclaimer      = "Timing estimates are based on on-device audio onsets. They aren't saved, exported, or scored."
     }
+
+    // MARK: Actionable coaching — "What to work on next"
+
+    /// Reframes coaching observations as actionable, plain-language
+    /// guidance. Each string follows the PROFILE.md vocab discipline:
+    /// no "AI detects", no "deep learning", no "real-time AI coach",
+    /// no grading verbs. Observational clause first, then a concrete
+    /// "try to" prescription.
+    enum ActionableCoaching {
+        static let header = "What to work on next"
+
+        /// Shown when drift events exist but attempt count is too low
+        /// to treat the analysis as reliable. Honest, not alarming.
+        static let lowConfidenceDisclaimer =
+            "Only a few attempts came through on this take, so treat these suggestions as guidance rather than a verdict."
+
+        // Per-kind actionable guidance. Each pairs an honest observation
+        // with a specific, concrete next step.
+
+        static let lateReversalAction =
+            "Your reversal arrived later than expected. Try reversing direction closer to the beat next time."
+
+        static let earlyReversalAction =
+            "Your reversal arrived earlier than expected. Try holding the stroke a moment longer before reversing."
+
+        /// Fallback for kinds that reach the card without specific
+        /// actionable copy. Returns the catalog descriptor body verbatim
+        /// so the card stays truthful even for future kinds.
+        static func fallbackAction(for kind: CoachingEventKind) -> String {
+            CoachingEventCatalog.descriptor(for: kind).body
+        }
+    }
 }

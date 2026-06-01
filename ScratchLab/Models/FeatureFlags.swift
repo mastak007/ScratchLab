@@ -39,6 +39,7 @@ enum FeatureFlags {
     static var coachingEventsPipelineEnabled: Bool  { isOn("COACHING_EVENTS_PIPELINE",  releaseDefault: false, debugDefault: true) }
     static var resultsDriftCoachingEnabled: Bool    { isOn("RESULTS_DRIFT_COACHING",    releaseDefault: false, debugDefault: false) }
     static var phraseCoachingSurfaceEnabled: Bool   { isOn("PHRASE_COACHING_SURFACE",   releaseDefault: false, debugDefault: false) }
+    static var actionableCoachingCardEnabled: Bool  { isOn("ACTIONABLE_COACHING_CARD",  releaseDefault: false, debugDefault: true) }
     static var structuredDrillsEnabled: Bool        { isOn("STRUCTURED_DRILLS",         releaseDefault: false, debugDefault: false) }
     static var nextUpSuggestionEnabled: Bool        { isOn("NEXT_UP_SUGGESTION",        releaseDefault: false, debugDefault: false) }
     static var lastTakeReplayEnabled: Bool          { isOn("LAST_TAKE_REPLAY",          releaseDefault: false, debugDefault: false) }
