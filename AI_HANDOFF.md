@@ -1,5 +1,73 @@
 # AI Handoff
 
+## 2026-06-01 (later) — Scratch Playback Lab RANE audio arc + Kid Mode state snapshot
+
+Context note so the PlaybackLab/RANE debugging arc and the Kid Mode pause aren't lost.
+**No app code changed by this note.** `release/testflight-1` is **6 commits ahead of
+`origin`, unpushed.** Nothing here is committed/pushed without Karl's approval.
+
+### 1. RANE Scratch Playback Lab (macOS) — commit chain on `release/testflight-1`
+
+Oldest → newest (none pushed):
+
+- `2bfd383` — **gate debounce.** Hysteretic `ScratchPlaybackLabAudibilityGate`; stops
+  reversal/slow-dip audio cutouts.
+- `08f8db5` — **MIDI parser crash fix.** Out-of-bounds read in
+  `MacCaptureEngine.receiveMIDIPacketList` on coalesced packets > 256 bytes (crashed with the
+  Rane connected and streaming). Reads the packet's real `length` via a pointer now.
+- `93da541` — **raw-rate + re-anchor port.** RANE audio driven by raw platter rate (not the
+  EMA-smoothed velocity) + position re-anchor after idle; fixes normal-speed lag/smear/drift.
+- `d722606` — **anti-alias resampler.** Box-averages the source span when `|rate| > 1`; fixes
+  high-speed fast-scratch grit.
+- `bdbbece` — **low-speed windowed rate.** Rate measured over a 22 ms real-time window instead
+  of per-event `moved/dt`; targets the slow-speed correct-pitch "ah" bursts caused by bursty
+  CoreMIDI delivery feeding a stale-held instantaneous rate.
+
+**Confirmed by ear on Rane:** normal-speed forward/back good; fast grit improved by `d722606`.
+
+**Remaining / unverified:** the slow-speed fix `bdbbece` is committed but **NOT yet
+device-confirmed.** Before it, slow forward AND slow backward had sporadic correct-pitch "ah"
+bursts mixed into the slow scratch (both directions). Diagnostics established the cause was
+per-event `moved/dt` spiking on sub-millisecond MIDI clusters and being held between events —
+**not** gate/idle/re-anchor (slow rates sit above all gate thresholds). `bdbbece` addresses
+exactly that; if slow speed is still bad after a Rane listen, see investigation list in §4.
+
+### 2. Kid Mode
+
+- **Start-card polish:** device-tested **good on iPhone K**. Present as an **uncommitted**
+  `KidPrototypeView.swift` edit in worktree `kid-instruction-cards-tip` (based on `5ecafbd`).
+  Copy/layout only.
+- **Kid touch-audio refactor:** preserved on branch **`kid-audio-refactor` @ `13bc0f5`**
+  (absolute band positioning, `KidRateGlide` momentum, waveform viz, gate-boundary alignment).
+  This is the version that felt good on K.
+- **`stash@{0}`** still holds the same refactor WIP — **preserved until cleanup approval.**
+- **Kid Mode coding stays PAUSED** per `analysis/kid_mode/extracted/RESEARCH_STOP_OR_CONTINUE.md`
+  unless running validation experiments (Layer 0 demand / Layer 1 transfer RCT). Production is
+  safe regardless: `FeatureFlags.kidPrototypeEnabled` is `releaseDefault: false`.
+
+### 3. Branch / worktree / stash state
+
+- `release/testflight-1` — the 5 PlaybackLab commits above (on top of `5ecafbd`); **6 ahead of
+  origin, unpushed.** Working tree dirty: `DEV_LOG.md`, `TASKS.md` only (unrelated planning +
+  session notes), plus untracked planning docs.
+- `kid-audio-refactor` @ `13bc0f5` — working Kid refactor (checked out in worktree `ScratchLab-good`).
+- `kid-instruction-cards-tip` (worktree, base `5ecafbd`) — start-card polish, uncommitted.
+- `kid-instruction-cards` (worktree, base `aee94d8`) — earlier superseded card-polish copy.
+- `ScratchLab-revert` (worktree, detached `aee94d8`) — clean baseline used for a revert build.
+- **Temp worktrees (`ScratchLab-good`, `-kidcards`, `-kidcards-tip`, `-revert`) and `stash@{0}`
+  must NOT be cleaned/popped/dropped until Karl explicitly approves.**
+
+### 4. Next RANE investigation (only if `bdbbece` doesn't fully fix slow speed, hardware required)
+
+- instrument slow CC6 sparse events (log `dt`, step, fed rate per event)
+- confirm whether the gate closes during *intentional* slow movement
+- confirm whether the windowed/raw rate falls to ~0 between sparse MIDI events
+- confirm whether re-anchor (`setTargetPosition`) causes position jumps/bursts
+- propose a minimal low-speed fix **only after evidence** — no blind tuning of gate / resampler /
+  MIDI / CC6 wrap / interpolation
+
+---
+
 ## 2026-06-01 — Kid Prototype touch-audio gate STABILISED (HEAD `aee94d8`, pushed to `origin/release/testflight-1`)
 
 The Kid Mode Prototype's touch-driven "ahh" audio gate is now stable on
