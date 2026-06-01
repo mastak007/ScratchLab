@@ -239,6 +239,67 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         XCTAssertFalse(ScratchPlaybackLabEngine.isAudible(perFrame: stopped, frames: 100, minDeltaFrames: 8))
     }
 
+    // MARK: - Audibility gate (hysteresis + hold)
+
+    private static let bufferSeconds = 512.0 / 44_100.0   // ~11.6 ms render buffer
+
+    func testGateOpensImmediatelyOnClearMovement() {
+        var gate = ScratchPlaybackLabAudibilityGate()
+        XCTAssertFalse(gate.isOpen)
+        XCTAssertTrue(gate.update(movementFrames: 20, bufferSeconds: Self.bufferSeconds))
+        XCTAssertTrue(gate.isOpen)
+    }
+
+    func testGateStaysClosedForBandMovementFromRest() {
+        // Movement in the hysteresis band (between close and open) must not start audio.
+        var gate = ScratchPlaybackLabAudibilityGate()  // open 8, close 2
+        for _ in 0..<20 {
+            XCTAssertFalse(gate.update(movementFrames: 5, bufferSeconds: Self.bufferSeconds))
+        }
+    }
+
+    func testGateGlidesThroughBriefReversalDip() {
+        // Open, then a short sub-close dip (a direction reversal) shorter than the hold
+        // must NOT mute — this is the stutter the gate exists to prevent.
+        var gate = ScratchPlaybackLabAudibilityGate(openDeltaFrames: 8, closeDeltaFrames: 2, holdSeconds: 0.08)
+        XCTAssertTrue(gate.update(movementFrames: 40, bufferSeconds: Self.bufferSeconds))
+        for _ in 0..<3 {   // ~35 ms below close, under the 80 ms hold
+            XCTAssertTrue(gate.update(movementFrames: 0, bufferSeconds: Self.bufferSeconds))
+        }
+        XCTAssertTrue(gate.update(movementFrames: 40, bufferSeconds: Self.bufferSeconds))
+    }
+
+    func testGateMutesAfterSustainedStop() {
+        var gate = ScratchPlaybackLabAudibilityGate(openDeltaFrames: 8, closeDeltaFrames: 2, holdSeconds: 0.08)
+        XCTAssertTrue(gate.update(movementFrames: 40, bufferSeconds: Self.bufferSeconds))
+        var open = true
+        for _ in 0..<16 {   // well past 80 ms of stillness
+            open = gate.update(movementFrames: 0, bufferSeconds: Self.bufferSeconds)
+        }
+        XCTAssertFalse(open)
+        XCTAssertFalse(gate.isOpen)
+    }
+
+    func testGateHoldResetsWhenMovementRecoversBeforeMuting() {
+        // A sub-close dip that recovers (even into the band) must clear the accumulated
+        // quiet time, so a later short dip doesn't prematurely mute.
+        var gate = ScratchPlaybackLabAudibilityGate(openDeltaFrames: 8, closeDeltaFrames: 2, holdSeconds: 0.08)
+        XCTAssertTrue(gate.update(movementFrames: 40, bufferSeconds: Self.bufferSeconds))
+        for _ in 0..<5 {
+            XCTAssertTrue(gate.update(movementFrames: 0, bufferSeconds: Self.bufferSeconds))   // accumulate ~58 ms
+            XCTAssertTrue(gate.update(movementFrames: 5, bufferSeconds: Self.bufferSeconds))   // band → reset hold
+        }
+        XCTAssertTrue(gate.isOpen)
+    }
+
+    func testGateResetClosesAndClearsHold() {
+        var gate = ScratchPlaybackLabAudibilityGate()
+        _ = gate.update(movementFrames: 40, bufferSeconds: Self.bufferSeconds)
+        XCTAssertTrue(gate.isOpen)
+        gate.reset()
+        XCTAssertFalse(gate.isOpen)
+    }
+
     func testFramesPerOutputFrameConvertsSampleRates() {
         // 1.0 sample-sec/sec at a 48k sample on a 44.1k output ⇒ >1 file frame/out frame.
         XCTAssertEqual(ScratchPlaybackLabEngine.framesPerOutputFrame(velocity: 1.0, sampleRate: 48000, outputSampleRate: 44100),

@@ -44,10 +44,11 @@ final class ScratchPlaybackLabEngine {
     private let pendingSeekFrame = OSAllocatedUnfairLock<Double?>(initialState: nil)
     /// Read head the render block last reached (file frames). Audio-thread-owned.
     private var renderFrame: Double = 0
-    /// Below this much head movement in a quantum the envelope closes (silence) — so a
-    /// truly stopped platter (velocity ≈ 0) fades out, but an actively gliding one never
-    /// does. NOT keyed off target changes, so bursty delivery cannot chop the audio.
-    private let minimumAudibleDeltaFrames = 8.0
+    /// Hysteretic gate: a truly stopped platter (sustained near-zero movement) fades to
+    /// silence, but a momentary dip — a direction reversal or mid-stroke MIDI wobble —
+    /// glides through instead of cutting the audio into stutter notches. NOT keyed off
+    /// target changes, so bursty delivery cannot chop the audio. Audio-thread-owned.
+    private var audibilityGate = ScratchPlaybackLabAudibilityGate()
     private var outputSampleRate: Double = 44_100
     private var envelope = ScratchPlaybackLabRenderEnvelope(sampleRate: 44_100)
     /// Whether the read head wraps around the sample (loop) instead of clamping. Written
@@ -91,6 +92,7 @@ final class ScratchPlaybackLabEngine {
         velocity.withLock { $0 = 0 }
         pendingSeekFrame.withLock { $0 = nil }
         envelope.reset()
+        audibilityGate.reset()
         return true
     }
 
@@ -138,6 +140,7 @@ final class ScratchPlaybackLabEngine {
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
         outputSampleRate = outputFormat.sampleRate > 0 ? outputFormat.sampleRate : sampleRate
         envelope = ScratchPlaybackLabRenderEnvelope(sampleRate: outputSampleRate)
+        audibilityGate.reset()
         let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList in
             guard let self else { return noErr }
             return self.render(frameCount: frameCount, audioBufferList: audioBufferList)
@@ -198,7 +201,8 @@ final class ScratchPlaybackLabEngine {
         let ring = Double(total)
         let start = renderFrame
         let perFrame = Self.framesPerOutputFrame(velocity: v, sampleRate: sampleRate, outputSampleRate: outputSampleRate)
-        let audible = Self.isAudible(perFrame: perFrame, frames: frames, minDeltaFrames: minimumAudibleDeltaFrames)
+        let bufferSeconds = outputSampleRate > 0 ? Double(frames) / outputSampleRate : 0
+        let audible = audibilityGate.update(movementFrames: perFrame * Double(frames), bufferSeconds: bufferSeconds)
 
         monoSamples.withUnsafeBufferPointer { samples in
             for frameIndex in 0..<frames {
@@ -268,6 +272,57 @@ final class ScratchPlaybackLabEngine {
         if lower >= maxIndex { return samples[maxIndex] }
         let fraction = Float(clamped - Double(lower))
         return samples[lower] * (1 - fraction) + samples[lower + 1] * fraction
+    }
+}
+
+/// Hysteretic audibility gate for the playback lab render head.
+///
+/// A bare per-buffer threshold ("mute the moment head movement drops below N frames")
+/// chops scratching into stutter notches: the head crosses zero at every direction
+/// reversal and wobbles below the threshold mid-stroke when MIDI arrives in bursts, so
+/// the source is muted and re-faded many times a second. This gate fixes that with:
+///   - **hysteresis** — once open it stays open until movement falls below a lower
+///     `closeDeltaFrames`, so velocity hovering near one level can't chatter the gate; and
+///   - **a hold** — movement must stay below `closeDeltaFrames` for `holdSeconds` of real
+///     time (buffer-size independent) before muting, so a brief reversal dip glides
+///     through. A genuinely stopped platter (sustained near-zero movement) still mutes.
+///
+/// Pure and audio-thread-owned, so the gating policy is unit-testable without AVAudioEngine.
+struct ScratchPlaybackLabAudibilityGate {
+    let openDeltaFrames: Double   // movement ≥ this re-opens the gate immediately
+    let closeDeltaFrames: Double  // movement < this counts toward muting
+    let holdSeconds: TimeInterval // sustained sub-close time required before muting
+    private(set) var isOpen = false
+    private var quietSeconds: TimeInterval = 0
+
+    init(openDeltaFrames: Double = 8.0, closeDeltaFrames: Double = 2.0, holdSeconds: TimeInterval = 0.08) {
+        self.openDeltaFrames = max(openDeltaFrames, 0)
+        self.closeDeltaFrames = max(min(closeDeltaFrames, openDeltaFrames), 0)
+        self.holdSeconds = max(holdSeconds, 0)
+    }
+
+    mutating func reset() {
+        isOpen = false
+        quietSeconds = 0
+    }
+
+    /// Updates the gate for one render buffer spanning `bufferSeconds` of output, during
+    /// which the head moved `movementFrames`. Returns whether the source is audible now.
+    mutating func update(movementFrames: Double, bufferSeconds: TimeInterval) -> Bool {
+        let magnitude = abs(movementFrames)
+        if magnitude >= openDeltaFrames {
+            quietSeconds = 0
+            isOpen = true
+        } else if magnitude < closeDeltaFrames {
+            quietSeconds += max(bufferSeconds, 0)
+            if quietSeconds >= holdSeconds {
+                isOpen = false
+            }
+        } else {
+            // In the hysteresis band: hold the current state, don't accumulate toward mute.
+            quietSeconds = 0
+        }
+        return isOpen
     }
 }
 
