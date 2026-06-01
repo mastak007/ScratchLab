@@ -314,6 +314,61 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         XCTAssertEqual(ScratchPlaybackLabEngine.clampFrame(50, total: 0), 0, accuracy: 1e-9)
     }
 
+    // MARK: - Anti-aliased resampling (sampleSpan)
+
+    /// Ramp buffer where sample[i] == i, so a point read at x returns x and a box-average
+    /// over [a, b] returns the midpoint (a + b) / 2 — easy ground truth.
+    private func withRamp(_ count: Int, _ body: (UnsafeBufferPointer<Float>) -> Void) {
+        let ramp = (0..<count).map { Float($0) }
+        ramp.withUnsafeBufferPointer(body)
+    }
+
+    func testSampleSpanAtOrBelowUnitRatePointSamplesAtHead() {
+        withRamp(100) { buf in
+            // width 0.5 (<1×) and exactly 1.0 (1×) both stay a point read at `from`.
+            XCTAssertEqual(ScratchPlaybackLabEngine.sampleSpan(buf, from: 10, to: 10.5, total: 100, loops: true),
+                           10.0, accuracy: 1e-5)
+            XCTAssertEqual(ScratchPlaybackLabEngine.sampleSpan(buf, from: 10, to: 11, total: 100, loops: true),
+                           10.0, accuracy: 1e-5)
+        }
+    }
+
+    func testSampleSpanAboveUnitRateAveragesSpan() {
+        withRamp(100) { buf in
+            // width 10 (10×) → box-average of the ramp over [10,20] ≈ 15, NOT the point 10.
+            let v = ScratchPlaybackLabEngine.sampleSpan(buf, from: 10, to: 20, total: 100, loops: true)
+            XCTAssertEqual(v, 15.0, accuracy: 0.01)
+            XCTAssertNotEqual(v, 10.0, accuracy: 1.0)   // proves it is not point-sampling at the head
+        }
+    }
+
+    func testSampleSpanReverseAveragesSameSpanSymmetrically() {
+        withRamp(100) { buf in
+            let forward = ScratchPlaybackLabEngine.sampleSpan(buf, from: 10, to: 20, total: 100, loops: true)
+            let reverse = ScratchPlaybackLabEngine.sampleSpan(buf, from: 20, to: 10, total: 100, loops: true)
+            XCTAssertEqual(forward, reverse, accuracy: 1e-6)   // direction-symmetric
+        }
+    }
+
+    func testSampleSpanAcrossLoopSeamIsFiniteAndInBounds() {
+        withRamp(100) { buf in
+            // span 98 → 104 crosses the wrap; must not read out of bounds or NaN.
+            let v = ScratchPlaybackLabEngine.sampleSpan(buf, from: 98, to: 104, total: 100, loops: true)
+            XCTAssertTrue(v.isFinite)
+            XCTAssertGreaterThanOrEqual(v, 0)
+            XCTAssertLessThanOrEqual(v, 99)
+        }
+    }
+
+    func testSampleSpanFastClampModeStaysInBounds() {
+        withRamp(100) { buf in
+            // clamp mode, fast read past the end: clamps, stays finite/in-bounds.
+            let v = ScratchPlaybackLabEngine.sampleSpan(buf, from: 95, to: 130, total: 100, loops: false)
+            XCTAssertTrue(v.isFinite)
+            XCTAssertLessThanOrEqual(v, 99)
+        }
+    }
+
     // MARK: - Boundary: degenerate ramp length
 
     func testSubFrameRampDurationStillReachesFullGainInOneFrame() {

@@ -209,8 +209,8 @@ final class ScratchPlaybackLabEngine {
                 let sourceValue: Float
                 if audible {
                     let position = start + perFrame * Double(frameIndex)
-                    let readPosition = loops ? Self.wrapFrame(position, total: ring) : Self.clampFrame(position, total: ring)
-                    sourceValue = Self.interpolate(samples, at: readPosition)
+                    sourceValue = Self.sampleSpan(samples, from: position, to: position + perFrame,
+                                                  total: ring, loops: loops)
                 } else {
                     sourceValue = 0
                 }
@@ -260,6 +260,35 @@ final class ScratchPlaybackLabEngine {
     static func clampFrame(_ frame: Double, total: Double) -> Double {
         guard total > 0 else { return 0 }
         return Swift.min(Swift.max(frame, 0), total - 1)
+    }
+
+    /// Reads the source for one output frame whose read head crosses the span `from…to`
+    /// (one quantum-step apart, so the span width is `|perFrame|` source frames).
+    ///
+    /// At ≤1× the span is sub-sample, so this is a single linear-interpolated point read at
+    /// `from` — byte-identical to plain interpolation. Above 1× the head skips source frames;
+    /// point-sampling would fold those skipped high frequencies back as harsh aliasing. So
+    /// the source is **box-averaged** across the span (band-limiting it to the new rate),
+    /// using `ceil(width)` midpoint sub-taps capped at 64. The span is `min…max`, so reverse
+    /// (`to < from`) averages the identical span — direction-symmetric. Each tap wraps/clamps
+    /// independently, so a span across the loop seam (or a clamped end) reads safely.
+    static func sampleSpan(_ samples: UnsafeBufferPointer<Float>, from: Double, to: Double,
+                           total: Double, loops: Bool) -> Float {
+        let width = abs(to - from)
+        let read: (Double) -> Float = { pos in
+            let p = loops ? wrapFrame(pos, total: total) : clampFrame(pos, total: total)
+            return interpolate(samples, at: p)
+        }
+        if width <= 1 { return read(from) }   // ≤1× — preserve plain interpolation at the head
+
+        let taps = Swift.min(64, Swift.max(2, Int(width.rounded(.up))))
+        let lo = Swift.min(from, to)
+        let step = width / Double(taps)
+        var sum: Float = 0
+        for k in 0..<taps {
+            sum += read(lo + (Double(k) + 0.5) * step)   // midpoint of each sub-interval
+        }
+        return sum / Float(taps)
     }
 
     /// Linear-interpolated read of a float buffer at a fractional index, clamped to
