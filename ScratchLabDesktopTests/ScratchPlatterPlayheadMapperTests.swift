@@ -299,61 +299,76 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         XCTAssertEqual(m.samplePosition, 0.0, accuracy: 1e-12)
     }
 
-    // MARK: - Audio drive decision (RANE raw-rate + re-anchor, shared with SV)
+    // MARK: - Audio drive: windowed rate (RANE low-speed jitter rejection)
 
-    func testAudioDriveGlidesAtRawInstantaneousRate() {
-        // moved / dt — immediate, NOT smoothed/EMA-lagged.
-        XCTAssertEqual(
-            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0.01, idleTimeout: 0.18),
-            .glide(sampleSecondsPerSecond: 2.0)
-        )
+    private func glideRate(_ action: ScratchPlatterAudioDrive.Action) -> Double? {
+        if case .glide(let r) = action { return r }
+        return nil
     }
 
-    func testAudioDriveRawRateIsStatelessNoEMACarryOver() {
-        // Stateless: a big move right after a tiny move yields the full rate immediately,
-        // with no EMA carry-over — this is the lag this change removes.
-        let slow = ScratchPlatterAudioDrive.decide(moved: 0.001, sinceLastEvent: 0.01, idleTimeout: 0.18)
-        let fast = ScratchPlatterAudioDrive.decide(moved: 0.05, sinceLastEvent: 0.01, idleTimeout: 0.18)
-        XCTAssertEqual(slow, .glide(sampleSecondsPerSecond: 0.1))
-        XCTAssertEqual(fast, .glide(sampleSecondsPerSecond: 5.0))
+    func testWindowedDriveAnchorsOnFirstEvent() {
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        XCTAssertEqual(d.ingest(moved: 0.0005, at: 5.0), .anchor)
     }
 
-    func testAudioDrivePreservesDirectionSign() {
-        XCTAssertEqual(
-            ScratchPlatterAudioDrive.decide(moved: -0.02, sinceLastEvent: 0.01, idleTimeout: 0.18),
-            .glide(sampleSecondsPerSecond: -2.0)
-        )
+    func testWindowedDriveAnchorsAfterIdleGap() {
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        _ = d.ingest(moved: 0.0005, at: 0.000)
+        _ = d.ingest(moved: 0.0005, at: 0.010)
+        // 0.29 s gap (> idleTimeout) → restart window and re-anchor, not glide from a stale rate.
+        XCTAssertEqual(d.ingest(moved: 0.0005, at: 0.300), .anchor)
     }
 
-    func testAudioDriveAnchorsOnFirstEvent() {
-        XCTAssertEqual(
-            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: nil, idleTimeout: 0.18),
-            .anchor
-        )
+    func testWindowedDriveSlowForwardRejectsSubMillisecondBurstSpike() {
+        // Slow forward (~0.06×): steady +1 steps, then a sub-ms-later event whose instantaneous
+        // moved/dt would be ~0.0005/0.001 = 0.5 (near 1×). The windowed rate must stay slow.
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        _ = d.ingest(moved: 0.0005, at: 0.000)   // anchor
+        _ = d.ingest(moved: 0.0005, at: 0.008)
+        _ = d.ingest(moved: 0.0005, at: 0.016)
+        let r = glideRate(d.ingest(moved: 0.0005, at: 0.017))   // 1 ms after the previous event
+        XCTAssertNotNil(r)
+        XCTAssertGreaterThan(r!, 0)            // forward
+        XCTAssertLessThan(r!, 0.15)            // windowed slow, NOT the 0.5 instantaneous spike
     }
 
-    func testAudioDriveAnchorsAfterIdleGap() {
-        // A gap longer than the idle timeout re-anchors to absolute position rather than
-        // gliding from a stale rate — prevents drift / stale-spot resume.
-        XCTAssertEqual(
-            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0.30, idleTimeout: 0.18),
-            .anchor
-        )
+    func testWindowedDriveSlowReverseRejectsSubMillisecondBurstSpike() {
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        _ = d.ingest(moved: -0.0005, at: 0.000)  // anchor
+        _ = d.ingest(moved: -0.0005, at: 0.008)
+        _ = d.ingest(moved: -0.0005, at: 0.016)
+        let r = glideRate(d.ingest(moved: -0.0005, at: 0.017))
+        XCTAssertNotNil(r)
+        XCTAssertLessThan(r!, 0)               // reverse
+        XCTAssertGreaterThan(r!, -0.15)        // windowed slow, NOT the -0.5 spike
     }
 
-    func testAudioDriveAnchorsOnNonPositiveDelta() {
-        XCTAssertEqual(
-            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0, idleTimeout: 0.18),
-            .anchor
-        )
+    func testWindowedDriveSteadySlowRateIsAccurate() {
+        // +0.001 every 10 ms ⇒ true rate 0.1; the window must report ≈0.1.
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        var r: Double?
+        for k in 0...5 { r = glideRate(d.ingest(moved: 0.001, at: Double(k) * 0.010)) }
+        XCTAssertNotNil(r)
+        XCTAssertEqual(r!, 0.1, accuracy: 0.02)
     }
 
-    func testAudioDriveGlidesThroughReversalWithoutAnchoring() {
-        // A direction reversal at normal cadence stays a glide (audio follows continuously);
-        // it must NOT collapse to an anchor/cut at the zero crossing.
-        let forward = ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0.01, idleTimeout: 0.18)
-        let reverse = ScratchPlatterAudioDrive.decide(moved: -0.02, sinceLastEvent: 0.01, idleTimeout: 0.18)
-        if case .anchor = forward { XCTFail("forward stroke should glide") }
-        if case .anchor = reverse { XCTFail("reverse stroke should glide") }
+    func testWindowedDriveStillTracksFastScratch() {
+        // +0.001 every 1 ms ⇒ true rate ≈1.0; window must still read a high rate (responsive).
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        var r: Double?
+        for k in 0...30 { r = glideRate(d.ingest(moved: 0.001, at: Double(k) * 0.001)) }
+        XCTAssertNotNil(r)
+        XCTAssertGreaterThan(r!, 0.5)          // appropriately high, no fallback to slow
+    }
+
+    func testWindowedDriveNeverInjectsUnitRateDuringSlowMovement() {
+        // A whole slow jittery forward stroke: no glide rate should approach 1× (no "ah" burst).
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.022, idleTimeout: 0.18)
+        let times = [0.0, 0.012, 0.013, 0.025, 0.026, 0.027, 0.040, 0.052, 0.053]
+        var maxRate = 0.0
+        for t in times {
+            if let r = glideRate(d.ingest(moved: 0.0005, at: t)) { maxRate = Swift.max(maxRate, abs(r)) }
+        }
+        XCTAssertLessThan(maxRate, 0.2)        // stays well below 1× despite sub-ms clusters
     }
 }
