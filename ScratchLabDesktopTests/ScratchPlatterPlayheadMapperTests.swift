@@ -298,4 +298,62 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         m.seek(toPositionFraction: -1.0) // clamp low
         XCTAssertEqual(m.samplePosition, 0.0, accuracy: 1e-12)
     }
+
+    // MARK: - Audio drive decision (RANE raw-rate + re-anchor, shared with SV)
+
+    func testAudioDriveGlidesAtRawInstantaneousRate() {
+        // moved / dt — immediate, NOT smoothed/EMA-lagged.
+        XCTAssertEqual(
+            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0.01, idleTimeout: 0.18),
+            .glide(sampleSecondsPerSecond: 2.0)
+        )
+    }
+
+    func testAudioDriveRawRateIsStatelessNoEMACarryOver() {
+        // Stateless: a big move right after a tiny move yields the full rate immediately,
+        // with no EMA carry-over — this is the lag this change removes.
+        let slow = ScratchPlatterAudioDrive.decide(moved: 0.001, sinceLastEvent: 0.01, idleTimeout: 0.18)
+        let fast = ScratchPlatterAudioDrive.decide(moved: 0.05, sinceLastEvent: 0.01, idleTimeout: 0.18)
+        XCTAssertEqual(slow, .glide(sampleSecondsPerSecond: 0.1))
+        XCTAssertEqual(fast, .glide(sampleSecondsPerSecond: 5.0))
+    }
+
+    func testAudioDrivePreservesDirectionSign() {
+        XCTAssertEqual(
+            ScratchPlatterAudioDrive.decide(moved: -0.02, sinceLastEvent: 0.01, idleTimeout: 0.18),
+            .glide(sampleSecondsPerSecond: -2.0)
+        )
+    }
+
+    func testAudioDriveAnchorsOnFirstEvent() {
+        XCTAssertEqual(
+            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: nil, idleTimeout: 0.18),
+            .anchor
+        )
+    }
+
+    func testAudioDriveAnchorsAfterIdleGap() {
+        // A gap longer than the idle timeout re-anchors to absolute position rather than
+        // gliding from a stale rate — prevents drift / stale-spot resume.
+        XCTAssertEqual(
+            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0.30, idleTimeout: 0.18),
+            .anchor
+        )
+    }
+
+    func testAudioDriveAnchorsOnNonPositiveDelta() {
+        XCTAssertEqual(
+            ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0, idleTimeout: 0.18),
+            .anchor
+        )
+    }
+
+    func testAudioDriveGlidesThroughReversalWithoutAnchoring() {
+        // A direction reversal at normal cadence stays a glide (audio follows continuously);
+        // it must NOT collapse to an anchor/cut at the zero crossing.
+        let forward = ScratchPlatterAudioDrive.decide(moved: 0.02, sinceLastEvent: 0.01, idleTimeout: 0.18)
+        let reverse = ScratchPlatterAudioDrive.decide(moved: -0.02, sinceLastEvent: 0.01, idleTimeout: 0.18)
+        if case .anchor = forward { XCTFail("forward stroke should glide") }
+        if case .anchor = reverse { XCTFail("reverse stroke should glide") }
+    }
 }

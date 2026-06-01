@@ -17,6 +17,31 @@ import Combine
 // playhead surface into the main Practice view so ScratchLab behaves like Scratch
 // Visualizer during practice — this window is temporary isolation, not final UX.
 
+/// How the audio engine should follow one platter move, given the real time since the
+/// previous platter event.
+///
+/// This is the model that the Scratch Visualizer path already uses, lifted into a pure,
+/// testable decision so the RANE CC6 path can share it: glide at the *raw* instantaneous
+/// rate (`moved / dt`) so audio responds immediately and each segment's displacement is
+/// exactly the platter move (no integration drift), but re-`anchor` to the mapper's
+/// absolute sample position after an idle gap or the first event (so a resume can't start
+/// from a stale, drifted spot). The EMA velocity estimator is deliberately NOT consulted
+/// here — it stays for the timeline's direction sign only, where smoothing is wanted and
+/// latency does not matter.
+enum ScratchPlatterAudioDrive: Equatable {
+    /// Set the engine velocity to this raw rate (sample-seconds of playback per real second).
+    case glide(sampleSecondsPerSecond: Double)
+    /// Snap/seek the engine to the mapper's true absolute sample position.
+    case anchor
+
+    /// `dt` is the real (CoreMIDI) time since the previous platter event, or nil for the
+    /// first event. A non-positive or longer-than-`idleTimeout` gap re-anchors.
+    static func decide(moved: Double, sinceLastEvent dt: TimeInterval?, idleTimeout: TimeInterval) -> ScratchPlatterAudioDrive {
+        guard let dt, dt > 0, dt <= idleTimeout else { return .anchor }
+        return .glide(sampleSecondsPerSecond: moved / dt)
+    }
+}
+
 /// One precomputed waveform column: the min and max sample value in a bin.
 struct WaveformPeak: Equatable {
     let min: Float
@@ -171,6 +196,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
             mapper.resetTracking()
             velocityEstimator.reset()
             lastSVEventTimestamp = nil // re-anchor SV audio after a mode change
+            lastCC6EventTimestamp = nil // re-anchor RANE audio after a mode change
         }
     }
     /// Sensitivity, expressed as sample-seconds moved per 1000 CC6 steps (nicer UI
@@ -296,6 +322,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Real (CoreMIDI) timestamp of the previous Scratch Visualizer pitch-bend event, used to
     /// glide the audio at the instantaneous rate between SV position samples. nil = re-anchor.
     private var lastSVEventTimestamp: TimeInterval?
+    /// Real (CoreMIDI) timestamp of the previous RANE CC6 platter event, used to glide the
+    /// audio at the raw instantaneous rate between steps (same model as SV). nil = re-anchor.
+    private var lastCC6EventTimestamp: TimeInterval?
     /// Captured-timeline replay clock (review only); advanced by the display tick.
     private var replay = CapturedTimelineReplay(timeline: ScratchSampleTimeline())
     /// Wall-clock time of the last replay advance, for the real-time delta.
@@ -349,6 +378,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
         mapper.resetTracking()
         velocityEstimator.reset()
         lastSVEventTimestamp = nil
+        lastCC6EventTimestamp = nil
         engine.setVelocity(0)
         engine.setTargetPosition(seconds: mapper.samplePosition) // seek/snap to 0
         clearTimeline()
@@ -782,11 +812,20 @@ final class ScratchPlaybackLabModel: ObservableObject {
             let step = mapper.ingestCC6(value)
             lastCC6Value = value
             lastCC6StepLatest = step
-            // Drive the engine by continuous velocity (smooth across bursts), using the
-            // REAL CoreMIDI event timestamp — not Date() — so the rate is accurate.
+            // Drive the engine from the RAW instantaneous rate (immediate, and drift-free
+            // per segment since rate·dt == moved), re-anchoring to the mapper's absolute
+            // position after an idle gap — the same model the SV path uses below. Uses the
+            // REAL CoreMIDI event timestamp — not Date() — so the rate is accurate. The EMA
+            // estimator is still fed, but ONLY for the timeline's direction sign (below),
+            // never the audio rate, so playback is not smeared or lagged.
             let moved = Double(inverted ? -step : step) * mapper.sampleSecondsPerStep
+            let cc6Dt = lastCC6EventTimestamp.map { event.timestamp - $0 }
+            switch ScratchPlatterAudioDrive.decide(moved: moved, sinceLastEvent: cc6Dt, idleTimeout: velocityIdleTimeout) {
+            case .glide(let rate): engine.setVelocity(rate)
+            case .anchor: engine.setTargetPosition(seconds: mapper.samplePosition)
+            }
+            lastCC6EventTimestamp = event.timestamp
             velocityEstimator.ingest(sampleSeconds: moved, at: event.timestamp)
-            engine.setVelocity(velocityEstimator.velocity)
             // Capture the real sample position the platter reached, so notation can be
             // derived from actual travel rather than inferred full-stroke notes. Only on
             // a true move (skip the seeding event, which does not advance the playhead).
