@@ -4198,14 +4198,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         for _ in 0..<Int(packetListPtr.pointee.numPackets) {
             let length = Int(packetPtr.pointee.length)
             if length >= 3 {
-                withUnsafeBytes(of: packetPtr.pointee.data) { rawBytes in
+                withUnsafePointer(to: &packetPtr.pointee.data) { dataTuplePtr in
+                    // `MIDIPacket.data` imports into Swift as a fixed 256-byte tuple, but a
+                    // coalesced packet's real payload is `length` contiguous bytes from this
+                    // address (CoreMIDI guarantee). Read through a length-bounded pointer so
+                    // packets longer than 256 bytes (heavy platter streams) don't index past
+                    // the tuple's fixed bounds and trap.
+                    let bytes = UnsafeRawPointer(dataTuplePtr).assumingMemoryBound(to: UInt8.self)
                     var i = 0
                     while i + 2 < length {
-                        let statusByte = rawBytes[i]
+                        let statusByte = bytes[i]
                         if statusByte & 0xF0 == 0xB0 {
                             let channel = Int(statusByte & 0x0F)
-                            let controller = Int(rawBytes[i + 1])
-                            let value = Int(rawBytes[i + 2])
+                            let controller = Int(bytes[i + 1])
+                            let value = Int(bytes[i + 2])
 
                             midiCaptureLock.lock()
                             let learning = isMIDILearning
