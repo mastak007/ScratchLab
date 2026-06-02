@@ -494,3 +494,245 @@ struct MIDIUserOverrideProfile: Codable, Equatable {
         )
     }
 }
+
+// MARK: - Requirements / readiness bridge
+
+// The policy layer that connects a known profile + its verification result to a usability
+// verdict. Pure value model on top of the existing `MIDIVerificationPlan` — it adds the
+// notions the plan does not carry: which checks are REQUIRED vs optional, which FAILURES
+// block use, which checks PRODUCE a typed calibration value, and which confidence tiers
+// must be verified before use. Nothing here ingests live MIDI, drives playback, or mutates
+// the existing plan/result/evaluate behaviour.
+
+/// Which typed `MIDICalibration` field a verification check can populate. Pure naming layer
+/// so a check outcome can be routed to the right calibration slot by a future live layer.
+enum MIDICalibrationField: String, Codable, CaseIterable, Equatable {
+    case platterDirection
+    case platterRotation
+    case platterNoise
+    case crossfaderRange
+    case crossfaderOrientation
+    case crossfaderCutThreshold
+    case quickCut
+}
+
+extension MIDIVerificationCheck {
+    /// The typed calibration field this check can produce when measured, or nil. Forward /
+    /// backward platter motion both establish platter DIRECTION; the remaining checks map
+    /// one-to-one onto their measurement's calibration slot.
+    var calibrationField: MIDICalibrationField? {
+        switch self {
+        case .platterForwardMotion, .platterBackwardMotion: return .platterDirection
+        case .platterFullRotationCalibration: return .platterRotation
+        case .platterNoAliasingNoise: return .platterNoise
+        case .crossfaderMinMax: return .crossfaderRange
+        case .crossfaderInversion: return .crossfaderOrientation
+        case .crossfaderCutThreshold: return .crossfaderCutThreshold
+        case .crossfaderQuickCuts: return .quickCut
+        }
+    }
+}
+
+/// One check's requirement policy: whether it must pass for full readiness, whether failing
+/// it blocks use, and which calibration field it produces. Pure Codable value.
+struct MIDIVerificationRequirement: Codable, Equatable {
+    /// The check this requirement governs.
+    let check: MIDIVerificationCheck
+    /// Whether the check must be present and passing for the device to be fully ready.
+    let isRequired: Bool
+    /// Whether FAILING the check makes the device unusable (a `.blocked` verdict).
+    let blocksUseOnFailure: Bool
+    /// The typed calibration field this check can produce, if any.
+    let producesCalibration: MIDICalibrationField?
+
+    init(check: MIDIVerificationCheck, isRequired: Bool, blocksUseOnFailure: Bool, producesCalibration: MIDICalibrationField?) {
+        self.check = check
+        self.isRequired = isRequired
+        self.blocksUseOnFailure = blocksUseOnFailure
+        self.producesCalibration = producesCalibration
+    }
+
+    /// Checks modelled as optional/non-blocking refinements rather than correctness gates.
+    /// Quick cuts is a PERFORMANCE measurement (how fast the fader can cut) — useful to record
+    /// but not something whose failure should block basic, correct use of the controller.
+    private static let optionalChecks: Set<MIDIVerificationCheck> = [.crossfaderQuickCuts]
+
+    /// The standard requirement for a check: required + blocking for correctness gates
+    /// (platter motion/calibration/noise, crossfader range/inversion/cut), optional +
+    /// non-blocking for refinements (`optionalChecks`). Calibration field comes from the check.
+    static func standard(for check: MIDIVerificationCheck) -> MIDIVerificationRequirement {
+        let required = !optionalChecks.contains(check)
+        return MIDIVerificationRequirement(
+            check: check,
+            isRequired: required,
+            blocksUseOnFailure: required,
+            producesCalibration: check.calibrationField
+        )
+    }
+}
+
+/// The full set of requirements derived from a profile, plus the profile's confidence tier.
+/// Built on `MIDIVerificationPlan.make(for:)` so the per-role check set stays the single
+/// source of truth (this layer adds policy, it does not re-enumerate which checks a role has).
+struct MIDIVerificationRequirementSet: Codable, Equatable {
+    /// Identifier of the profile these requirements were derived from.
+    let profileIdentifier: String
+    /// The profile's certification / confidence tier (drives the verify-before-use gate).
+    let confidence: MIDIProfileConfidence
+    /// The per-check requirements, in plan/check order, de-duplicated across steps.
+    let requirements: [MIDIVerificationRequirement]
+
+    init(profileIdentifier: String, confidence: MIDIProfileConfidence, requirements: [MIDIVerificationRequirement]) {
+        self.profileIdentifier = profileIdentifier
+        self.confidence = confidence
+        self.requirements = requirements
+    }
+
+    /// Derives requirements from a profile. Reuses the plan factory's checks (so a deckless
+    /// mixer yields only crossfader checks, a platter-only deck yields only platter checks),
+    /// de-duplicating checks that recur across steps (e.g. both platter decks share the same
+    /// four platter checks → one requirement each).
+    static func make(for profile: MIDIControllerProfile) -> MIDIVerificationRequirementSet {
+        let plan = MIDIVerificationPlan.make(for: profile)
+        var seen = Set<MIDIVerificationCheck>()
+        var requirements: [MIDIVerificationRequirement] = []
+        for step in plan.steps {
+            for check in step.checks where !seen.contains(check) {
+                seen.insert(check)
+                requirements.append(.standard(for: check))
+            }
+        }
+        return MIDIVerificationRequirementSet(
+            profileIdentifier: profile.identifier,
+            confidence: profile.confidence,
+            requirements: requirements
+        )
+    }
+
+    /// Checks that must pass for full readiness.
+    var requiredChecks: [MIDIVerificationCheck] { requirements.filter(\.isRequired).map(\.check) }
+    /// Checks that are optional (their failure never blocks).
+    var optionalChecks: [MIDIVerificationCheck] { requirements.filter { !$0.isRequired }.map(\.check) }
+    /// Checks whose failure blocks use.
+    var blockingChecks: [MIDIVerificationCheck] { requirements.filter(\.blocksUseOnFailure).map(\.check) }
+    /// Calibration fields the profile's checks can produce (per check; may repeat a field).
+    var producibleCalibrationFields: [MIDICalibrationField] { requirements.compactMap(\.producesCalibration) }
+
+    /// The requirement governing a given check, if the profile has it.
+    func requirement(for check: MIDIVerificationCheck) -> MIDIVerificationRequirement? {
+        requirements.first { $0.check == check }
+    }
+
+    /// Whether the profile's confidence tier mandates verification before use. `.heuristic`
+    /// (inferred) and `.unverified` (no match) must always be verified; certified/community
+    /// profiles are trusted unless a required check actually fails.
+    var confidenceRequiresVerification: Bool {
+        confidence <= MIDIProfileConfidence.heuristic
+    }
+}
+
+/// The top-level usability verdict for a device under a profile.
+enum MIDIVerificationReadinessVerdict: String, Codable, Equatable {
+    /// All required checks present and passing, and the profile is trusted — safe to use.
+    case ready
+    /// Nothing is blocking, but the device must be verified first (low-confidence profile
+    /// and/or a required check has not been exercised yet).
+    case verificationRequired
+    /// A required, use-blocking check failed — the device must not be used as mapped.
+    case blocked
+}
+
+/// The readiness assessment of a verification result against a profile's requirements. Pure
+/// and deterministic; carries enough detail to explain the verdict (blocking failures,
+/// not-yet-exercised required checks, non-blocking failures, and the confidence reason).
+struct MIDIVerificationReadiness: Codable, Equatable {
+    /// The overall verdict.
+    let verdict: MIDIVerificationReadinessVerdict
+    /// Required, use-blocking checks that FAILED (the reason for `.blocked`).
+    let blockingFailures: [MIDIVerificationCheck]
+    /// Required checks with no outcome yet (not exercised) — contribute to `.verificationRequired`.
+    let missingRequiredChecks: [MIDIVerificationCheck]
+    /// Optional / non-blocking checks that failed (informational only; never block).
+    let failedOptionalChecks: [MIDIVerificationCheck]
+    /// Whether the profile's confidence tier alone mandates verification.
+    let confidenceRequiresVerification: Bool
+    /// The profile confidence the verdict was computed against.
+    let confidence: MIDIProfileConfidence
+
+    init(
+        verdict: MIDIVerificationReadinessVerdict,
+        blockingFailures: [MIDIVerificationCheck],
+        missingRequiredChecks: [MIDIVerificationCheck],
+        failedOptionalChecks: [MIDIVerificationCheck],
+        confidenceRequiresVerification: Bool,
+        confidence: MIDIProfileConfidence
+    ) {
+        self.verdict = verdict
+        self.blockingFailures = blockingFailures
+        self.missingRequiredChecks = missingRequiredChecks
+        self.failedOptionalChecks = failedOptionalChecks
+        self.confidenceRequiresVerification = confidenceRequiresVerification
+        self.confidence = confidence
+    }
+
+    /// Convenience: whether the device is ready to use as mapped.
+    var isReady: Bool { verdict == .ready }
+
+    /// Computes readiness from a requirement set and a verification result. Pure: it inspects
+    /// the result's check outcomes only and mutates nothing.
+    ///
+    /// Precedence (most severe wins):
+    /// - Any required, use-blocking check that FAILED → `.blocked` (even on a trusted profile).
+    /// - Else if confidence mandates verification, OR a required check was never exercised →
+    ///   `.verificationRequired`.
+    /// - Else → `.ready`.
+    ///
+    /// Optional checks never block and never force verification; a failed optional check is
+    /// reported for information only.
+    static func evaluate(
+        requirements: MIDIVerificationRequirementSet,
+        result: MIDIVerificationResult
+    ) -> MIDIVerificationReadiness {
+        let outcomes = result.allCheckOutcomes
+        let failedChecks = Set(outcomes.filter { !$0.passed }.map(\.check))
+        let presentChecks = Set(outcomes.map(\.check))
+
+        var blockingFailures: [MIDIVerificationCheck] = []
+        var missingRequired: [MIDIVerificationCheck] = []
+        var failedOptional: [MIDIVerificationCheck] = []
+
+        for requirement in requirements.requirements {
+            let didFail = failedChecks.contains(requirement.check)
+            let isPresent = presentChecks.contains(requirement.check)
+            if didFail {
+                if requirement.blocksUseOnFailure {
+                    blockingFailures.append(requirement.check)
+                } else {
+                    failedOptional.append(requirement.check)
+                }
+            }
+            if requirement.isRequired && !isPresent {
+                missingRequired.append(requirement.check)
+            }
+        }
+
+        let confidenceGate = requirements.confidenceRequiresVerification
+        let verdict: MIDIVerificationReadinessVerdict
+        if !blockingFailures.isEmpty {
+            verdict = .blocked
+        } else if confidenceGate || !missingRequired.isEmpty {
+            verdict = .verificationRequired
+        } else {
+            verdict = .ready
+        }
+
+        return MIDIVerificationReadiness(
+            verdict: verdict,
+            blockingFailures: blockingFailures,
+            missingRequiredChecks: missingRequired,
+            failedOptionalChecks: failedOptional,
+            confidenceRequiresVerification: confidenceGate,
+            confidence: requirements.confidence
+        )
+    }
+}
