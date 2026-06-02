@@ -106,6 +106,18 @@ enum FeatureFlags {
         isOn("PLATTER_POSITION_CORRECTION", releaseDefault: false, debugDefault: false)
     }
 
+    // MARK: Scratch Playback Lab — RANE scratch-zone phase mapping (experiment)
+
+    // Maps the sample to a fixed angular cut zone (~12→4 o'clock ≈ 120°) of the platter
+    // instead of looping it continuously around the full revolution: inside the zone the
+    // ahhh plays once; outside (4→12) it is silent; returning to 12 replays from the start.
+    // Phase is derived from cumulative CC6 steps (CC6 stays source of truth — no Pitch Bend).
+    // OFF in both release and debug; strictly opt-in via SCRATCHLAB_FF_RANE_SCRATCH_ZONE so
+    // the default continuous playback path is unchanged until this is hardware-verified.
+    static var raneScratchZoneEnabled: Bool {
+        isOn("RANE_SCRATCH_ZONE", releaseDefault: false, debugDefault: false)
+    }
+
     // MARK: Resolution
 
     static func isOn(

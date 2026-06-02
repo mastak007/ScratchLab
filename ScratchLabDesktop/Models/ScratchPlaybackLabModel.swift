@@ -142,6 +142,42 @@ struct ScratchPositionCorrectionController: Equatable {
     }
 }
 
+/// Maps platter PHASE (angle over one revolution) to a sample position and audibility for
+/// the RANE scratch-zone experiment (`FeatureFlags.raneScratchZoneEnabled`).
+///
+/// A real turntable binds the sample to a fixed arc of the record, not the whole rotation.
+/// So one sample pass occupies the active cut zone (~12→4 o'clock ≈ 120°); the rest of the
+/// turn is silent. Inside the zone the sample maps linearly across the arc (forward and
+/// reverse); outside it is silent and the sample does NOT advance or loop, so returning to
+/// 12 o'clock (phase wraps to 0) replays from the beginning. Pure value type — testable
+/// without hardware. Phase comes from cumulative CC6 steps; no Pitch Bend is involved.
+struct ScratchZonePhaseMapper: Equatable {
+    /// Fraction of a full revolution that the sample occupies (120° → 120/360 ≈ 0.333).
+    var activeFraction: Double
+
+    struct Output: Equatable {
+        /// Sample position in seconds the head should be at (held at the end while silent).
+        let samplePositionSeconds: Double
+        /// Whether the source should sound here (false outside the active arc).
+        let audible: Bool
+    }
+
+    /// Maps a platter `phase` (any real; normalised to `[0,1)`) to a sample position and
+    /// audibility for a sample of length `sampleDuration`.
+    func map(phase: Double, sampleDuration: Double) -> Output {
+        guard activeFraction > 0, sampleDuration > 0 else {
+            return Output(samplePositionSeconds: 0, audible: false)
+        }
+        let p = phase - floor(phase)                 // normalise to [0,1)
+        if p < activeFraction {
+            return Output(samplePositionSeconds: (p / activeFraction) * sampleDuration, audible: true)
+        }
+        // Outside the active arc: silent, held at the sample end (not looped). Re-entry at
+        // phase 0 returns position 0, so the sample replays from the start.
+        return Output(samplePositionSeconds: sampleDuration, audible: false)
+    }
+}
+
 /// One precomputed waveform column: the min and max sample value in a bin.
 struct WaveformPeak: Equatable {
     let min: Float
@@ -443,6 +479,17 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// position. Only consulted when `FeatureFlags.platterPositionCorrectionEnabled` is on;
     /// the default playback path never touches it.
     private let positionCorrection = ScratchPositionCorrectionController()
+    /// RANE scratch-zone experiment: maps platter phase to a ~120° cut zone. Only consulted
+    /// when `FeatureFlags.raneScratchZoneEnabled` is on; the default path never touches it.
+    private let scratchZoneMapper = ScratchZonePhaseMapper(activeFraction: 120.0 / 360.0)
+    /// Cumulative signed CC6 steps since the last reset (for platter-phase tracking).
+    private var cumulativeZoneSteps: Int = 0
+    /// Step count captured as 12 o'clock (auto-zeroed on the first CC6 event); nil until set.
+    private var zoneCueZeroSteps: Int?
+    /// Last in-zone sample position (seconds) and event time, for click-free glide tracking.
+    private var lastZonePositionSeconds: Double = 0
+    private var lastZoneEventTime: TimeInterval?
+    private var wasZoneAudible = false
     /// Captured-timeline replay clock (review only); advanced by the display tick.
     private var replay = CapturedTimelineReplay(timeline: ScratchSampleTimeline())
     /// Wall-clock time of the last replay advance, for the real-time delta.
@@ -498,6 +545,7 @@ final class ScratchPlaybackLabModel: ObservableObject {
         velocityEstimator.reset()
         lastSVEventTimestamp = nil
         cc6AudioDrive.reset()
+        resetScratchZone()
         engine.setVelocity(0)
         engine.setTargetPosition(seconds: mapper.samplePosition) // seek/snap to 0
         clearTimeline()
@@ -943,22 +991,28 @@ final class ScratchPlaybackLabModel: ObservableObject {
             // estimator is still fed, but ONLY for the timeline's direction sign (below),
             // never the audio rate, so playback is not smeared or lagged.
             let moved = Double(inverted ? -step : step) * mapper.sampleSecondsPerStep
-            switch cc6AudioDrive.ingest(moved: moved, at: event.timestamp) {
-            case .glide(let rate):
-                if FeatureFlags.platterPositionCorrectionEnabled, engine.isRunning {
-                    // Slice C experiment: bias the glide rate toward the mapper's absolute
-                    // CC6 position so the audio head stops drifting away from the platter
-                    // angle. Bounded velocity nudge only — no snap, no seek, no DSP change.
-                    let corrected = positionCorrection.correctedRate(
-                        baseRate: rate,
-                        targetSeconds: mapper.samplePosition,
-                        audioSeconds: engine.diagnosticRenderSeconds,
-                        sampleDuration: mapper.sampleDuration)
-                    engine.setVelocity(corrected)
-                } else {
-                    engine.setVelocity(rate)   // default path — byte-identical to before
+            if FeatureFlags.raneScratchZoneEnabled {
+                // EXPERIMENT: drive audio from the platter's angular scratch zone instead of
+                // the continuous looping path. CC6 still source of truth; no Pitch Bend.
+                driveScratchZoneAudio(signedStep: inverted ? -step : step, at: event.timestamp)
+            } else {
+                switch cc6AudioDrive.ingest(moved: moved, at: event.timestamp) {
+                case .glide(let rate):
+                    if FeatureFlags.platterPositionCorrectionEnabled, engine.isRunning {
+                        // Slice C experiment: bias the glide rate toward the mapper's absolute
+                        // CC6 position so the audio head stops drifting away from the platter
+                        // angle. Bounded velocity nudge only — no snap, no seek, no DSP change.
+                        let corrected = positionCorrection.correctedRate(
+                            baseRate: rate,
+                            targetSeconds: mapper.samplePosition,
+                            audioSeconds: engine.diagnosticRenderSeconds,
+                            sampleDuration: mapper.sampleDuration)
+                        engine.setVelocity(corrected)
+                    } else {
+                        engine.setVelocity(rate)   // default path — byte-identical to before
+                    }
+                case .anchor: engine.setTargetPosition(seconds: mapper.samplePosition)
                 }
-            case .anchor: engine.setTargetPosition(seconds: mapper.samplePosition)
             }
             velocityEstimator.ingest(sampleSeconds: moved, at: event.timestamp)
             // Capture the real sample position the platter reached, so notation can be
@@ -1121,6 +1175,58 @@ final class ScratchPlaybackLabModel: ObservableObject {
         if let last = lastPlatterEventDate, Date().timeIntervalSince(last) > idleResetInterval {
             mapper.resetTracking()
         }
+    }
+
+    /// RANE scratch-zone experiment audio path (`FeatureFlags.raneScratchZoneEnabled`).
+    /// Tracks platter phase from cumulative CC6 steps, maps it through the zone, and drives
+    /// the engine so the sample plays once across the active arc and is silent outside it.
+    /// CC6 only — no Pitch Bend. Reuses the existing seek/velocity/zone-gate engine API; no
+    /// render-block DSP change. The mapper's display position is kept in sync with the zone.
+    private func driveScratchZoneAudio(signedStep: Int, at time: TimeInterval) {
+        cumulativeZoneSteps += signedStep
+        // Auto-zero 12 o'clock on the first event after enable/reset.
+        if zoneCueZeroSteps == nil { zoneCueZeroSteps = cumulativeZoneSteps }
+        let stepsPerRev = Double(ScratchPlatterPlayheadMapper.defaultStepsPerRevolution)
+        let phase = Double(cumulativeZoneSteps - (zoneCueZeroSteps ?? cumulativeZoneSteps)) / stepsPerRev
+        let z = scratchZoneMapper.map(phase: phase, sampleDuration: mapper.sampleDuration)
+
+        // Keep the mapper's published position coherent with the zone (display + timeline).
+        if mapper.sampleDuration > 0 {
+            mapper.seek(toPositionFraction: z.samplePositionSeconds / mapper.sampleDuration)
+        }
+
+        engine.setZoneAudible(z.audible)
+        if z.audible {
+            // Glide toward the zone target at the instantaneous rate (click-free, reverse-
+            // correct). Re-anchor (snap) on first entry or after an idle gap — while silent,
+            // so the snap is inaudible.
+            if wasZoneAudible, let last = lastZoneEventTime {
+                let dt = time - last
+                if dt > 0 && dt <= velocityIdleTimeout {
+                    engine.setVelocity((z.samplePositionSeconds - lastZonePositionSeconds) / dt)
+                } else {
+                    engine.setTargetPosition(seconds: z.samplePositionSeconds) // resume after gap
+                }
+            } else {
+                engine.setTargetPosition(seconds: z.samplePositionSeconds)     // zone entry
+            }
+            lastZonePositionSeconds = z.samplePositionSeconds
+            lastZoneEventTime = time
+        } else {
+            engine.setVelocity(0)        // outside the arc: stop; zone gate fades to silence
+            lastZoneEventTime = nil      // force a re-anchor on the next entry
+        }
+        wasZoneAudible = z.audible
+    }
+
+    /// Clears scratch-zone phase tracking so the next CC6 event re-zeroes 12 o'clock.
+    private func resetScratchZone() {
+        cumulativeZoneSteps = 0
+        zoneCueZeroSteps = nil
+        lastZonePositionSeconds = 0
+        lastZoneEventTime = nil
+        wasZoneAudible = false
+        engine.setZoneAudible(true)
     }
 
     // MARK: - Display publish (≈60 Hz)

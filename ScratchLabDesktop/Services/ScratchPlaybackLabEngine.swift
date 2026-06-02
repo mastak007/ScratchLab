@@ -49,6 +49,12 @@ final class ScratchPlaybackLabEngine {
     /// the audio read-head position to measure drift against the mapper's absolute platter
     /// position. Read-only observation — it does NOT feed back into DSP or change `renderFrame`.
     private let renderFrameSnapshot = OSAllocatedUnfairLock(initialState: 0.0)
+    /// Angular scratch-zone gate (RANE scratch-zone experiment): when false, the source is
+    /// silenced regardless of platter movement, so the dead arc (4→12 o'clock) is silent even
+    /// while the platter keeps spinning. Defaults true so it has NO effect unless the zone
+    /// feature drives it. ANDed with the movement gate; the existing envelope ramps the
+    /// transition, so toggling it is click-free. Written by the main thread, read by render.
+    private let zoneAudibleFlag = OSAllocatedUnfairLock(initialState: true)
     /// Hysteretic gate: a truly stopped platter (sustained near-zero movement) fades to
     /// silence, but a momentary dip — a direction reversal or mid-stroke MIDI wobble —
     /// glides through instead of cutting the audio into stutter notches. NOT keyed off
@@ -151,6 +157,23 @@ final class ScratchPlaybackLabEngine {
         sampleRate > 0 ? diagnosticRenderFrame / sampleRate : 0
     }
 
+    // MARK: - Scratch zone (experiment): angular silence gate
+
+    /// Sets the angular scratch-zone audibility gate. Pass false to silence the source while
+    /// the platter is outside the active cut arc, true inside it. Default true (no effect).
+    func setZoneAudible(_ audible: Bool) {
+        zoneAudibleFlag.withLock { $0 = audible }
+    }
+
+    /// Diagnostic read of the zone gate (test seam; does not touch the audio thread's logic).
+    var diagnosticZoneAudible: Bool { zoneAudibleFlag.withLock { $0 } }
+
+    /// The source is audible only when BOTH the movement gate is open AND the angular zone
+    /// gate is open. Pure so the rule is unit-testable without AVAudioEngine.
+    static func zoneGatedAudible(zoneAudible: Bool, movementAudible: Bool) -> Bool {
+        zoneAudible && movementAudible
+    }
+
     // MARK: - Lifecycle
 
     func start() {
@@ -220,7 +243,12 @@ final class ScratchPlaybackLabEngine {
         let start = renderFrame
         let perFrame = Self.framesPerOutputFrame(velocity: v, sampleRate: sampleRate, outputSampleRate: outputSampleRate)
         let bufferSeconds = outputSampleRate > 0 ? Double(frames) / outputSampleRate : 0
-        let audible = audibilityGate.update(movementFrames: perFrame * Double(frames), bufferSeconds: bufferSeconds)
+        let movementAudible = audibilityGate.update(movementFrames: perFrame * Double(frames), bufferSeconds: bufferSeconds)
+        // Gate by the angular scratch zone too: outside the active arc the source is silenced
+        // even while the platter keeps moving. Default-true flag → no effect unless the zone
+        // feature drives it. The existing envelope ramps the transition (click-free).
+        let zoneOpen = zoneAudibleFlag.withLock { $0 }
+        let audible = Self.zoneGatedAudible(zoneAudible: zoneOpen, movementAudible: movementAudible)
 
         monoSamples.withUnsafeBufferPointer { samples in
             for frameIndex in 0..<frames {

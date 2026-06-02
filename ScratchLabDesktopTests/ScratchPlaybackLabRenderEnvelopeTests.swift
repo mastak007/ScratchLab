@@ -135,6 +135,99 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
                        ScratchPlaybackLabModel.defaultSampleSecondsPer1000Ticks, accuracy: 1e-9)
     }
 
+    // MARK: - Scratch-zone phase mapper (12→4 o'clock plays once, 4→12 silent)
+
+    private func makeZone(arcDegrees: Double = 120) -> ScratchZonePhaseMapper {
+        ScratchZonePhaseMapper(activeFraction: arcDegrees / 360.0)
+    }
+
+    func testZonePhaseZeroMapsToSampleStartAudible() {
+        let z = makeZone().map(phase: 0.0, sampleDuration: 1.0)
+        XCTAssertEqual(z.samplePositionSeconds, 0.0, accuracy: 1e-12)
+        XCTAssertTrue(z.audible)
+    }
+
+    func testZoneInsideArcMapsLinearly() {
+        let active = 120.0 / 360.0
+        let z = makeZone().map(phase: active / 2, sampleDuration: 1.0)   // halfway through the arc
+        XCTAssertEqual(z.samplePositionSeconds, 0.5, accuracy: 1e-9)
+        XCTAssertTrue(z.audible)
+    }
+
+    func testZoneNearArcEndMapsToSampleEndAudible() {
+        let active = 120.0 / 360.0
+        let z = makeZone().map(phase: active - 1e-4, sampleDuration: 1.0)
+        XCTAssertEqual(z.samplePositionSeconds, 1.0, accuracy: 2e-3)
+        XCTAssertTrue(z.audible)
+    }
+
+    func testZoneOutsideArcIsSilent() {
+        let z = makeZone().map(phase: 0.5, sampleDuration: 1.0)   // 180° — past 4 o'clock
+        XCTAssertFalse(z.audible)
+        let z2 = makeZone().map(phase: 0.95, sampleDuration: 1.0) // ~342° — still silent
+        XCTAssertFalse(z2.audible)
+    }
+
+    func testZoneReverseInsideArcDecreasesPosition() {
+        let zm = makeZone()
+        let forward = zm.map(phase: 0.20, sampleDuration: 1.0)
+        let backToward = zm.map(phase: 0.10, sampleDuration: 1.0)
+        XCTAssertLessThan(backToward.samplePositionSeconds, forward.samplePositionSeconds)
+        XCTAssertTrue(forward.audible)
+        XCTAssertTrue(backToward.audible)
+    }
+
+    func testFullRevolutionIsOneAudiblePassThenSilence_NotThreeRepeats() {
+        let zm = makeZone()
+        var audibleSteps = 0, transitions = 0, prevAudible = false
+        var lastPos = -1.0, monotonicInZone = true
+        for deg in 0..<360 {
+            let z = zm.map(phase: Double(deg) / 360.0, sampleDuration: 1.0)
+            if z.audible {
+                audibleSteps += 1
+                if z.samplePositionSeconds < lastPos - 1e-9 { monotonicInZone = false }
+                lastPos = z.samplePositionSeconds
+            }
+            if z.audible != prevAudible { transitions += 1; prevAudible = z.audible }
+        }
+        XCTAssertEqual(audibleSteps, 120, "≈120° of the revolution should be audible")
+        // Exactly one contiguous audible block (0→1 transition then 1→0) — NOT three repeats.
+        XCTAssertEqual(transitions, 2, "one audible region per revolution, not multiple")
+        XCTAssertTrue(monotonicInZone, "the single pass advances forward through the sample")
+    }
+
+    func testZoneReentryThroughPhaseWrapResetsToStart() {
+        let zm = makeZone()
+        XCTAssertFalse(zm.map(phase: 0.99, sampleDuration: 1.0).audible)       // before 12
+        let reentry = zm.map(phase: 1.0, sampleDuration: 1.0)                  // wraps to 0
+        XCTAssertEqual(reentry.samplePositionSeconds, 0.0, accuracy: 1e-12)
+        XCTAssertTrue(reentry.audible)
+    }
+
+    // MARK: - Engine zone-audible gate (minimal hook)
+
+    func testZoneGatedAudibleRequiresBothGates() {
+        XCTAssertTrue(ScratchPlaybackLabEngine.zoneGatedAudible(zoneAudible: true, movementAudible: true))
+        XCTAssertFalse(ScratchPlaybackLabEngine.zoneGatedAudible(zoneAudible: false, movementAudible: true))
+        XCTAssertFalse(ScratchPlaybackLabEngine.zoneGatedAudible(zoneAudible: true, movementAudible: false))
+        XCTAssertFalse(ScratchPlaybackLabEngine.zoneGatedAudible(zoneAudible: false, movementAudible: false))
+    }
+
+    func testSetZoneAudibleTogglesGateAndDefaultsOpen() {
+        let engine = ScratchPlaybackLabEngine()
+        XCTAssertTrue(engine.diagnosticZoneAudible, "default open → no effect unless driven")
+        engine.setZoneAudible(false)
+        XCTAssertFalse(engine.diagnosticZoneAudible)
+        engine.setZoneAudible(true)
+        XCTAssertTrue(engine.diagnosticZoneAudible)
+    }
+
+    func testRaneScratchZoneFlagDefaultsOff() {
+        XCTAssertFalse(FeatureFlags.isOn("RANE_SCRATCH_ZONE",
+                                         releaseDefault: false, debugDefault: false,
+                                         environment: [:]))
+    }
+
     // MARK: - Fade-in
 
     func testFadeInRampsGainInQuartersToFull() {
