@@ -170,6 +170,10 @@ struct ScratchPlaybackLabView: View {
 
             Spacer()
 
+            if FeatureFlags.raneScratchZoneEnabled {
+                Button("Set 12 o'clock") { model.cueRaneScratchZoneZero() }
+                    .help("Place the platter at 12 o'clock, then press Set.")
+            }
             Button("Reset playhead") { model.resetPlayhead() }
             Button { showingOnboarding = true } label: {
                 Label("Help", systemImage: "questionmark.circle")

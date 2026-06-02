@@ -1236,6 +1236,25 @@ final class ScratchPlaybackLabModel: ObservableObject {
         engine.setZoneAudible(true)
     }
 
+    /// Manually marks the platter's CURRENT angle as 12 o'clock for the RANE scratch zone:
+    /// the active arc then runs from here to ~4 o'clock. Press with the platter physically at
+    /// 12 so the audible zone aligns to the hardware (the auto-zero on first event is only a
+    /// fallback and is overridden by this). Re-anchors zone state and parks the sample at the
+    /// start, ready to play. No effect on the default/non-zone path. Idempotent.
+    func cueRaneScratchZoneZero() {
+        zoneCueZeroSteps = cumulativeZoneSteps   // current angle becomes phase 0 (12 o'clock)
+        lastZonePositionSeconds = 0
+        lastZoneEventTime = nil
+        wasZoneAudible = false
+        cc6AudioDrive.reset()                    // no stale rate carried across the re-cue
+        engine.setZoneAudible(true)
+        if mapper.sampleDuration > 0 { mapper.seek(toPositionFraction: 0) }
+        engine.setTargetPosition(seconds: 0)     // sample ready at the start
+    }
+
+    /// Diagnostic test seam: whether 12 o'clock has been explicitly/auto cued yet.
+    var diagnosticScratchZoneCued: Bool { zoneCueZeroSteps != nil }
+
     // MARK: - Display publish (≈60 Hz)
 
     private func publishDisplayState() {

@@ -293,6 +293,47 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
                                          environment: [:]))
     }
 
+    // MARK: - Manual "Set 12 o'clock" cue (zone alignment)
+
+    /// After cueing, the platter's current angle is phase 0 → sample start (audible); +120°
+    /// of steps → sample end (audible); beyond the arc → silent. Validates the cue arithmetic
+    /// (cue = current cumulative steps) composed with the zone mapper.
+    func testCueZeroAlignsPhaseToCurrentStep() {
+        let zm = makeZone()
+        let stepsPerRev = Double(ScratchPlatterPlayheadMapper.defaultStepsPerRevolution)
+        let cumulativeAtCue = 5000
+        let cue = cumulativeAtCue                       // cueRaneScratchZoneZero sets cue = cumulative
+
+        // Immediately after cue → phase 0 → sample start, audible.
+        let atCue = zm.map(phase: Double(cumulativeAtCue - cue) / stepsPerRev, sampleDuration: 1.0)
+        XCTAssertEqual(atCue.samplePositionSeconds, 0.0, accuracy: 1e-9)
+        XCTAssertTrue(atCue.audible)
+
+        // +120° worth of steps → sample end, audible.
+        let activeSteps = Int((120.0 / 360.0) * stepsPerRev)   // ≈1310
+        let atEnd = zm.map(phase: Double((cumulativeAtCue + activeSteps) - cue) / stepsPerRev, sampleDuration: 1.0)
+        XCTAssertEqual(atEnd.samplePositionSeconds, 1.0, accuracy: 0.02)
+        XCTAssertTrue(atEnd.audible)
+
+        // Beyond the 120° arc → silent.
+        let beyond = zm.map(phase: Double((cumulativeAtCue + activeSteps * 2) - cue) / stepsPerRev, sampleDuration: 1.0)
+        XCTAssertFalse(beyond.audible)
+    }
+
+    /// The model's manual cue sets the cue (overriding the first-event auto-zero), is
+    /// idempotent, and is cleared by resetPlayhead (auto-zero fallback restored).
+    @MainActor
+    func testManualCueSetsAndResetClears() {
+        let model = ScratchPlaybackLabModel()
+        XCTAssertFalse(model.diagnosticScratchZoneCued, "fresh model: not cued (auto-zero pending)")
+        model.cueRaneScratchZoneZero()
+        XCTAssertTrue(model.diagnosticScratchZoneCued, "after Set 12 o'clock: cued")
+        model.cueRaneScratchZoneZero()
+        XCTAssertTrue(model.diagnosticScratchZoneCued, "idempotent: still cued")
+        model.resetPlayhead()
+        XCTAssertFalse(model.diagnosticScratchZoneCued, "reset clears the cue (auto-zero fallback)")
+    }
+
     // MARK: - Fade-in
 
     func testFadeInRampsGainInQuartersToFull() {
