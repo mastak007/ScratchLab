@@ -1,5 +1,60 @@
 # AI Handoff
 
+## 2026-06-03 — Demo Mode visual-coach copy fix (commit `8cfb0c7`, branch `polish/non-rane-testflight-ui`)
+
+Tail of the visual-coach removal cleanup on the non-RANE polish branch. One
+user-facing string in Demo Mode still referenced the now-removed visual coach
+rig; this slice corrects the wording only. **Copy-only, no logic.** Not pushed.
+
+### Commit
+
+- **SHA**: `8cfb0c7` — `Copy: update Demo Mode visual-coach wording`
+- **Footprint**: 1 file changed, 1 insertion(+), 1 deletion(−), entirely in
+  `ScratchLab/Views/MainMenuView.swift`.
+- **No `Co-Authored-By` trailer** (per `feedback_no_coauthor_trailer` + `SOUL.md`).
+
+### What changed
+
+`DemoModeView.coachCard` `demoStatusMessage` (MainMenuView.swift:733):
+
+- before: `"Coach animation follows the bundled baby scratch demo."`
+- after:  `"Notation follows the bundled baby scratch demo audio."`
+
+References demo playback / notation instead of the removed coach animation/rig,
+per `PROFILE.md` App-Store-safety wording.
+
+### Scope confirmation
+
+- Grep for stale coach copy (`Coach animation follows`, `animation follows`,
+  `coach animation`, `animated coach`, `Scratch Guide`, `coach rig`) across
+  `ScratchLab` + `ScratchLabDesktop` returned only this string plus two **code
+  comments** (`CaptureCore.swift:2772`, `MainMenuView.swift:606`) that
+  accurately document the removal — left as-is, not user-facing.
+- Other `demoStatusMessage` producers (`PracticeModeView.swift:2487`,
+  `MacAnalyzerView.swift:2231`) reference the **retained** text/audio "coach
+  demo" (demo audio playback), not the visual rig — no change needed.
+- No test references the changed literal, so no focused test was run.
+- No RANE / playback / audio / engine / CC6 / Pitch Bend / scratch-zone /
+  platter-correction files touched. `ScratchPlaybackLabModel.swift` and
+  `ScratchPlaybackLabEngine.swift` untouched.
+
+### Verification
+
+| Gate | Result |
+|---|---|
+| `git diff --check` | clean (exit 0) |
+| iOS Debug build (`ScratchLab`, generic iOS Simulator) | `** BUILD SUCCEEDED **` |
+| macOS Debug build (`ScratchLabDesktop`, platform=macOS) | `** BUILD SUCCEEDED **` |
+
+### State after this slice
+
+- Branch `polish/non-rane-testflight-ui`, HEAD `8cfb0c7` (on top of docs
+  handoff commit `b1cecb8`).
+- Working tree clean.
+- **Not pushed.**
+
+---
+
 ## 2026-06-01 (later) — Scratch Playback Lab RANE audio arc + Kid Mode state snapshot
 
 Context note so the PlaybackLab/RANE debugging arc and the Kid Mode pause aren't lost.
