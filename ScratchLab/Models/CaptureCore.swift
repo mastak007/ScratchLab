@@ -2769,7 +2769,8 @@ extension BabyScratchReferenceMotionTimeline {
 #if DEBUG
 extension BabyScratchReferenceAsset {
     // Reference angles are development-only inputs for validating the hand-authored timeline.
-    // Demo Mode keeps rendering the animated coach rig and never plays these MKVs.
+    // Demo Mode keeps the text/card coaching and demo-analysis surface (the visual coach rig
+    // has been removed) and never plays these MKVs.
     static let babyScratch79BPM = BabyScratchReferenceAsset(
         scratchName: "Baby Scratch",
         bpm: 79,
