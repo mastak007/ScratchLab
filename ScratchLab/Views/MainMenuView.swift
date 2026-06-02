@@ -733,7 +733,7 @@ private struct DemoModeView: View {
     private var coachCard: some View {
         ScratchCoachCardContent(
             instruction: demoController.instruction,
-            demoStatusMessage: "Coach animation follows the bundled baby scratch demo.",
+            demoStatusMessage: "Notation follows the bundled baby scratch demo audio.",
             playbackTimeProvider: { demoController.demoPlayer.currentPlaybackTime },
             isPlayingProvider: { demoController.demoPlayer.isActivelyPlayingAudio },
             theme: theme
