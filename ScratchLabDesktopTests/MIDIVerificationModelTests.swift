@@ -516,4 +516,253 @@ final class MIDIVerificationModelTests: XCTestCase {
         XCTAssertNil(outcome.measurement)
         XCTAssertNil(outcome.detail)
     }
+
+    // MARK: - Requirements / readiness bridge
+
+    /// A passing outcome for a check (no measurement needed for readiness logic).
+    private func pass(_ check: MIDIVerificationCheck) -> MIDIVerificationCheckOutcome {
+        MIDIVerificationCheckOutcome(check: check, passed: true)
+    }
+    /// A failing outcome for a check.
+    private func fail(_ check: MIDIVerificationCheck) -> MIDIVerificationCheckOutcome {
+        MIDIVerificationCheckOutcome(check: check, passed: false)
+    }
+    /// A single-step result carrying the given check outcomes for a role.
+    private func result(profile: String, role: MIDIControlRole, signal: MIDIControlSignalType,
+                        outcomes: [MIDIVerificationCheckOutcome]) -> MIDIVerificationResult {
+        MIDIVerificationResult(
+            profileIdentifier: profile,
+            stepResults: [
+                MIDIVerificationStepResult(
+                    role: role, expectedSignal: signal,
+                    observedEventCount: 99, requiredEventCount: 1,
+                    checkOutcomes: outcomes
+                )
+            ]
+        )
+    }
+
+    /// A platter-only profile (one deck, relative CC) — no crossfader binding.
+    private func platterOnlyFixture(confidence: MIDIProfileConfidence = .community) -> MIDIControllerProfile {
+        MIDIControllerProfile(
+            identifier: "test-platter-only", displayName: "Test Platter Only (synthetic)",
+            confidence: confidence, matching: MIDIProfileMatching(), deckCount: 1,
+            bindings: [
+                MIDIControlBinding(role: MIDIControlRole(kind: .platterMovement, deck: 0),
+                                   signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)), channel: 0)
+            ],
+            notes: "Synthetic fixture — not a certified hardware profile."
+        )
+    }
+
+    /// A crossfader-only deckless mixer (DJM-S9-style) — no platter binding.
+    private func decklessCrossfaderFixture(confidence: MIDIProfileConfidence = .community) -> MIDIControllerProfile {
+        MIDIControllerProfile(
+            identifier: "test-deckless-xf", displayName: "Test Deckless Mixer (synthetic)",
+            confidence: confidence, matching: MIDIProfileMatching(), deckCount: 0,
+            bindings: [
+                MIDIControlBinding(role: MIDIControlRole(kind: .crossfader),
+                                   signal: .absoluteCC(number: 8), channel: 6)
+            ],
+            notes: "Synthetic fixture — not a certified hardware profile."
+        )
+    }
+
+    // MARK: Requirement derivation
+
+    func testPlatterRequirementDerivationIncludesAllPlatterChecks() {
+        let set = MIDIVerificationRequirementSet.make(for: platterOnlyFixture())
+        XCTAssertEqual(
+            Set(set.requirements.map(\.check)),
+            [.platterForwardMotion, .platterBackwardMotion, .platterFullRotationCalibration, .platterNoAliasingNoise]
+        )
+        // All platter checks are required + blocking correctness gates.
+        XCTAssertTrue(set.requirements.allSatisfy { $0.isRequired && $0.blocksUseOnFailure })
+    }
+
+    func testCrossfaderRequirementDerivationIncludesAllCrossfaderChecks() {
+        let set = MIDIVerificationRequirementSet.make(for: decklessCrossfaderFixture())
+        XCTAssertEqual(
+            Set(set.requirements.map(\.check)),
+            [.crossfaderMinMax, .crossfaderInversion, .crossfaderCutThreshold, .crossfaderQuickCuts]
+        )
+        // Quick cuts is the lone optional / non-blocking refinement.
+        XCTAssertEqual(Set(set.requiredChecks), [.crossfaderMinMax, .crossfaderInversion, .crossfaderCutThreshold])
+        XCTAssertEqual(set.optionalChecks, [.crossfaderQuickCuts])
+        XCTAssertEqual(set.requirement(for: .crossfaderQuickCuts)?.blocksUseOnFailure, false)
+    }
+
+    func testDecklessMixerRequiresNoPlatterChecks() {
+        let set = MIDIVerificationRequirementSet.make(for: decklessCrossfaderFixture())
+        let platterChecks: Set<MIDIVerificationCheck> =
+            [.platterForwardMotion, .platterBackwardMotion, .platterFullRotationCalibration, .platterNoAliasingNoise]
+        XCTAssertTrue(Set(set.requirements.map(\.check)).isDisjoint(with: platterChecks))
+    }
+
+    func testPlatterOnlyRequiresNoCrossfaderChecks() {
+        let set = MIDIVerificationRequirementSet.make(for: platterOnlyFixture())
+        let crossfaderChecks: Set<MIDIVerificationCheck> =
+            [.crossfaderMinMax, .crossfaderInversion, .crossfaderCutThreshold, .crossfaderQuickCuts]
+        XCTAssertTrue(Set(set.requirements.map(\.check)).isDisjoint(with: crossfaderChecks))
+    }
+
+    func testRequirementSetDedupesChecksAcrossDecks() {
+        // The RANE seed has two platter decks sharing the same four checks → one each.
+        let set = MIDIVerificationRequirementSet.make(for: .raneOneSeed)
+        XCTAssertEqual(set.requirements.count, Set(set.requirements.map(\.check)).count)
+        // Two-deck platter + crossfader = 4 platter checks + 4 crossfader checks = 8 unique.
+        XCTAssertEqual(set.requirements.count, 8)
+    }
+
+    // MARK: Calibration field mapping
+
+    func testCheckToCalibrationFieldMapping() {
+        XCTAssertEqual(MIDIVerificationCheck.platterForwardMotion.calibrationField, .platterDirection)
+        XCTAssertEqual(MIDIVerificationCheck.platterBackwardMotion.calibrationField, .platterDirection)
+        XCTAssertEqual(MIDIVerificationCheck.platterFullRotationCalibration.calibrationField, .platterRotation)
+        XCTAssertEqual(MIDIVerificationCheck.platterNoAliasingNoise.calibrationField, .platterNoise)
+        XCTAssertEqual(MIDIVerificationCheck.crossfaderMinMax.calibrationField, .crossfaderRange)
+        XCTAssertEqual(MIDIVerificationCheck.crossfaderInversion.calibrationField, .crossfaderOrientation)
+        XCTAssertEqual(MIDIVerificationCheck.crossfaderCutThreshold.calibrationField, .crossfaderCutThreshold)
+        XCTAssertEqual(MIDIVerificationCheck.crossfaderQuickCuts.calibrationField, .quickCut)
+        // The requirement carries the same mapping through.
+        let set = MIDIVerificationRequirementSet.make(for: decklessCrossfaderFixture())
+        XCTAssertEqual(set.requirement(for: .crossfaderMinMax)?.producesCalibration, .crossfaderRange)
+    }
+
+    // MARK: Readiness verdict
+
+    func testFailedRequiredCheckProducesBlocked() {
+        let profile = platterOnlyFixture(confidence: .certified)
+        let set = MIDIVerificationRequirementSet.make(for: profile)
+        // All present; one required check fails (no aliasing).
+        let res = result(profile: profile.identifier,
+                         role: MIDIControlRole(kind: .platterMovement, deck: 0),
+                         signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
+                         outcomes: [pass(.platterForwardMotion), pass(.platterBackwardMotion),
+                                    pass(.platterFullRotationCalibration), fail(.platterNoAliasingNoise)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        XCTAssertEqual(readiness.verdict, .blocked)
+        XCTAssertEqual(readiness.blockingFailures, [.platterNoAliasingNoise])
+        XCTAssertTrue(readiness.missingRequiredChecks.isEmpty)
+        XCTAssertFalse(readiness.isReady)
+    }
+
+    func testFailedOptionalCheckDoesNotBlockReadiness() {
+        let profile = decklessCrossfaderFixture(confidence: .certified)
+        let set = MIDIVerificationRequirementSet.make(for: profile)
+        // All required crossfader checks pass; only the optional quick-cuts fails.
+        let res = result(profile: profile.identifier,
+                         role: MIDIControlRole(kind: .crossfader),
+                         signal: .absoluteCC(number: 8),
+                         outcomes: [pass(.crossfaderMinMax), pass(.crossfaderInversion),
+                                    pass(.crossfaderCutThreshold), fail(.crossfaderQuickCuts)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        XCTAssertEqual(readiness.verdict, .ready)
+        XCTAssertTrue(readiness.blockingFailures.isEmpty)
+        XCTAssertEqual(readiness.failedOptionalChecks, [.crossfaderQuickCuts])
+        XCTAssertTrue(readiness.isReady)
+    }
+
+    func testHeuristicConfidenceProducesVerificationRequired() {
+        let profile = decklessCrossfaderFixture(confidence: .heuristic)
+        let set = MIDIVerificationRequirementSet.make(for: profile)
+        XCTAssertTrue(set.confidenceRequiresVerification)
+        // Even with every required check passing, low confidence forces verification.
+        let res = result(profile: profile.identifier,
+                         role: MIDIControlRole(kind: .crossfader),
+                         signal: .absoluteCC(number: 8),
+                         outcomes: [pass(.crossfaderMinMax), pass(.crossfaderInversion),
+                                    pass(.crossfaderCutThreshold), pass(.crossfaderQuickCuts)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        XCTAssertEqual(readiness.verdict, .verificationRequired)
+        XCTAssertTrue(readiness.confidenceRequiresVerification)
+        XCTAssertTrue(readiness.blockingFailures.isEmpty)
+        XCTAssertTrue(readiness.missingRequiredChecks.isEmpty)
+    }
+
+    func testUnverifiedConfidenceProducesVerificationRequired() {
+        // The unverified fallback (no bindings) is gated purely by confidence.
+        let fallback = MIDIHardwareRegistry.unverifiedFallback(
+            for: MIDIDeviceIdentity(sourceName: "Mystery Controller")
+        ).profile
+        let set = MIDIVerificationRequirementSet.make(for: fallback)
+        XCTAssertTrue(set.requirements.isEmpty)
+        XCTAssertTrue(set.confidenceRequiresVerification)
+        let readiness = MIDIVerificationReadiness.evaluate(
+            requirements: set,
+            result: MIDIVerificationResult(profileIdentifier: fallback.identifier, stepResults: [])
+        )
+        XCTAssertEqual(readiness.verdict, .verificationRequired)
+    }
+
+    func testMissingRequiredCheckReportedAndForcesVerification() {
+        let profile = platterOnlyFixture(confidence: .certified)
+        let set = MIDIVerificationRequirementSet.make(for: profile)
+        // Only two of the four required platter checks were exercised; both pass.
+        let res = result(profile: profile.identifier,
+                         role: MIDIControlRole(kind: .platterMovement, deck: 0),
+                         signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
+                         outcomes: [pass(.platterForwardMotion), pass(.platterBackwardMotion)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        XCTAssertEqual(readiness.verdict, .verificationRequired)
+        XCTAssertTrue(readiness.blockingFailures.isEmpty)
+        XCTAssertEqual(
+            Set(readiness.missingRequiredChecks),
+            [.platterFullRotationCalibration, .platterNoAliasingNoise]
+        )
+    }
+
+    func testAllRequiredPassingTrustedProfileIsReady() {
+        let profile = platterOnlyFixture(confidence: .certified)
+        let set = MIDIVerificationRequirementSet.make(for: profile)
+        let res = result(profile: profile.identifier,
+                         role: MIDIControlRole(kind: .platterMovement, deck: 0),
+                         signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
+                         outcomes: [pass(.platterForwardMotion), pass(.platterBackwardMotion),
+                                    pass(.platterFullRotationCalibration), pass(.platterNoAliasingNoise)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        XCTAssertEqual(readiness.verdict, .ready)
+        XCTAssertFalse(readiness.confidenceRequiresVerification)
+    }
+
+    func testBlockingTakesPrecedenceOverLowConfidence() {
+        // A blocking failure on a low-confidence profile is `.blocked`, not just verify.
+        let profile = platterOnlyFixture(confidence: .heuristic)
+        let set = MIDIVerificationRequirementSet.make(for: profile)
+        let res = result(profile: profile.identifier,
+                         role: MIDIControlRole(kind: .platterMovement, deck: 0),
+                         signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
+                         outcomes: [fail(.platterForwardMotion), pass(.platterBackwardMotion),
+                                    pass(.platterFullRotationCalibration), pass(.platterNoAliasingNoise)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        XCTAssertEqual(readiness.verdict, .blocked)
+        XCTAssertEqual(readiness.blockingFailures, [.platterForwardMotion])
+    }
+
+    // MARK: Codable round-trips
+
+    func testRequirementSetCodableRoundtrip() throws {
+        let set = MIDIVerificationRequirementSet.make(for: .raneOneSeed)
+        let data = try JSONEncoder().encode(set)
+        XCTAssertEqual(try JSONDecoder().decode(MIDIVerificationRequirementSet.self, from: data), set)
+    }
+
+    func testReadinessCodableRoundtrip() throws {
+        let set = MIDIVerificationRequirementSet.make(for: decklessCrossfaderFixture(confidence: .heuristic))
+        let res = result(profile: "test-deckless-xf",
+                         role: MIDIControlRole(kind: .crossfader),
+                         signal: .absoluteCC(number: 8),
+                         outcomes: [fail(.crossfaderMinMax), pass(.crossfaderInversion)])
+        let readiness = MIDIVerificationReadiness.evaluate(requirements: set, result: res)
+        let data = try JSONEncoder().encode(readiness)
+        XCTAssertEqual(try JSONDecoder().decode(MIDIVerificationReadiness.self, from: data), readiness)
+    }
+
+    func testCalibrationFieldCodableRoundtripAcrossCases() throws {
+        for field in MIDICalibrationField.allCases {
+            let data = try JSONEncoder().encode(field)
+            XCTAssertEqual(try JSONDecoder().decode(MIDICalibrationField.self, from: data), field)
+        }
+    }
 }
