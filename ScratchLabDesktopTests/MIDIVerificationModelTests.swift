@@ -140,7 +140,12 @@ final class MIDIVerificationModelTests: XCTestCase {
                     channel: 6
                 )
             ],
-            calibration: MIDICalibration(platterTicksPerRevolution: 3932, crossfaderMin: 0, crossfaderMax: 127, inverted: true),
+            calibration: MIDICalibration(
+                platterRotation: MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 3932, sampleRevolutions: 3),
+                platterDirection: .correct,
+                crossfaderRange: MIDICrossfaderRange(rawMin: 0, rawMax: 127),
+                crossfaderOrientation: .inverted
+            ),
             verifiedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         let data = try JSONEncoder().encode(override)
@@ -268,10 +273,15 @@ final class MIDIVerificationModelTests: XCTestCase {
             observedEventCount: 10,
             requiredEventCount: 4,
             checkOutcomes: [
-                MIDIVerificationCheckOutcome(check: .platterForwardMotion, passed: true),
-                MIDIVerificationCheckOutcome(check: .platterBackwardMotion, passed: true),
-                MIDIVerificationCheckOutcome(check: .platterFullRotationCalibration, passed: true, detail: "3932 ticks/rev"),
-                MIDIVerificationCheckOutcome(check: .platterNoAliasingNoise, passed: false, detail: "12 aliased events")
+                MIDIVerificationCheckOutcome(check: .platterForwardMotion, passed: true,
+                                             measurement: .platterDirection(.correct)),
+                MIDIVerificationCheckOutcome(check: .platterBackwardMotion, passed: true,
+                                             measurement: .platterDirection(.correct)),
+                MIDIVerificationCheckOutcome(check: .platterFullRotationCalibration, passed: true,
+                                             measurement: .platterRotation(MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 3932, sampleRevolutions: 2))),
+                MIDIVerificationCheckOutcome(check: .platterNoAliasingNoise, passed: false,
+                                             measurement: .platterNoise(MIDIPlatterNoiseMetrics(totalEvents: 200, aliasedEventCount: 12, maxPerEventDelta: 9000)),
+                                             detail: "noisy on slow reverse")
             ]
         )
         let result = MIDIVerificationResult(profileIdentifier: "rane-one", stepResults: [platterResult])
@@ -294,10 +304,14 @@ final class MIDIVerificationModelTests: XCTestCase {
             observedEventCount: 5,
             requiredEventCount: 2,
             checkOutcomes: [
-                MIDIVerificationCheckOutcome(check: .crossfaderMinMax, passed: true),
-                MIDIVerificationCheckOutcome(check: .crossfaderInversion, passed: false, detail: "reads inverted"),
-                MIDIVerificationCheckOutcome(check: .crossfaderCutThreshold, passed: true, detail: "cut at 0.04"),
-                MIDIVerificationCheckOutcome(check: .crossfaderQuickCuts, passed: true)
+                MIDIVerificationCheckOutcome(check: .crossfaderMinMax, passed: true,
+                                             measurement: .crossfaderRange(MIDICrossfaderRange(rawMin: 0, rawMax: 127))),
+                MIDIVerificationCheckOutcome(check: .crossfaderInversion, passed: false,
+                                             measurement: .crossfaderOrientation(.inverted)),
+                MIDIVerificationCheckOutcome(check: .crossfaderCutThreshold, passed: true,
+                                             measurement: .crossfaderCutThreshold(MIDICrossfaderCutThreshold(positionFraction: 0.04, rawValue: 5))),
+                MIDIVerificationCheckOutcome(check: .crossfaderQuickCuts, passed: true,
+                                             measurement: .quickCut(MIDIQuickCutMetrics(cutCount: 8, fastestCutSeconds: 0.03, medianCutSeconds: 0.05)))
             ]
         )
         let result = MIDIVerificationResult(profileIdentifier: "rane-one", stepResults: [stepResult])
@@ -407,5 +421,99 @@ final class MIDIVerificationModelTests: XCTestCase {
 
         let padResult = MIDIVerificationResult.evaluate(plan: plan, messages: [note(36, channel: 7)])
         XCTAssertTrue(padResult.stepResults.contains { $0.role.kind == .pad && $0.livenessPassed })
+    }
+
+    // MARK: - Typed measured values (Codex follow-up)
+
+    func testVerificationMeasurementCodableRoundtripAcrossCases() throws {
+        let measurements: [MIDIVerificationMeasurement] = [
+            .platterDirection(.inverted),
+            .platterRotation(MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 3932, sampleRevolutions: 2)),
+            .platterNoise(MIDIPlatterNoiseMetrics(totalEvents: 500, aliasedEventCount: 7, maxPerEventDelta: 8200)),
+            .crossfaderRange(MIDICrossfaderRange(rawMin: 0, rawMax: 127)),
+            .crossfaderOrientation(.normal),
+            .crossfaderCutThreshold(MIDICrossfaderCutThreshold(positionFraction: 0.05, rawValue: 6)),
+            .quickCut(MIDIQuickCutMetrics(cutCount: 10, fastestCutSeconds: 0.02, medianCutSeconds: 0.04))
+        ]
+        for measurement in measurements {
+            let data = try JSONEncoder().encode(measurement)
+            XCTAssertEqual(try JSONDecoder().decode(MIDIVerificationMeasurement.self, from: data), measurement)
+        }
+    }
+
+    func testCalibrationCodableRoundtripWithAllTypedValues() throws {
+        let calibration = MIDICalibration(
+            platterRotation: MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 3932, sampleRevolutions: 5),
+            platterDirection: .correct,
+            platterNoise: MIDIPlatterNoiseMetrics(totalEvents: 1000, aliasedEventCount: 0, maxPerEventDelta: 1),
+            crossfaderRange: MIDICrossfaderRange(rawMin: 2, rawMax: 126),
+            crossfaderOrientation: .normal,
+            crossfaderCutThreshold: MIDICrossfaderCutThreshold(positionFraction: 0.04, rawValue: 5),
+            quickCut: MIDIQuickCutMetrics(cutCount: 12, fastestCutSeconds: 0.018, medianCutSeconds: 0.033)
+        )
+        XCTAssertFalse(calibration.isEmpty)
+        let data = try JSONEncoder().encode(calibration)
+        XCTAssertEqual(try JSONDecoder().decode(MIDICalibration.self, from: data), calibration)
+    }
+
+    func testCalibrationRecordsOnlyMeasuredFields() throws {
+        // Only the platter rotation was measured; everything else stays nil (not zeroed).
+        let calibration = MIDICalibration(
+            platterRotation: MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 4096)
+        )
+        XCTAssertFalse(calibration.isEmpty)
+        XCTAssertNil(calibration.crossfaderRange)
+        XCTAssertNil(calibration.crossfaderOrientation)
+        XCTAssertNil(calibration.quickCut)
+        XCTAssertEqual(calibration.platterRotation?.sampleRevolutions, 1) // default
+
+        let empty = MIDICalibration()
+        XCTAssertTrue(empty.isEmpty)
+        XCTAssertEqual(try JSONDecoder().decode(MIDICalibration.self, from: JSONEncoder().encode(empty)), empty)
+    }
+
+    func testTypedValueValidityHelpers() {
+        XCTAssertTrue(MIDICrossfaderRange(rawMin: 0, rawMax: 127).isValid)
+        XCTAssertEqual(MIDICrossfaderRange(rawMin: 0, rawMax: 127).span, 127)
+        XCTAssertFalse(MIDICrossfaderRange(rawMin: 100, rawMax: 100).isValid)
+        XCTAssertEqual(MIDICrossfaderRange(rawMin: 100, rawMax: 50).span, 0)
+
+        XCTAssertTrue(MIDICrossfaderCutThreshold(positionFraction: 0.04).isInUnitRange)
+        XCTAssertFalse(MIDICrossfaderCutThreshold(positionFraction: 1.4).isInUnitRange)
+
+        XCTAssertTrue(MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 3932).isValid)
+        XCTAssertFalse(MIDIPlatterRotationMeasurement(measuredStepsPerRevolution: 0).isValid)
+
+        XCTAssertEqual(MIDIPlatterNoiseMetrics(totalEvents: 200, aliasedEventCount: 50, maxPerEventDelta: 9000).aliasFraction, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(MIDIPlatterNoiseMetrics(totalEvents: 0, aliasedEventCount: 0, maxPerEventDelta: 0).aliasFraction, 0, accuracy: 1e-12)
+    }
+
+    func testUserOverrideSchemaIsV2AndOldShapeFailsClosed() throws {
+        XCTAssertEqual(MIDIUserOverrideProfile.currentSchemaVersion, 2)
+
+        // A v1 override document (the only thing that ever existed before) must fail closed.
+        let v1 = MIDIUserOverrideProfile(
+            schemaVersion: 1,
+            baseProfileIdentifier: "rane-one"
+        )
+        let data = try JSONEncoder().encode(v1)
+        XCTAssertThrowsError(try MIDIUserOverrideProfile.decode(from: data)) { error in
+            XCTAssertEqual(error as? MIDIControllerProfileError, .unsupportedSchemaVersion(1))
+        }
+    }
+
+    func testEvaluateLeavesMeasurementNil() {
+        // Pure-model guarantee: the event-count evaluate path never fabricates measurements.
+        let plan = MIDIVerificationPlan.make(for: .raneOneSeed)
+        let messages = (0..<8).map { _ in cc(6, channel: 0) }
+        let result = MIDIVerificationResult.evaluate(plan: plan, messages: messages)
+        XCTAssertTrue(result.stepResults.allSatisfy { $0.checkOutcomes.isEmpty })
+        XCTAssertTrue(result.allCheckOutcomes.isEmpty)
+    }
+
+    func testCheckOutcomeMeasurementDefaultsNil() {
+        let outcome = MIDIVerificationCheckOutcome(check: .platterForwardMotion, passed: true)
+        XCTAssertNil(outcome.measurement)
+        XCTAssertNil(outcome.detail)
     }
 }
