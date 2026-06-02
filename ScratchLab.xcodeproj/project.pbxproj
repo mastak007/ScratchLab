@@ -204,6 +204,18 @@
 		CPN0001000CPN001CPN00001 /* CameraPassthroughNotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */; };
 		CSM1001000CSM001CSM00001 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
 		CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
+		MIDREG0IOS0001 /* MIDIControlRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0001 /* MIDIControlRole.swift */; };
+		MIDREG0MAC0001 /* MIDIControlRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0001 /* MIDIControlRole.swift */; };
+		MIDREG0IOS0002 /* MIDIControlBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0002 /* MIDIControlBinding.swift */; };
+		MIDREG0MAC0002 /* MIDIControlBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0002 /* MIDIControlBinding.swift */; };
+		MIDREG0IOS0003 /* MIDIControllerProfileV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0003 /* MIDIControllerProfileV2.swift */; };
+		MIDREG0MAC0003 /* MIDIControllerProfileV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0003 /* MIDIControllerProfileV2.swift */; };
+		MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */; };
+		MIDREG0MAC0004 /* MIDIHardwareRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */; };
+		MIDREG0IOS0005 /* MIDIVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0005 /* MIDIVerification.swift */; };
+		MIDREG0MAC0005 /* MIDIVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0005 /* MIDIVerification.swift */; };
+		MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */; };
+		MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */; };
 		CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */; };
 		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
 		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
@@ -568,6 +580,13 @@
 		COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayTests.swift; sourceTree = "<group>"; };
 		CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPassthroughNotationView.swift; sourceTree = "<group>"; };
 		CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventSummary.swift; sourceTree = "<group>"; };
+		MIDREG0FREF0001 /* MIDIControlRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlRole.swift; sourceTree = "<group>"; };
+		MIDREG0FREF0002 /* MIDIControlBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlBinding.swift; sourceTree = "<group>"; };
+		MIDREG0FREF0003 /* MIDIControllerProfileV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControllerProfileV2.swift; sourceTree = "<group>"; };
+		MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistry.swift; sourceTree = "<group>"; };
+		MIDREG0FREF0005 /* MIDIVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerification.swift; sourceTree = "<group>"; };
+		MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistryTests.swift; sourceTree = "<group>"; };
+		MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerificationModelTests.swift; sourceTree = "<group>"; };
 		CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventSummaryTests.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
@@ -837,6 +856,8 @@
 				SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */,
 				CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */,
 				CES2010000CES002CES00001 /* CoachingEventTests.swift */,
+				MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */,
+				MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1107,6 +1128,7 @@
 				TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */,
 				TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */,
 			TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */,
+			CI00GRP00001 /* ControllerInput */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1242,6 +1264,26 @@
 				D8A10821073521D744B544DE /* Cocoa.framework */,
 			);
 			name = "OS X";
+			sourceTree = "<group>";
+		};
+		CI00GRP00001 /* ControllerInput */ = {
+			isa = PBXGroup;
+			children = (
+				MIDREG0GRP0001 /* Registry */,
+			);
+			path = ControllerInput;
+			sourceTree = "<group>";
+		};
+		MIDREG0GRP0001 /* Registry */ = {
+			isa = PBXGroup;
+			children = (
+				MIDREG0FREF0001 /* MIDIControlRole.swift */,
+				MIDREG0FREF0002 /* MIDIControlBinding.swift */,
+				MIDREG0FREF0003 /* MIDIControllerProfileV2.swift */,
+				MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */,
+				MIDREG0FREF0005 /* MIDIVerification.swift */,
+			);
+			path = Registry;
 			sourceTree = "<group>";
 		};
 		D96E6940CAA2986DF75726CE /* watchOS */ = {
@@ -1561,6 +1603,11 @@
 				C68BC19238996C9C92EB97A6 /* StagingInspector.swift in Sources */,
 				37D8315725EAF63490E7ACB0 /* WatchMotionCapture.swift in Sources */,
 				B5AA0001A1B2C3D4E5F60709 /* Scratch.swift in Sources */,
+				MIDREG0MAC0001 /* MIDIControlRole.swift in Sources */,
+				MIDREG0MAC0002 /* MIDIControlBinding.swift in Sources */,
+				MIDREG0MAC0003 /* MIDIControllerProfileV2.swift in Sources */,
+				MIDREG0MAC0004 /* MIDIHardwareRegistry.swift in Sources */,
+				MIDREG0MAC0005 /* MIDIVerification.swift in Sources */,
 				B5AA0002A1B2C3D4E5F60709 /* GameState.swift in Sources */,
 				B5AA0003A1B2C3D4E5F60709 /* ProgressManager.swift in Sources */,
 				B5AA0004A1B2C3D4E5F60709 /* ScratchFormulaAST.swift in Sources */,
@@ -1660,6 +1707,11 @@
 				A1000029 /* StagingInspectorView.swift in Sources */,
 				A1000030 /* ScratchCoachViews.swift in Sources */,
 				A1000005 /* Scratch.swift in Sources */,
+				MIDREG0IOS0001 /* MIDIControlRole.swift in Sources */,
+				MIDREG0IOS0002 /* MIDIControlBinding.swift in Sources */,
+				MIDREG0IOS0003 /* MIDIControllerProfileV2.swift in Sources */,
+				MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */,
+				MIDREG0IOS0005 /* MIDIVerification.swift in Sources */,
 				A1000006 /* GameState.swift in Sources */,
 				D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */,
 				PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */,
@@ -1847,6 +1899,8 @@
 				SFM2011000SFM002SFM00001 /* ScratchFamilySummaryTests.swift in Sources */,
 				CEV2011000CEV002CEV00001 /* CoachingEventVocabularyTests.swift in Sources */,
 				CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */,
+				MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */,
+				MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
