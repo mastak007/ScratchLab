@@ -41,20 +41,34 @@ struct ScratchPlatterAudioDrive {
 
     let windowSeconds: TimeInterval
     let idleTimeout: TimeInterval
+    /// Minimum real-time span before a glide rate is trusted. When the history window
+    /// spans less than this (e.g. a sub-millisecond delivery burst), the drive returns
+    /// the last known good rate instead of computing a fresh rate that would spike to
+    /// near-1×. Default 3 ms — longer than the worst sub-ms MIDI cluster, shorter than
+    /// the ~14 ms burst gap so every non-first burst fills the window.
+    let minimumSpan: TimeInterval
     /// (event time, cumulative sample-seconds travelled). Trimmed to roughly `windowSeconds`.
     private var history: [(time: TimeInterval, position: Double)] = []
     private var cumulativePosition: Double = 0
     private var lastTime: TimeInterval?
+    /// Last glide rate the drive produced when the window span was ≥ minimumSpan.
+    /// Used to hold a stable rate across sub-ms delivery bursts so the engine never
+    /// gets a single-event "moved / dt" spike. Reset on `reset()` and after idle timeout.
+    private var lastGlideRate: Double?
 
-    init(windowSeconds: TimeInterval = 0.022, idleTimeout: TimeInterval = 0.18) {
+    init(windowSeconds: TimeInterval = 0.022,
+         idleTimeout: TimeInterval = 0.18,
+         minimumSpan: TimeInterval = 0.003) {
         self.windowSeconds = max(windowSeconds, 0)
         self.idleTimeout = max(idleTimeout, 0)
+        self.minimumSpan = max(minimumSpan, 0)
     }
 
     mutating func reset() {
         history.removeAll(keepingCapacity: true)
         cumulativePosition = 0
         lastTime = nil
+        lastGlideRate = nil
     }
 
     /// Ingests one platter move of `moved` sample-seconds that occurred at real time `time`.
@@ -72,7 +86,20 @@ struct ScratchPlatterAudioDrive {
         let reference = history[0]
         let span = time - reference.time
         guard span > 0 else { return .anchor }
-        return .glide(sampleSecondsPerSecond: (cumulativePosition - reference.position) / span)
+        // Sub-millisecond delivery bursts produce a single-event "moved / dt" spike that the
+        // engine would hold until the next burst arrives. When the window span is too thin,
+        // hold the last known good rate so the audio glides smoothly across the gap. If no
+        // prior glide rate exists yet (start of rotation), anchor instead — a spike into
+        // silence is inaudible, and the window fills in 3–4 ms.
+        guard span >= minimumSpan else {
+            if let last = lastGlideRate {
+                return .glide(sampleSecondsPerSecond: last)
+            }
+            return .anchor
+        }
+        let rate = (cumulativePosition - reference.position) / span
+        lastGlideRate = rate
+        return .glide(sampleSecondsPerSecond: rate)
     }
 }
 

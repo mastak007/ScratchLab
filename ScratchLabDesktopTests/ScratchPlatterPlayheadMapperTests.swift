@@ -371,4 +371,107 @@ final class ScratchPlatterPlayheadMapperTests: XCTestCase {
         }
         XCTAssertLessThan(maxRate, 0.2)        // stays well below 1× despite sub-ms clusters
     }
+
+    // MARK: - Audio drive: minimum-span spike rejection
+    //
+    // Production config: windowSeconds (22 ms) >= minimumSpan (3 ms).
+    // The minimum-span guard exists to catch the startup case where only
+    // 1–2 sub-ms MIDI burst events exist in the history and the computed
+    // window span would be ~0.5 ms, producing a spike near 1.0×.
+    //
+    // Once the window fills beyond minimumSpan (~3–4 events), the guard
+    // never triggers under production config — the oldest reference is
+    // always ≥22 ms back, well above the 3 ms threshold, so the span is
+    // always sufficient regardless of inter-event jitter.
+    //
+    // Tests A–D use production config. Test E uses a contrived config
+    // (windowSeconds < minimumSpan) for defensive branch coverage only.
+
+    // MARK: A. Startup burst — forward — anchors, no full-rate spike
+
+    func testStartupBurstForwardAnchorsNotSpike() {
+        // Production config (defaults). First burst of 2 sub-ms events
+        // during slow forward rotation. The second event has span = 0.5 ms
+        // which is below minimumSpan (3 ms), and lastGlideRate is nil.
+        // Must return .anchor, NOT .glide near 1.0×.
+        var d = ScratchPlatterAudioDrive()
+        XCTAssertEqual(d.ingest(moved: 0.0005, at: 0.0000), .anchor)
+        XCTAssertEqual(d.ingest(moved: 0.0005, at: 0.0005), .anchor,
+                       "sub-ms second event must anchor, not spike at moved/0.5ms ≈ 1.0×")
+    }
+
+    // MARK: B. First reliable span after startup burst — slow forward glide
+
+    func testFirstReliableSpanAfterStartupBurstGlidesSlowForward() {
+        // Continue from startup burst. Third event at t=14 ms fills the
+        // window past minimumSpan (14 ms ≥ 3 ms), so a real rate is
+        // computed. Cumulative movement = 3 × 0.0005 = 0.0015, reference
+        // position = 0.0005. Rate = 0.0010 / 0.014 ≈ 0.071.
+        var d = ScratchPlatterAudioDrive()
+        _ = d.ingest(moved: 0.0005, at: 0.0000)   // anchor
+        _ = d.ingest(moved: 0.0005, at: 0.0005)   // anchor (guard)
+        let r = glideRate(d.ingest(moved: 0.0005, at: 0.014))
+        XCTAssertNotNil(r)
+        XCTAssertGreaterThan(r!, 0)
+        XCTAssertLessThan(r!, 0.15)
+    }
+
+    // MARK: C. Filled production window ignores sub-ms inter-event gap
+
+    func testFilledWindowRejectsSubMillisecondBurstSpikeDefaultConfig() {
+        // Production config only. Build up events spanning ≥ 22 ms so the
+        // oldest reference sits at the window edge. A 0.5 ms inter-event
+        // gap then contributes its net displacement over a 22+ ms real span,
+        // not over the 0.5 ms dt, so the rate stays slow — no spike.
+        var d = ScratchPlatterAudioDrive()
+        _ = d.ingest(moved: 0.0005, at: 0.000)   // anchor
+        _ = d.ingest(moved: 0.0005, at: 0.008)   // span=8ms
+        _ = d.ingest(moved: 0.0005, at: 0.016)   // span=16ms
+        _ = d.ingest(moved: 0.0005, at: 0.024)   // span=24ms → window filled
+        _ = d.ingest(moved: 0.0005, at: 0.032)   // span=32ms
+        let r = glideRate(d.ingest(moved: 0.0005, at: 0.0325))  // 0.5 ms inter-event
+        XCTAssertNotNil(r)
+        XCTAssertGreaterThan(r!, 0)
+        XCTAssertLessThan(r!, 0.2, "filled 22ms windowed rate must stay slow, not spike from 0.5ms dt")
+    }
+
+    // MARK: D. Startup burst — reverse — anchors, no negative full-rate spike
+
+    func testStartupBurstReverseAnchorsNotSpike() {
+        // Mirror of Test A for reverse motion. Second sub-ms event must
+        // anchor, NOT produce a glide near -1.0×.
+        var d = ScratchPlatterAudioDrive()
+        XCTAssertEqual(d.ingest(moved: -0.0005, at: 0.0000), .anchor)
+        XCTAssertEqual(d.ingest(moved: -0.0005, at: 0.0005), .anchor,
+                       "sub-ms reverse second event must anchor, not spike at moved/0.5ms ≈ -1.0×")
+    }
+
+    // MARK: E. Contrived fallback — windowSeconds < minimumSpan (defensive branch)
+
+    /// Defensive branch coverage only: production config keeps
+    /// windowSeconds >= minimumSpan, so this is not the normal CC6/MIDI
+    /// path. When a prior glide rate exists and the window span computed
+    /// from the oldest reference is below minimumSpan, the drive must
+    /// return the last known good rate rather than computing a fresh
+    /// spike from the narrow span.
+    func testSubMinimumSpanWithPriorRateReturnsLastKnownRate_ContrivedConfig() {
+        // windowSeconds=4 ms, minimumSpan=8 ms.
+        // t=0:       anchor
+        // t=0.005:   span=5ms <8ms, lastGlideRate=nil → anchor
+        // t=0.0085:  cutoff=0.0045, hist[1]=0.005>0.0045, no trim yet
+        //            ref=0.000, span=8.5ms ≥8ms → glide (good rate established)
+        // t=0.0091:  cutoff=0.0051, hist[1]=0.005<=0.0051, old ref trimmed
+        //            new ref=0.005, span=4.1ms <8ms, lastGlideRate exists → hold
+        var d = ScratchPlatterAudioDrive(windowSeconds: 0.004,
+                                         idleTimeout: 0.18,
+                                         minimumSpan: 0.008)
+        _ = d.ingest(moved: 0.0005, at: 0.000)    // anchor
+        _ = d.ingest(moved: 0.0005, at: 0.005)    // span=5ms <8ms, lastGlideRate=nil → anchor
+        let good = glideRate(d.ingest(moved: 0.0005, at: 0.0085))  // span=8.5ms≥8ms → glide
+        XCTAssertNotNil(good)
+        let held = glideRate(d.ingest(moved: 0.0005, at: 0.0091))  // span=4.1ms<8ms → hold
+        XCTAssertNotNil(held)
+        XCTAssertEqual(held!, good!, accuracy: 1e-9,
+                       "span < minSpan with lastGlideRate set must hold last known rate")
+    }
 }
