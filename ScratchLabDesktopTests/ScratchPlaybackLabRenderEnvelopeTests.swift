@@ -204,6 +204,71 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         XCTAssertTrue(reentry.audible)
     }
 
+    // MARK: - Scratch-zone smoothing (in-zone audio routed through cc6AudioDrive)
+
+    /// Constant hand speed delivered with bursty CoreMIDI timing (dt alternating ~1 ms/12 ms)
+    /// would swing a raw per-event moved/dt rate ~12×. Routed through the windowed drive the
+    /// in-zone rate must stay tightly bounded (the pitch-instability fix).
+    func testZoneSmoothingStabilizesRateUnderBurstyTiming() {
+        let zm = makeZone()
+        var drive = ScratchPlatterAudioDrive()
+        var phase = 0.0, t = 0.0, lastPos = 0.0, seeded = false
+        var rates: [Double] = []
+        for i in 0..<400 {
+            phase += 0.0005                                   // stays within the 1/3 zone
+            let pos = zm.map(phase: phase, sampleDuration: 1.0).samplePositionSeconds
+            let moved = pos - lastPos; lastPos = pos
+            t += (i % 2 == 0) ? 0.001 : 0.012                 // bursty delivery
+            if case .glide(let r) = drive.ingest(moved: moved, at: t), seeded { rates.append(r) }
+            seeded = true
+        }
+        let warm = Array(rates.suffix(150))
+        let lo = try! XCTUnwrap(warm.min()), hi = try! XCTUnwrap(warm.max())
+        XCTAssertGreaterThan(lo, 0, "steady forward → positive rate")
+        XCTAssertLessThan(hi / lo, 4.0, "windowed rate must not swing ~12× like raw per-event moved/dt")
+    }
+
+    /// Zone entry anchors (no boundary spike), then glides on subsequent steady events.
+    func testZoneEntryDriveAnchorsThenGlides() {
+        var drive = ScratchPlatterAudioDrive()
+        XCTAssertEqual(drive.ingest(moved: 0.002, at: 0.0), .anchor)   // first event after reset
+        var sawGlide = false, t = 0.0
+        for _ in 0..<20 {
+            t += 0.005
+            if case .glide = drive.ingest(moved: 0.002, at: t) { sawGlide = true }
+        }
+        XCTAssertTrue(sawGlide, "steady in-zone motion should produce a glide rate after entry")
+    }
+
+    /// Zone exit resets the drive so the next entry re-anchors rather than inheriting a stale
+    /// cross-boundary rate (prevents a spike/click crossing 12 o'clock).
+    func testZoneExitResetReanchorsNextEntry() {
+        var drive = ScratchPlatterAudioDrive()
+        var t = 0.0
+        _ = drive.ingest(moved: 0.002, at: t)
+        for _ in 0..<10 { t += 0.005; _ = drive.ingest(moved: 0.002, at: t) }  // gliding
+        drive.reset()                                                          // zone exit
+        XCTAssertEqual(drive.ingest(moved: 0.002, at: t + 0.005), .anchor)
+    }
+
+    /// Reverse motion inside the zone yields a negative smoothed rate.
+    func testZoneReverseProducesNegativeSmoothedRate() {
+        let zm = makeZone()
+        var drive = ScratchPlatterAudioDrive()
+        var phase = 0.30, t = 0.0
+        var lastPos = zm.map(phase: phase, sampleDuration: 1.0).samplePositionSeconds
+        _ = drive.ingest(moved: 0, at: t)                  // seed/anchor
+        var lastRate = 0.0
+        for _ in 0..<60 {
+            phase -= 0.001                                 // reverse, staying inside the zone
+            let pos = zm.map(phase: phase, sampleDuration: 1.0).samplePositionSeconds
+            let moved = pos - lastPos; lastPos = pos
+            t += 0.005
+            if case .glide(let r) = drive.ingest(moved: moved, at: t) { lastRate = r }
+        }
+        XCTAssertLessThan(lastRate, 0, "reverse inside zone → negative smoothed rate")
+    }
+
     // MARK: - Engine zone-audible gate (minimal hook)
 
     func testZoneGatedAudibleRequiresBothGates() {

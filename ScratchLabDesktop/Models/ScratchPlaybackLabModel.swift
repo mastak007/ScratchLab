@@ -1197,24 +1197,31 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
         engine.setZoneAudible(z.audible)
         if z.audible {
-            // Glide toward the zone target at the instantaneous rate (click-free, reverse-
-            // correct). Re-anchor (snap) on first entry or after an idle gap — while silent,
-            // so the snap is inaudible.
-            if wasZoneAudible, let last = lastZoneEventTime {
-                let dt = time - last
-                if dt > 0 && dt <= velocityIdleTimeout {
-                    engine.setVelocity((z.samplePositionSeconds - lastZonePositionSeconds) / dt)
-                } else {
-                    engine.setTargetPosition(seconds: z.samplePositionSeconds) // resume after gap
+            if wasZoneAudible {
+                // Continuous in-zone: smooth the rate over `cc6AudioDrive`'s real-time window
+                // (the same anti-jitter path the normal mode uses) instead of a raw per-event
+                // Δposition/dt, which spiked the pitch on bursty CoreMIDI delivery. The drive
+                // re-anchors itself after its own idle gap, so no stale rate survives a pause.
+                let moved = z.samplePositionSeconds - lastZonePositionSeconds
+                switch cc6AudioDrive.ingest(moved: moved, at: time) {
+                case .glide(let rate): engine.setVelocity(rate)
+                case .anchor: engine.setTargetPosition(seconds: z.samplePositionSeconds)
                 }
             } else {
-                engine.setTargetPosition(seconds: z.samplePositionSeconds)     // zone entry
+                // Zone entry: reset the drive and snap to the zone position so the first audible
+                // event can't inherit a stale cross-boundary rate (this is the click at 12). The
+                // snap happens as the gate ramps up from silence, so it is inaudible.
+                cc6AudioDrive.reset()
+                engine.setTargetPosition(seconds: z.samplePositionSeconds)
             }
             lastZonePositionSeconds = z.samplePositionSeconds
             lastZoneEventTime = time
         } else {
-            engine.setVelocity(0)        // outside the arc: stop; zone gate fades to silence
-            lastZoneEventTime = nil      // force a re-anchor on the next entry
+            // Outside the arc: silence (zone gate fades), stop, and reset the drive on exit so
+            // a rate from this pass can't leak into the next entry.
+            if wasZoneAudible { cc6AudioDrive.reset() }
+            engine.setVelocity(0)
+            lastZoneEventTime = nil
         }
         wasZoneAudible = z.audible
     }
