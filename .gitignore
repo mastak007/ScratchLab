@@ -87,3 +87,9 @@ reference_frames/
 reference_videos/
 context.txt
 debug_captures/
+
+# Local research / scratch notes (agent verdicts, handoffs, planning zips) —
+# author's working material, not app source or shipped docs.
+/analysis/
+# External tool checkout that carries its own .git (deep-research skills repo).
+/deep-research-skills/
