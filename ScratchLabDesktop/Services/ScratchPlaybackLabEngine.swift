@@ -44,6 +44,11 @@ final class ScratchPlaybackLabEngine {
     private let pendingSeekFrame = OSAllocatedUnfairLock<Double?>(initialState: nil)
     /// Read head the render block last reached (file frames). Audio-thread-owned.
     private var renderFrame: Double = 0
+    /// Diagnostic-only (Slice B): a thread-safe snapshot of `renderFrame` (file frames),
+    /// published once per render buffer at the end of `render()`. Lets the main thread read
+    /// the audio read-head position to measure drift against the mapper's absolute platter
+    /// position. Read-only observation — it does NOT feed back into DSP or change `renderFrame`.
+    private let renderFrameSnapshot = OSAllocatedUnfairLock(initialState: 0.0)
     /// Hysteretic gate: a truly stopped platter (sustained near-zero movement) fades to
     /// silence, but a momentary dip — a direction reversal or mid-stroke MIDI wobble —
     /// glides through instead of cutting the audio into stutter notches. NOT keyed off
@@ -131,6 +136,19 @@ final class ScratchPlaybackLabEngine {
     /// crossfader position). Applied on the main mixer — isolated to this engine.
     func setOutputGain(_ gain: Float) {
         engine.mainMixerNode.outputVolume = Swift.min(Swift.max(gain, 0), 1)
+    }
+
+    // MARK: - Diagnostics (Slice B: audio-head drift; read-only, no DSP effect)
+
+    /// The audio render read-head position in FILE FRAMES, snapshotted once per render
+    /// buffer. Thread-safe to read from the main thread. Diagnostic-only.
+    var diagnosticRenderFrame: Double { renderFrameSnapshot.withLock { $0 } }
+
+    /// The audio render read-head position in SAMPLE-SECONDS (`frame / sampleRate`), for
+    /// direct comparison with the mapper's absolute sample position (also seconds). 0 when
+    /// no sample is loaded. Diagnostic-only.
+    var diagnosticRenderSeconds: Double {
+        sampleRate > 0 ? diagnosticRenderFrame / sampleRate : 0
     }
 
     // MARK: - Lifecycle
@@ -224,6 +242,9 @@ final class ScratchPlaybackLabEngine {
 
         let rawEnd = start + perFrame * Double(frames)
         renderFrame = audible ? (loops ? Self.wrapFrame(rawEnd, total: ring) : Self.clampFrame(rawEnd, total: ring)) : start
+        // Diagnostic-only (Slice B): publish the finalized read head for the main thread to
+        // read. Once per buffer; does not affect the value above or any DSP.
+        renderFrameSnapshot.withLock { $0 = renderFrame }
         return noErr
     }
 

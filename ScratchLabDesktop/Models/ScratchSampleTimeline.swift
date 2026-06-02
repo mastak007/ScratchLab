@@ -61,6 +61,17 @@ struct ScratchSampleTimelineEvent: Equatable, Codable {
     /// (`cc6Time − pitchBendTime`), for timestamp alignment between the two streams. nil if
     /// no pitch bend has been seen yet.
     let pitchBendAgeSeconds: Double?
+    /// Diagnostic-only (Slice B: audio-head drift): the mapper's absolute platter position
+    /// in SAMPLE-SECONDS at this CC6 event (the "true" position the platter angle implies).
+    let mapperSampleSeconds: Double?
+    /// Diagnostic-only (Slice B): the audio engine's render read-head position in
+    /// SAMPLE-SECONDS at this CC6 event, or nil if the engine was not running. This is what
+    /// the listener actually hears.
+    let audioRenderSeconds: Double?
+    /// Diagnostic-only (Slice B): `audioRenderSeconds − mapperSampleSeconds` in SAMPLE-SECONDS
+    /// — how far the audio read-head has drifted from the true platter position. nil if the
+    /// audio position was unavailable. The question this whole slice exists to answer.
+    let audioMapperDriftSeconds: Double?
 
     /// Memberwise initializer with the diagnostic pitch-bend fields defaulted to nil so
     /// existing call sites (and old data) need not supply them. Because these fields are
@@ -74,7 +85,10 @@ struct ScratchSampleTimelineEvent: Equatable, Codable {
          cc6Step: Int?,
          rawPitchBend: Int? = nil,
          pitchBendDelta: Int? = nil,
-         pitchBendAgeSeconds: Double? = nil) {
+         pitchBendAgeSeconds: Double? = nil,
+         mapperSampleSeconds: Double? = nil,
+         audioRenderSeconds: Double? = nil,
+         audioMapperDriftSeconds: Double? = nil) {
         self.timeSeconds = timeSeconds
         self.position = position
         self.velocity = velocity
@@ -84,6 +98,9 @@ struct ScratchSampleTimelineEvent: Equatable, Codable {
         self.rawPitchBend = rawPitchBend
         self.pitchBendDelta = pitchBendDelta
         self.pitchBendAgeSeconds = pitchBendAgeSeconds
+        self.mapperSampleSeconds = mapperSampleSeconds
+        self.audioRenderSeconds = audioRenderSeconds
+        self.audioMapperDriftSeconds = audioMapperDriftSeconds
     }
 
     /// Velocities with magnitude at or below this are treated as stationary (`.idle`),
@@ -141,7 +158,10 @@ struct ScratchSampleTimeline: Equatable, Codable {
         cc6Step: Int? = nil,
         rawPitchBend: Int? = nil,
         pitchBendDelta: Int? = nil,
-        pitchBendAgeSeconds: Double? = nil
+        pitchBendAgeSeconds: Double? = nil,
+        mapperSampleSeconds: Double? = nil,
+        audioRenderSeconds: Double? = nil,
+        audioMapperDriftSeconds: Double? = nil
     ) -> ScratchSampleTimelineEvent? {
         guard events.count < Self.maxEvents else {
             didReachCapacity = true
@@ -159,7 +179,10 @@ struct ScratchSampleTimeline: Equatable, Codable {
             cc6Step: cc6Step,
             rawPitchBend: rawPitchBend,
             pitchBendDelta: pitchBendDelta,
-            pitchBendAgeSeconds: pitchBendAgeSeconds
+            pitchBendAgeSeconds: pitchBendAgeSeconds,
+            mapperSampleSeconds: mapperSampleSeconds,
+            audioRenderSeconds: audioRenderSeconds,
+            audioMapperDriftSeconds: audioMapperDriftSeconds
         )
         events.append(event)
         return event

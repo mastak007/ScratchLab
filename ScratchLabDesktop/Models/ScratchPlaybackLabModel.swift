@@ -900,6 +900,14 @@ final class ScratchPlaybackLabModel: ObservableObject {
             // derived from actual travel rather than inferred full-stroke notes. Only on
             // a true move (skip the seeding event, which does not advance the playhead).
             if wasSeeded {
+                // Diagnostic-only (Slice B): compare the mapper's absolute platter position
+                // (sample-seconds — the "true" position the platter angle implies) against the
+                // audio engine's actual render read-head (also sample-seconds). The drift
+                // between them answers whether the velocity-integrating engine is wandering
+                // away from the platter angle during real scratching. Read-only: the engine
+                // accessor just snapshots its head; nothing here changes velocity or playback.
+                let mapperSeconds = mapper.samplePosition
+                let audioSeconds: Double? = engine.isRunning ? engine.diagnosticRenderSeconds : nil
                 timeline.append(
                     timeSeconds: event.timestamp,
                     position: mapper.positionFraction,
@@ -911,7 +919,10 @@ final class ScratchPlaybackLabModel: ObservableObject {
                     // arrived. Pitch bend does not drive playback — CC6 does.
                     rawPitchBend: latestRaneRawPitchBend,
                     pitchBendDelta: latestRanePitchBendDelta,
-                    pitchBendAgeSeconds: latestRanePitchBendTime.map { event.timestamp - $0 }
+                    pitchBendAgeSeconds: latestRanePitchBendTime.map { event.timestamp - $0 },
+                    mapperSampleSeconds: mapperSeconds,
+                    audioRenderSeconds: audioSeconds,
+                    audioMapperDriftSeconds: audioSeconds.map { $0 - mapperSeconds }
                 )
             }
             // Tick measurement now counts CC6 steps over one revolution (~3,932).

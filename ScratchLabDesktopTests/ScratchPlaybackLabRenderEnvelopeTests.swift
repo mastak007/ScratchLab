@@ -20,6 +20,17 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         ScratchPlaybackLabRenderEnvelope(sampleRate: 1000, rampDuration: 0.004)
     }
 
+    // MARK: - Slice B: engine read-head diagnostic accessor (no DSP, engine not started)
+
+    /// The drift-diagnostic accessor is readable on a freshly constructed engine without
+    /// starting AVAudioEngine, and reads 0 before any rendering. A pure observation seam —
+    /// confirms the accessor exists and is safe to read off the audio thread.
+    func testDiagnosticRenderHeadIsZeroOnFreshEngine() {
+        let engine = ScratchPlaybackLabEngine()
+        XCTAssertEqual(engine.diagnosticRenderFrame, 0)
+        XCTAssertEqual(engine.diagnosticRenderSeconds, 0)
+    }
+
     // MARK: - Fade-in
 
     func testFadeInRampsGainInQuartersToFull() {

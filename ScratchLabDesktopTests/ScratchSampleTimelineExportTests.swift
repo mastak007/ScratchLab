@@ -79,6 +79,10 @@ final class ScratchSampleTimelineExportTests: XCTestCase {
         XCTAssertNil(decoded.rawPitchBend)
         XCTAssertNil(decoded.pitchBendDelta)
         XCTAssertNil(decoded.pitchBendAgeSeconds)
+        // Slice B drift fields are likewise absent in old JSON.
+        XCTAssertNil(decoded.mapperSampleSeconds)
+        XCTAssertNil(decoded.audioRenderSeconds)
+        XCTAssertNil(decoded.audioMapperDriftSeconds)
     }
 
     /// A nil-diagnostic event must not emit the new keys, so normal exports stay clean and
@@ -92,6 +96,48 @@ final class ScratchSampleTimelineExportTests: XCTestCase {
         XCTAssertFalse(json.contains("rawPitchBend"))
         XCTAssertFalse(json.contains("pitchBendDelta"))
         XCTAssertFalse(json.contains("pitchBendAgeSeconds"))
+        XCTAssertFalse(json.contains("mapperSampleSeconds"))
+        XCTAssertFalse(json.contains("audioRenderSeconds"))
+        XCTAssertFalse(json.contains("audioMapperDriftSeconds"))
+    }
+
+    // MARK: - Slice B: audio-head drift diagnostics (sample-seconds)
+
+    func testEventCarriesDriftDiagnosticsRoundTrip() throws {
+        let event = ScratchSampleTimelineEvent(
+            timeSeconds: 4.0, position: 0.5, velocity: 0.1,
+            crossfader: nil, muted: false, cc6Step: -2,
+            mapperSampleSeconds: 0.500, audioRenderSeconds: 0.512,
+            audioMapperDriftSeconds: 0.012
+        )
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(ScratchSampleTimelineEvent.self, from: data)
+        XCTAssertEqual(decoded, event)
+        XCTAssertEqual(try XCTUnwrap(decoded.mapperSampleSeconds), 0.500, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(decoded.audioRenderSeconds), 0.512, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(decoded.audioMapperDriftSeconds), 0.012, accuracy: 1e-9)
+    }
+
+    /// The capture contract Slice B relies on: a CC6 append carries the mapper position, the
+    /// audio render-head position, and their drift; an append without them leaves all nil.
+    func testAppendCarriesDriftDiagnosticsOntoCC6Event() throws {
+        var timeline = ScratchSampleTimeline()
+        let none = try XCTUnwrap(timeline.append(
+            timeSeconds: 0.0, position: 0.0, velocity: 0.0, cc6Step: 1
+        ))
+        XCTAssertNil(none.mapperSampleSeconds)
+        XCTAssertNil(none.audioRenderSeconds)
+        XCTAssertNil(none.audioMapperDriftSeconds)
+
+        // Mapper at 0.300 s, audio head at 0.315 s → 15 ms of drift.
+        let drift = try XCTUnwrap(timeline.append(
+            timeSeconds: 0.05, position: 0.30, velocity: 0.4, cc6Step: 1,
+            mapperSampleSeconds: 0.300, audioRenderSeconds: 0.315,
+            audioMapperDriftSeconds: 0.315 - 0.300
+        ))
+        XCTAssertEqual(try XCTUnwrap(drift.mapperSampleSeconds), 0.300, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(drift.audioRenderSeconds), 0.315, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(drift.audioMapperDriftSeconds), 0.015, accuracy: 1e-9)
     }
 
     /// The capture contract Slice A relies on: a CC6 append carries the latest pitch-bend
