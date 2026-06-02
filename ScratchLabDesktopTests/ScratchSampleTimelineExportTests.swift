@@ -46,6 +46,77 @@ final class ScratchSampleTimelineExportTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(ScratchSampleTimelineEvent.self, from: bareData), bare)
     }
 
+    // MARK: - Slice A: diagnostic pitch-bend fields (CC6 + pitch-bend fusion investigation)
+
+    func testEventCarriesPitchBendDiagnosticsRoundTrip() throws {
+        let event = ScratchSampleTimelineEvent(
+            timeSeconds: 2.5, position: 0.6, velocity: 0.3,
+            crossfader: 0.7, muted: false, cc6Step: 1,
+            rawPitchBend: 9001, pitchBendDelta: -123, pitchBendAgeSeconds: 0.004
+        )
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(ScratchSampleTimelineEvent.self, from: data)
+        XCTAssertEqual(decoded, event)
+        XCTAssertEqual(decoded.rawPitchBend, 9001)
+        XCTAssertEqual(decoded.pitchBendDelta, -123)
+        XCTAssertEqual(decoded.pitchBendAgeSeconds, 0.004)
+    }
+
+    /// Old exports predate the diagnostic fields. JSON lacking those keys must still decode,
+    /// with the new fields nil — so existing captures keep loading.
+    func testOldEventJSONWithoutPitchBendFieldsDecodesWithNilDiagnostics() throws {
+        let oldJSON = """
+        { "timeSeconds": 1.0, "position": 0.5, "velocity": 0.2, "muted": false }
+        """
+        let decoded = try JSONDecoder().decode(
+            ScratchSampleTimelineEvent.self, from: Data(oldJSON.utf8)
+        )
+        XCTAssertEqual(decoded.timeSeconds, 1.0)
+        XCTAssertEqual(decoded.position, 0.5)
+        XCTAssertEqual(decoded.velocity, 0.2)
+        XCTAssertNil(decoded.crossfader)
+        XCTAssertNil(decoded.cc6Step)
+        XCTAssertNil(decoded.rawPitchBend)
+        XCTAssertNil(decoded.pitchBendDelta)
+        XCTAssertNil(decoded.pitchBendAgeSeconds)
+    }
+
+    /// A nil-diagnostic event must not emit the new keys, so normal exports stay clean and
+    /// byte-stable for diffing (and so the schema only grows when data is actually present).
+    func testNilPitchBendDiagnosticsAreOmittedFromJSON() throws {
+        let bare = ScratchSampleTimelineEvent(
+            timeSeconds: 0, position: 0.1, velocity: 0.1,
+            crossfader: nil, muted: false, cc6Step: 5
+        )
+        let json = String(decoding: try JSONEncoder().encode(bare), as: UTF8.self)
+        XCTAssertFalse(json.contains("rawPitchBend"))
+        XCTAssertFalse(json.contains("pitchBendDelta"))
+        XCTAssertFalse(json.contains("pitchBendAgeSeconds"))
+    }
+
+    /// The capture contract Slice A relies on: a CC6 append carries the latest pitch-bend
+    /// sample (mirrors the model holding the last pitch bend, then attaching it to the next
+    /// CC6 event), while a CC6-only append leaves the diagnostics nil.
+    func testAppendCarriesPitchBendDiagnosticsOntoCC6Event() throws {
+        var timeline = ScratchSampleTimeline()
+        // CC6-only event (no pitch bend seen yet) → nil diagnostics.
+        let cc6Only = try XCTUnwrap(timeline.append(
+            timeSeconds: 0.0, position: 0.0, velocity: 0.0, cc6Step: 1
+        ))
+        XCTAssertNil(cc6Only.rawPitchBend)
+        XCTAssertNil(cc6Only.pitchBendDelta)
+        XCTAssertNil(cc6Only.pitchBendAgeSeconds)
+
+        // A pitch bend arrived at t=0.010; the next CC6 event at t=0.012 carries it (age 2 ms).
+        let withPB = try XCTUnwrap(timeline.append(
+            timeSeconds: 0.012, position: 0.01, velocity: 0.5, cc6Step: 1,
+            rawPitchBend: 12345, pitchBendDelta: 678, pitchBendAgeSeconds: 0.012 - 0.010
+        ))
+        XCTAssertEqual(withPB.rawPitchBend, 12345)
+        XCTAssertEqual(withPB.pitchBendDelta, 678)
+        XCTAssertEqual(try XCTUnwrap(withPB.pitchBendAgeSeconds), 0.002, accuracy: 1e-9)
+    }
+
     func testTimelineCodableRoundTrip() throws {
         let timeline = makeTimeline(positions: [0.0, 0.2, 0.4, 0.2, 0.0])
         let data = try JSONEncoder().encode(timeline)

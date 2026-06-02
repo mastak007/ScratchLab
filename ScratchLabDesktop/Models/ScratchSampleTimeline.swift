@@ -48,6 +48,43 @@ struct ScratchSampleTimelineEvent: Equatable, Codable {
     let muted: Bool
     /// Optional source diagnostic: the signed CC6 step (±1) that produced this sample.
     let cc6Step: Int?
+    /// Diagnostic-only (RANE CC6 + pitch-bend fusion investigation): the latest raw 14-bit
+    /// pitch-bend value seen on the platter stream *before* this CC6 event, or nil if no
+    /// pitch bend has arrived yet. Captured so we can analyse offline whether the
+    /// high-resolution pitch bend carries the movement magnitude that a ±1 CC6 step cannot.
+    /// This does NOT drive playback — CC6 remains the sole audio driver.
+    let rawPitchBend: Int?
+    /// Diagnostic-only: the mapper's most recent pitch-bend wrapped delta (shortest signed
+    /// distance on the 14-bit ring) at the time of capture, or nil if unavailable.
+    let pitchBendDelta: Int?
+    /// Diagnostic-only: seconds between the captured pitch-bend sample and this CC6 event
+    /// (`cc6Time − pitchBendTime`), for timestamp alignment between the two streams. nil if
+    /// no pitch bend has been seen yet.
+    let pitchBendAgeSeconds: Double?
+
+    /// Memberwise initializer with the diagnostic pitch-bend fields defaulted to nil so
+    /// existing call sites (and old data) need not supply them. Because these fields are
+    /// optional, missing keys from older JSON decode as nil under synthesized Codable, and
+    /// nil diagnostics are omitted from normal export output.
+    init(timeSeconds: TimeInterval,
+         position: Double,
+         velocity: Double,
+         crossfader: Double?,
+         muted: Bool,
+         cc6Step: Int?,
+         rawPitchBend: Int? = nil,
+         pitchBendDelta: Int? = nil,
+         pitchBendAgeSeconds: Double? = nil) {
+        self.timeSeconds = timeSeconds
+        self.position = position
+        self.velocity = velocity
+        self.crossfader = crossfader
+        self.muted = muted
+        self.cc6Step = cc6Step
+        self.rawPitchBend = rawPitchBend
+        self.pitchBendDelta = pitchBendDelta
+        self.pitchBendAgeSeconds = pitchBendAgeSeconds
+    }
 
     /// Velocities with magnitude at or below this are treated as stationary (`.idle`),
     /// so float dither around zero doesn't read as motion.
@@ -101,7 +138,10 @@ struct ScratchSampleTimeline: Equatable, Codable {
         position: Double,
         velocity: Double,
         crossfader: Double? = nil,
-        cc6Step: Int? = nil
+        cc6Step: Int? = nil,
+        rawPitchBend: Int? = nil,
+        pitchBendDelta: Int? = nil,
+        pitchBendAgeSeconds: Double? = nil
     ) -> ScratchSampleTimelineEvent? {
         guard events.count < Self.maxEvents else {
             didReachCapacity = true
@@ -116,7 +156,10 @@ struct ScratchSampleTimeline: Equatable, Codable {
             velocity: velocity,
             crossfader: crossfader,
             muted: muted,
-            cc6Step: cc6Step
+            cc6Step: cc6Step,
+            rawPitchBend: rawPitchBend,
+            pitchBendDelta: pitchBendDelta,
+            pitchBendAgeSeconds: pitchBendAgeSeconds
         )
         events.append(event)
         return event

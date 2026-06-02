@@ -347,6 +347,12 @@ final class ScratchPlaybackLabModel: ObservableObject {
     private var rawPitchBendLatest: Int = 0
     private var previousRawLatest: Int?
     private var wrappedDeltaLatest: Int = 0
+    // Diagnostic-only (Slice A): the latest RANE platter pitch-bend sample, attached to the
+    // next CC6 timeline event so CC6 and pitch bend can be analysed together offline. These
+    // NEVER drive the audio path — CC6 remains the sole playback driver.
+    private var latestRaneRawPitchBend: Int?
+    private var latestRanePitchBendDelta: Int?
+    private var latestRanePitchBendTime: TimeInterval?
     private var crossfaderLatest: Double = 0
     private var crossfaderRawLatest: Int = 0
     private var crossfaderChannelLatest: Int?
@@ -452,6 +458,11 @@ final class ScratchPlaybackLabModel: ObservableObject {
         timelineEventCount = 0
         timelinePositionSpan = 0
         timelineReachedCapacity = false
+        // Diagnostic-only (Slice A): forget the stashed pitch-bend sample so a fresh capture
+        // doesn't attach a pre-clear value to its first CC6 event. No audio-path effect.
+        latestRaneRawPitchBend = nil
+        latestRanePitchBendDelta = nil
+        latestRanePitchBendTime = nil
     }
 
     /// Notation geometry derived from the live captured timeline — the absolute
@@ -894,7 +905,13 @@ final class ScratchPlaybackLabModel: ObservableObject {
                     position: mapper.positionFraction,
                     velocity: velocityEstimator.velocity,
                     crossfader: crossfaderValidLatest ? crossfaderLatest : nil,
-                    cc6Step: step
+                    cc6Step: step,
+                    // Diagnostic-only (Slice A): the latest pitch-bend sample seen before this
+                    // CC6 event, with its age for stream alignment. nil until a pitch bend has
+                    // arrived. Pitch bend does not drive playback — CC6 does.
+                    rawPitchBend: latestRaneRawPitchBend,
+                    pitchBendDelta: latestRanePitchBendDelta,
+                    pitchBendAgeSeconds: latestRanePitchBendTime.map { event.timestamp - $0 }
                 )
             }
             // Tick measurement now counts CC6 steps over one revolution (~3,932).
@@ -979,6 +996,13 @@ final class ScratchPlaybackLabModel: ObservableObject {
             mapper.trackPitchBend(raw)
             rawPitchBendLatest = raw
             wrappedDeltaLatest = mapper.lastWrappedDelta
+            // Diagnostic-only (Slice A): stash this pitch-bend sample (raw value, the mapper's
+            // wrapped delta, and the host timestamp) so the next CC6 timeline event can carry
+            // it for offline CC6+pitch-bend analysis. Does NOT move the playhead or set
+            // velocity — the playhead is CC6-driven; pitch bend stays diagnostic.
+            latestRaneRawPitchBend = raw
+            latestRanePitchBendDelta = mapper.lastWrappedDelta
+            latestRanePitchBendTime = event.timestamp
             let now = Date()
             pitchBendEventDates.append(now)
             lastPitchBendDate = now
