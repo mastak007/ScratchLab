@@ -2252,15 +2252,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
     }
 
-    func testIOSAppTargetDoesNotIncludeAIBattleModeView() throws {
-        let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
-        let source = try String(contentsOf: projectURL, encoding: .utf8)
-        XCTAssertFalse(
-            source.contains("AIBattleModeView.swift in Sources"),
-            "AIBattleModeView.swift must not be compiled into the iOS app target (Rule 2.5.1)"
-        )
-    }
-
     func testIOSAppTargetDoesNotIncludeFormulaPlaygroundView() throws {
         let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
         let source = try String(contentsOf: projectURL, encoding: .utf8)
@@ -9562,20 +9553,10 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
 
     // Slice U.1 — Battle Mode user-facing copy must not contain "AI" wording.
     // Internal type names (AICharacter) and enum case identifiers (aiChallenge)
-    // are allowed because they are not surfaced to users; only the literal UI
-    // strings are guarded here.
+    // are allowed because they are not surfaced to users; only the live
+    // GameState raw value is guarded here. (The orphaned AIBattleModeView was
+    // removed, so its copy is no longer scanned.)
     func testBattleModeUserFacingCopyHasNoAIWording() throws {
-        let battleURL = projectRootURL().appendingPathComponent("ScratchLab/Views/AIBattleModeView.swift")
-        let battleSource = try String(contentsOf: battleURL, encoding: .utf8)
-        XCTAssertFalse(
-            battleSource.contains("\"AI BATTLE\""),
-            "Battle mode header must not display 'AI BATTLE'"
-        )
-        XCTAssertFalse(
-            battleSource.contains("\"Challenge an AI opponent\""),
-            "Battle mode subtitle must not display 'Challenge an AI opponent'"
-        )
-
         let gameStateURL = projectRootURL().appendingPathComponent("ScratchLab/Models/GameState.swift")
         let gameStateSource = try String(contentsOf: gameStateURL, encoding: .utf8)
         XCTAssertFalse(

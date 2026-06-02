@@ -523,7 +523,6 @@
 		A2000011 /* ProgressManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressManager.swift; sourceTree = "<group>"; };
 		A2000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A2000014 /* AIBattleModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBattleModeView.swift; sourceTree = "<group>"; };
 		A2000015 /* ScratchAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzer.swift; sourceTree = "<group>"; };
 		A2000019 /* ScratchFormulaAST.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaAST.swift; sourceTree = "<group>"; };
 		A2000020 /* ScratchFormulaCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaCatalog.swift; sourceTree = "<group>"; };
@@ -1032,7 +1031,6 @@
 				A2000003 /* LevelSelectView.swift */,
 				A2000004 /* PracticeModeView.swift */,
 				SML0000000SML001SML00001 /* ScratchMotionLane.swift */,
-				A2000014 /* AIBattleModeView.swift */,
 				A2000023 /* FormulaPlaygroundView.swift */,
 				A2000026 /* CompanionCameraView.swift */,
 				A2000030 /* StagingInspectorView.swift */,
