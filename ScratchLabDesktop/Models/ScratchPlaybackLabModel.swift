@@ -299,10 +299,18 @@ final class ScratchPlaybackLabModel: ObservableObject {
             cc6AudioDrive.reset() // re-anchor RANE audio after a mode change
         }
     }
+    /// Calibrated default platter sensitivity (sample-seconds moved per 1000 CC6 steps).
+    /// One physical revolution is ~`ScratchPlatterPlayheadMapper.defaultStepsPerRevolution`
+    /// (~3,932) CC6 steps, so to map one revolution onto ~one sample pass the per-1000-step
+    /// advance must be 1000 × (sample seconds / steps-per-rev) ≈ 1000 × 1.047 / 3932 ≈ 0.266.
+    /// Single source of truth so the value can't drift from this calibration again — the
+    /// previous literal 0.5 made one revolution play the sample ~2× (about double sensitivity).
+    static let defaultSampleSecondsPer1000Ticks: Double = 0.266
+
     /// Sensitivity, expressed as sample-seconds moved per 1000 CC6 steps (nicer UI
-    /// numbers than per-step). One platter revolution is ~3,932 CC6 steps, so the
-    /// default ~0.266 maps roughly one revolution onto a ~1 s sample.
-    @Published var sampleSecondsPer1000Ticks: Double = 0.5 {
+    /// numbers than per-step). Defaults to `defaultSampleSecondsPer1000Ticks` so one
+    /// revolution plays the sample once; the UI knob can still adjust it live.
+    @Published var sampleSecondsPer1000Ticks: Double = ScratchPlaybackLabModel.defaultSampleSecondsPer1000Ticks {
         didSet { mapper.sampleSecondsPerStep = sampleSecondsPer1000Ticks / 1000.0 }
     }
     /// Lab-only: flip platter direction if the hardware reports the opposite sign.
@@ -442,8 +450,9 @@ final class ScratchPlaybackLabModel: ObservableObject {
 
     init(transport: CoreMIDIInputTransport = CoreMIDIInputTransport()) {
         self.transport = transport
-        self.mapper = ScratchPlatterPlayheadMapper(sampleSecondsPerStep: 0.5 / 1000.0,
-                                                   sampleDuration: 0, boundaryMode: .loop)
+        self.mapper = ScratchPlatterPlayheadMapper(
+            sampleSecondsPerStep: Self.defaultSampleSecondsPer1000Ticks / 1000.0,
+            sampleDuration: 0, boundaryMode: .loop)
         transport.onSourcedEvent = { [weak self] sourceName, event in
             MainActor.assumeIsolated { self?.ingest(sourceName: sourceName, event: event) }
         }

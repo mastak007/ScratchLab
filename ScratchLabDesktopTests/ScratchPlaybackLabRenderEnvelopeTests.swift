@@ -105,6 +105,36 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
                                          environment: [:]))
     }
 
+    // MARK: - Calibration: one physical revolution plays the sample once (not 2×)
+
+    /// The default sensitivity must map one platter revolution (~3,932 CC6 steps) onto
+    /// roughly ONE sample pass (~1 s), not two. With the old literal 0.5 this product was
+    /// ≈1.97 (≈2× → the "ahhh plays twice per rotation" bug); the calibrated 0.266 gives ≈1.05.
+    @MainActor
+    func testDefaultSensitivityMapsOneRevolutionToOneSamplePass() {
+        let perStep = ScratchPlaybackLabModel.defaultSampleSecondsPer1000Ticks / 1000.0
+        let secondsPerRevolution = perStep * Double(ScratchPlatterPlayheadMapper.defaultStepsPerRevolution)
+        XCTAssertEqual(secondsPerRevolution, 1.0, accuracy: 0.1,
+                       "one revolution should advance ~one ~1 s sample pass")
+        XCTAssertLessThan(secondsPerRevolution, 1.5,
+                          "regression guard: must NOT be ~2× (the old 0.5 default)")
+    }
+
+    /// The calibrated default is the documented ~0.266 (single source of truth), so the
+    /// comment and value can't drift apart again.
+    @MainActor
+    func testDefaultSensitivityConstantIsCalibratedValue() {
+        XCTAssertEqual(ScratchPlaybackLabModel.defaultSampleSecondsPer1000Ticks, 0.266, accuracy: 1e-9)
+    }
+
+    /// A freshly constructed model starts at the calibrated default (not the old 0.5).
+    @MainActor
+    func testFreshModelUsesCalibratedDefaultSensitivity() {
+        let model = ScratchPlaybackLabModel()
+        XCTAssertEqual(model.sampleSecondsPer1000Ticks,
+                       ScratchPlaybackLabModel.defaultSampleSecondsPer1000Ticks, accuracy: 1e-9)
+    }
+
     // MARK: - Fade-in
 
     func testFadeInRampsGainInQuartersToFull() {
