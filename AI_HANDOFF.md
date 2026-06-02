@@ -2391,6 +2391,12 @@ work and MUST NOT be started in this slice.
 
 ## Next recommended command
 
+> SUPERSEDED (2026-06-03): The visual coach (3D `CoachPreviewView` + 2D rig) and the
+> orphaned `AIBattleModeView` were removed, and `AICharacter` was replaced by neutral
+> `ScratchLevelTheme` skill stages (commits 69cfb17 / 3c1b2b1 / af35407 / 90d3486).
+> The "Slice U.1" rename block below is obsolete — no `AIBattleModeView` or `AICharacter`
+> remains, and `GameMode.aiChallenge` already renders "Rival Challenge".
+
 If the rename is approved:
 
 ```

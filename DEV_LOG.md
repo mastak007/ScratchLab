@@ -1,5 +1,21 @@
 # DEV_LOG
 
+## 2026-06-03
+
+### Non-RANE visual-coach / AI-persona removal (complete)
+
+- Selected task: remove the visual coach and AI-persona surfaces; keep Demo Mode and text coaching; re-theme the level picker neutrally.
+- Files changed (commits 69cfb17, 3c1b2b1, 3ab4388, af35407, db98764, 90d3486, d44dbb4, 3f4e09a): `ScratchLab/Views/CoachPreviewView.swift` (deleted), `ScratchLab/Resources/Coach/*` (deleted), `ScratchLab/Views/AIBattleModeView.swift` (deleted), `ScratchLab/Views/ScratchCoachViews.swift`, `MainMenuView.swift`, `LevelSelectView.swift`, `ScratchLab/Models/GameState.swift`, `CoachCopy.swift`, `CaptureCore.swift` (comment), `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/*`, `ScratchLab.xcodeproj/project.pbxproj`, `.gitignore`, `docs/*`.
+- Build result: iOS Debug + macOS Debug builds passed; macOS build-for-testing passed; full ScratchLabDesktop suite 1545 passed / 12 skipped / 0 failures.
+- Follow-up notes:
+  - Removed the 3D coach (`CoachPreviewView` + bundled `Coach.usdz` / `Happy Idle.usdz`), the 2D "Scratch Guide" rig (`ScratchCoachRigView` + helpers), and the orphaned `AIBattleModeView`.
+  - Re-themed the level picker to neutral skill stages via `ScratchLevelTheme` (Foundation, Timing, Control, Combos, Routine) — no AI personas, avatars, or battle identity. Removed `AICharacter`, `skillMultiplier`, `avatarImageName`, `currentAICharacter`, and `Level.aiCharacter` (persistence-checked safe — `Level` is `Codable` but never serialized).
+  - Retained: Demo Mode (reference playback + notation + analyzer), CoachCopy, text/card coaching; kept `PlayerProfile.avatarEmoji` (user badge) and the dormant `ScratchCoachDemoAnimator`/`AnimationState` (still consumed by Demo Mode internals).
+  - Added a CoachCopy vocabulary-compliance test and a level-theming no-persona guard.
+  - `.gitignore`: ignored local `analysis/` and `deep-research-skills/` (nested repo) scratch dirs.
+  - RANE / Scratch Playback Lab work remains macOS-only surface work or flag-gated experimental code (`RANE_SCRATCH_ZONE`, `PLATTER_POSITION_CORRECTION`), default OFF, paused until hardware is available; not user-visible in iOS TestFlight.
+  - Known non-blocking follow-ups: inline `demoStatusMessage` still says "Coach animation follows…" (copy fix pending); dead `systemStatusCard` + `recordBattleResult` removal; LevelSelect stage-vs-title alignment.
+
 ## 2026-06-01
 
 ### Status snapshot
