@@ -50,16 +50,152 @@ enum MIDIVerificationCheck: String, Codable, CaseIterable {
     }
 }
 
-/// The pass/fail outcome of a single intended check, with an optional human detail. Pure
-/// value model — constructed by a future live layer or directly in tests.
+// MARK: - Typed measured values
+
+// Codex follow-up: measured verification/calibration values are TYPED here rather than
+// carried as free-form `detail` strings. These are pure Codable value carriers — they
+// store what was measured; deriving them from live MIDI is a later slice (this slice does
+// not compute them and `MIDIVerificationResult.evaluate` leaves measurements nil).
+
+/// Whether forward platter rotation actually read as forward motion.
+enum MIDIPlatterDirectionResult: String, Codable, Equatable {
+    /// Forward rotation read forward (correct).
+    case correct
+    /// Forward rotation read as reverse (inverted).
+    case inverted
+    /// Direction could not be determined from the measurement.
+    case undetermined
+}
+
+/// Whether the crossfader's reported orientation matches its physical travel.
+enum MIDICrossfaderOrientation: String, Codable, Equatable {
+    /// Open/closed map the expected way.
+    case normal
+    /// Open/closed are reversed.
+    case inverted
+    /// Orientation could not be determined.
+    case undetermined
+}
+
+/// A measured full-rotation calibration: steps counted over `sampleRevolutions` turns.
+struct MIDIPlatterRotationMeasurement: Codable, Equatable {
+    /// Measured platter ticks/steps per single physical revolution.
+    var measuredStepsPerRevolution: Int
+    /// How many revolutions the measurement was taken over (for averaging confidence).
+    var sampleRevolutions: Int
+
+    init(measuredStepsPerRevolution: Int, sampleRevolutions: Int = 1) {
+        self.measuredStepsPerRevolution = measuredStepsPerRevolution
+        self.sampleRevolutions = sampleRevolutions
+    }
+
+    /// True when the measurement is usable (positive steps over at least one revolution).
+    var isValid: Bool { measuredStepsPerRevolution > 0 && sampleRevolutions > 0 }
+}
+
+/// Platter aliasing / noise metrics over a measured motion sample.
+struct MIDIPlatterNoiseMetrics: Codable, Equatable {
+    /// Total platter events seen during the sample.
+    var totalEvents: Int
+    /// Events whose per-event delta indicated aliasing / spurious direction.
+    var aliasedEventCount: Int
+    /// Largest per-event delta observed (in the control's native units).
+    var maxPerEventDelta: Int
+
+    init(totalEvents: Int, aliasedEventCount: Int, maxPerEventDelta: Int) {
+        self.totalEvents = totalEvents
+        self.aliasedEventCount = aliasedEventCount
+        self.maxPerEventDelta = maxPerEventDelta
+    }
+
+    /// Fraction of events flagged as aliased (0 when no events were seen).
+    var aliasFraction: Double {
+        totalEvents > 0 ? Double(aliasedEventCount) / Double(totalEvents) : 0
+    }
+}
+
+/// Measured raw crossfader travel extremes.
+struct MIDICrossfaderRange: Codable, Equatable {
+    /// Lowest raw value observed.
+    var rawMin: Int
+    /// Highest raw value observed.
+    var rawMax: Int
+
+    init(rawMin: Int, rawMax: Int) {
+        self.rawMin = rawMin
+        self.rawMax = rawMax
+    }
+
+    /// Raw span of the throw (clamped at 0 if min/max are crossed).
+    var span: Int { max(0, rawMax - rawMin) }
+    /// True when the range is well-formed (max strictly above min).
+    var isValid: Bool { rawMax > rawMin }
+}
+
+/// Measured crossfader hard-cut threshold — where the cut engages along the throw.
+struct MIDICrossfaderCutThreshold: Codable, Equatable {
+    /// Position fraction (0...1 of throw) at which the hard cut engages.
+    var positionFraction: Double
+    /// Raw value at the cut point, when known.
+    var rawValue: Int?
+
+    init(positionFraction: Double, rawValue: Int? = nil) {
+        self.positionFraction = positionFraction
+        self.rawValue = rawValue
+    }
+
+    /// True when the cut fraction is within the unit interval.
+    var isInUnitRange: Bool { positionFraction >= 0 && positionFraction <= 1 }
+}
+
+/// Quick-cut performance metrics over a measured burst of rapid open/close transitions.
+struct MIDIQuickCutMetrics: Codable, Equatable {
+    /// Number of distinct cuts counted.
+    var cutCount: Int
+    /// Fastest single open→close (or close→open) time in seconds, when measured.
+    var fastestCutSeconds: Double?
+    /// Median cut time in seconds, when measured.
+    var medianCutSeconds: Double?
+
+    init(cutCount: Int, fastestCutSeconds: Double? = nil, medianCutSeconds: Double? = nil) {
+        self.cutCount = cutCount
+        self.fastestCutSeconds = fastestCutSeconds
+        self.medianCutSeconds = medianCutSeconds
+    }
+}
+
+/// A typed measured value attached to a verification check outcome. Synthesized Codable
+/// (same enum-with-associated-values pattern as `MIDIControlSignalType`).
+enum MIDIVerificationMeasurement: Codable, Equatable {
+    case platterDirection(MIDIPlatterDirectionResult)
+    case platterRotation(MIDIPlatterRotationMeasurement)
+    case platterNoise(MIDIPlatterNoiseMetrics)
+    case crossfaderRange(MIDICrossfaderRange)
+    case crossfaderOrientation(MIDICrossfaderOrientation)
+    case crossfaderCutThreshold(MIDICrossfaderCutThreshold)
+    case quickCut(MIDIQuickCutMetrics)
+}
+
+/// The pass/fail outcome of a single intended check. Measured values are carried in the
+/// typed `measurement`; `detail` is for human-readable prose ONLY (never measured numbers).
+/// Pure value model — constructed by a future live layer or directly in tests.
 struct MIDIVerificationCheckOutcome: Codable, Equatable {
     let check: MIDIVerificationCheck
     let passed: Bool
+    /// The typed measured value behind this outcome, when one was measured.
+    let measurement: MIDIVerificationMeasurement?
+    /// Optional human-readable prose only (e.g. a hint). NOT a place for measured values.
     let detail: String?
 
-    init(check: MIDIVerificationCheck, passed: Bool, detail: String? = nil) {
+    init(
+        check: MIDIVerificationCheck,
+        passed: Bool,
+        measurement: MIDIVerificationMeasurement? = nil,
+        detail: String? = nil
+    ) {
         self.check = check
         self.passed = passed
+        self.measurement = measurement
         self.detail = detail
     }
 }
@@ -234,28 +370,48 @@ struct MIDIVerificationResult: Codable, Equatable {
 
 // MARK: - User override / calibration
 
-/// User-measured calibration values for a controller (all optional — only what was
-/// actually measured is recorded). Does not itself drive playback in this slice.
+/// User-measured calibration values for a controller, held as TYPED optional values — only
+/// what was actually measured is recorded (a nil field means "not measured", distinct from
+/// a measured zero/false). Does not itself drive playback in this slice.
 struct MIDICalibration: Codable, Equatable {
-    /// Measured platter ticks per physical revolution.
-    var platterTicksPerRevolution: Int?
-    /// Observed crossfader minimum raw value.
-    var crossfaderMin: Int?
-    /// Observed crossfader maximum raw value.
-    var crossfaderMax: Int?
-    /// Whether the user flagged platter direction as inverted.
-    var inverted: Bool
+    /// Measured full-rotation steps-per-revolution.
+    var platterRotation: MIDIPlatterRotationMeasurement?
+    /// Measured platter direction result (correct / inverted / undetermined).
+    var platterDirection: MIDIPlatterDirectionResult?
+    /// Measured platter aliasing / noise metrics.
+    var platterNoise: MIDIPlatterNoiseMetrics?
+    /// Measured crossfader raw min/max range.
+    var crossfaderRange: MIDICrossfaderRange?
+    /// Measured crossfader orientation (normal / inverted / undetermined).
+    var crossfaderOrientation: MIDICrossfaderOrientation?
+    /// Measured crossfader hard-cut threshold.
+    var crossfaderCutThreshold: MIDICrossfaderCutThreshold?
+    /// Measured quick-cut metrics.
+    var quickCut: MIDIQuickCutMetrics?
 
     init(
-        platterTicksPerRevolution: Int? = nil,
-        crossfaderMin: Int? = nil,
-        crossfaderMax: Int? = nil,
-        inverted: Bool = false
+        platterRotation: MIDIPlatterRotationMeasurement? = nil,
+        platterDirection: MIDIPlatterDirectionResult? = nil,
+        platterNoise: MIDIPlatterNoiseMetrics? = nil,
+        crossfaderRange: MIDICrossfaderRange? = nil,
+        crossfaderOrientation: MIDICrossfaderOrientation? = nil,
+        crossfaderCutThreshold: MIDICrossfaderCutThreshold? = nil,
+        quickCut: MIDIQuickCutMetrics? = nil
     ) {
-        self.platterTicksPerRevolution = platterTicksPerRevolution
-        self.crossfaderMin = crossfaderMin
-        self.crossfaderMax = crossfaderMax
-        self.inverted = inverted
+        self.platterRotation = platterRotation
+        self.platterDirection = platterDirection
+        self.platterNoise = platterNoise
+        self.crossfaderRange = crossfaderRange
+        self.crossfaderOrientation = crossfaderOrientation
+        self.crossfaderCutThreshold = crossfaderCutThreshold
+        self.quickCut = quickCut
+    }
+
+    /// True when no field has been measured yet.
+    var isEmpty: Bool {
+        platterRotation == nil && platterDirection == nil && platterNoise == nil
+            && crossfaderRange == nil && crossfaderOrientation == nil
+            && crossfaderCutThreshold == nil && quickCut == nil
     }
 }
 
@@ -264,8 +420,10 @@ struct MIDICalibration: Codable, Equatable {
 /// certified profile stays read-only while the user keeps their own overrides. Schema is
 /// versioned and fails closed on decode.
 struct MIDIUserOverrideProfile: Codable, Equatable {
-    /// Schema version this build writes and accepts.
-    static let currentSchemaVersion = 1
+    /// Schema version this build writes and accepts. Bumped 1 → 2 when `MIDICalibration`
+    /// was restructured to hold typed measured values (no persisted v1 data exists, and
+    /// decoding fails closed on any unsupported version).
+    static let currentSchemaVersion = 2
 
     /// Schema version of this instance (fails closed on decode if unsupported).
     let schemaVersion: Int
