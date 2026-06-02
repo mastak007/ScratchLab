@@ -601,20 +601,20 @@ struct LevelCard: View {
     
     @State private var isPressed = false
     
-    private var aiCharacter: AICharacter {
-        AICharacter(rawValue: level.aiCharacter) ?? .rookie
+    private var theme: ScratchLevelTheme {
+        ScratchLevelTheme(level: level.id)
     }
     
     var body: some View {
         Button(action: { if isUnlocked { onTap() } }) {
             HStack(spacing: 16) {
-                // Level number with character avatar
+                // Level number with skill-stage accent
                 ZStack {
                     Circle()
                         .fill(
                             isUnlocked ?
                             LinearGradient(
-                                colors: [Color(hex: aiCharacter.primaryColor), Color(hex: aiCharacter.primaryColor).opacity(0.6)],
+                                colors: [Color(hex: theme.accentColor), Color(hex: theme.accentColor).opacity(0.6)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ) :
@@ -651,7 +651,7 @@ struct LevelCard: View {
                             ProgressIndicator(
                                 current: min(prog.scratchesMastered, 1),
                                 total: 1,
-                                color: Color(hex: aiCharacter.primaryColor)
+                                color: Color(hex: theme.accentColor)
                             )
                             
                             // Stars
@@ -668,12 +668,12 @@ struct LevelCard: View {
                 
                 Spacer()
                 
-                // AI Character indicator
+                // Skill-stage indicator
                 if isUnlocked {
                     VStack(spacing: 4) {
-                        Text(aiCharacter == .rookie ? "🎧" : aiCharacter == .flash ? "⚡️" : aiCharacter == .cipher ? "🎤" : aiCharacter == .nova ? "🌟" : "👑")
+                        Image(systemName: theme.iconName)
                             .font(.title2)
-                        Text(aiCharacter.rawValue)
+                        Text(theme.stageName)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
                     }
@@ -689,7 +689,7 @@ struct LevelCard: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
                             .stroke(
-                                isUnlocked ? Color(hex: aiCharacter.primaryColor).opacity(0.3) : Color.clear,
+                                isUnlocked ? Color(hex: theme.accentColor).opacity(0.3) : Color.clear,
                                 lineWidth: 1
                             )
                     )
@@ -740,8 +740,8 @@ struct LevelDetailView: View {
         ScratchLibrary.shared.scratchesForLevel(level.id).filter { $0.id == "baby_scratch" }
     }
     
-    private var aiCharacter: AICharacter {
-        AICharacter(rawValue: level.aiCharacter) ?? .rookie
+    private var theme: ScratchLevelTheme {
+        ScratchLevelTheme(level: level.id)
     }
     
     var body: some View {
@@ -803,28 +803,28 @@ struct LevelDetailView: View {
     
     private var levelHeader: some View {
         VStack(spacing: 16) {
-            // AI Character
+            // Skill stage
             ZStack {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color(hex: aiCharacter.primaryColor), Color(hex: aiCharacter.primaryColor).opacity(0.5)],
+                            colors: [Color(hex: theme.accentColor), Color(hex: theme.accentColor).opacity(0.5)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .frame(width: 80, height: 80)
                 
-                Text(aiCharacter == .rookie ? "🎧" : aiCharacter == .flash ? "⚡️" : aiCharacter == .cipher ? "🎤" : aiCharacter == .nova ? "🌟" : "👑")
+                Image(systemName: theme.iconName)
                     .font(.system(size: 40))
             }
             
             VStack(spacing: 4) {
-                Text(aiCharacter.rawValue)
+                Text(theme.stageName)
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text(aiCharacter.description)
+                Text(theme.learningGoal)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white.opacity(0.6))
                     .multilineTextAlignment(.center)
