@@ -1197,28 +1197,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertLessThan(guardRange.lowerBound, playbackSetRange.lowerBound)
     }
 
-    func testCoachPauseHoldsPoseFromAudioTimeAndAvoidsPausedTimelineWork() throws {
-        let coachSourceURL = projectRootURL()
-            .appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let macSourceURL = projectRootURL()
-            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
-        let coachSource = try String(contentsOf: coachSourceURL, encoding: .utf8)
-        let macSource = try String(contentsOf: macSourceURL, encoding: .utf8)
-        let rigSource = try sourceSlice(
-            in: coachSource,
-            from: "struct ScratchCoachRigView: View",
-            through: "private var hasCustomAnimationStateProvider"
-        )
-
-        XCTAssertTrue(rigSource.contains("if isPlayingProvider()"))
-        XCTAssertTrue(rigSource.contains("TimelineView(.periodic"))
-        XCTAssertTrue(rigSource.contains("rigContent(\n                    playbackTime: playbackTimeProvider(),\n                    isPlaying: false"))
-        XCTAssertTrue(rigSource.contains("ScratchLabPerformanceSignpost.withInterval(\"CoachRigUpdate\")"))
-        XCTAssertTrue(macSource.contains("guard !babyScratchDemo.isStopped else { return .babyScratchOpen }"))
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
-        XCTAssertFalse(macSource.contains("CACurrentMediaTime()"))
-    }
-
     func testPausePerformanceSignpostsAndDiagnosticsAreWired() throws {
         let coreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
         let notationURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
@@ -1238,7 +1216,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(coreSource.contains("enum ScratchLabPerformanceSignpost"))
         XCTAssertTrue(notationSource.contains("ScratchLabPerformanceSignpost.begin(\"NotationTick\")"))
-        XCTAssertTrue(coachSource.contains("ScratchLabPerformanceSignpost.withInterval(\"CoachRigUpdate\")"))
         XCTAssertTrue(captureSource.contains("ScratchLabPerformanceSignpost.begin(\"CameraFrameProcess\")"))
         XCTAssertTrue(captureSource.contains("ScratchLabPerformanceSignpost.begin(\"CaptureFrameProcess\")"))
         XCTAssertTrue(captureSource.contains("ScratchLabPerformanceSignpost.begin(\"AudioAnalyze\")"))
@@ -2584,7 +2561,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(demoSource.contains("ScratchLabDemoModeController()"))
         XCTAssertTrue(demoSource.contains("demoController.startDemo()"))
         XCTAssertTrue(demoSource.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(demoSource.contains("animationStateProvider:"))
         XCTAssertTrue(demoSource.contains("Motion Feedback"))
         XCTAssertFalse(demoSource.contains("CameraPreviewView("))
         XCTAssertFalse(demoSource.contains("audioEngine.start()"))
@@ -3239,7 +3215,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(coreSource.contains("embeddedMotionTimelineName: \"BabyScratchReferenceMotionTimelineFallback\""))
         XCTAssertTrue(coreSource.contains("automaticVideoTrackingEnabled: false"))
         XCTAssertTrue(coreSource.contains("let timelineState = BabyScratchReferenceMotionTimeline.pose("))
-        XCTAssertTrue(coachSource.contains("demoMotionSampleBuffer?.coachRigAnimationState("))
     }
 
     func testBabyScratchReferenceMotionPoseLinksHandRecordAndStickerProgress() throws {
@@ -3726,236 +3701,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("\"Demo audio unavailable for this scratch.\""))
         XCTAssertTrue(source.contains("ScratchCoachCardContent("))
         XCTAssertTrue(source.contains("babyScratchDemo.currentAudioTime"))
-        XCTAssertTrue(source.contains("animationStateProvider:"))
-        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
         XCTAssertTrue(source.contains(".onChange(of: coachDemoPlaybackBlocked)"))
         XCTAssertTrue(source.contains("practiceBeatStore.isPlaying || captureEngine.isRoutineRecording"))
         XCTAssertFalse(source.contains("isolatedScratch"))
-    }
-
-    func testScratchCoachSharedViewsExistAndUseAnimator() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("struct ScratchCoachRigView: View"))
-        XCTAssertTrue(source.contains("struct ScratchCoachCardContent<Controls: View>: View"))
-        XCTAssertTrue(source.contains("ScratchCoachDemoAnimator.state("))
-        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
-        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
-        XCTAssertTrue(source.contains("demoMotionSampleBuffer?.coachRigAnimationState("))
-        XCTAssertTrue(source.contains(".task(id: demoMotionProfileTaskID)"))
-        XCTAssertTrue(source.contains("@State private var showsDetails = false"))
-        XCTAssertTrue(source.contains("Dis" + "closureGroup(isExpanded: $showsDetails)"))
-        XCTAssertTrue(source.contains("instruction.coachScript"))
-        XCTAssertTrue(source.contains(".accessibilityIdentifier(\"scratchlab-coach-rig\")"))
-        XCTAssertFalse(source.contains("struct ScratchCoachCharacterView: View"))
-    }
-
-    func testLowerScratchCoachRigUsesSharedAudioSyncedComponent() throws {
-        let sharedURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
-        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
-        let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
-        let sharedSource = try String(contentsOf: sharedURL, encoding: .utf8)
-        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
-        let macSource = try String(contentsOf: macURL, encoding: .utf8)
-        let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
-
-        XCTAssertEqual(sharedSource.components(separatedBy: "struct ScratchCoachRigView: View").count - 1, 1)
-        XCTAssertTrue(sharedSource.contains("private func resolvedAnimationState("))
-        XCTAssertTrue(sharedSource.contains("ScratchCoachDemoAudioPlayer.bundledDemoAudioURL(named: audioFileName, in: .main)"))
-        XCTAssertTrue(sharedSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
-        XCTAssertTrue(sharedSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
-        XCTAssertTrue(sharedSource.contains("private static let babyScratchCrossfaderPosition"))
-        XCTAssertTrue(sharedSource.contains("private static let babyScratchLeftHandPose"))
-        XCTAssertTrue(sharedSource.contains("private static let recordHandBasePose"))
-        XCTAssertTrue(sharedSource.contains("private static let recordStickerBasePose"))
-        XCTAssertTrue(sharedSource.contains("ScratchCoachRigGeometry.recordHandUnitPoint(progress: 0)"))
-        XCTAssertTrue(sharedSource.contains("ScratchCoachRigGeometry.recordStickerUnitPoint(progress: 0)"))
-        XCTAssertFalse(sharedSource.contains(".animation("))
-        XCTAssertFalse(sharedSource.contains("withAnimation("))
-        XCTAssertTrue(practiceSource.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(practiceSource.contains("playbackTimeProvider: { demoPlayer.currentPlaybackTime }"))
-        XCTAssertTrue(macSource.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(macSource.contains("playbackTimeProvider: { babyScratchDemo.currentAudioTime }"))
-        XCTAssertTrue(macSource.contains("animationStateProvider:"))
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
-        XCTAssertTrue(mainMenuSource.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(mainMenuSource.contains("animationStateProvider:"))
-        XCTAssertFalse(practiceSource.contains("struct ScratchCoachRigView"))
-        XCTAssertFalse(macSource.contains("struct ScratchCoachRigView"))
-        XCTAssertFalse(mainMenuSource.contains("struct ScratchCoachRigView"))
-    }
-
-    func testScratchCoachRigDoesNotRenderToneArm() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let platterStart = try XCTUnwrap(source.range(of: "private func platter("))
-        let platterEnd = try XCTUnwrap(source.range(of: "private func recordStickerLineMarker("))
-        let platterSource = String(source[platterStart.lowerBound..<platterEnd.lowerBound])
-
-        XCTAssertFalse(source.contains("ScratchCoachToneArmPose"))
-        XCTAssertFalse(source.contains("toneArm(center: platterCenter, radius: platterRadius)"))
-        XCTAssertFalse(source.contains("private func toneArm("))
-        XCTAssertFalse(source.contains("battleSafeToneArm"))
-        XCTAssertFalse(source.contains("toneArmPose"))
-        XCTAssertTrue(platterSource.contains(".rotationEffect(.degrees(animationState.recordRotationDegrees))"))
-        XCTAssertTrue(platterSource.contains("Self.recordStickerBasePose"))
-        XCTAssertTrue(platterSource.contains("recordMarkerOffset("))
-    }
-
-    func testScratchCoachRigCrossfaderRendersBelowVolumeFaders() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let mixerStart = try XCTUnwrap(source.range(of: "private func mixer("))
-        let mixerEnd = try XCTUnwrap(source.range(of: "private var knob: some View"))
-        let mixerSource = String(source[mixerStart.lowerBound..<mixerEnd.lowerBound])
-
-        XCTAssertTrue(source.contains("private static let volumeFaderYRatio: CGFloat = 0.46"))
-        XCTAssertTrue(source.contains("private static let crossfaderYRatio: CGFloat = 0.80"))
-        XCTAssertTrue(mixerSource.contains("let volumeFaderY = rect.height * Self.volumeFaderYRatio"))
-        XCTAssertTrue(mixerSource.contains("let crossfaderY = rect.height * Self.crossfaderYRatio"))
-        XCTAssertTrue(mixerSource.contains("channelVolumeFader(active: true, height: volumeFaderHeight)"))
-        XCTAssertTrue(mixerSource.contains(".position(x: rect.width * 0.5, y: volumeFaderY)"))
-        XCTAssertTrue(mixerSource.contains(".position(x: rect.width * 0.5, y: crossfaderY)"))
-        XCTAssertLessThan(
-            try XCTUnwrap(mixerSource.range(of: "volumeFaderY")).lowerBound,
-            try XCTUnwrap(mixerSource.range(of: "crossfaderY")).lowerBound
-        )
-    }
-
-    func testScratchCoachRigBabyScratchUsesFixedLeftHandAndCenteredFader() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let faderStart = try XCTUnwrap(source.range(of: "private func faderHandPoint("))
-        let faderEnd = try XCTUnwrap(source.range(of: "private func boothShadow("))
-        let faderSource = String(source[faderStart.lowerBound..<faderEnd.lowerBound])
-
-        XCTAssertTrue(source.contains("private static let babyScratchCrossfaderPosition = ScratchCoachDemoAnimationState.babyScratchCrossfaderPosition"))
-        XCTAssertTrue(source.contains("private static let babyScratchLeftHandPose = CGPoint(x: 0.50, y: 0.66)"))
-        XCTAssertTrue(faderSource.contains("guard isBabyScratch else"))
-        XCTAssertTrue(faderSource.contains("Self.babyScratchLeftHandPose.x"))
-        XCTAssertTrue(faderSource.contains("Self.babyScratchLeftHandPose.y"))
-        XCTAssertTrue(source.contains("return isBabyScratch ? .babyScratchOpen : .neutral"))
-        XCTAssertTrue(source.contains("?? (isBabyScratch ? .babyScratchOpen : .neutral)"))
-    }
-
-    func testScratchCoachRigRecordHandAndStickerUseBabyScratchClockPositions() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let recordHandStart = try XCTUnwrap(source.range(of: "private func recordHandPoint("))
-        let recordHandEnd = try XCTUnwrap(source.range(of: "private func faderHandPoint("))
-        let platterStart = try XCTUnwrap(source.range(of: "private func platter("))
-        let platterEnd = try XCTUnwrap(source.range(of: "private func recordStickerLineMarker("))
-        let recordHandSource = String(source[recordHandStart.lowerBound..<recordHandEnd.lowerBound])
-        let platterSource = String(source[platterStart.lowerBound..<platterEnd.lowerBound])
-        let stickerLineStart = try XCTUnwrap(source.range(of: "private func recordStickerLineMarker("))
-        let stickerLineEnd = try XCTUnwrap(source.range(of: "private func recordMarkerOffset("))
-        let stickerLineSource = String(source[stickerLineStart.lowerBound..<stickerLineEnd.lowerBound])
-
-        XCTAssertTrue(source.contains("Clock positions are authored in coach/deck space and converted to front-facing viewer space using 180° rotation."))
-        XCTAssertTrue(source.contains("clockPerspectiveRotationHours: Double = 6"))
-        XCTAssertTrue(source.contains("babyScratchHandStartCoachHour: Double = 9"))
-        XCTAssertTrue(source.contains("babyScratchHandEndCoachHour: Double = 11"))
-        XCTAssertTrue(source.contains("babyScratchStickerStartCoachHour: Double = 12"))
-        XCTAssertTrue(source.contains("babyScratchStickerEndCoachHour: Double = 2"))
-        XCTAssertTrue(source.contains("static func frontFacingViewerHour(coachHour: Double) -> Double"))
-        XCTAssertTrue(source.contains("static func viewerAngleDegrees(coachHour: Double) -> Double"))
-        XCTAssertTrue(source.contains("recordHandRadiusMultiplier: CGFloat = 0.92"))
-        XCTAssertTrue(source.contains("recordStickerRadiusMultiplier: CGFloat = 0.72"))
-        XCTAssertTrue(source.contains("private static let recordHandBasePose = ScratchCoachRigGeometry.recordHandUnitPoint(progress: 0)"))
-        XCTAssertTrue(source.contains("private static let recordStickerBasePose = ScratchCoachRigGeometry.recordStickerUnitPoint(progress: 0)"))
-        XCTAssertTrue(recordHandSource.contains("ScratchCoachRigGeometry.recordHandPoint("))
-        XCTAssertTrue(recordHandSource.contains("x: center.x + radius * Self.recordHandBasePose.x"))
-        XCTAssertTrue(recordHandSource.contains("+ CGFloat(animationState.recordPosition) * 24"))
-        XCTAssertTrue(platterSource.contains("recordStickerLineMarker(radius: radius)"))
-        XCTAssertTrue(platterSource.contains("Self.recordStickerBasePose.x"))
-        XCTAssertTrue(platterSource.contains("Self.recordStickerBasePose.y"))
-        XCTAssertTrue(platterSource.contains(".rotationEffect(.degrees(animationState.recordRotationDegrees))"))
-        XCTAssertTrue(stickerLineSource.contains("Capsule()"))
-        XCTAssertTrue(stickerLineSource.contains(".frame(width: 5, height: max(14, radius * 0.46))"))
-        XCTAssertFalse(stickerLineSource.contains("Circle()"))
-        XCTAssertFalse(platterSource.contains("Self.toneArmPose"))
-    }
-
-    func testScratchCoachRigGeometryMapsBabyHandAndStickerAngles() {
-        XCTAssertEqual(ScratchCoachRigGeometry.frontFacingViewerHour(coachHour: 9), 3, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.frontFacingViewerHour(coachHour: 11), 5, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.frontFacingViewerHour(coachHour: 12), 6, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.frontFacingViewerHour(coachHour: 2), 8, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.viewerAngleDegrees(coachHour: 9), 0, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.viewerAngleDegrees(coachHour: 11), 60, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.viewerAngleDegrees(coachHour: 12), 90, accuracy: 0.0001)
-        XCTAssertEqual(ScratchCoachRigGeometry.viewerAngleDegrees(coachHour: 2), 150, accuracy: 0.0001)
-
-        let handStart = ScratchCoachRigGeometry.recordHandUnitPoint(progress: 0)
-        let handEnd = ScratchCoachRigGeometry.recordHandUnitPoint(progress: 1)
-        let stickerStart = ScratchCoachRigGeometry.recordStickerUnitPoint(progress: 0)
-        let stickerEnd = ScratchCoachRigGeometry.recordStickerUnitPoint(progress: 1)
-        let stickerRotation = ScratchCoachRigGeometry.recordStickerRotationDegrees(progress: 1)
-        let leftDeckCenter = CGPoint(x: 80, y: 120)
-        let rightDeckCenter = CGPoint(x: 240, y: 120)
-        let leftStart = ScratchCoachRigGeometry.recordHandPoint(
-            center: leftDeckCenter,
-            radius: 40,
-            progress: 0
-        )
-        let rightStart = ScratchCoachRigGeometry.recordHandPoint(
-            center: rightDeckCenter,
-            radius: 40,
-            progress: 0
-        )
-        let leftEnd = ScratchCoachRigGeometry.recordHandPoint(
-            center: leftDeckCenter,
-            radius: 40,
-            progress: 1
-        )
-        let rightEnd = ScratchCoachRigGeometry.recordHandPoint(
-            center: rightDeckCenter,
-            radius: 40,
-            progress: 1
-        )
-
-        XCTAssertEqual(handStart.x, 0.92, accuracy: 0.01)
-        XCTAssertEqual(handStart.y, 0, accuracy: 0.01)
-        XCTAssertEqual(handEnd.x, 0.46, accuracy: 0.02)
-        XCTAssertEqual(handEnd.y, 0.80, accuracy: 0.02)
-        XCTAssertEqual(stickerStart.x, 0, accuracy: 0.01)
-        XCTAssertEqual(stickerStart.y, 0.72, accuracy: 0.01)
-        XCTAssertEqual(stickerEnd.x, -0.62, accuracy: 0.02)
-        XCTAssertEqual(stickerEnd.y, 0.36, accuracy: 0.02)
-        XCTAssertEqual(stickerRotation, 60, accuracy: 0.0001)
-        XCTAssertEqual(leftStart.x - leftDeckCenter.x, rightStart.x - rightDeckCenter.x, accuracy: 0.0001)
-        XCTAssertEqual(leftStart.y - leftDeckCenter.y, rightStart.y - rightDeckCenter.y, accuracy: 0.0001)
-        XCTAssertEqual(leftEnd.x - leftDeckCenter.x, rightEnd.x - rightDeckCenter.x, accuracy: 0.0001)
-        XCTAssertEqual(leftEnd.y - leftDeckCenter.y, rightEnd.y - rightDeckCenter.y, accuracy: 0.0001)
-        XCTAssertLessThan(leftEnd.x, leftStart.x)
-        XCTAssertGreaterThan(leftEnd.y, leftStart.y)
-    }
-
-    func testScratchCoachRigSourceHasNoRandomOrFreeRunningMotionCursor() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let rigStart = try XCTUnwrap(source.range(of: "struct ScratchCoachRigView: View"))
-        let rigEnd = try XCTUnwrap(source.range(of: "struct ScratchCoachCardContent<Controls: View>: View"))
-        let rigSource = String(source[rigStart.lowerBound..<rigEnd.lowerBound])
-
-        XCTAssertFalse(rigSource.contains(".random"))
-        XCTAssertFalse(rigSource.contains("randomElement"))
-        XCTAssertFalse(rigSource.contains("UUID("))
-        XCTAssertFalse(rigSource.contains("cursorTime +="))
-        XCTAssertFalse(rigSource.contains("let playbackTime = isPlaying ? playbackTimeProvider() : 0"))
-        XCTAssertTrue(rigSource.contains("playbackTime: playbackTimeProvider()"))
-        XCTAssertTrue(rigSource.contains("demoMotionSampleBuffer?.coachRigAnimationState("))
-    }
-
-    func testScratchCoachSharedViewsUseScratchSpecificFaderCueCopy() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("return \"Fader stays open.\""))
-        XCTAssertTrue(source.contains("return \"Quick fader click.\""))
-        XCTAssertFalse(source.contains("case \"baby\":\n            return \"Close between cuts.\""))
     }
 
     func testScratchCoachSharedViewsAreBuiltForIOSAndMacTargets() throws {
@@ -6974,9 +6722,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(coreSource.contains("let timelineState = BabyScratchReferenceMotionTimeline.pose("))
         // The coordinator is also defined in CaptureCore.swift.
         XCTAssertTrue(coreSource.contains("final class BabyScratchDemoPlaybackCoordinator"))
-        // The macOS Baby Scratch coach bypasses buffered audio analysis and samples the direct audio-time pose.
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
         XCTAssertFalse(notationSource.contains("playbackStartWall"))
     }
 

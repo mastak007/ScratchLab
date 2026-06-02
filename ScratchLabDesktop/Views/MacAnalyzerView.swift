@@ -5843,11 +5843,6 @@ struct MacAnalyzerView: View {
                 demoStatusMessage: coachDemoStatusMessage,
                 playbackTimeProvider: { babyScratchDemo.currentAudioTime },
                 isPlayingProvider: { babyScratchDemo.isPlaying },
-                animationStateProvider: { audioTime, _ in
-                    let pose = BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)
-                    guard !babyScratchDemo.isStopped else { return .babyScratchOpen }
-                    return BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)
-                },
                 theme: coachCardTheme
             ) {
                 HStack(spacing: 10) {
