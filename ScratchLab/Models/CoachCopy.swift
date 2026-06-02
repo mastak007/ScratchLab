@@ -398,4 +398,72 @@ enum CoachCopy {
             CoachingEventCatalog.descriptor(for: kind).body
         }
     }
+
+    // MARK: Vocabulary-compliance aggregator (audited by tests)
+    //
+    // Flat list of the user-facing string CONSTANTS above, plus the literal-returning
+    // helper outputs that carry real advisory/progress copy, so a test can audit them all
+    // against the PROFILE.md banned-vocabulary list (see CoachingEventVocabularyTests).
+    // Pure data — exposing this list changes no runtime behaviour. When adding a new
+    // user-facing string, add it here too so the audit keeps covering the full surface.
+    // Helpers that defer to external types (e.g. `ActionableCoaching.fallbackAction`, which
+    // returns a `CoachingEventCatalog` body) are audited where those types live, not here.
+    // Emoji/glyph constants are intentionally omitted — they carry no vocabulary.
+    static let allUserFacingStrings: [String] = [
+        AssistMode.autoCutExplainer, AssistMode.demoExplainer, AssistMode.guidedExplainer,
+        AssistMode.coachedExplainer, AssistMode.openExplainer,
+
+        Tip.comboCleared, Tip.comboInProgress, Tip.guided, Tip.defaultExecution,
+        Tip.contextualFirstSession, Tip.contextualReturning, Tip.contextualActiveStreak,
+
+        Results.mastery, Results.goodJob, Results.keepPracticing,
+        Results.scoreLabel, Results.attemptsLabel, Results.bestStreakLabel,
+        Results.backToLevel, Results.primaryMetricLabel,
+        Results.progressToPhraseClear, Results.progressToMastery,
+        Results.phraseClearProgress(percentRemaining: 50), Results.masteryProgress(percentRemaining: 50),
+
+        Progression.streakStart, Progression.availableNextHeader, Progression.inSessionMomentumLabel,
+
+        ScratchCard.bestRunLabel, ScratchCard.takesLabel, ScratchCard.mastered,
+
+        Recent.header, Recent.emptyState, Recent.today, Recent.yesterday,
+
+        Practice.liveTitle, Practice.liveSubtitle, Practice.selectScratchHeader,
+
+        Combo.babyFlowTitle, Combo.babyFlowBody, Combo.cuesVisualNote,
+        Combo.badgeCleared, Combo.badgeLive, Combo.bestRunLabel, Combo.statusLabel,
+        Combo.statusCleared, Combo.statusNoClean, Combo.valueCleared, Combo.valueBuilding, Combo.valueFresh,
+
+        PhraseMomentum.chipLabel,
+
+        PracticeGuide.babyScratchTitle, PracticeGuide.babyScratchSubtitle,
+        PracticeGuide.babyScratchPlayingCaption, PracticeGuide.babyScratchIdleCaption,
+
+        Compare.header, Compare.menuTitle, Compare.clearMenuTitle, Compare.primaryColumn,
+        Compare.secondaryColumn, Compare.placeholderNotation,
+        Compare.sameScratchBadge, Compare.differentScratchBadge,
+
+        Export.header, Export.demoVideoButtonTitle, Export.demoVideoCaption,
+        Export.exportingLabel, Export.savePanelTitle, Export.defaultFileName,
+
+        NeedsReview.label,
+
+        Milestone.header, Milestone.firstSession,
+
+        DriftCoaching.header, DriftCoaching.primaryLate, DriftCoaching.primaryEarly,
+        DriftCoaching.advisoryLate(1), DriftCoaching.advisoryLate(2),
+        DriftCoaching.advisoryEarly(1), DriftCoaching.advisoryEarly(2),
+
+        DrillSummaryCopy.header, DrillSummaryCopy.repetitionsLabel,
+        DrillSummaryCopy.landedLabel, DrillSummaryCopy.subskillLabel,
+
+        LowSignal.noAttempts, LowSignal.fewAttempts,
+
+        TimingPreview.header, TimingPreview.takeLengthLabel, TimingPreview.attemptsLabel,
+        TimingPreview.onBeatLabel, TimingPreview.avgTimingLabel,
+        TimingPreview.previewSuffix, TimingPreview.disclaimer,
+
+        ActionableCoaching.header, ActionableCoaching.lowConfidenceDisclaimer,
+        ActionableCoaching.lateReversalAction, ActionableCoaching.earlyReversalAction,
+    ]
 }

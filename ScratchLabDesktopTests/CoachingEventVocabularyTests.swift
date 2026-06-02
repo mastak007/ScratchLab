@@ -253,4 +253,47 @@ final class CoachingEventVocabularyTests: XCTestCase {
                            "fallbackAction(for: .\(kind.rawValue)) must return the catalog descriptor body")
         }
     }
+
+    // MARK: - 21. CoachCopy vocabulary compliance (PROFILE.md / App Store safety)
+
+    /// PROFILE.md / CoachCopy header banned vocabulary: ScratchLab must never imply an AI
+    /// detector, deep learning, a real-time AI coach, or perfect detection. Matched
+    /// phrase-level and case-insensitive — bare "AI"/"ai" is intentionally NOT banned (it
+    /// would false-positive "available", "again", "fail"); only the documented
+    /// marketing-risk phrases are.
+    private static let bannedPhrases = [
+        "AI detects", "AI detect", "AI coach", "real-time AI coach",
+        "deep learning", "neural", "perfectly detects", "perfectly detect",
+    ]
+
+    func testCoachCopyAggregatorIsNonEmptyAndStringsAreNonEmpty() {
+        XCTAssertFalse(CoachCopy.allUserFacingStrings.isEmpty,
+                       "the audit aggregator must list the user-facing strings")
+        for s in CoachCopy.allUserFacingStrings {
+            XCTAssertFalse(s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                           "no user-facing string should be empty")
+        }
+    }
+
+    func testCoachCopyContainsNoBannedVocabulary() {
+        for s in CoachCopy.allUserFacingStrings {
+            let lower = s.lowercased()
+            for phrase in Self.bannedPhrases {
+                XCTAssertFalse(lower.contains(phrase.lowercased()),
+                               "CoachCopy string contains banned phrase \"\(phrase)\": \"\(s)\"")
+            }
+        }
+    }
+
+    /// The practice-timing preview surface must keep its PROFILE.md-required disclaimer
+    /// conventions: a "(preview)" suffix token and the not-saved/exported/scored disclaimer
+    /// stating metrics come from on-device audio onsets.
+    func testTimingPreviewKeepsRequiredDisclaimerVocabulary() {
+        XCTAssertEqual(CoachCopy.TimingPreview.previewSuffix, "(preview)")
+        let disclaimer = CoachCopy.TimingPreview.disclaimer.lowercased()
+        XCTAssertTrue(disclaimer.contains("on-device audio onsets"),
+                      "disclaimer must state metrics come from on-device audio onsets")
+        XCTAssertTrue(disclaimer.contains("aren't saved, exported, or scored"),
+                      "disclaimer must keep the not-saved/exported/scored language")
+    }
 }
