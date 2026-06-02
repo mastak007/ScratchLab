@@ -3641,27 +3641,25 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(scheme.contains("waitForExecutable = \"YES\""))
     }
 
-    func testMainMenuSourceExposesDebugCoachPreviewEntryPoint() throws {
+    func testMainMenuDoesNotExposeCoachPreviewEntryPoint() throws {
+        // The 3D Coach (CoachPreviewView + Coach.usdz) was fully removed. The main menu /
+        // Advanced hub must no longer reference it in any form.
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("@State private var showingCoachPreview = false"))
-        XCTAssertTrue(source.contains("#if DEBUG && canImport(RealityKit)"))
-        XCTAssertTrue(source.contains(".sheet(isPresented: $showingCoachPreview)"))
-        XCTAssertTrue(source.contains("CoachPreviewView()"))
-        XCTAssertTrue(source.contains("title: \"3D Coach Demo\""))
-        XCTAssertTrue(source.contains("subtitle: \"Preview the 3D coach model animation\""))
-        XCTAssertTrue(source.contains("action: { showingCoachPreview = true }"))
-        XCTAssertFalse(source.contains("Debug only"))
+        XCTAssertFalse(source.contains("showingCoachPreview"),
+                       "main menu must not retain 3D coach preview state")
+        XCTAssertFalse(source.contains("CoachPreviewView"),
+                       "main menu must not present the removed 3D coach preview")
+        XCTAssertFalse(source.contains("3D Coach Demo"),
+                       "main menu must not advertise the removed 3D coach demo")
     }
 
     func testPracticeSetupDoesNotExposeCoachPreviewEntryPoint() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        // The 3D Coach Demo entry point was removed from the practice flow.
-        // CoachPreviewView is preserved in code (still reachable from the main
-        // menu); practice no longer links to it.
+        // The 3D Coach Demo has been fully removed; practice never links to it.
         XCTAssertFalse(source.contains("showingCoachPreview"),
                        "Practice must not retain 3D coach preview state")
         XCTAssertFalse(source.contains("CoachPreviewView()"),
@@ -3670,173 +3668,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                        "Practice setup must not expose the 3D coach preview button")
         XCTAssertFalse(source.contains("Open 3D Coach Demo"),
                        "Practice setup must not advertise the 3D coach demo")
-    }
-
-    func testCoachPreviewSourceExposesBabyScratchAudioMotionFeedback() throws {
-        // The Baby Scratch audio-motion feedback panel moved from
-        // PracticeModeView to CoachPreviewView and is now rendered as
-        // `trainerBadge` rows. (PROFILE: motion labels stay in the coach /
-        // trainer context, not surfaced as truth in Practice.)
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CoachPreviewView.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("audioEngine.scratchMotionFeedback"))
-        XCTAssertTrue(source.contains("trainerBadge(title: \"Direction\", value: audioEngine.scratchMotionDirection.label)"))
-        XCTAssertTrue(source.contains("trainerBadge(title: \"Forward\", value: audioForwardDurationText)"))
-        XCTAssertTrue(source.contains("trainerBadge(title: \"Back\", value: audioBackwardDurationText)"))
-        XCTAssertTrue(source.contains("trainerBadge(title: \"Timing Error\", value: audioTimingErrorText)"))
-        XCTAssertTrue(source.contains("private func formattedDuration(_ duration: TimeInterval?) -> String"))
-    }
-
-    func testCoachPreviewSourceLoadsBundledCoachUSDZWithRealityKitDiagnosticsAndARViewFraming() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CoachPreviewView.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("import RealityKit"))
-        XCTAssertTrue(source.contains("struct CoachPreviewView: View"))
-        XCTAssertTrue(source.contains("@EnvironmentObject private var audioEngine: AudioEngine"))
-        XCTAssertTrue(source.contains("static let entityName = \"Coach\""))
-        XCTAssertTrue(source.contains("static let resourceExtension = \"usdz\""))
-        XCTAssertTrue(source.contains("try await Entity("))
-        XCTAssertTrue(source.contains("contentsOf: bundleURL"))
-        XCTAssertTrue(source.contains("withName: CoachPreviewConstants.resourceName"))
-        XCTAssertTrue(source.contains("try await Entity(named: CoachPreviewConstants.entityName, in: Bundle.main)"))
-        XCTAssertTrue(source.contains("let initialBounds = coachEntity.visualBounds(relativeTo: nil)"))
-        XCTAssertTrue(source.contains("let framedBounds = applyPreviewFraming("))
-        XCTAssertTrue(source.contains("animationController = coachEntity.playAnimation("))
-        XCTAssertTrue(source.contains("firstAnimation.repeat(),"))
-        XCTAssertTrue(source.contains("ARView(frame: .zero, cameraMode: .nonAR, automaticallyConfigureSession: false)"))
-        XCTAssertTrue(source.contains("DispatchQueue.main.async { [weak arView] in"))
-        XCTAssertTrue(source.contains("arView.debugOptions = []"))
-        XCTAssertTrue(source.contains("arView.debugOptions.remove(.showStatistics)"))
-        // Statistics-overlay suppression moved from private-API hacks
-        // (__statisticsOptions / setShowStatistics: KVC) to a dedicated
-        // public-API helper.
-        XCTAssertTrue(source.contains("private func disableStatisticsOverlay(on arView: ARView)"),
-                      "ARView statistics overlay must be suppressed via a dedicated helper")
-        XCTAssertTrue(source.contains("disableStatisticsOverlay(on: arView)"),
-                      "configure(_:) must call the statistics-overlay suppressor")
-        XCTAssertTrue(source.contains("AnchorEntity(world: .zero)"))
-        XCTAssertTrue(source.contains("Bundle.main.url("))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] rootEntity.name="))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] namedEntity.loadSucceeded=false error="))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] namedEntity.fallback=rootEntity\")"))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] finalScale="))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] finalTranslation="))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] loadSucceeded=true\")"))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] availableAnimations.count=\\(animationCount)\")"))
-        XCTAssertTrue(source.contains("private var previewBadge: some View"))
-        XCTAssertTrue(source.contains("Text(status.summaryLine)"))
-        XCTAssertTrue(source.contains(".overlay(alignment: .topLeading)"))
-        XCTAssertTrue(source.contains(".frame(height: 400)"))
-        XCTAssertTrue(source.contains("private var audioMotionCard: some View"))
-        XCTAssertTrue(source.contains("Text(\"Audio Motion\")"))
-        XCTAssertTrue(source.contains("audioEngine.scratchMotionFeedback"))
-        XCTAssertTrue(source.contains("audioEngine.selectInputSource(source)"))
-        XCTAssertTrue(source.contains("prepareAudioMonitoringIfNeeded()"))
-        XCTAssertTrue(source.contains("teardownAudioMonitoringIfNeeded()"))
-        XCTAssertTrue(source.contains("@State private var inputSourceBeforePreview: AudioInputSource?"))
-        XCTAssertTrue(source.contains("inputSourceBeforePreview = audioEngine.currentInputSource"))
-        XCTAssertTrue(source.contains("audioEngine.selectInputSource(inputSourceBeforePreview)"))
-        XCTAssertFalse(source.contains("Debug-only"))
-        XCTAssertFalse(source.contains("RealityView { content in"))
-        XCTAssertFalse(source.contains("showStatistics = true"))
-        XCTAssertFalse(source.contains("ARView.appearance"))
-        XCTAssertFalse(source.contains("import SceneKit"))
-    }
-
-    func testCoachPreviewSourceExposesInteractiveScratchTrainerPrototypeControls() throws {
-        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CoachPreviewView.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        XCTAssertTrue(source.contains("enum CoachMotionMode: String, CaseIterable, Identifiable"))
-        XCTAssertTrue(source.contains("case idleLoop = \"Idle Loop\""))
-        XCTAssertTrue(source.contains("case forwardScratch = \"Forward Scratch\""))
-        XCTAssertTrue(source.contains("case backScratch = \"Back Scratch\""))
-        XCTAssertTrue(source.contains("case babyScratchDemo = \"Baby Scratch Demo\""))
-        XCTAssertTrue(source.contains("@State private var motionMode: CoachMotionMode = .idleLoop"))
-        XCTAssertTrue(source.contains("@State private var scratchValue = 0.0"))
-        XCTAssertTrue(source.contains("@State private var scratchVelocityApprox = 0.0"))
-        XCTAssertTrue(source.contains("Text(\"Motion\")"))
-        XCTAssertTrue(source.contains("Text(\"Scratch Pad\")"))
-        XCTAssertTrue(source.contains("Text(formattedScratchValue(scratchValue))"))
-        XCTAssertTrue(source.contains("@State private var motionDemoTask: Task<Void, Never>?"))
-        XCTAssertTrue(source.contains("@State private var scratchReleaseTask: Task<Void, Never>?"))
-        XCTAssertTrue(source.contains("@State private var startedAudioEngineForPreview = false"))
-        XCTAssertTrue(source.contains("private func applyMotionMode(_ mode: CoachMotionMode)"))
-        XCTAssertTrue(source.contains("applyMotionMode(mode)"))
-        XCTAssertTrue(source.contains("DragGesture(minimumDistance: 0)"))
-        XCTAssertTrue(source.contains("if motionDemoTask != nil {"))
-        XCTAssertTrue(source.contains("cancelActiveMotionDemo()"))
-        XCTAssertTrue(source.contains("if scratchReleaseTask != nil {"))
-        XCTAssertTrue(source.contains("cancelScratchReleaseMotion()"))
-        XCTAssertTrue(source.contains("rotationEffect(.degrees(platterRotationDegrees))"))
-        XCTAssertTrue(source.contains("case .idleLoop:"))
-        XCTAssertTrue(source.contains("resetTrainerToNeutral()"))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainerMode] Forward Scratch\")"))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainerMode] Back Scratch\")"))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainerMode] Baby Scratch Demo started\")"))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainerMode] Baby Scratch Demo completed\")"))
-        XCTAssertTrue(source.contains("private func beginScratchRelease() -> Int"))
-        XCTAssertTrue(source.contains("private func runScratchRelease("))
-        XCTAssertTrue(source.contains("private func settleScratchToNeutral("))
-        XCTAssertTrue(source.contains("private func animateScratchValue("))
-        XCTAssertTrue(source.contains("private func easeInOutCubic(_ progress: Double) -> Double"))
-        XCTAssertTrue(source.contains("static let motionDemoForwardMilliseconds: UInt64 = 520"))
-        XCTAssertTrue(source.contains("static let motionDemoBackMilliseconds: UInt64 = 520"))
-        XCTAssertTrue(source.contains("static let motionDemoCenterPauseMilliseconds: UInt64 = 120"))
-        XCTAssertTrue(source.contains("static let motionDemoReturnMilliseconds: UInt64 = 440"))
-        XCTAssertTrue(source.contains("static let motionPulseTravelMilliseconds: UInt64 = 220"))
-        XCTAssertTrue(source.contains("static let motionPulseHoldMilliseconds: UInt64 = 90"))
-        XCTAssertTrue(source.contains("velocity *= exp(-CoachPreviewConstants.releaseDecelerationPerSecond * timeStep)"))
-        XCTAssertTrue(source.contains("let acceleration = (-CoachPreviewConstants.releaseSpringStiffness * position)"))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainer] scratchValue="))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainer] direction="))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainer] velocityApprox="))
-        XCTAssertTrue(source.contains("let scratchValue: Double"))
-        XCTAssertTrue(source.contains("let scratchVelocityApprox: Double"))
-        XCTAssertTrue(source.contains("var platterEntity: Entity?"))
-        XCTAssertTrue(source.contains("func applyPlatterState(scratchValue: Double, scratchVelocityApprox: Double)"))
-        XCTAssertTrue(source.contains("makeTrainerPlatter("))
-        XCTAssertTrue(source.contains("around: loadedCoach.visualBounds"))
-        XCTAssertTrue(source.contains("viewportSize: viewportSize"))
-        XCTAssertTrue(source.contains("mesh: .generateCylinder("))
-        XCTAssertTrue(source.contains("platterEntity.name = \"CoachTrainerPlatter\""))
-        XCTAssertTrue(source.contains("context.coordinator.applyPlatterState("))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainer3D] platterRotation="))
-        XCTAssertTrue(source.contains("print(\"[CoachTrainer3D] scratchValue="))
-        XCTAssertTrue(source.contains("static let platterRadius: Float = 0.28"))
-        XCTAssertTrue(source.contains("static let platterTargetScreenWidthRatio: Float = 0.35"))
-        XCTAssertTrue(source.contains("let waistHeight = coachBounds.min.y + (coachBounds.extents.y * CoachPreviewConstants.platterWaistHeightRatio)"))
-        XCTAssertTrue(source.contains("let targetDistance = platterDistanceFromCamera(for: viewportSize)"))
-        XCTAssertTrue(source.contains("let accentSurfaceMaterial = UnlitMaterial("))
-        XCTAssertTrue(source.contains("print(\"[CoachPreview] platter.diameter="))
-        XCTAssertTrue(source.contains("trainerBadge(title: \"Timing Error\", value: audioTimingErrorText)"))
-        XCTAssertTrue(source.contains("private func formattedDuration(_ duration: TimeInterval?) -> String"))
-        XCTAssertTrue(source.contains("case .pausedForScratch"))
-        XCTAssertTrue(source.contains("animationController.pause()"))
-        XCTAssertTrue(source.contains("animationController.resume()"))
-        XCTAssertFalse(source.contains("Text(\"Coach model test\")"))
-        XCTAssertFalse(source.contains("Debug only"))
-        XCTAssertFalse(source.contains("Text(\"Coach Trainer Prototype\")"))
-        XCTAssertFalse(source.contains("Text(\"PROTOTYPE NOTES\")"))
-        XCTAssertFalse(source.contains("Text(\"Preview the bundled coach model, keep its default loop alive, and sketch scratch motion before real rig controls are wired in.\")"))
-    }
-
-    func testProjectBundlesCoachUSDZForPreviewTargets() throws {
-        let projectURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj")
-        let project = try String(contentsOf: projectURL, encoding: .utf8)
-
-        XCTAssertTrue(project.contains("Coach.usdz in Resources"))
-        XCTAssertTrue(project.contains("Coach.usdz */ = {isa = PBXFileReference;"))
-        XCTAssertTrue(project.contains("path = Resources/Coach/Coach.usdz;"))
-        XCTAssertTrue(project.contains("CoachPreviewView.swift in Sources"))
-        XCTAssertTrue(project.contains("CoachPreviewView.swift */ = {isa = PBXFileReference;"))
-    }
-
-    func testHostedDesktopBundleContainsCoachUSDZAsset() throws {
-        let assetURL = try XCTUnwrap(Bundle.main.url(forResource: "Coach", withExtension: "usdz"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: assetURL.path))
     }
 
     func testPracticeModeCoachDemoSourceStopsWhenPracticeBeatStarts() throws {

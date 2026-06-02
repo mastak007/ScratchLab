@@ -45,9 +45,6 @@
 		43751697AA2973A2E1462B3F /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC927BE2AC20BBF592338F0B /* Entry.swift */; };
 		4A543CD477CFCC3F9EB88C03 /* WatchCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9886FB2B8E07860472DD229 /* WatchCaptureView.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
-		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
-		51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */; };
-		51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */; };
 		51DF6B522FCC621500A6C749 /* ClickPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DF6B512FCC621500A6C749 /* ClickPlacement.swift */; };
 		51DF6B532FCC621500A6C749 /* ClickPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DF6B512FCC621500A6C749 /* ClickPlacement.swift */; };
 		KIDSCRUBINPUTBUILDIOS001 /* KidScrubInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */; };
@@ -495,8 +492,6 @@
 		514AF3882F535649000B597C /* ScratchLab.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = ScratchLab.xctestplan; sourceTree = "<group>"; };
 		517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ScratchLabDatasetBuilder; sourceTree = BUILT_PRODUCTS_DIR; };
 		518282CE2F5DD2800077484A /* ScratchLab 2.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ScratchLab 2.xctestplan"; sourceTree = "<group>"; };
-		51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachPreviewView.swift; sourceTree = "<group>"; };
-		51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Coach/Coach.usdz; sourceTree = "<group>"; };
 		51DF6B512FCC621500A6C749 /* ClickPlacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClickPlacement.swift; path = Notation/Grammar/ClickPlacement.swift; sourceTree = "<group>"; };
 		KIDSCRUBINPUTFILEREF0001 /* KidScrubInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubInput.swift; path = KidPrototype/KidScrubInput.swift; sourceTree = "<group>"; };
 		KIDSCRUBAUDIOFILEREF0001 /* KidScrubAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KidScrubAudioPlayer.swift; path = KidPrototype/KidScrubAudioPlayer.swift; sourceTree = "<group>"; };
@@ -1002,7 +997,6 @@
 				A5000050 /* ML */,
 				A5000008 /* Services */,
 				A2000012 /* Assets.xcassets */,
-				51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */,
 				A2000031 /* Resources/CoachInstructions */,
 				A2000032 /* Resources/CoachDemoAudio */,
 				A2000035 /* Resources/CoachDemoMotion */,
@@ -1035,7 +1029,6 @@
 			isa = PBXGroup;
 			children = (
 				A2000002 /* MainMenuView.swift */,
-				51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */,
 				A2000003 /* LevelSelectView.swift */,
 				A2000004 /* PracticeModeView.swift */,
 				SML0000000SML001SML00001 /* ScratchMotionLane.swift */,
@@ -1457,7 +1450,6 @@
 			isa = PBXResourcesBuildPhase;
 			files = (
 				B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */,
-				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */,
 				B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */,
 				B9AF9ED9370241CF8BEFDB7C /* Resources/CoachDemoReels in Resources */,
@@ -1471,7 +1463,6 @@
 			isa = PBXResourcesBuildPhase;
 			files = (
 				219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */,
-				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
 				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
 				219D8D64A93840FC9A724C11 /* Resources/CoachDemoReels in Resources */,
@@ -1675,7 +1666,6 @@
 			files = (
 				A1000001 /* ScratchLabApp.swift in Sources */,
 				A1000002 /* MainMenuView.swift in Sources */,
-				51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */,
 				A1000003 /* LevelSelectView.swift in Sources */,
 				A1000004 /* PracticeModeView.swift in Sources */,
 				SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */,

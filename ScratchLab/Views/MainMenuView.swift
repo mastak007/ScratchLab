@@ -23,7 +23,6 @@ struct MainMenuView: View {
     @State private var showingCompanionCam = false
     @State private var showingWatchCapture = false
     @State private var showingPerformerMonitor = false
-    @State private var showingCoachPreview = false
     @State private var showingDemoMode = false
     #if DEBUG
     @State private var showingVirtualPlatterPrototype = false
@@ -56,13 +55,6 @@ struct MainMenuView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
-        #if DEBUG && canImport(RealityKit)
-        .sheet(isPresented: $showingCoachPreview) {
-            NavigationStack {
-                CoachPreviewView()
-            }
-        }
-        #endif
         .onAppear {
             if progressManager.playerProfile == nil {
                 progressManager.createProfile(displayName: "New DJ")
@@ -392,7 +384,6 @@ private struct AdvancedHubView: View {
     @State private var showingCompanionCam = false
     @State private var showingPerformerMonitor = false
     @State private var showingWatchCapture = false
-    @State private var showingCoachPreview = false
     #if DEBUG
     @State private var showingVirtualPlatterPrototype = false
     #endif
@@ -417,13 +408,6 @@ private struct AdvancedHubView: View {
         }
         .navigationTitle("Advanced / Mac Companion")
         .navigationBarTitleDisplayMode(.inline)
-        #if DEBUG && canImport(RealityKit)
-        .sheet(isPresented: $showingCoachPreview) {
-            NavigationStack {
-                CoachPreviewView()
-            }
-        }
-        #endif
         .navigationDestination(isPresented: $showingDemoMode) {
             DemoModeView()
         }
@@ -515,16 +499,6 @@ private struct AdvancedHubView: View {
                 accent: ScratchLabPalette.link,
                 action: { showingWatchCapture = true }
             )
-
-            #if DEBUG && canImport(RealityKit)
-            MenuButton(
-                title: "3D Coach Demo",
-                subtitle: "Preview the 3D coach model animation",
-                icon: "cube.transparent",
-                accent: Color(hex: "8B5CF6"),
-                action: { showingCoachPreview = true }
-            )
-            #endif
 
             #if DEBUG
             MenuButton(
