@@ -103,6 +103,45 @@ struct ScratchPlatterAudioDrive {
     }
 }
 
+/// Bounded proportional correction toward the mapper's absolute CC6 sample position
+/// (Slice C experiment, behind `FeatureFlags.platterPositionCorrectionEnabled`).
+///
+/// Slice B proved the velocity-integrating engine drifts away from the true platter angle
+/// during continuous scratching (folded drift up to ~½ a sample). This adds a small,
+/// BOUNDED velocity bias to the existing CC6 glide rate so the audio read head is pulled
+/// back toward `mapper.samplePosition` — it is a *velocity correction*, NOT a hard lock:
+/// it never snaps the head, never seeks, and never touches the engine render block. The
+/// error is folded to the shortest circular path so a loop-seam straddle can't yank the
+/// head the long way round. Pure value type so the math is unit-testable without hardware.
+struct ScratchPositionCorrectionController: Equatable {
+    /// Proportional gain (per second): correction rate per second of position error.
+    var gainPerSecond: Double
+    /// Hard bound on the added correction rate (sample-seconds of playback per real second),
+    /// so a large accumulated error can never slam the head or jump the pitch.
+    var maxCorrectionRate: Double
+
+    init(gainPerSecond: Double = 6.0, maxCorrectionRate: Double = 0.5) {
+        self.gainPerSecond = gainPerSecond
+        self.maxCorrectionRate = max(0, maxCorrectionRate)
+    }
+
+    /// The existing glide `baseRate` plus a bounded pull toward `targetSeconds`. `error`
+    /// is the shortest signed distance from the audio head to the target (wrap-folded by
+    /// `sampleDuration` when positive). As the head reaches the target the correction
+    /// fades to zero, leaving the base rate — so there is no steady-state pitch offset.
+    func correctedRate(baseRate: Double, targetSeconds: Double,
+                       audioSeconds: Double, sampleDuration: Double) -> Double {
+        var error = targetSeconds - audioSeconds
+        if sampleDuration > 0 {
+            error = error.truncatingRemainder(dividingBy: sampleDuration)
+            if error > sampleDuration / 2 { error -= sampleDuration }
+            if error < -sampleDuration / 2 { error += sampleDuration }
+        }
+        let correction = Swift.min(maxCorrectionRate, Swift.max(-maxCorrectionRate, error * gainPerSecond))
+        return baseRate + correction
+    }
+}
+
 /// One precomputed waveform column: the min and max sample value in a bin.
 struct WaveformPeak: Equatable {
     let min: Float
@@ -392,6 +431,10 @@ final class ScratchPlaybackLabModel: ObservableObject {
     /// Windowed-rate driver for RANE CC6 audio: converts bursty platter events into a stable
     /// signed rate over a short real-time window so slow rotation can't spike to near-1×.
     private var cc6AudioDrive = ScratchPlatterAudioDrive()
+    /// Slice C experiment: bounded velocity correction toward the mapper's absolute CC6
+    /// position. Only consulted when `FeatureFlags.platterPositionCorrectionEnabled` is on;
+    /// the default playback path never touches it.
+    private let positionCorrection = ScratchPositionCorrectionController()
     /// Captured-timeline replay clock (review only); advanced by the display tick.
     private var replay = CapturedTimelineReplay(timeline: ScratchSampleTimeline())
     /// Wall-clock time of the last replay advance, for the real-time delta.
@@ -892,7 +935,20 @@ final class ScratchPlaybackLabModel: ObservableObject {
             // never the audio rate, so playback is not smeared or lagged.
             let moved = Double(inverted ? -step : step) * mapper.sampleSecondsPerStep
             switch cc6AudioDrive.ingest(moved: moved, at: event.timestamp) {
-            case .glide(let rate): engine.setVelocity(rate)
+            case .glide(let rate):
+                if FeatureFlags.platterPositionCorrectionEnabled, engine.isRunning {
+                    // Slice C experiment: bias the glide rate toward the mapper's absolute
+                    // CC6 position so the audio head stops drifting away from the platter
+                    // angle. Bounded velocity nudge only — no snap, no seek, no DSP change.
+                    let corrected = positionCorrection.correctedRate(
+                        baseRate: rate,
+                        targetSeconds: mapper.samplePosition,
+                        audioSeconds: engine.diagnosticRenderSeconds,
+                        sampleDuration: mapper.sampleDuration)
+                    engine.setVelocity(corrected)
+                } else {
+                    engine.setVelocity(rate)   // default path — byte-identical to before
+                }
             case .anchor: engine.setTargetPosition(seconds: mapper.samplePosition)
             }
             velocityEstimator.ingest(sampleSeconds: moved, at: event.timestamp)

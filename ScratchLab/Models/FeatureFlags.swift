@@ -93,6 +93,19 @@ enum FeatureFlags {
     // KidPrototype folder leaves production byte-identical.
     static var kidPrototypeEnabled: Bool { isOn("KIDPROTOTYPE", releaseDefault: false, debugDefault: true) }
 
+    // MARK: Scratch Playback Lab — platter position correction (experiment)
+
+    // Hybrid RANE scratch-audio experiment: when on, the CC6 velocity-glide drive is
+    // augmented with a bounded proportional correction that nudges the audio read head
+    // toward the mapper's absolute CC6 sample position (Slice B proved the velocity
+    // integral drifts away from the platter angle). It is a velocity bias only — it never
+    // hard-snaps the head and never touches the engine render block. OFF in both release
+    // and debug: strictly opt-in via the SCRATCHLAB_FF_PLATTER_POSITION_CORRECTION env
+    // override for the hardware A/B, so default playback is byte-identical until approved.
+    static var platterPositionCorrectionEnabled: Bool {
+        isOn("PLATTER_POSITION_CORRECTION", releaseDefault: false, debugDefault: false)
+    }
+
     // MARK: Resolution
 
     static func isOn(

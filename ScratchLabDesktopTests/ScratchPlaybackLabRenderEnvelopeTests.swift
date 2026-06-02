@@ -31,6 +31,80 @@ final class ScratchPlaybackLabRenderEnvelopeTests: XCTestCase {
         XCTAssertEqual(engine.diagnosticRenderSeconds, 0)
     }
 
+    // MARK: - Slice C: platter position correction controller (pure math, no hardware)
+
+    private func makeCorrection(gain: Double = 6.0, maxRate: Double = 0.5) -> ScratchPositionCorrectionController {
+        ScratchPositionCorrectionController(gainPerSecond: gain, maxCorrectionRate: maxRate)
+    }
+
+    func testCorrectionZeroErrorReturnsBaseRate() {
+        let c = makeCorrection()
+        let r = c.correctedRate(baseRate: 0.3, targetSeconds: 0.5, audioSeconds: 0.5, sampleDuration: 1.0)
+        XCTAssertEqual(r, 0.3, accuracy: 1e-12)
+    }
+
+    func testCorrectionPositiveErrorAddsCorrection() {
+        let c = makeCorrection()           // error = +0.01 s → +0.06 within ±0.5 clamp
+        let r = c.correctedRate(baseRate: 0.2, targetSeconds: 0.51, audioSeconds: 0.50, sampleDuration: 1.0)
+        XCTAssertEqual(r, 0.2 + 0.01 * 6.0, accuracy: 1e-12)
+        XCTAssertGreaterThan(r, 0.2)
+    }
+
+    func testCorrectionNegativeErrorSubtractsCorrection() {
+        let c = makeCorrection()           // error = -0.02 s → -0.12 within clamp
+        let r = c.correctedRate(baseRate: 0.2, targetSeconds: 0.48, audioSeconds: 0.50, sampleDuration: 1.0)
+        XCTAssertEqual(r, 0.2 + (-0.02) * 6.0, accuracy: 1e-12)
+        XCTAssertLessThan(r, 0.2)
+    }
+
+    func testCorrectionClampsAtMaxRate() {
+        let c = makeCorrection()           // huge error (0.4 s × 6 = 2.4) clamps to +0.5
+        let r = c.correctedRate(baseRate: 0.1, targetSeconds: 0.9, audioSeconds: 0.5, sampleDuration: 10.0)
+        XCTAssertEqual(r, 0.1 + 0.5, accuracy: 1e-12)
+    }
+
+    func testCorrectionNeverExceedsClampOverSweptErrors() {
+        let c = makeCorrection()
+        for i in -200...200 {
+            let target = Double(i) * 0.01     // -2.0 ... 2.0 s
+            let r = c.correctedRate(baseRate: 0.25, targetSeconds: target, audioSeconds: 0, sampleDuration: 1000)
+            XCTAssertLessThanOrEqual(abs(r - 0.25), 0.5 + 1e-12)
+        }
+    }
+
+    func testCorrectionWrapFoldsToShortestPath() {
+        let c = makeCorrection()
+        // target near 0, audio near end of a 1 s sample → shortest path is a small +error,
+        // NOT a large negative one. With audio=0.98, target=0.02, raw diff = -0.96 but the
+        // folded error is +0.04 → a small POSITIVE correction.
+        let r = c.correctedRate(baseRate: 0.0, targetSeconds: 0.02, audioSeconds: 0.98, sampleDuration: 1.0)
+        XCTAssertEqual(r, 0.04 * 6.0, accuracy: 1e-9)
+        XCTAssertGreaterThan(r, 0)
+    }
+
+    func testCorrectionConvergesTowardTarget() {
+        let c = makeCorrection()
+        let target = 0.5, dt = 0.001, D = 1.0
+        var audio = 0.20
+        var lastError = abs(target - audio)
+        for _ in 0..<2000 {
+            let rate = c.correctedRate(baseRate: 0, targetSeconds: target, audioSeconds: audio, sampleDuration: D)
+            audio += rate * dt
+            let err = abs(target - audio)
+            XCTAssertLessThanOrEqual(err, lastError + 1e-9, "error must not grow (no overshoot blow-up)")
+            lastError = err
+        }
+        XCTAssertLessThan(lastError, 1e-3, "should settle very close to the target")
+    }
+
+    func testPlatterPositionCorrectionFlagDefaultsOff() {
+        // Default (no env override) must be OFF in both release and debug so the default
+        // playback path is unchanged until the experiment is explicitly enabled.
+        XCTAssertFalse(FeatureFlags.isOn("PLATTER_POSITION_CORRECTION",
+                                         releaseDefault: false, debugDefault: false,
+                                         environment: [:]))
+    }
+
     // MARK: - Fade-in
 
     func testFadeInRampsGainInQuartersToFull() {
