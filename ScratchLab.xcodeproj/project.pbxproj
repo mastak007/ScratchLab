@@ -16,6 +16,8 @@
 		SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */; };
 		SLCORE00000000000000BF11 /* ScratchAnalysisNotationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */; };
 		SLCORE00000000000000BF14 /* ScratchAnalysisNotationComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */; };
+		SLCORE00000000000000BF16 /* ScratchAnalysisNotationComparisonExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */; };
+		SLCORE00000000000000BF17 /* ScratchAnalysisNotationComparisonExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */; };
 		SLCORE00000000000000BF15 /* ScratchAnalysisNotationComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */; };
 		SLCORE00000000000000BF12 /* ScratchAnalysisNotationIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */; };
 		SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */; };
@@ -385,6 +387,8 @@
 		SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisTimelineAdapter.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationAdapter.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationComparison.swift"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationComparisonExport.swift"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationComparisonExportTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationComparisonTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationIntentTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealRaneFixtureTests.swift; sourceTree = "<group>"; };
@@ -739,6 +743,7 @@
 				SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */,
 				SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */,
 				SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */,
+				SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */,
 				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
 				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
 				SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */,
@@ -819,6 +824,7 @@
 				SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */,
 				SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */,
 				SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */,
+				SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */,
 				A2000001 /* ScratchLabApp.swift */,
 				A5000004 /* Views */,
 				A5000005 /* Models */,
@@ -1269,6 +1275,7 @@
 				SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */,
 				SLCORE00000000000000BF11 /* ScratchAnalysisNotationAdapter.swift in Sources */,
 				SLCORE00000000000000BF14 /* ScratchAnalysisNotationComparison.swift in Sources */,
+				SLCORE00000000000000BF16 /* ScratchAnalysisNotationComparisonExport.swift in Sources */,
 				B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */,
 				F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */,
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
@@ -1530,6 +1537,7 @@
 				SLCORE00000000000000BF12 /* ScratchAnalysisNotationIntentTests.swift in Sources */,
 				SLCORE00000000000000BF13 /* ScratchAnalysisRealFaderFixtureTests.swift in Sources */,
 				SLCORE00000000000000BF15 /* ScratchAnalysisNotationComparisonTests.swift in Sources */,
+				SLCORE00000000000000BF17 /* ScratchAnalysisNotationComparisonExportTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
