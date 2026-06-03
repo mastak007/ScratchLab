@@ -23,9 +23,18 @@ double clamp01(double value) {
     return value;
 }
 
+/// Sanitize the crossfader open threshold: a non-finite value falls back to 0 (treat
+/// every sample as potentially open), then the result is clamped to 0...1 so the
+/// comparison against clamped sample values is always well-defined.
+double sanitizeCutWidth(double cutWidth) {
+    if (!std::isfinite(cutWidth)) return 0.0;
+    return clamp01(cutWidth);
+}
+
 /// True if any crossfader sample within [startTime, endTime] reads open (>= cutWidth).
-/// `sortedCrossfader` is assumed sorted by time. With no crossfader events at all the
-/// caller defaults to audible; this helper only runs when at least one event exists.
+/// `sortedCrossfader` is assumed sorted by time and `cutWidth` is already sanitized to
+/// 0...1. With no crossfader events the caller reports unknown; this helper only runs
+/// when at least one event exists.
 bool spanIsAudible(const std::vector<CrossfaderEvent>& sortedCrossfader,
                    double startTime,
                    double endTime,
@@ -75,6 +84,7 @@ AnalysisResult analyzeScratch(
                          return a.timeSeconds < b.timeSeconds;
                      });
     const bool hasFaderEvents = !faderEvents.empty();
+    const double cutWidth = sanitizeCutWidth(calibration.crossfaderCutWidth);
 
     // Segment into runs of same-sign movement.
     // Rule 3: cc6Step == 0 means "no movement" and is skipped entirely — it neither opens,
@@ -94,12 +104,16 @@ AnalysisResult analyzeScratch(
         // Rule 5: travel from signed CC6 magnitude only — never pitch bend, never duration.
         stroke.travelPercent =
             std::abs(static_cast<double>(groupStepSum)) / calibration.stepsPerRevolution * 100.0;
-        // Rule 6: default audible when no crossfader telemetry exists; otherwise gate on span.
-        stroke.audibleState =
-            (!hasFaderEvents ||
-             spanIsAudible(faderEvents, stroke.startTime, stroke.endTime, calibration.crossfaderCutWidth))
-                ? AudibleState::audible
-                : AudibleState::cut;
+        // Rule 6: with no crossfader telemetry, audibility is unknown (do not guess).
+        // Otherwise gate on whether any in-span sample is open at the sanitized threshold.
+        if (!hasFaderEvents) {
+            stroke.audibleState = AudibleState::unknown;
+        } else {
+            stroke.audibleState =
+                spanIsAudible(faderEvents, stroke.startTime, stroke.endTime, cutWidth)
+                    ? AudibleState::audible
+                    : AudibleState::cut;
+        }
         result.strokes.push_back(stroke);
         inStroke = false;
     };

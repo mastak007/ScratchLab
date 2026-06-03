@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -57,7 +58,7 @@ void testSameDirectionOneStroke() {
         CHECK(approxEqual(s.startTime, 0.0), "startTime is first event time");
         CHECK(approxEqual(s.endTime, 0.2), "endTime is last event time");
         CHECK(approxEqual(s.travelPercent, 3.0 / 3932.0 * 100.0), "travel uses summed steps");
-        CHECK(s.audibleState == AudibleState::audible, "no crossfader defaults to audible");
+        CHECK(s.audibleState == AudibleState::unknown, "no crossfader telemetry -> unknown");
     }
     CHECK(result.warnings.empty(), "no warnings for clean unit-step input");
 }
@@ -201,6 +202,139 @@ void testNonUnitStepWarning() {
     }
 }
 
+// 12. Missing crossfader telemetry gives AudibleState::unknown (Slice 1.1).
+void testMissingCrossfaderUnknown() {
+    std::printf("test: missing crossfader telemetry -> unknown\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 1}};
+    AnalysisResult result = analyzeScratch(platter, {}, kRane);
+    CHECK(result.strokes.size() == 1, "one stroke");
+    if (result.strokes.size() == 1) {
+        CHECK(result.strokes.front().audibleState == AudibleState::unknown,
+              "no crossfader events -> unknown, not a guess");
+    }
+}
+
+// 13. Duplicate timestamps preserve input order through stable-sort.
+void testDuplicateTimestampsStableOrder() {
+    std::printf("test: duplicate timestamps preserve input order (stable-sort)\n");
+    // Two opposite-sign events share t=0.0; stable-sort must keep input order, so the
+    // first-listed sign defines the first stroke.
+    std::vector<PlatterEvent> forwardFirst{{0.0, 1}, {0.0, -1}};
+    AnalysisResult a = analyzeScratch(forwardFirst, {}, kRane);
+    CHECK(a.strokes.size() == 2, "forward-first: two strokes");
+    if (a.strokes.size() == 2) {
+        CHECK(a.strokes[0].direction == StrokeDirection::forward, "forward-first: stroke 0 forward");
+        CHECK(a.strokes[1].direction == StrokeDirection::reverse, "forward-first: stroke 1 reverse");
+    }
+    std::vector<PlatterEvent> reverseFirst{{0.0, -1}, {0.0, 1}};
+    AnalysisResult b = analyzeScratch(reverseFirst, {}, kRane);
+    CHECK(b.strokes.size() == 2, "reverse-first: two strokes");
+    if (b.strokes.size() == 2) {
+        CHECK(b.strokes[0].direction == StrokeDirection::reverse, "reverse-first: stroke 0 reverse");
+        CHECK(b.strokes[1].direction == StrokeDirection::forward, "reverse-first: stroke 1 forward");
+    }
+}
+
+// 14. Zero-step between same-sign movement does not split the stroke.
+void testZeroStepSameSignNoSplit() {
+    std::printf("test: zero-step between same-sign movement does not split\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 0}, {0.2, 1}};
+    AnalysisResult result = analyzeScratch(platter, {}, kRane);
+    CHECK(result.strokes.size() == 1, "still one forward stroke");
+    if (result.strokes.size() == 1) {
+        const Stroke& s = result.strokes.front();
+        CHECK(s.direction == StrokeDirection::forward, "forward");
+        CHECK(approxEqual(s.startTime, 0.0), "start at first move");
+        CHECK(approxEqual(s.endTime, 0.2), "end at last move (zero event skipped)");
+        CHECK(approxEqual(s.travelPercent, 2.0 / 3932.0 * 100.0), "zero contributes no travel");
+    }
+}
+
+// 15. Zero-step between opposite-sign movement creates no extra stroke; reversal still splits.
+void testZeroStepOppositeSignSplit() {
+    std::printf("test: zero-step between opposite-sign movement splits cleanly\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 0}, {0.2, -1}};
+    AnalysisResult result = analyzeScratch(platter, {}, kRane);
+    CHECK(result.strokes.size() == 2, "exactly two strokes (no phantom stroke from zero)");
+    if (result.strokes.size() == 2) {
+        CHECK(result.strokes[0].direction == StrokeDirection::forward, "stroke 0 forward");
+        CHECK(approxEqual(result.strokes[0].endTime, 0.0), "forward ends before zero event");
+        CHECK(result.strokes[1].direction == StrokeDirection::reverse, "stroke 1 reverse");
+        CHECK(approxEqual(result.strokes[1].startTime, 0.2), "reverse starts at the -1 event");
+    }
+}
+
+// 16. Unsorted crossfader input still gates correctly (defensive sort).
+void testUnsortedCrossfaderGates() {
+    std::printf("test: unsorted crossfader input still gates correctly\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 1}, {0.2, 1}};
+    // Open sample (1.0) sits at t=0.1 but is supplied out of time order.
+    std::vector<CrossfaderEvent> fader{{0.2, 0.0}, {0.0, 0.0}, {0.1, 1.0}};
+    AnalysisResult result = analyzeScratch(platter, fader, kRane);
+    CHECK(result.strokes.size() == 1, "one stroke");
+    if (result.strokes.size() == 1) {
+        CHECK(result.strokes.front().audibleState == AudibleState::audible,
+              "open sample found despite unsorted input");
+    }
+}
+
+// 17. crossfaderCutWidth below 0 clamps to 0 (a 0.0 sample then reads open).
+void testCutWidthBelowZeroClamps() {
+    std::printf("test: crossfaderCutWidth below 0 clamps to 0\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 1}};
+    std::vector<CrossfaderEvent> fader{{0.0, 0.0}, {0.1, 0.0}};
+    AnalysisResult result = analyzeScratch(platter, fader, Calibration{3932.0, -1.0});
+    CHECK(result.strokes.size() == 1, "one stroke");
+    if (result.strokes.size() == 1) {
+        CHECK(result.strokes.front().audibleState == AudibleState::audible,
+              "threshold clamped to 0: a 0.0 sample is >= 0 -> audible");
+    }
+}
+
+// 18. crossfaderCutWidth above 1 clamps to 1 (a fully-open 1.0 sample reads audible).
+void testCutWidthAboveOneClamps() {
+    std::printf("test: crossfaderCutWidth above 1 clamps to 1\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 1}};
+    // Fully open sample at 1.0. Without clamping, threshold 5.0 would never be met -> cut.
+    std::vector<CrossfaderEvent> openFader{{0.0, 1.0}, {0.1, 1.0}};
+    AnalysisResult open = analyzeScratch(platter, openFader, Calibration{3932.0, 5.0});
+    CHECK(open.strokes.size() == 1 && open.strokes.front().audibleState == AudibleState::audible,
+          "threshold clamped to 1: a 1.0 sample is >= 1 -> audible");
+    // A partly-open 0.9 sample stays below the clamped threshold of 1 -> cut.
+    std::vector<CrossfaderEvent> partFader{{0.0, 0.9}, {0.1, 0.9}};
+    AnalysisResult part = analyzeScratch(platter, partFader, Calibration{3932.0, 5.0});
+    CHECK(part.strokes.size() == 1 && part.strokes.front().audibleState == AudibleState::cut,
+          "0.9 < clamped threshold 1 -> cut");
+}
+
+// 19. Non-finite crossfaderCutWidth falls back safely (to 0).
+void testCutWidthNonFiniteFallback() {
+    std::printf("test: non-finite crossfaderCutWidth falls back safely\n");
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 1}};
+    std::vector<CrossfaderEvent> fader{{0.0, 0.5}, {0.1, 0.5}};
+    AnalysisResult nan = analyzeScratch(platter, fader, Calibration{3932.0, std::nan("")});
+    CHECK(nan.strokes.size() == 1 && nan.strokes.front().audibleState == AudibleState::audible,
+          "NaN cutWidth -> fallback 0 -> 0.5 sample audible");
+    const double inf = std::numeric_limits<double>::infinity();
+    AnalysisResult infinite = analyzeScratch(platter, fader, Calibration{3932.0, inf});
+    CHECK(infinite.strokes.size() == 1 && infinite.strokes.front().audibleState == AudibleState::audible,
+          "infinite cutWidth -> fallback 0 -> 0.5 sample audible");
+}
+
+// 20. travelPercent over 100 stays over 100 and is not capped.
+void testTravelPercentNotCapped() {
+    std::printf("test: travelPercent over 100 is not capped\n");
+    // 5 steps over a 2-step revolution -> 250%.
+    std::vector<PlatterEvent> platter{{0.0, 1}, {0.1, 1}, {0.2, 1}, {0.3, 1}, {0.4, 1}};
+    AnalysisResult result = analyzeScratch(platter, {}, Calibration{2.0, 0.05});
+    CHECK(result.strokes.size() == 1, "one stroke");
+    if (result.strokes.size() == 1) {
+        const double travel = result.strokes.front().travelPercent;
+        CHECK(approxEqual(travel, 250.0), "5 steps / 2 per rev * 100 = 250");
+        CHECK(travel > 100.0, "travel percent left uncapped as diagnostic evidence");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -214,6 +348,16 @@ int main() {
     testEmptyInputWarning();
     testInvalidCalibrationWarning();
     testNonUnitStepWarning();
+    // Slice 1.1 hardening.
+    testMissingCrossfaderUnknown();
+    testDuplicateTimestampsStableOrder();
+    testZeroStepSameSignNoSplit();
+    testZeroStepOppositeSignSplit();
+    testUnsortedCrossfaderGates();
+    testCutWidthBelowZeroClamps();
+    testCutWidthAboveOneClamps();
+    testCutWidthNonFiniteFallback();
+    testTravelPercentNotCapped();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {

@@ -25,9 +25,11 @@ namespace core {
 ///  - |cc6Step| != 1 is still used by signed magnitude; warning nonUnitStep is added once.
 ///  - Consecutive same-sign movement is one stroke; a sign change splits strokes.
 ///  - travelPercent = abs(sum of cc6Step in group) / stepsPerRevolution * 100.
-///  - Crossfader: with no crossfader events, default audible. Otherwise a stroke is
-///    audible iff some crossfader event within [startTime, endTime] has a clamped
-///    value >= crossfaderCutWidth; else it is cut.
+///  - Crossfader: with no crossfader events, audibleState is unknown (the core does not
+///    guess). Otherwise a stroke is audible iff some crossfader event within
+///    [startTime, endTime] has a clamped value >= the sanitized crossfaderCutWidth; else
+///    it is cut. crossfaderCutWidth is sanitized: non-finite falls back to 0, then it is
+///    clamped to 0...1; sample values are clamped to 0...1 for comparison.
 AnalysisResult analyzeScratch(
     const std::vector<PlatterEvent>& platter,
     const std::vector<CrossfaderEvent>& crossfader,

@@ -23,7 +23,10 @@ enum class StrokeDirection {
 };
 
 /// Whether a stroke was heard through the crossfader or cut to silence.
+/// `unknown` is used when no crossfader telemetry was supplied: the core declines to
+/// guess audibility rather than defaulting to audible, keeping downstream honesty.
 enum class AudibleState {
+    unknown,
     audible,
     cut,
 };
