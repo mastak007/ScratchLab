@@ -21,6 +21,8 @@
 		SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */; };
 		SLCORE00000000000000BF10 /* ScratchAnalysisTrimmedRealFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */; };
 		SLCORE00000000000000BFR2 /* scratch_timeline_cc6_real_trimmed_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */; };
+		SLCORE00000000000000BF13 /* ScratchAnalysisRealFaderFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */; };
+		SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */; };
 		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
@@ -386,6 +388,8 @@
 		SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisCheckedInFixtureTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisTrimmedRealFixtureTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Fixtures/scratch_timeline_cc6_real_trimmed_fixture.json"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealFaderFixtureTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Fixtures/scratch_timeline_cc6_real_fader_cut_fixture.json"; sourceTree = "<group>"; };
 		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
 		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
 		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
@@ -731,7 +735,9 @@
 				SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */,
 				SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */,
 				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
+				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
 				SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */,
+				SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1210,6 +1216,7 @@
 			files = (
 				SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */,
 				SLCORE00000000000000BFR2 /* scratch_timeline_cc6_real_trimmed_fixture.json in Resources */,
+				SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */,
 			);
 		};
 		09C738A56A342FC5A7BBBEA3 /* Resources */ = {
@@ -1514,6 +1521,7 @@
 				SLCORE00000000000000BF09 /* ScratchAnalysisCheckedInFixtureTests.swift in Sources */,
 				SLCORE00000000000000BF10 /* ScratchAnalysisTrimmedRealFixtureTests.swift in Sources */,
 				SLCORE00000000000000BF12 /* ScratchAnalysisNotationIntentTests.swift in Sources */,
+				SLCORE00000000000000BF13 /* ScratchAnalysisRealFaderFixtureTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
