@@ -15,6 +15,8 @@
 		SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */; };
 		SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */; };
 		SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */; };
+		SLCORE00000000000000BF09 /* ScratchAnalysisCheckedInFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */; };
+		SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */; };
 		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
@@ -374,6 +376,8 @@
 		SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisFixtureDecodeTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisTimelineAdapter.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealRaneFixtureTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Fixtures/scratch_timeline_cc6_baby_fixture.json"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisCheckedInFixtureTests.swift; sourceTree = "<group>"; };
 		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
 		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
 		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
@@ -715,6 +719,8 @@
 				SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */,
 				SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */,
 				SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */,
+				SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */,
+				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1082,6 +1088,7 @@
 			buildPhases = (
 				F9TESTSRC10AA0010AA10AA /* Sources */,
 				F9TESTPHASE10AA0010AA10 /* Frameworks */,
+				SLCORE0000000000000RES01 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -1186,6 +1193,12 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		SLCORE0000000000000RES01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+				SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */,
+			);
+		};
 		09C738A56A342FC5A7BBBEA3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
@@ -1484,6 +1497,7 @@
 				SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */,
 				SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */,
 				SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */,
+				SLCORE00000000000000BF09 /* ScratchAnalysisCheckedInFixtureTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
