@@ -13,6 +13,8 @@
 		SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */; };
 		SLCORE00000000000000BF05 /* ScratchAnalysisFixtureAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */; };
 		SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */; };
+		SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */; };
+		SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */; };
 		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
@@ -370,6 +372,8 @@
 		SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisBridgeTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisFixtureAdapter.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisFixtureDecodeTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisTimelineAdapter.swift"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealRaneFixtureTests.swift; sourceTree = "<group>"; };
 		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
 		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
 		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
@@ -710,6 +714,7 @@
 				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
 				SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */,
 				SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */,
+				SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -783,6 +788,7 @@
 			children = (
 				SLCORE00000000000000FR06 /* ScratchAnalysis.swift */,
 				SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */,
+				SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */,
 				A2000001 /* ScratchLabApp.swift */,
 				A5000004 /* Views */,
 				A5000005 /* Models */,
@@ -1221,6 +1227,7 @@
 				SLCORE00000000000000BF02 /* ScratchAnalysisBridge.mm in Sources */,
 				SLCORE00000000000000BF03 /* ScratchAnalysis.swift in Sources */,
 				SLCORE00000000000000BF05 /* ScratchAnalysisFixtureAdapter.swift in Sources */,
+				SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */,
 				B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */,
 				F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */,
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
@@ -1476,6 +1483,7 @@
 			files = (
 				SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */,
 				SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */,
+				SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
