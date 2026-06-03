@@ -1,0 +1,166 @@
+{
+  "_comment": "REAL trimmed slice of an exported ScratchTimeline (schemaVersion 1). 20 contiguous events (source indices 3461-3480) straddling a single direction reversal: ten cc6Step=+1 then ten cc6Step=-1. timeSeconds, cc6Step and crossfader are copied verbatim from the real export. In this capture the crossfader sat constant at 0.551 (no open/cut transitions occurred), which is >= the 0.05 cut width, so both strokes are honestly .audible. rawPitchBend/pitchBendDelta/audioRenderSeconds are also real values, present ONLY to prove the adapter ignores them. No private paths/device/source/summary metadata. Uses cc6Step directly (no raw-CC6 derivation).",
+  "schemaVersion": 1,
+  "events": [
+    {
+      "timeSeconds": 168719.47665162498,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11011,
+      "pitchBendDelta": -6854,
+      "audioRenderSeconds": 0.4695891100103222
+    },
+    {
+      "timeSeconds": 168719.480812125,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 4511,
+      "pitchBendDelta": -6500,
+      "audioRenderSeconds": 0.4695891100103222
+    },
+    {
+      "timeSeconds": 168719.48597254165,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 14774,
+      "pitchBendDelta": -6121,
+      "audioRenderSeconds": 0.4695891100103222
+    },
+    {
+      "timeSeconds": 168719.4901599583,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 9089,
+      "pitchBendDelta": -5685,
+      "audioRenderSeconds": 0.4695891100103222
+    },
+    {
+      "timeSeconds": 168719.49537425,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 3870,
+      "pitchBendDelta": -5219,
+      "audioRenderSeconds": 0.47050406216020535
+    },
+    {
+      "timeSeconds": 168719.50059687498,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 15625,
+      "pitchBendDelta": -4629,
+      "audioRenderSeconds": 0.47050406216020535
+    },
+    {
+      "timeSeconds": 168719.506688375,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": -3960,
+      "audioRenderSeconds": 0.47050406216020535
+    },
+    {
+      "timeSeconds": 168719.5129513333,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.47050406216020535
+    },
+    {
+      "timeSeconds": 168719.52111258332,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.47050406216020535
+    },
+    {
+      "timeSeconds": 168719.53146541666,
+      "cc6Step": 1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.47050406216020535
+    },
+    {
+      "timeSeconds": 168719.592614375,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.63818287497,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.65995099998,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.67432924997,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.6847198333,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.69414916664,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.70238074998,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.70960629164,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.71681012498,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.476000763576951
+    },
+    {
+      "timeSeconds": 168719.73036595833,
+      "cc6Step": -1,
+      "crossfader": 0.5511811023622047,
+      "rawPitchBend": 11665,
+      "pitchBendDelta": 0,
+      "audioRenderSeconds": 0.4718688994888237
+    }
+  ]
+}
