@@ -129,4 +129,71 @@ final class ScratchNotationLanePreviewModelTests: XCTestCase {
             warnings: intent.warnings)
         XCTAssertEqual(preview, rebuilt)
     }
+
+    // MARK: - Source-dependency guard (Codex hardening follow-up)
+    //
+    // Enforces the UI-free / lane-free / playback-free boundary that the other tests only
+    // document. Scans the PRODUCTION source with comments stripped, so the explanatory header
+    // comment (which names forbidden types to say it avoids them) does not trip the guard and
+    // no production comment churn is required.
+
+    /// Loads the production model source with `//` line comments and `/* */` block comments
+    /// removed. Comment removal is safe here because the file contains no string literals that
+    /// embed `//` or comment delimiters.
+    private func previewModelCodeWithoutComments(
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws -> String {
+        let url = URL(fileURLWithPath: "\(file)")
+            .deletingLastPathComponent()   // ScratchLabDesktopTests/
+            .deletingLastPathComponent()   // repo root
+            .appendingPathComponent("ScratchLab/Analysis/ScratchNotationLanePreviewModel.swift")
+        let raw = try String(contentsOf: url, encoding: .utf8)
+
+        // Strip block comments first, then line comments.
+        var noBlocks = ""
+        var index = raw.startIndex
+        var inBlock = false
+        while index < raw.endIndex {
+            let rest = raw[index...]
+            if inBlock {
+                if rest.hasPrefix("*/") { inBlock = false; index = raw.index(index, offsetBy: 2) }
+                else { index = raw.index(after: index) }
+            } else if rest.hasPrefix("/*") {
+                inBlock = true; index = raw.index(index, offsetBy: 2)
+            } else {
+                noBlocks.append(raw[index]); index = raw.index(after: index)
+            }
+        }
+        let codeLines = noBlocks.split(separator: "\n", omittingEmptySubsequences: false).map { lineText -> Substring in
+            if let r = lineText.range(of: "//") { return lineText[lineText.startIndex..<r.lowerBound] }
+            return lineText
+        }
+        return codeLines.joined(separator: "\n")
+    }
+
+    // 11. Production model code references no UI / lane-renderer / playback / MIDI / audio types.
+    func testProductionFileDoesNotReferenceForbiddenTypes() throws {
+        let code = try previewModelCodeWithoutComments()
+        let forbidden = [
+            "import SwiftUI",
+            "LaneStroke", "TimingLane",
+            "NotationPresentation", "NotationLaneGeometry", "NotationPrimitive",
+            "ScratchPlaybackLabEngine", "ScratchPlaybackLabModel",
+            "CoreMIDI", "RtMidi", "AVAudio", "AudioToolbox",
+        ]
+        for token in forbidden {
+            XCTAssertFalse(code.contains(token),
+                           "Preview model production code must not reference \(token)")
+        }
+    }
+
+    // 12. The production model imports only Foundation (no UI/audio/MIDI frameworks).
+    func testProductionFileImportsOnlyFoundation() throws {
+        let code = try previewModelCodeWithoutComments()
+        let imports = code
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("import ") }
+        XCTAssertEqual(imports, ["import Foundation"], "preview model must import only Foundation")
+    }
 }
