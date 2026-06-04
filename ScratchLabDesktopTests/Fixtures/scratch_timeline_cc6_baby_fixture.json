@@ -1,0 +1,13 @@
+{
+  "_comment": "Tiny privacy-safe ScratchSampleTimeline-shape fixture for offline notation proof. Synthetic baby scratch: one forward stroke (crossfader open) then one reverse stroke (crossfader cut). Pitch-bend / zone / audioRender fields are present ONLY to prove the adapter ignores them. No personal data, no real capture, no hardware. Uses cc6Step directly (no raw-CC6 derivation).",
+  "muteCrossfaderBelow": 0.05,
+  "didReachCapacity": false,
+  "events": [
+    { "timeSeconds": 0.000, "position": 0.50, "velocity": 0.20, "crossfader": 1.0, "muted": false, "cc6Step": 1, "rawPitchBend": 8192, "pitchBendDelta": 0, "zoneAudioMode": "velocity", "audioRenderSeconds": 0.000 },
+    { "timeSeconds": 0.012, "position": 0.53, "velocity": 0.20, "crossfader": 1.0, "muted": false, "cc6Step": 1, "rawPitchBend": 8260, "pitchBendDelta": 68, "zoneTargetSeconds": 1.20, "zoneScrubRate": 0.90 },
+    { "timeSeconds": 0.024, "position": 0.56, "velocity": 0.20, "crossfader": 1.0, "muted": false, "cc6Step": 1, "rawPitchBend": 8328, "pitchBendDelta": 68, "mapperSampleSeconds": 0.024, "audioMapperDriftSeconds": 0.000 },
+    { "timeSeconds": 0.200, "position": 0.55, "velocity": -0.20, "crossfader": 0.0, "muted": true, "cc6Step": -1, "rawPitchBend": 8260, "pitchBendDelta": -68, "zoneAudioMode": "positionFollow" },
+    { "timeSeconds": 0.212, "position": 0.52, "velocity": -0.20, "crossfader": 0.0, "muted": true, "cc6Step": -1, "rawPitchBend": 8192, "pitchBendDelta": -68, "audioRenderSeconds": 0.212 },
+    { "timeSeconds": 0.224, "position": 0.49, "velocity": -0.20, "crossfader": 0.0, "muted": true, "cc6Step": -1, "rawPitchBend": 8124, "pitchBendDelta": -68, "zoneScrubRate": -0.90 }
+  ]
+}
