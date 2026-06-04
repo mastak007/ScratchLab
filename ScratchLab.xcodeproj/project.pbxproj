@@ -22,6 +22,8 @@
 		SLCORE00000000000000BF20 /* ScratchNotationIntentDebugFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */; };
 		SLCORE00000000000000BF22 /* ScratchNotationLanePreviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */; };
 		SLCORE00000000000000BF24 /* ScratchNotationLaneDisplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */; };
+		SLCORE00000000000000BF26 /* ScratchNotationTravelMotionPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */; };
+		SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */; };
 		SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */; };
 		SLCORE00000000000000BF23 /* ScratchNotationLanePreviewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */; };
 		SLCORE00000000000000BF21 /* ScratchNotationIntentDebugFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */; };
@@ -401,6 +403,8 @@
 		SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationIntentDebugFormatter.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationLanePreviewModel.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationLaneDisplayModel.swift"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationTravelMotionPath.swift"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTravelMotionPathTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLaneDisplayModelTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLanePreviewModelTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationIntentDebugFormatterTests.swift; sourceTree = "<group>"; };
@@ -764,6 +768,7 @@
 				SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */,
 				SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */,
 				SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */,
+				SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */,
 				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
 				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
 				SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */,
@@ -849,6 +854,7 @@
 				SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */,
 				SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */,
 				SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */,
+				SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */,
 				A2000001 /* ScratchLabApp.swift */,
 				A5000004 /* Views */,
 				A5000005 /* Models */,
@@ -1304,6 +1310,7 @@
 				SLCORE00000000000000BF20 /* ScratchNotationIntentDebugFormatter.swift in Sources */,
 				SLCORE00000000000000BF22 /* ScratchNotationLanePreviewModel.swift in Sources */,
 				SLCORE00000000000000BF24 /* ScratchNotationLaneDisplayModel.swift in Sources */,
+				SLCORE00000000000000BF26 /* ScratchNotationTravelMotionPath.swift in Sources */,
 				B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */,
 				F84276F104CCF0C4B5534C4D /* MacAnalyzerView.swift in Sources */,
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
@@ -1570,6 +1577,7 @@
 				SLCORE00000000000000BF21 /* ScratchNotationIntentDebugFormatterTests.swift in Sources */,
 				SLCORE00000000000000BF23 /* ScratchNotationLanePreviewModelTests.swift in Sources */,
 				SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */,
+				SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
