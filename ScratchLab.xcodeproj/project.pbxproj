@@ -321,6 +321,8 @@
 		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
 		SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */; };
 		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
+		SLCORE00000000000000BF28 /* TravelLaneDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR35 /* TravelLaneDebugView.swift */; };
+		SLCORE00000000000000BF29 /* TravelLaneDebugComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */; };
 		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
 		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
 		PVM0001000PVM001PVM00003 /* PhraseViewportModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */; };
@@ -622,6 +624,8 @@
 		SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabBrandMark.swift; sourceTree = "<group>"; };
 		SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignTokens.swift; sourceTree = "<group>"; };
 		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR35 /* TravelLaneDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelLaneDebugView.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelLaneDebugComparisonTests.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
 		PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModelTests.swift; sourceTree = "<group>"; };
@@ -769,6 +773,7 @@
 				SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */,
 				SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */,
 				SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */,
+				SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */,
 				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
 				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
 				SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */,
@@ -1053,6 +1058,7 @@
 				NV00000001NV0001NV000001 /* NotationVisualizerView.swift */,
 				SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */,
 				SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */,
+				SLCORE00000000000000FR35 /* TravelLaneDebugView.swift */,
 				SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */,
 				SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */,
 				RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */,
@@ -1328,6 +1334,7 @@
 				NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */,
 				SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */,
 				SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */,
+				SLCORE00000000000000BF28 /* TravelLaneDebugView.swift in Sources */,
 				SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */,
 				SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */,
 				SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */,
@@ -1578,6 +1585,7 @@
 				SLCORE00000000000000BF23 /* ScratchNotationLanePreviewModelTests.swift in Sources */,
 				SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */,
 				SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */,
+				SLCORE00000000000000BF29 /* TravelLaneDebugComparisonTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
