@@ -24,6 +24,7 @@
 		SLCORE00000000000000BF24 /* ScratchNotationLaneDisplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */; };
 		SLCORE00000000000000BF30 /* ScratchTimelineProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */; };
 		SLCORE00000000000000BF31 /* ScratchTimelineProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */; };
+		SLCORE00000000000000BF32 /* ScratchStrokeGeometryTravelAmplitudeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */; };
 		SLCORE00000000000000BF26 /* ScratchNotationTravelMotionPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */; };
 		SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */; };
 		SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */; };
@@ -409,6 +410,7 @@
 		SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationLaneDisplayModel.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchTimelineProvenance.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTimelineProvenanceTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometryTravelAmplitudeTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationTravelMotionPath.swift"; sourceTree = "<group>"; };
 		SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTravelMotionPathTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLaneDisplayModelTests.swift; sourceTree = "<group>"; };
@@ -778,6 +780,7 @@
 				SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */,
 				SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */,
 				SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */,
+				SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */,
 				SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */,
 				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
 				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
@@ -1593,6 +1596,7 @@
 				SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */,
 				SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */,
 				SLCORE00000000000000BF31 /* ScratchTimelineProvenanceTests.swift in Sources */,
+				SLCORE00000000000000BF32 /* ScratchStrokeGeometryTravelAmplitudeTests.swift in Sources */,
 				SLCORE00000000000000BF29 /* TravelLaneDebugComparisonTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
