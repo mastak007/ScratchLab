@@ -49,6 +49,27 @@ struct LaneStroke: Equatable, Sendable {
     /// True for a derived copy-window target — drawn as an outline "ghost"
     /// rather than a solid reference stroke.
     let isGhost: Bool
+    /// Optional travel-driven lane excursion (0...1). When non-nil the renderer uses it as the
+    /// stroke's amplitude (clamped 0...1); when nil it falls back to the existing speed-bucket
+    /// amplitude. Demo / scored / reel / notation strokes carry no travel and stay nil, so their
+    /// rendering is unchanged. A real production source for this is PR 2 (provenance), not this PR.
+    let normalizedTravel: Double?
+
+    init(startTime: TimeInterval,
+         endTime: TimeInterval,
+         direction: ScratchNotationDirection,
+         speed: ScratchNotationSpeedClassification,
+         faderState: ScratchNotationFaderState,
+         isGhost: Bool,
+         normalizedTravel: Double? = nil) {
+        self.startTime = startTime
+        self.endTime = endTime
+        self.direction = direction
+        self.speed = speed
+        self.faderState = faderState
+        self.isGhost = isGhost
+        self.normalizedTravel = normalizedTravel
+    }
 
     var duration: TimeInterval { max(0, endTime - startTime) }
 }
@@ -83,7 +104,8 @@ extension LaneStroke {
                           direction: direction,
                           speed: speed,
                           faderState: faderState,
-                          isGhost: isGhost)
+                          isGhost: isGhost,
+                          normalizedTravel: normalizedTravel)
     }
 }
 

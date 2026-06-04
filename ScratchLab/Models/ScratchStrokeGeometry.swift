@@ -118,6 +118,11 @@ enum ScratchStrokeGeometry {
     /// 0, so the loop seam (which sits at centre) closes regardless of how
     /// the rail end is scaled.
     private static func rawAmplitude(for stroke: LaneStroke) -> CGFloat {
+        // Travel-driven amplitude takes precedence when present (PR 2 supplies it from analysis);
+        // otherwise the existing speed-bucket amplitude is used unchanged.
+        if let travel = stroke.normalizedTravel {
+            return min(1, max(0, CGFloat(travel)))
+        }
         switch stroke.speed {
         case .slow:   return 0.55
         case .medium: return 0.78
