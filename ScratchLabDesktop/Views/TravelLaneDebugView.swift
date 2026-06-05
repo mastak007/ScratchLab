@@ -19,7 +19,8 @@ import UniformTypeIdentifiers
 // user-selected `.fileImporter` read below (DEBUG, macOS) — no hardcoded paths, no bundled/committed
 // export, no live MIDI/engine/playback, no production renderer change. Calibration and
 // fullScaleTravelPercent are explicit debug inputs. If nothing is loaded (or a load fails), the
-// travel lane falls back to the hand-authored sample. Not wired into app navigation; use `#Preview`.
+// travel lane falls back to the hand-authored sample. Reachable in DEBUG builds via the macOS
+// Window menu ("Travel Lane Debug") or the Xcode `#Preview`; absent from release builds.
 
 struct TravelLaneDebugView: View {
     @State private var fullScaleTravelPercent: Double = 1.0

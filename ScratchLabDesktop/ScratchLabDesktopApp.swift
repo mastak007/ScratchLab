@@ -3,6 +3,9 @@ import SwiftUI
 private enum ScratchLabDesktopWindowID {
     static let mainWindow = "main-window"
     static let performerMonitor = "performer-monitor"
+    #if DEBUG
+    static let travelLaneDebug = "travel-lane-debug"
+    #endif
 }
 
 @main
@@ -56,6 +59,16 @@ struct ScratchLabDesktopApp: App {
             performerMonitorContent
         }
         .windowResizability(.contentSize)
+
+        #if DEBUG
+        // DEBUG-only: a separate window hosting the self-contained TravelLaneDebugView (travel-vs-
+        // speed-bucket A/B + recorded-timeline loader). Opened on demand from the Window menu; this
+        // scene is compiled out of release builds and carries no production state.
+        Window("Travel Lane Debug", id: ScratchLabDesktopWindowID.travelLaneDebug) {
+            TravelLaneDebugView()
+        }
+        .windowResizability(.contentSize)
+        #endif
     }
 
     @ViewBuilder
@@ -126,6 +139,12 @@ private struct ScratchLabDesktopCommands: Commands {
             Button("Show Performer Monitor") {
                 openWindow(id: ScratchLabDesktopWindowID.performerMonitor)
             }
+
+            #if DEBUG
+            Button("Travel Lane Debug") {
+                openWindow(id: ScratchLabDesktopWindowID.travelLaneDebug)
+            }
+            #endif
         }
     }
 }
