@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 //     (`ScratchStrokeGeometry.motionPath(for:)`) over a hand-authored sample — a short FAST flick
 //     still slams the rail. This lane always shows the sample (the "what the current renderer does"
 //     reference); it is not rebuilt from loaded files (a LaneStroke speed bucket can't be derived
-//     from a cc6 timeline).
+//     from a cc6 timeline). Hidden in CXL review mode.
 //   • Bottom lane (proposed): excursion from platter travel
 //     (`ScratchNotationTravelMotionPath.motionPath(for:scaling:.absoluteAboveBaseline)`). It uses
 //     the DEBUG above-baseline mode so (a) the fullScaleTravelPercent slider is visibly meaningful —
@@ -26,17 +26,47 @@ import UniformTypeIdentifiers
 // fullScaleTravelPercent are explicit debug inputs. If nothing is loaded (or a load fails), the
 // travel lane falls back to the hand-authored sample. Reachable in DEBUG builds via the macOS
 // Window menu ("Travel Lane Debug") or the Xcode `#Preview`; absent from release builds.
+//
+// CXL review mode (default): turntablist-friendly labels, sensitivity presets, and only the green
+// travel lane. Toggle "Show technical details" to reveal the full engineering view — the toggle
+// preserves all state (loaded take, sensitivity, stroke height, calibration, lane output).
+
+// MARK: - Sensitivity preset (DEBUG-only, CXL review mode)
+
+/// DEBUG sensitivity presets for CXL review mode — map turntablist-friendly labels to
+/// noiseGateThreshold values. NOT production; not persisted.
+private enum SensitivityPreset: String, CaseIterable {
+    case sensitive = "Sensitive"
+    case normal = "Normal"
+    case strict = "Strict"
+
+    var threshold: Double {
+        switch self {
+        case .sensitive: return 0.0
+        case .normal:    return 0.02
+        case .strict:    return 0.05
+        }
+    }
+}
 
 struct TravelLaneDebugView: View {
     @State private var fullScaleTravelPercent: Double = 1.0
     @State private var stepsPerRevolution: Double = 3932      // RANE-measured default; editable
     @State private var crossfaderCutWidth: Double = 0.05      // editable
-    @State private var noiseGateThreshold: Double = 0.0       // DEBUG: 0=off; silences strokes below this normalizedTravel
+    @State private var noiseGateThreshold: Double = 0.02      // CXL default: Normal (0.02); 0=off
 
     @State private var loadedModel: ScratchNotationLaneDisplayModel?  // nil → hand-authored sample
     @State private var loadedName: String?
     @State private var showImporter = false
     @State private var loadError: String?
+
+    /// CXL review mode toggle — defaults to turntablist-friendly labels (false).
+    /// Advanced mode (true) reveals full engineering controls. Toggling preserves all state.
+    @State private var showAdvanced: Bool = false
+
+    /// CXL sensitivity preset — maps to noiseGateThreshold. nil when user has set a freeform
+    /// value via the raw slider in Advanced mode.
+    @State private var sensitivityPreset: SensitivityPreset? = .normal
 
     private let sampleDuration: TimeInterval = 4.0
 
@@ -46,12 +76,15 @@ struct TravelLaneDebugView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Notation lane: speed-bucket vs travel (DEBUG)").font(.headline)
+            Text(windowTitle).font(.headline)
 
-            labelledLane("Current — speed bucket (hand-authored sample)", color: .cyan) { ctx, size in
-                ScratchMotionRenderer.draw(speedBucketPath, in: ctx,
-                                           viewport: viewport(size: size, start: 0, span: sampleDuration),
-                                           style: .target)
+            // Speed-bucket lane — engineering A/B reference; hidden in CXL review mode.
+            if showAdvanced {
+                labelledLane("Current — speed bucket (hand-authored sample)", color: .cyan) { ctx, size in
+                    ScratchMotionRenderer.draw(speedBucketPath, in: ctx,
+                                               viewport: viewport(size: size, start: 0, span: sampleDuration),
+                                               style: .target)
+                }
             }
 
             labelledLane(travelLaneTitle, color: .green) { ctx, size in
@@ -75,43 +108,168 @@ struct TravelLaneDebugView: View {
     @ViewBuilder
     private var controls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Button("Load recorded ScratchTimeline JSON…") { showImporter = true }
-                if loadedModel != nil {
-                    Button("Use sample") { loadedModel = nil; loadedName = nil; loadError = nil }
-                }
-                Text(loadedName.map { "loaded: \($0)" } ?? "using hand-authored sample")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let loadError { Text(loadError).font(.caption).foregroundStyle(.red).lineLimit(2) }
+            // --- Load / unload (label varies by mode) ---
+            loadControls
 
-            // DEBUG stats line — computed live from the travel model (no hardcoded counts)
+            // --- Stats line (label varies by mode) ---
             statsLine
 
-            slider("fullScaleTravelPercent", value: $fullScaleTravelPercent, range: 0.2...3.0, fmt: "%.2f")
-            slider("stepsPerRevolution (reload to apply)", value: $stepsPerRevolution, range: 500...5000, fmt: "%.0f")
-            slider("crossfaderCutWidth (reload to apply)", value: $crossfaderCutWidth, range: 0...0.5, fmt: "%.2f")
-            slider("noiseGateThreshold (normalizedTravel)", value: $noiseGateThreshold, range: 0.0...0.1, fmt: "%.4f")
+            // --- Take classification (CXL mode only, loaded take only) ---
+            if !showAdvanced, let classification = takeClassification {
+                Text(classification.text)
+                    .font(.caption).monospacedDigit()
+                    .foregroundStyle(classification.color)
+            }
+
+            if showAdvanced {
+                advancedControls
+            } else {
+                cxlControls
+            }
+
+            // --- Mode toggle ---
+            Divider()
+            Button(showAdvanced ? "Hide technical details" : "Show technical details…") {
+                showAdvanced.toggle()
+            }
+            .font(.caption)
         }
     }
 
-    // MARK: - Stats line (DEBUG, computed live)
+    // MARK: - Load controls
+
+    @ViewBuilder
+    private var loadControls: some View {
+        HStack {
+            Button(showAdvanced ? "Load recorded ScratchTimeline JSON…" : "Load take…") {
+                showImporter = true
+            }
+            if loadedModel != nil {
+                Button(showAdvanced ? "Use sample" : "Use demo strokes") {
+                    loadedModel = nil; loadedName = nil; loadError = nil
+                }
+            }
+            loadedIndicator
+        }
+        if let loadError { Text(loadError).font(.caption).foregroundStyle(.red).lineLimit(2) }
+    }
+
+    private var loadedIndicator: some View {
+        let text: String
+        if showAdvanced {
+            text = loadedName.map { "loaded: \($0)" } ?? "using hand-authored sample"
+        } else {
+            text = loadedName.map { "Loaded take: \($0)" } ?? "using demo strokes"
+        }
+        return Text(text).font(.caption).foregroundStyle(.secondary)
+    }
+
+    // MARK: - CXL controls (turntablist-friendly)
+
+    @ViewBuilder
+    private var cxlControls: some View {
+        // Sensitivity presets
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Movement sensitivity:").font(.caption)
+            HStack(spacing: 8) {
+                ForEach(SensitivityPreset.allCases, id: \.self) { preset in
+                    Button {
+                        sensitivityPreset = preset
+                        noiseGateThreshold = preset.threshold
+                    } label: {
+                        Text(preset.rawValue)
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(sensitivityPreset == preset ? .accentColor : .secondary)
+                }
+            }
+        }
+
+        // Stroke height (CXL label for fullScaleTravelPercent)
+        slider("Stroke height", value: $fullScaleTravelPercent, range: 0.2...3.0, fmt: "%.1f")
+    }
+
+    // MARK: - Advanced controls (engineering)
+
+    @ViewBuilder
+    private var advancedControls: some View {
+        slider("fullScaleTravelPercent", value: $fullScaleTravelPercent, range: 0.2...3.0, fmt: "%.2f")
+        slider("stepsPerRevolution (reload to apply)", value: $stepsPerRevolution, range: 500...5000, fmt: "%.0f")
+        slider("crossfaderCutWidth (reload to apply)", value: $crossfaderCutWidth, range: 0...0.5, fmt: "%.2f")
+
+        // Raw noiseGateThreshold slider — moving it clears the CXL preset
+        VStack(alignment: .leading, spacing: 2) {
+            slider("noiseGateThreshold (normalizedTravel)", value: $noiseGateThreshold, range: 0.0...0.1, fmt: "%.4f")
+                .onChange(of: noiseGateThreshold) { _, _ in
+                    sensitivityPreset = nil  // freeform — no preset matches
+                }
+            if let preset = sensitivityPreset {
+                Text("Preset: \(preset.rawValue)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: - Stats line (CXL vs engineering)
 
     private var statsLine: some View {
         let model = travelModel
         let stats = model.stats
-        let silenced = model.strokes.filter { $0.normalizedTravel < noiseGateThreshold }.count
-        let rendered = stats.totalStrokes - silenced
-        let silencedText = noiseGateThreshold > 0
-            ? " | silenced: \(silenced)" : ""
-        return Text("strokes: \(stats.totalStrokes) | meaningful: \(stats.meaningfulTravelStrokes) | " +
-                    "micro: \(stats.microTravelStrokes) | zero-dur: \(stats.zeroDurationStrokes) | " +
-                    "rail hits: \(stats.railHitStrokes) | " +
-                    "max travel: \(String(format: "%.1f", stats.maxTravelPercent))% | " +
-                    "rendered: \(rendered)\(silencedText)")
-            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-            .lineLimit(3)
+        if showAdvanced {
+            // Engineering stats — identical to the view before CXL mode was added.
+            let silenced = model.strokes.filter { $0.normalizedTravel < noiseGateThreshold }.count
+            let rendered = stats.totalStrokes - silenced
+            let silencedText = noiseGateThreshold > 0
+                ? " | silenced: \(silenced)" : ""
+            return Text("strokes: \(stats.totalStrokes) | meaningful: \(stats.meaningfulTravelStrokes) | " +
+                        "micro: \(stats.microTravelStrokes) | zero-dur: \(stats.zeroDurationStrokes) | " +
+                        "rail hits: \(stats.railHitStrokes) | " +
+                        "max travel: \(String(format: "%.1f", stats.maxTravelPercent))% | " +
+                        "rendered: \(rendered)\(silencedText)")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .lineLimit(3)
+        } else {
+            // CXL turntablist-friendly stats
+            let silenced = model.strokes.filter { $0.normalizedTravel < noiseGateThreshold }.count
+            let silencedText = noiseGateThreshold > 0 && silenced > 0
+                ? " (filtered: \(silenced))" : ""
+            return Text("Real strokes: \(stats.meaningfulTravelStrokes) | " +
+                        "Hand jitters: \(stats.microTravelStrokes) | " +
+                        "Biggest movement: \(String(format: "%.0f", stats.maxTravelPercent))% rotation\(silencedText)")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
     }
+
+    // MARK: - Take classification (CXL mode, heuristic only)
+
+    /// Heuristic take check for CXL review mode. NOT a persisted classification — computed
+    /// live from the current stats and never written back. nil when no take is loaded.
+    private var takeClassification: (text: String, color: Color)? {
+        guard loadedModel != nil else { return nil }  // no classification for demo strokes
+        let s = travelModel.stats
+        guard s.totalStrokes > 0 else { return nil }
+
+        let meaningfulPct = Double(s.meaningfulTravelStrokes) / Double(s.totalStrokes)
+        let microPct = Double(s.microTravelStrokes) / Double(s.totalStrokes)
+        let zeroPct = Double(s.zeroDurationStrokes) / Double(s.totalStrokes)
+
+        if s.meaningfulTravelStrokes == 0 && s.microTravelStrokes > 0 {
+            return ("Take check: Try Strict sensitivity", .blue)
+        }
+        if microPct > 0.30 {
+            return ("Take check: Noisy movement", .orange)
+        }
+        if meaningfulPct >= 0.70 && zeroPct <= 0.10 {
+            return ("Take check: Looks clean", .green)
+        }
+        return nil  // inconclusive — show nothing
+    }
+
+    // MARK: - Slider helper
 
     @ViewBuilder
     private func slider(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, fmt: String) -> some View {
@@ -164,10 +322,21 @@ struct TravelLaneDebugView: View {
                      actionLineFraction: 0, secondsAhead: max(span, 0.001))
     }
 
+    /// Window title varies by mode: CXL sees turntablist wording, Advanced shows engineering terms.
+    private var windowTitle: String {
+        showAdvanced ? "Notation lane: speed-bucket vs travel (DEBUG)" : "Scratch movement review"
+    }
+
+    /// Lane title varies by mode: CXL uses turntablist terms, Advanced uses engineering terms.
     private var travelLaneTitle: String {
-        loadedModel == nil
-            ? "Proposed — travel above baseline (hand-authored sample)"
-            : "Proposed — travel above baseline (loaded recording)"
+        if showAdvanced {
+            return loadedModel == nil
+                ? "Proposed — travel above baseline (hand-authored sample)"
+                : "Proposed — travel above baseline (loaded recording)"
+        }
+        return loadedModel == nil
+            ? "Record movement (demo strokes)"
+            : "Record movement"
     }
 
     // MARK: - Sample (DEBUG only; not derived, not production)
