@@ -916,6 +916,71 @@ struct MacAnalyzerView: View {
                         value: timeline.source.rawValue
                     )
                 }
+                // Phase 5 — Vision hit-rate diagnostic. Shows the raw
+                // hand-tracker frame success rate so low sample density
+                // can be traced to the Vision pipeline rather than to
+                // the platter recorder (which never thins samples).
+                // DEBUG only; reads live counters that reset each take.
+                if liveTimeline != nil {
+                    let stats = captureEngine.captureDebugStats()
+                    let totalFrames = max(
+                        stats.framesAnalyzed,
+                        stats.handObservationsFound + stats.missedFrames,
+                        0
+                    )
+                    let handObs = stats.handObservationsFound
+                    let missed = stats.missedFrames
+                    let hitRate: Double? = totalFrames > 0
+                        ? Double(handObs) / Double(totalFrames) : nil
+                    let missRate: Double? = totalFrames > 0
+                        ? Double(missed) / Double(totalFrames) : nil
+                    VStack(spacing: 8) {
+                        diagnosticRow(
+                            title: "Vision frames analyzed",
+                            value: "\(stats.framesAnalyzed)"
+                        )
+                        diagnosticRow(
+                            title: "Hand observations found",
+                            value: "\(handObs)"
+                        )
+                        diagnosticRow(
+                            title: "Missed hand frames",
+                            value: "\(missed)"
+                        )
+                        if let hr = hitRate {
+                            diagnosticRow(
+                                title: "Vision hit rate",
+                                value: String(format: "%.0f%%", hr * 100)
+                            )
+                        } else {
+                            diagnosticRow(
+                                title: "Vision hit rate",
+                                value: "counters unavailable"
+                            )
+                        }
+                        if let mr = missRate {
+                            diagnosticRow(
+                                title: "Vision miss rate",
+                                value: String(format: "%.0f%%", mr * 100)
+                            )
+                        }
+                        if let ltl = liveTimeline,
+                           ltl.endTime > 0 {
+                            let expectedMax = Int(ltl.endTime * 25.0)
+                            diagnosticRow(
+                                title: "Expected max frames at 25 Hz",
+                                value: "~\(expectedMax)"
+                            )
+                        }
+                        if let hr = hitRate, hr < 0.2 {
+                            Text("Low raw density means Vision/ROI only produced a few valid hand points. This is diagnostic only.")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+
                 // Phase 3.5 — mixed-state explanation. Renders only when
                 // raw motion was captured but the classifier produced
                 // no strokes (`hasRawMotionWithoutClassifiedStrokes`).
