@@ -31,6 +31,7 @@ struct TravelLaneDebugView: View {
     @State private var fullScaleTravelPercent: Double = 1.0
     @State private var stepsPerRevolution: Double = 3932      // RANE-measured default; editable
     @State private var crossfaderCutWidth: Double = 0.05      // editable
+    @State private var noiseGateThreshold: Double = 0.0       // DEBUG: 0=off; silences strokes below this normalizedTravel
 
     @State private var loadedModel: ScratchNotationLaneDisplayModel?  // nil → hand-authored sample
     @State private var loadedName: String?
@@ -84,10 +85,30 @@ struct TravelLaneDebugView: View {
             }
             if let loadError { Text(loadError).font(.caption).foregroundStyle(.red).lineLimit(2) }
 
+            // DEBUG stats line — computed live from the travel model (no hardcoded counts)
+            statsLine
+
             slider("fullScaleTravelPercent", value: $fullScaleTravelPercent, range: 0.2...3.0, fmt: "%.2f")
             slider("stepsPerRevolution (reload to apply)", value: $stepsPerRevolution, range: 500...5000, fmt: "%.0f")
             slider("crossfaderCutWidth (reload to apply)", value: $crossfaderCutWidth, range: 0...0.5, fmt: "%.2f")
+            slider("noiseGateThreshold (normalizedTravel)", value: $noiseGateThreshold, range: 0.0...0.1, fmt: "%.4f")
         }
+    }
+
+    // MARK: - Stats line (DEBUG, computed live)
+
+    private var statsLine: some View {
+        let model = travelModel
+        let stats = model.stats
+        let silenced = model.strokes.filter { $0.normalizedTravel < noiseGateThreshold }.count
+        let rendered = stats.totalStrokes - silenced
+        let silencedText = noiseGateThreshold > 0
+            ? " | silenced: \(silenced)" : ""
+        return Text("strokes: \(stats.totalStrokes) | rail hits: \(stats.railHitStrokes) | " +
+                    "max travel: \(String(format: "%.1f", stats.maxTravelPercent))% | " +
+                    "rendered: \(rendered)\(silencedText)")
+            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            .lineLimit(2)
     }
 
     @ViewBuilder
@@ -201,8 +222,11 @@ struct TravelLaneDebugView: View {
         // DEBUG validation lane uses `.absoluteAboveBaseline`: the fullScaleTravelPercent slider is
         // visibly meaningful (the default `.perPhrase` fit cancels a uniform scale) AND every stroke
         // rises above a single baseline — notation-truthful, never dipping below the line.
+        // noiseGateThreshold silences strokes below the threshold as flat holds (timing preserved).
         return ScratchNotationTravelMotionPath.motionPath(
-            for: travelModel, duration: max(last, sampleDuration), scaling: .absoluteAboveBaseline)
+            for: travelModel, duration: max(last, sampleDuration),
+            scaling: .absoluteAboveBaseline,
+            noiseGateThreshold: noiseGateThreshold)
     }
 }
 

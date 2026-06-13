@@ -460,6 +460,90 @@ final class ScratchNotationTravelMotionPathTests: XCTestCase {
         XCTAssertEqual(heights.first ?? 0, 1.0, accuracy: 1e-9, "low scale must rail the larger stroke")
     }
 
+    // MARK: - Noise gate (DEBUG visual filter)
+
+    /// Helper: path with noise gate for above-baseline mode.
+    private func gated(_ strokes: [ScratchNotationLanePreviewModel.Stroke],
+                       fullScale: Double, duration: TimeInterval = 4.0,
+                       threshold: Double = 0.0) -> MotionPath {
+        ScratchNotationTravelMotionPath.motionPath(
+            for: display(strokes, fullScale: fullScale), duration: duration,
+            scaling: .absoluteAboveBaseline,
+            noiseGateThreshold: threshold)
+    }
+
+    // N1. Default (noiseGateThreshold not passed) == explicit 0.0 (backward-compatible).
+    func testNoiseGateDefaultIsBackwardCompatible() {
+        let model = display([pStroke(.forward, 0, 1, 0.3), pStroke(.reverse, 1, 2, 0.9)], fullScale: 1.0)
+        XCTAssertEqual(
+            ScratchNotationTravelMotionPath.motionPath(for: model, duration: 3.0, scaling: .absoluteAboveBaseline),
+            ScratchNotationTravelMotionPath.motionPath(for: model, duration: 3.0, scaling: .absoluteAboveBaseline, noiseGateThreshold: 0.0))
+    }
+
+    // N2. Stroke below threshold becomes flat holds (no excursion).
+    func testNoiseGateFiltersTinyStroke() {
+        // travelPercent 0.002 / fullScale 1.0 → normalizedTravel 0.002 → below threshold 0.01
+        let path = gated([pStroke(.forward, 1, 2, 0.002)], fullScale: 1.0, threshold: 0.01)
+        // Only hold segments — the stroke was replaced.
+        let strokeSegs = path.segments.filter { if case .stroke = $0.kind { return true }; return false }
+        XCTAssertEqual(strokeSegs.count, 0, "tiny stroke must be filtered to holds only")
+        XCTAssertEqual(minPosition(path), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(maxPosition(path), 0.0, accuracy: 1e-9, "no excursion above baseline")
+    }
+
+    // N3. Stroke above threshold survives filtering.
+    func testNoiseGatePreservesLargeStroke() {
+        let path = gated([pStroke(.forward, 1, 2, 0.5)], fullScale: 1.0, threshold: 0.01)
+        let strokeSegs = path.segments.filter { if case .stroke = $0.kind { return true }; return false }
+        XCTAssertGreaterThanOrEqual(strokeSegs.count, 2, "large stroke must survive noise gate")
+        XCTAssertGreaterThan(maxPosition(path), 0.0, "must have excursion above baseline")
+    }
+
+    // N4. Timing is preserved where it matters: time range, inter-stroke gaps, and
+    //     the unfiltered stroke's segment times all stay identical. The filtered stroke's
+    //     time span is covered by a hold (segment count differs — 2 stroke segments → 1 hold).
+    func testNoiseGatePreservesTiming() {
+        let model = display([pStroke(.forward, 0.2, 0.8, 0.002),
+                             pStroke(.reverse, 1.5, 2.1, 0.6)], fullScale: 1.0)
+        let off = ScratchNotationTravelMotionPath.motionPath(
+            for: model, duration: 3.0, scaling: .absoluteAboveBaseline, noiseGateThreshold: 0.0)
+        let on = ScratchNotationTravelMotionPath.motionPath(
+            for: model, duration: 3.0, scaling: .absoluteAboveBaseline, noiseGateThreshold: 0.05)
+        // Time range is identical.
+        XCTAssertEqual(off.timeRange, on.timeRange)
+        // The inter-stroke hold [0.8, 1.5] should exist in both paths.
+        let offInterHold = off.segments.first { $0.isHold && $0.startTime == 0.8 && $0.endTime == 1.5 }
+        let onInterHold  = on.segments.first  { $0.isHold && $0.startTime == 0.8 && $0.endTime == 1.5 }
+        XCTAssertNotNil(offInterHold)
+        XCTAssertNotNil(onInterHold, "inter-stroke hold timing must survive noise gate")
+        // The unfiltered stroke (reverse, [1.5, 2.1]) has the same segment timing in both paths.
+        let offRevSegs = off.segments.filter { if case .stroke(.backward) = $0.kind { return true }; return false }
+        let onRevSegs  = on.segments.filter  { if case .stroke(.backward) = $0.kind { return true }; return false }
+        XCTAssertEqual(offRevSegs.count, onRevSegs.count)
+        for (p, a) in zip(offRevSegs, onRevSegs) {
+            XCTAssertEqual(p.startTime, a.startTime, accuracy: 1e-9)
+            XCTAssertEqual(p.endTime, a.endTime, accuracy: 1e-9)
+        }
+        // The filtered stroke's time [0.2, 0.8] is covered by a hold in the gated path.
+        let filteredHold = on.segments.first { $0.isHold && $0.startTime == 0.2 && $0.endTime == 0.8 }
+        XCTAssertNotNil(filteredHold, "filtered stroke must become a hold spanning its original time")
+    }
+
+    // N5. All strokes filtered → entire path is flat holds at baseline, spanning [0, duration].
+    func testNoiseGateAllFilteredProducesFlatAboveBaseline() {
+        let path = gated([pStroke(.forward, 0.5, 1.0, 0.002),
+                          pStroke(.reverse, 1.5, 2.0, 0.001)], fullScale: 1.0, duration: 3.0, threshold: 0.01)
+        XCTAssertEqual(minPosition(path), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(maxPosition(path), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(path.timeRange, 0...3.0)
+        XCTAssertEqual(path.position(at: 0.0), 0.0, accuracy: 1e-9)
+        XCTAssertEqual(path.position(at: 3.0), 0.0, accuracy: 1e-9)
+        // All non-hold segments should be holds.
+        for seg in path.segments where !seg.isHold {
+            XCTFail("all-filtered path must contain only holds, got \(seg.kind)")
+        }
+    }
+
     // MARK: - 10. Source-dependency guard
 
     private func builderCodeWithoutComments(file: StaticString = #filePath) throws -> String {

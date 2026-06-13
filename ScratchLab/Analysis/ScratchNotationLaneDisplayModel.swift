@@ -16,6 +16,14 @@
 
 import Foundation
 
+/// DEBUG stats summary of a display model's stroke distribution — read-only, lossless, no mutation.
+struct ScratchNotationLaneDisplayStats: Equatable, Sendable {
+    let totalStrokes: Int
+    let railHitStrokes: Int        // normalizedTravel >= 1.0
+    let maxNormalizedTravel: Double
+    let maxTravelPercent: Double
+}
+
 /// A display-ready snapshot for a future notation lane, in stroke order. Carries the preview
 /// model verbatim plus a display-only `normalizedTravel` and the scale used to compute it.
 struct ScratchNotationLaneDisplayModel: Equatable, Sendable {
@@ -69,6 +77,18 @@ enum ScratchNotationLaneDisplayAdapter {
             warnings: preview.warnings,
             fullScaleTravelPercent: fullScaleTravelPercent,
             scaleIsUsable: usable
+        )
+    }
+}
+
+extension ScratchNotationLaneDisplayModel {
+    /// Read-only stats summary of the stroke distribution — lossless, no mutation.
+    var stats: ScratchNotationLaneDisplayStats {
+        ScratchNotationLaneDisplayStats(
+            totalStrokes: strokes.count,
+            railHitStrokes: strokes.filter { $0.normalizedTravel >= 1.0 }.count,
+            maxNormalizedTravel: strokes.map(\.normalizedTravel).max() ?? 0,
+            maxTravelPercent: strokes.map(\.travelPercent).max() ?? 0
         )
     }
 }

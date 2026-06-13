@@ -174,7 +174,41 @@ final class ScratchNotationLaneDisplayModelTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
-    // MARK: - 17. Source-dependency guard for the production file
+    // MARK: - 17. Stats computed property
+
+    func testStatsEmptyModel() {
+        let m = ScratchNotationLaneDisplayAdapter.displayModel(
+            from: preview([], warnings: []), fullScaleTravelPercent: 1.0)
+        let s = m.stats
+        XCTAssertEqual(s.totalStrokes, 0)
+        XCTAssertEqual(s.railHitStrokes, 0)
+        XCTAssertEqual(s.maxNormalizedTravel, 0, accuracy: 1e-9)
+        XCTAssertEqual(s.maxTravelPercent, 0, accuracy: 1e-9)
+    }
+
+    func testStatsCountsRailHits() {
+        let m = ScratchNotationLaneDisplayAdapter.displayModel(
+            from: preview([previewStroke(.forward, 0, 1, 0.5, .audible),
+                           previewStroke(.forward, 1, 2, 2.0, .audible),
+                           previewStroke(.reverse, 2, 3, 3.0, .cut)]),
+            fullScaleTravelPercent: 2.0)
+        let s = m.stats
+        XCTAssertEqual(s.totalStrokes, 3)
+        // normalizedTravel: 0.5/2=0.25, 2.0/2=1.0, 3.0/2=1.0 (clamped) → 2 rail hits
+        XCTAssertEqual(s.railHitStrokes, 2)
+        XCTAssertEqual(s.maxNormalizedTravel, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(s.maxTravelPercent, 3.0, accuracy: 1e-9)
+    }
+
+    func testStatsDeterministic() {
+        let p = preview([previewStroke(.forward, 0, 1, 1.0, .audible),
+                         previewStroke(.reverse, 1, 2, 0.3, .cut)])
+        let a = ScratchNotationLaneDisplayAdapter.displayModel(from: p, fullScaleTravelPercent: 2.0).stats
+        let b = ScratchNotationLaneDisplayAdapter.displayModel(from: p, fullScaleTravelPercent: 2.0).stats
+        XCTAssertEqual(a, b)
+    }
+
+    // MARK: - 18. Source-dependency guard for the production file
 
     private func displayModelCodeWithoutComments(
         file: StaticString = #filePath, line: UInt = #line

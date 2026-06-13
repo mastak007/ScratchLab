@@ -60,10 +60,16 @@ enum ScratchNotationTravelMotionPath {
     /// DEBUG proof modes that make `fullScaleTravelPercent` visibly meaningful. Only the cross-axis
     /// position mapping differs between modes — stroke times, direction kinds, holds and the
     /// loop seam are identical.
+    ///
+    /// `noiseGateThreshold` (default 0 = off) is a DEBUG visual gate: strokes whose
+    /// `normalizedTravel` is below the threshold are replaced with flat holds so they carry no
+    /// visible excursion. Timing (start/end times) is preserved; the stroke is simply rendered
+    /// as silence at the baseline. Direction kinds and the loop seam are unaffected.
     static func motionPath(
         for model: ScratchNotationLaneDisplayModel,
         duration: TimeInterval,
-        scaling: Scaling = .perPhrase
+        scaling: Scaling = .perPhrase,
+        noiseGateThreshold: Double = 0.0
     ) -> MotionPath {
         let totalDuration = max(duration, 0.001)
         let epsilon = 1e-6
@@ -103,23 +109,32 @@ enum ScratchNotationTravelMotionPath {
         appendHold(start: 0, end: strokes[0].startTime)
 
         for (index, stroke) in strokes.enumerated() {
-            // Sign from direction; magnitude from travel (NOT speed). reverse maps to backward.
-            let laneDirection: ScratchNotationDirection = (stroke.direction == .forward) ? .forward : .backward
-            let sign: CGFloat = (stroke.direction == .forward) ? 1 : -1
-            let rail: CGFloat = sign * CGFloat(stroke.normalizedTravel)
+            // DEBUG noise gate: strokes below the threshold become flat holds so they
+            // carry no visible excursion. Timing (start/end) is preserved.
+            let shouldFilter = noiseGateThreshold > 0
+                && stroke.normalizedTravel < noiseGateThreshold
 
-            if stroke.endTime - stroke.startTime <= epsilon {
-                spans.append(Span(kind: .stroke(laneDirection),
-                                  start: stroke.startTime, end: stroke.endTime,
-                                  startPos: 0, endPos: rail))
+            if shouldFilter {
+                appendHold(start: stroke.startTime, end: stroke.endTime)
             } else {
-                let mid = (stroke.startTime + stroke.endTime) / 2
-                spans.append(Span(kind: .stroke(laneDirection),
-                                  start: stroke.startTime, end: mid,
-                                  startPos: 0, endPos: rail))
-                spans.append(Span(kind: .stroke(laneDirection),
-                                  start: mid, end: stroke.endTime,
-                                  startPos: rail, endPos: 0))
+                // Sign from direction; magnitude from travel (NOT speed). reverse maps to backward.
+                let laneDirection: ScratchNotationDirection = (stroke.direction == .forward) ? .forward : .backward
+                let sign: CGFloat = (stroke.direction == .forward) ? 1 : -1
+                let rail: CGFloat = sign * CGFloat(stroke.normalizedTravel)
+
+                if stroke.endTime - stroke.startTime <= epsilon {
+                    spans.append(Span(kind: .stroke(laneDirection),
+                                      start: stroke.startTime, end: stroke.endTime,
+                                      startPos: 0, endPos: rail))
+                } else {
+                    let mid = (stroke.startTime + stroke.endTime) / 2
+                    spans.append(Span(kind: .stroke(laneDirection),
+                                      start: stroke.startTime, end: mid,
+                                      startPos: 0, endPos: rail))
+                    spans.append(Span(kind: .stroke(laneDirection),
+                                      start: mid, end: stroke.endTime,
+                                      startPos: rail, endPos: 0))
+                }
             }
 
             if index + 1 < strokes.count {
