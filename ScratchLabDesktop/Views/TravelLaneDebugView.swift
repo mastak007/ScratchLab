@@ -266,7 +266,7 @@ struct TravelLaneDebugView: View {
             let silenced = model.strokes.filter { $0.normalizedTravel < noiseGateThreshold }.count
             let silencedText = noiseGateThreshold > 0 && silenced > 0
                 ? " (filtered: \(silenced))" : ""
-            return Text("Real strokes: \(stats.meaningfulTravelStrokes) | " +
+            return Text("Movement strokes: \(stats.meaningfulTravelStrokes) | " +
                         "Hand jitters: \(stats.microTravelStrokes) | " +
                         "Biggest movement: \(String(format: "%.0f", stats.maxTravelPercent))% rotation\(silencedText)")
                 .font(.caption).monospacedDigit().foregroundStyle(.secondary)
