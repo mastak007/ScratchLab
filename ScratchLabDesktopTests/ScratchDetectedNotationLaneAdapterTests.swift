@@ -174,4 +174,116 @@ final class ScratchDetectedNotationLaneAdapterTests: XCTestCase {
         XCTAssertEqual(stats.microTravelStrokes, 2)
         XCTAssertEqual(stats.zeroDurationStrokes, 0)
     }
+
+    // MARK: - CC6 platter fallback tests (DEBUG CC6 platter proxy)
+
+    /// Minimal detected-notation with empty recordMovement but RANE ONE MKII CC6 data.
+    /// Two clear strokes: forward 120→125 (delta 5), backward 125→122 (delta 3).
+    private var cc6TwoStrokeJSON: String {
+        """
+        {"schemaVersion":"scratchlab_detected_notation_v1","sessionID":"cc6-test","takeID":"t1","takeNumber":1,"scratchType":"baby_scratch","bpm":95,"captureMode":"timed_click","notationSource":"unavailable","detectionSources":[],"labelSource":"unknown","labelConfidence":null,"notationConfidence":null,"recordMovementEvents":[],"audioEvents":[],"faderEvents":[],"mixerMidiEvents":[{"takeRelativeTime":1.0,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":120,"normalizedValue":0.9449,"mappedControl":null},{"takeRelativeTime":1.1,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":122,"normalizedValue":0.9606,"mappedControl":null},{"takeRelativeTime":1.2,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":125,"normalizedValue":0.9843,"mappedControl":null},{"takeRelativeTime":1.3,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":124,"normalizedValue":0.9764,"mappedControl":null},{"takeRelativeTime":1.4,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":122,"normalizedValue":0.9606,"mappedControl":null}],"beatGrid":{"beatsPerBar":4,"bpm":95,"countInBeats":4},"notes":""}
+        """
+    }
+
+    /// Detected-notation with CC6 wrap: 126→127→0→1 (forward wrap crossing the 127→0 boundary).
+    private var cc6WrapJSON: String {
+        """
+        {"schemaVersion":"scratchlab_detected_notation_v1","sessionID":"cc6-wrap","takeID":"t2","takeNumber":2,"scratchType":"baby_scratch","bpm":95,"captureMode":"timed_click","notationSource":"unavailable","detectionSources":[],"labelSource":"unknown","labelConfidence":null,"notationConfidence":null,"recordMovementEvents":[],"audioEvents":[],"faderEvents":[],"mixerMidiEvents":[{"takeRelativeTime":2.0,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":126,"normalizedValue":0.9921,"mappedControl":null},{"takeRelativeTime":2.1,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":127,"normalizedValue":1.0,"mappedControl":null},{"takeRelativeTime":2.2,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":0,"normalizedValue":0.0,"mappedControl":null},{"takeRelativeTime":2.3,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":1,"normalizedValue":0.0079,"mappedControl":null},{"takeRelativeTime":2.4,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":2,"normalizedValue":0.0157,"mappedControl":null}],"beatGrid":{"beatsPerBar":4,"bpm":95,"countInBeats":4},"notes":""}
+        """
+    }
+
+    /// Detected-notation with CC6 direction changes.
+    private var cc6DirectionChangeJSON: String {
+        """
+        {"schemaVersion":"scratchlab_detected_notation_v1","sessionID":"cc6-dir","takeID":"t3","takeNumber":3,"scratchType":"baby_scratch","bpm":95,"captureMode":"timed_click","notationSource":"unavailable","detectionSources":[],"labelSource":"unknown","labelConfidence":null,"notationConfidence":null,"recordMovementEvents":[],"audioEvents":[],"faderEvents":[],"mixerMidiEvents":[{"takeRelativeTime":3.0,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":10,"normalizedValue":0.0787,"mappedControl":null},{"takeRelativeTime":3.1,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":20,"normalizedValue":0.1575,"mappedControl":null},{"takeRelativeTime":3.2,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":30,"normalizedValue":0.2362,"mappedControl":null},{"takeRelativeTime":3.3,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":28,"normalizedValue":0.2205,"mappedControl":null},{"takeRelativeTime":3.4,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":25,"normalizedValue":0.1969,"mappedControl":null},{"takeRelativeTime":3.5,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":20,"normalizedValue":0.1575,"mappedControl":null},{"takeRelativeTime":3.6,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":30,"normalizedValue":0.2362,"mappedControl":null},{"takeRelativeTime":3.7,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":40,"normalizedValue":0.315,"mappedControl":null},{"takeRelativeTime":3.8,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":50,"normalizedValue":0.3937,"mappedControl":null}],"beatGrid":{"beatsPerBar":4,"bpm":95,"countInBeats":4},"notes":""}
+        """
+    }
+
+    /// Detected-notation with CC6 jitter — a single-sample micro-reversal.
+    private var cc6JitterJSON: String {
+        """
+        {"schemaVersion":"scratchlab_detected_notation_v1","sessionID":"cc6-jitter","takeID":"t4","takeNumber":4,"scratchType":"baby_scratch","bpm":95,"captureMode":"timed_click","notationSource":"unavailable","detectionSources":[],"labelSource":"unknown","labelConfidence":null,"notationConfidence":null,"recordMovementEvents":[],"audioEvents":[],"faderEvents":[],"mixerMidiEvents":[{"takeRelativeTime":4.0,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":50,"normalizedValue":0.3937,"mappedControl":null},{"takeRelativeTime":4.1,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":55,"normalizedValue":0.4331,"mappedControl":null},{"takeRelativeTime":4.2,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":54,"normalizedValue":0.4252,"mappedControl":null},{"takeRelativeTime":4.3,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":58,"normalizedValue":0.4567,"mappedControl":null},{"takeRelativeTime":4.4,"deviceName":"Rane ONE MKII","channel":7,"controller":6,"value":62,"normalizedValue":0.4882,"mappedControl":null}],"beatGrid":{"beatsPerBar":4,"bpm":95,"countInBeats":4},"notes":""}
+        """
+    }
+
+    // MARK: CC6 → strokes
+
+    func testRaneCC6ProducesStrokes() throws {
+        let model = try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(cc6TwoStrokeJSON.utf8))
+        // Forward 120→122→125 (accumulated delta +5), then backward 125→124→122 (delta -3)
+        XCTAssertGreaterThanOrEqual(model.strokes.count, 1)
+        // First stroke is forward
+        XCTAssertEqual(model.strokes[0].direction, .forward)
+    }
+
+    func testRaneCC6HandlesWraps() throws {
+        let model = try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(cc6WrapJSON.utf8))
+        // 126→127→0→1→2: unwrapped, that's 126→127→128→129→130 = delta of 4
+        XCTAssertGreaterThanOrEqual(model.strokes.count, 1)
+        // travelPercent = accumulated delta / 127 = 4/127 ≈ 0.031
+        let stroke = model.strokes[0]
+        XCTAssertEqual(stroke.travelPercent, 4.0 / 127.0, accuracy: 0.001)
+    }
+
+    func testRaneCC6DirectionChangesProduceMultipleStrokes() throws {
+        let model = try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(cc6DirectionChangeJSON.utf8))
+        // Forward: 10→20→30 (delta +20), then backward: 30→28→25→20 (delta -10),
+        // then forward: 20→30→40→50 (delta +30). Should produce ≥ 2 strokes.
+        XCTAssertGreaterThanOrEqual(model.strokes.count, 2)
+        // Check alternating directions
+        let dirs = model.strokes.map(\.direction)
+        for i in 1..<dirs.count {
+            XCTAssertNotEqual(dirs[i], dirs[i - 1], "Adjacent strokes must alternate direction")
+        }
+    }
+
+    func testRaneCC6AudibleStateIsUnknown() throws {
+        let model = try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(cc6TwoStrokeJSON.utf8))
+        // CC6 events carry no audio confidence — all strokes should be .unknown
+        for stroke in model.strokes {
+            XCTAssertEqual(stroke.audibleState, .unknown,
+                "CC6-derived strokes must have audibleState = .unknown")
+        }
+    }
+
+    func testRaneCC6SkipsJitter() throws {
+        let model = try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(cc6JitterJSON.utf8))
+        // 50→55 (+5), then 55→54 (-1 jitter), then 54→58→62 (+8 total).
+        // The single -1 step is within jitterSteps (3). Should produce 1 stroke, not 3.
+        // With +5 -1 +8 merged = +12 total in one forward stroke.
+        XCTAssertEqual(model.strokes.count, 1, "Single-sample micro-reversal should be merged as jitter")
+        XCTAssertEqual(model.strokes[0].direction, .forward)
+        XCTAssertEqual(model.strokes[0].travelPercent, 12.0 / 127.0, accuracy: 0.001)
+    }
+
+    // MARK: CC6 empty / missing
+
+    func testEmptyRecordMovementAndNoCC6Fails() {
+        let json = """
+        {"schemaVersion":"scratchlab_detected_notation_v1","sessionID":"t","takeID":"t","takeNumber":1,"scratchType":"baby","bpm":70,"captureMode":"free","notationSource":"unavailable","detectionSources":[],"labelSource":"unknown","labelConfidence":null,"notationConfidence":null,"recordMovementEvents":[],"audioEvents":[],"faderEvents":[],"mixerMidiEvents":[],"beatGrid":null,"notes":""}
+        """
+        XCTAssertThrowsError(try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(json.utf8))) { error in
+            guard case ScratchDetectedNotationLaneAdapterError.emptyMovementEvents = error else {
+                XCTFail("Expected emptyMovementEvents, got \(error)")
+                return
+            }
+        }
+    }
+
+    // MARK: Existing path not broken
+
+    func testExistingRecordMovementPathStillWorks() throws {
+        // Uses the same JSON as testDecodesOneStroke — recordMovementEvents present,
+        // mixerMidiEvents absent. Must load successfully via Path 1.
+        let model = try ScratchDetectedNotationLaneAdapter.previewModel(
+            from: Data(oneStrokeJSON.utf8))
+        XCTAssertEqual(model.strokes.count, 1)
+        XCTAssertEqual(model.strokes[0].direction, .forward)
+    }
 }
