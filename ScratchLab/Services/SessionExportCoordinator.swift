@@ -1959,6 +1959,37 @@ struct SessionArchiveBuilder: Sendable {
             let notationData = try Self.jsonEncoder.encode(takeContext.notationDocument)
             try notationData.write(to: notationURL, options: .atomic)
 
+#if DEBUG
+            // Copy companion raw-platter debug file if it exists next to the sidecar.
+            // Written by MacAnalyzerView from the in-memory raw platter timeline
+            // before export. No mutation to LocalRecordingSidecar or export schema.
+            let sidecarBase = takeContext.take.sidecarURL
+                .deletingPathExtension().lastPathComponent
+            let companionURL = takeContext.take.sidecarURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("\(sidecarBase)_raw_platter_debug.json")
+            if fileManager.fileExists(atPath: companionURL.path) {
+                let debugDir = stagedSessionURL
+                    .appendingPathComponent("debug", isDirectory: true)
+                let debugURL = debugDir
+                    .appendingPathComponent("take-\(takeContext.take.takeNumber)_raw_platter_debug.json")
+                let companionData = try? Data(contentsOf: companionURL)
+                // Fix up takeID / takeNumber from the export context.
+                if let data = companionData,
+                   var companionJSON = try? JSONSerialization.jsonObject(
+                    with: data) as? [String: Any] {
+                    companionJSON["takeID"] = takeContext.sidecar.takeID
+                    companionJSON["takeNumber"] = takeContext.take.takeNumber
+                    if let fixedData = try? JSONSerialization.data(
+                        withJSONObject: companionJSON, options: [.prettyPrinted, .sortedKeys]) {
+                        try? fileManager.createDirectory(at: debugDir,
+                            withIntermediateDirectories: true)
+                        try? fixedData.write(to: debugURL)
+                    }
+                }
+            }
+#endif
+
             if let watchFileName = takeContext.watchFileName,
                let watchCaptureSession = takeContext.take.watchCaptureSession {
                 let watchURL = stagedSessionURL

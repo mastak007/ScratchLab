@@ -2718,6 +2718,9 @@ struct MacAnalyzerView: View {
             sessionExportCoordinator.showFailure(.sessionFolderNotFound)
             return
         }
+#if DEBUG
+        writeRawPlatterCompanionForLastRecording(url: lastRoutineRecordingURL)
+#endif
         sessionExportCoordinator.prepareShare(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
@@ -2733,6 +2736,9 @@ struct MacAnalyzerView: View {
             sessionExportCoordinator.showFailure(.sessionFolderNotFound)
             return
         }
+#if DEBUG
+        writeRawPlatterCompanionForLastRecording(url: lastRoutineRecordingURL)
+#endif
         sessionExportCoordinator.saveArchiveCopy(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
@@ -2742,6 +2748,67 @@ struct MacAnalyzerView: View {
             options: SessionExportOptions(mixMode: exportMixMode)
         )
     }
+
+#if DEBUG
+    /// Write a companion `_raw_platter_debug.json` file next to the last
+    /// recording's sidecar so the export coordinator can copy it into the
+    /// session bundle. The file carries normalised position samples and
+    /// diagnostic flags — NOT recognised notation.
+    ///
+    /// This is the ONLY place that bridges the in-memory raw platter
+    /// timeline to disk for export. No mutation to LocalRecordingSidecar
+    /// or production schema.
+    private func writeRawPlatterCompanionForLastRecording(url lastRoutineRecordingURL: URL) {
+        guard let rawTimeline = captureEngine.lastDrainedPlatterPositionTimeline,
+              !rawTimeline.samples.isEmpty else { return }
+
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(
+            forMediaURL: lastRoutineRecordingURL)
+        let sidecarBase = sidecarURL.deletingPathExtension().lastPathComponent
+        let companionURL = sidecarURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(sidecarBase)_raw_platter_debug.json")
+
+        let positionRange = rawTimeline.positionRange
+        let span: Double
+        let offset: Double
+        if let range = positionRange, range.upperBound > range.lowerBound {
+            span = range.upperBound - range.lowerBound
+            offset = range.lowerBound
+        } else {
+            span = 1.0
+            offset = 0.0
+        }
+        let normalizedSamples: [RawPlatterDebugExport.Sample] = rawTimeline.samples.map {
+            .init(time: $0.time,
+                  normalizedPosition: ($0.position - offset) / span)
+        }
+        let movementEventsEmpty = currentRoutineNotationSnapshot?
+            .recordMovementEvents.isEmpty ?? true
+        let density: Double = {
+            let dur = rawTimeline.endTime - rawTimeline.startTime
+            return dur > 0 ? Double(rawTimeline.samples.count) / dur : 0
+        }()
+        let debugExport = RawPlatterDebugExport(
+            schemaVersion: "scratchlab_raw_platter_debug_v1",
+            takeID: "",        // placeholder — filled by export coordinator
+            takeNumber: 0,    // placeholder — filled by export coordinator
+            source: rawTimeline.source.rawValue,
+            sampleCount: rawTimeline.samples.count,
+            startTime: rawTimeline.startTime,
+            endTime: rawTimeline.endTime,
+            sampleRate: density,
+            positionSpan: span,
+            lowDensity: density < 10.0,
+            notPromoted: movementEventsEmpty,
+            rendererEligibility: density >= 10.0 ? "eligible" : "density_below_floor",
+            samples: normalizedSamples
+        )
+        if let debugData = try? JSONEncoder().encode(debugExport) {
+            try? debugData.write(to: companionURL, options: .atomic)
+        }
+    }
+#endif
 
     private func uploadLastRoutineSession() {
         guard sessionUploadManager.isUploadAvailable else {

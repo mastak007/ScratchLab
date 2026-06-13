@@ -72,6 +72,11 @@ struct TravelLaneDebugView: View {
     /// Display-only; does not change stroke geometry or model.
     @State private var laneZoom: Int = 1
 
+    /// True when the current display model was loaded from a raw platter debug export.
+    /// Changes the lane title and adds an explainer so the user knows this is NOT
+    /// recognised notation.
+    @State private var rawPlatterPreview: Bool = false
+
     private let sampleDuration: TimeInterval = 4.0
 
     private var calibration: ScratchAnalysisCalibration {
@@ -139,6 +144,13 @@ struct TravelLaneDebugView: View {
                     .foregroundStyle(classification.color)
             }
 
+            // --- Raw platter explainer (any mode, raw platter only) ---
+            if rawPlatterPreview {
+                Text("Raw platter preview — not recognized strokes")
+                    .font(.caption).monospacedDigit()
+                    .foregroundStyle(.orange)
+            }
+
             if showAdvanced {
                 advancedControls
             } else {
@@ -165,6 +177,7 @@ struct TravelLaneDebugView: View {
             if loadedModel != nil {
                 Button(showAdvanced ? "Use sample" : "Use demo strokes") {
                     loadedModel = nil; loadedName = nil; loadError = nil
+                    rawPlatterPreview = false
                 }
             }
             loadedIndicator
@@ -319,22 +332,40 @@ struct TravelLaneDebugView: View {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
                 let data = try Data(contentsOf: url)
-                // Try old RANE-format ScratchTimeline first (cc6Step events → C++ analysis).
+                // 1. Try old RANE-format ScratchTimeline (cc6Step events → C++ analysis).
                 if let model = try? ScratchTimelineProvenance.displayModel(
                     from: data, calibration: calibration, fullScaleTravelPercent: fullScaleTravelPercent) {
                     loadedModel = model
                     loadedName = url.lastPathComponent
+                    rawPlatterPreview = false
                     loadError = nil
                     return
                 }
-                // Fall back: try detected-notation sidecar (recordMovementEvents → direct preview).
-                let preview = try ScratchDetectedNotationLaneAdapter.previewModel(from: data)
-                loadedModel = ScratchNotationLaneDisplayAdapter.displayModel(
-                    from: preview, fullScaleTravelPercent: fullScaleTravelPercent)
-                loadedName = url.lastPathComponent
-                loadError = nil
+                // 2. Try detected-notation sidecar (recordMovementEvents → direct preview,
+                //    with CC6 fallback from mixerMidiEvents).
+                if let preview = try? ScratchDetectedNotationLaneAdapter.previewModel(from: data) {
+                    loadedModel = ScratchNotationLaneDisplayAdapter.displayModel(
+                        from: preview, fullScaleTravelPercent: fullScaleTravelPercent)
+                    loadedName = url.lastPathComponent
+                    rawPlatterPreview = false
+                    loadError = nil
+                    return
+                }
+                // 3. Try raw platter debug sidecar (normalised position samples →
+                //    directional strokes for low-density / not-promoted takes).
+                if let preview = try? ScratchRawPlatterLaneAdapter.previewModel(from: data) {
+                    loadedModel = ScratchNotationLaneDisplayAdapter.displayModel(
+                        from: preview, fullScaleTravelPercent: fullScaleTravelPercent)
+                    loadedName = url.lastPathComponent
+                    rawPlatterPreview = true
+                    loadError = nil
+                    return
+                }
+                throw ScratchDetectedNotationLaneAdapterError.notDetectedNotationFormat(
+                    "Unrecognised file format")
             } catch {
-                loadedModel = nil; loadedName = nil          // fall back to sample
+                loadedModel = nil; loadedName = nil
+                rawPlatterPreview = false
                 loadError = "Load failed: \(error)"
             }
         case .failure(let error):
@@ -368,11 +399,18 @@ struct TravelLaneDebugView: View {
     }
 
     /// Lane title varies by mode: CXL uses turntablist terms, Advanced uses engineering terms.
+    /// Raw platter preview gets an explicit "raw preview" label.
     private var travelLaneTitle: String {
         if showAdvanced {
+            if rawPlatterPreview {
+                return "Proposed — travel above baseline (raw platter preview)"
+            }
             return loadedModel == nil
                 ? "Proposed — travel above baseline (hand-authored sample)"
                 : "Proposed — travel above baseline (loaded recording)"
+        }
+        if rawPlatterPreview {
+            return "Raw movement preview"
         }
         return loadedModel == nil
             ? "Record movement (demo strokes)"
