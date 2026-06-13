@@ -68,6 +68,10 @@ struct TravelLaneDebugView: View {
     /// value via the raw slider in Advanced mode.
     @State private var sensitivityPreset: SensitivityPreset? = .normal
 
+    /// Zoom level for the travel lane — 1/2/4x. Wider canvas → higher pointsPerSecond → zoom.
+    /// Display-only; does not change stroke geometry or model.
+    @State private var laneZoom: Int = 1
+
     private let sampleDuration: TimeInterval = 4.0
 
     private var calibration: ScratchAnalysisCalibration {
@@ -87,11 +91,25 @@ struct TravelLaneDebugView: View {
                 }
             }
 
-            labelledLane(travelLaneTitle, color: .green) { ctx, size in
+            // Zoom-aware travel lane: wider canvas inside ScrollView clips to visible width.
+            // Window stays at 560px regardless of zoom. LaneViewport maps wider canvas to
+            // more pointsPerSecond — display-only zoom, no stroke geometry change.
+            let zoomedLane = labelledLane(travelLaneTitle, color: .green) { ctx, size in
                 let window = travelWindow
                 ScratchMotionRenderer.draw(travelPath, in: ctx,
                                            viewport: viewport(size: size, start: window.start, span: window.span),
                                            style: .user)
+            }
+            if laneZoom > 1 {
+                GeometryReader { geo in
+                    let visibleWidth = geo.size.width
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        zoomedLane.frame(width: visibleWidth * CGFloat(laneZoom))
+                    }
+                }
+                .frame(height: 110)   // caption + spacing + 90px canvas
+            } else {
+                zoomedLane
             }
 
             controls
@@ -190,6 +208,18 @@ struct TravelLaneDebugView: View {
 
         // Stroke height (CXL label for fullScaleTravelPercent)
         slider("Stroke height", value: $fullScaleTravelPercent, range: 0.2...3.0, fmt: "%.1f")
+
+        // Zoom picker
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Zoom:").font(.caption)
+            Picker("Zoom", selection: $laneZoom) {
+                Text("1x").tag(1)
+                Text("2x").tag(2)
+                Text("4x").tag(4)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 200)
+        }
     }
 
     // MARK: - Advanced controls (engineering)
