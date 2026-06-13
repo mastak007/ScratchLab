@@ -17,11 +17,19 @@
 import Foundation
 
 /// DEBUG stats summary of a display model's stroke distribution — read-only, lossless, no mutation.
+/// Travel/duration sanity buckets use neutral measurement terms only; this is NOT scratch
+/// technique classification.
 struct ScratchNotationLaneDisplayStats: Equatable, Sendable {
     let totalStrokes: Int
     let railHitStrokes: Int        // normalizedTravel >= 1.0
     let maxNormalizedTravel: Double
     let maxTravelPercent: Double
+    /// Strokes with zero duration — instantaneous direction reversals; undefined speed.
+    let zeroDurationStrokes: Int
+    /// Strokes with travelPercent < 1.0 and non-zero duration — sub-revolution movement.
+    let microTravelStrokes: Int
+    /// Strokes with travelPercent >= 1.0 and non-zero duration — meaningful platter movement.
+    let meaningfulTravelStrokes: Int
 }
 
 /// A display-ready snapshot for a future notation lane, in stroke order. Carries the preview
@@ -43,6 +51,14 @@ struct ScratchNotationLaneDisplayModel: Equatable, Sendable {
         let audibleState: ScratchAudibleState   // preserved, including .unknown
 
         var durationSeconds: Double { max(0, endTime - startTime) }
+
+        /// Derived platter speed in travel-percent per second. nil when duration is
+        /// zero (instantaneous direction reversal). DEBUG read-only; not persisted.
+        var speedPercentPerSecond: Double? {
+            let dur = durationSeconds
+            guard dur > 0 else { return nil }
+            return travelPercent / dur
+        }
     }
 }
 
@@ -83,12 +99,20 @@ enum ScratchNotationLaneDisplayAdapter {
 
 extension ScratchNotationLaneDisplayModel {
     /// Read-only stats summary of the stroke distribution — lossless, no mutation.
+    /// Travel/duration buckets use neutral measurement terms only (NOT technique labels).
     var stats: ScratchNotationLaneDisplayStats {
-        ScratchNotationLaneDisplayStats(
+        let zeroDur = strokes.filter { $0.durationSeconds == 0 }.count
+        let nonZero = strokes.filter { $0.durationSeconds > 0 }
+        let micro = nonZero.filter { $0.travelPercent < 1.0 }.count
+        let meaningful = nonZero.filter { $0.travelPercent >= 1.0 }.count
+        return ScratchNotationLaneDisplayStats(
             totalStrokes: strokes.count,
             railHitStrokes: strokes.filter { $0.normalizedTravel >= 1.0 }.count,
             maxNormalizedTravel: strokes.map(\.normalizedTravel).max() ?? 0,
-            maxTravelPercent: strokes.map(\.travelPercent).max() ?? 0
+            maxTravelPercent: strokes.map(\.travelPercent).max() ?? 0,
+            zeroDurationStrokes: zeroDur,
+            microTravelStrokes: micro,
+            meaningfulTravelStrokes: meaningful
         )
     }
 }

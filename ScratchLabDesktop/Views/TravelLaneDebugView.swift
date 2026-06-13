@@ -104,11 +104,13 @@ struct TravelLaneDebugView: View {
         let rendered = stats.totalStrokes - silenced
         let silencedText = noiseGateThreshold > 0
             ? " | silenced: \(silenced)" : ""
-        return Text("strokes: \(stats.totalStrokes) | rail hits: \(stats.railHitStrokes) | " +
+        return Text("strokes: \(stats.totalStrokes) | meaningful: \(stats.meaningfulTravelStrokes) | " +
+                    "micro: \(stats.microTravelStrokes) | zero-dur: \(stats.zeroDurationStrokes) | " +
+                    "rail hits: \(stats.railHitStrokes) | " +
                     "max travel: \(String(format: "%.1f", stats.maxTravelPercent))% | " +
                     "rendered: \(rendered)\(silencedText)")
             .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-            .lineLimit(2)
+            .lineLimit(3)
     }
 
     @ViewBuilder

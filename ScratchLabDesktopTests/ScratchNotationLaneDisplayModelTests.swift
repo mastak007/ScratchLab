@@ -184,6 +184,9 @@ final class ScratchNotationLaneDisplayModelTests: XCTestCase {
         XCTAssertEqual(s.railHitStrokes, 0)
         XCTAssertEqual(s.maxNormalizedTravel, 0, accuracy: 1e-9)
         XCTAssertEqual(s.maxTravelPercent, 0, accuracy: 1e-9)
+        XCTAssertEqual(s.zeroDurationStrokes, 0)
+        XCTAssertEqual(s.microTravelStrokes, 0)
+        XCTAssertEqual(s.meaningfulTravelStrokes, 0)
     }
 
     func testStatsCountsRailHits() {
@@ -198,6 +201,10 @@ final class ScratchNotationLaneDisplayModelTests: XCTestCase {
         XCTAssertEqual(s.railHitStrokes, 2)
         XCTAssertEqual(s.maxNormalizedTravel, 1.0, accuracy: 1e-9)
         XCTAssertEqual(s.maxTravelPercent, 3.0, accuracy: 1e-9)
+        // travelPercent: 0.5, 2.0, 3.0 — all non-zero duration, 1 micro (<1.0), 2 meaningful (>=1.0)
+        XCTAssertEqual(s.zeroDurationStrokes, 0)
+        XCTAssertEqual(s.microTravelStrokes, 1)
+        XCTAssertEqual(s.meaningfulTravelStrokes, 2)
     }
 
     func testStatsDeterministic() {
@@ -206,6 +213,47 @@ final class ScratchNotationLaneDisplayModelTests: XCTestCase {
         let a = ScratchNotationLaneDisplayAdapter.displayModel(from: p, fullScaleTravelPercent: 2.0).stats
         let b = ScratchNotationLaneDisplayAdapter.displayModel(from: p, fullScaleTravelPercent: 2.0).stats
         XCTAssertEqual(a, b)
+    }
+
+    // 17a. Derived speedPercentPerSecond: normal stroke computes travel/dur; zero-duration → nil.
+    func testSpeedPercentPerSecond() {
+        let m = ScratchNotationLaneDisplayAdapter.displayModel(
+            from: preview([previewStroke(.forward, 0, 1, 50.0, .audible),
+                           previewStroke(.reverse, 2, 2, 10.0, .cut)]),
+            fullScaleTravelPercent: 1.0)
+        // Stroke 1: duration=1s, travel=50% → speed=50%/s
+        XCTAssertEqual(m.strokes[0].speedPercentPerSecond ?? -1, 50.0, accuracy: 1e-9)
+        // Stroke 2: duration=0 → nil
+        XCTAssertNil(m.strokes[1].speedPercentPerSecond)
+    }
+
+    // 17b. Travel/duration sanity buckets: zeroDuration, microTravel (<1.0%), meaningfulTravel (>=1.0%).
+    func testStatsTravelDurationSanity() {
+        let m = ScratchNotationLaneDisplayAdapter.displayModel(
+            from: preview([previewStroke(.forward, 0.0, 0.01, 0.025, .audible),   // micro
+                           previewStroke(.reverse, 0.5, 1.0, 0.5, .cut),           // micro
+                           previewStroke(.forward, 1.5, 2.0, 50.0, .audible),      // meaningful
+                           previewStroke(.reverse, 3.0, 3.0, 0.1, .cut)]),         // zero-dur
+            fullScaleTravelPercent: 1.0)
+        let s = m.stats
+        XCTAssertEqual(s.totalStrokes, 4)
+        XCTAssertEqual(s.zeroDurationStrokes, 1)
+        XCTAssertEqual(s.microTravelStrokes, 2)
+        XCTAssertEqual(s.meaningfulTravelStrokes, 1)
+        // Sanity: total = zeroDur + micro + meaningful
+        XCTAssertEqual(s.totalStrokes, s.zeroDurationStrokes + s.microTravelStrokes + s.meaningfulTravelStrokes)
+    }
+
+    // 17c. A zero-duration stroke is counted in zeroDurationStrokes only, NOT in microTravel.
+    func testStatsZeroDurationExcludedFromBuckets() {
+        let m = ScratchNotationLaneDisplayAdapter.displayModel(
+            from: preview([previewStroke(.forward, 0, 0, 0.025, .audible)]),
+            fullScaleTravelPercent: 1.0)
+        let s = m.stats
+        XCTAssertEqual(s.totalStrokes, 1)
+        XCTAssertEqual(s.zeroDurationStrokes, 1)
+        XCTAssertEqual(s.microTravelStrokes, 0, "zero-duration must not be counted as microTravel")
+        XCTAssertEqual(s.meaningfulTravelStrokes, 0)
     }
 
     // MARK: - 18. Source-dependency guard for the production file
