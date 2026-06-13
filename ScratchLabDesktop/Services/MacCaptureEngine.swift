@@ -2270,6 +2270,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.platterRecordingStartTime = CACurrentMediaTime()
                 self.platterPositionRecorder.startRecording(at: 0)
                 self.platterRecorderLock.unlock()
+                #if DEBUG
+                // Reset per-take Vision counters so Review diagnostics
+                // compare against this take only, not the whole session.
+                self.debugFramesAnalyzed = 0
+                self.debugHandObservationsFound = 0
+                self.debugDirectionChanges = 0
+                self.debugMissedFrameCount = 0
+                self.debugVisionReturnedHand = 0
+                // debugLastROI intentionally left alone — it will be
+                // updated on the next analyzed frame.
+                #endif
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
                 self.reconnectSelectedMIDIInput()
