@@ -10,10 +10,15 @@ import UniformTypeIdentifiers
 //     reference); it is not rebuilt from loaded files (a LaneStroke speed bucket can't be derived
 //     from a cc6 timeline).
 //   • Bottom lane (proposed): excursion from platter travel
-//     (`ScratchNotationTravelMotionPath.motionPath(for:)`). It shows EITHER the hand-authored
-//     sample OR — via the DEBUG "Load…" button — a RECORDED ScratchTimeline JSON the user picks,
-//     decoded through `ScratchTimelineProvenance` (Data → analyze → intent → display). Timing (x)
-//     comes from the stroke times.
+//     (`ScratchNotationTravelMotionPath.motionPath(for:scaling:.absoluteAboveBaseline)`). It uses
+//     the DEBUG above-baseline mode so (a) the fullScaleTravelPercent slider is visibly meaningful —
+//     lower scale = taller strokes, higher scale = shorter (the default `.perPhrase` fit cancels a
+//     uniform scale) — and (b) every stroke rises ABOVE a single baseline: reverse is a return
+//     stroke above the line, never a below-the-line dip (direction is carried by the renderer's
+//     forward/reverse colour, not by sign). It shows EITHER the hand-authored sample OR — via the
+//     DEBUG "Load…" button — a RECORDED ScratchTimeline JSON the user picks, decoded through
+//     `ScratchTimelineProvenance` (Data → analyze → intent → display). Timing (x) comes from the
+//     stroke times.
 //
 // Stage B boundary: this loads a *recorded* timeline, not live capture. The ONLY file I/O is the
 // user-selected `.fileImporter` read below (DEBUG, macOS) — no hardcoded paths, no bundled/committed
@@ -137,7 +142,9 @@ struct TravelLaneDebugView: View {
     }
 
     private var travelLaneTitle: String {
-        loadedModel == nil ? "Proposed — travel (hand-authored sample)" : "Proposed — travel (loaded recording)"
+        loadedModel == nil
+            ? "Proposed — travel above baseline (hand-authored sample)"
+            : "Proposed — travel above baseline (loaded recording)"
     }
 
     // MARK: - Sample (DEBUG only; not derived, not production)
@@ -191,7 +198,11 @@ struct TravelLaneDebugView: View {
 
     private var travelPath: MotionPath {
         let last = travelModel.strokes.map(\.endTime).max() ?? sampleDuration
-        return ScratchNotationTravelMotionPath.motionPath(for: travelModel, duration: max(last, sampleDuration))
+        // DEBUG validation lane uses `.absoluteAboveBaseline`: the fullScaleTravelPercent slider is
+        // visibly meaningful (the default `.perPhrase` fit cancels a uniform scale) AND every stroke
+        // rises above a single baseline — notation-truthful, never dipping below the line.
+        return ScratchNotationTravelMotionPath.motionPath(
+            for: travelModel, duration: max(last, sampleDuration), scaling: .absoluteAboveBaseline)
     }
 }
 

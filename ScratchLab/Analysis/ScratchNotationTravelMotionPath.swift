@@ -23,23 +23,64 @@ import Foundation
 
 enum ScratchNotationTravelMotionPath {
 
+    /// How raw signed cross-axis positions (0 = centre/rest, ±1 = rails) become 0...1 lane
+    /// positions. `.perPhrase` is the production-shaped default; the two `absolute*` modes are
+    /// DEBUG/proof modes that keep `fullScaleTravelPercent` visually meaningful (the factor no
+    /// longer cancels), differing only in how direction is shown.
+    enum Scaling {
+        /// Existing behaviour: fit the phrase's own min…max excursion to 0...1. Because every
+        /// stroke's `normalizedTravel` scales by the same `fullScaleTravelPercent` factor, that
+        /// factor cancels in the fit — so the display scale is visually inert except where the
+        /// 0...1 clamp in the display adapter bites. This is the default and is unchanged.
+        case perPhrase
+        /// DEBUG diagnostic: map each signed excursion directly with `0.5 + 0.5 * value` (clamped)
+        /// — centre → 0.5, forward rail (+1) → 1.0, reverse rail (−1) → 0.0. The scale is visible,
+        /// but reverse dips BELOW the mid-line, which is NOT how scratch notation reads (reverse is
+        /// a return/reversal stroke above the line, not "below the staff"). Kept only as a raw
+        /// signed read; the DEBUG view uses `.absoluteAboveBaseline` for notation-truthful output.
+        case absoluteSigned
+        /// DEBUG notation mode: fold the sign so EVERY stroke rises ABOVE a single baseline.
+        /// Baseline (rest / centre / a hold) → 0 (lane floor); a stroke's apex → its
+        /// `normalizedTravel` (0...1) regardless of direction, so forward and reverse both read as
+        /// upward excursions whose height is the travel and never dip below the baseline. Direction
+        /// is still carried truthfully by the segment's `MotionSegmentKind` (the renderer colours
+        /// forward vs reverse), not by a below-line dip. `fullScaleTravelPercent` stays meaningful:
+        /// a smaller scale makes strokes taller (more rail hits), a larger scale shorter, and a
+        /// short travel stays short.
+        case absoluteAboveBaseline
+    }
+
     /// Build a `MotionPath` from a travel-display model over `[0, duration]`.
     ///
     /// `duration` is caller-supplied (the lane/timeline span); it is floored at a small positive
     /// value to avoid divide-by-zero. Stroke times are taken verbatim from the model — the caller
     /// is responsible for supplying a `duration` that spans them (typically the timeline duration).
+    ///
+    /// `scaling` defaults to `.perPhrase` (the existing behaviour); the `.absolute*` modes are
+    /// DEBUG proof modes that make `fullScaleTravelPercent` visibly meaningful. Only the cross-axis
+    /// position mapping differs between modes — stroke times, direction kinds, holds and the
+    /// loop seam are identical.
     static func motionPath(
         for model: ScratchNotationLaneDisplayModel,
-        duration: TimeInterval
+        duration: TimeInterval,
+        scaling: Scaling = .perPhrase
     ) -> MotionPath {
         let totalDuration = max(duration, 0.001)
         let epsilon = 1e-6
         let strokes = model.strokes.sorted { $0.startTime < $1.startTime }
 
+        // The rest position a hold / centre maps to: the lane mid-line for the fitted and signed
+        // modes, the lane floor for the above-baseline notation mode (everything rises from it).
+        let baseline: CGFloat
+        switch scaling {
+        case .perPhrase, .absoluteSigned: baseline = 0.5
+        case .absoluteAboveBaseline:      baseline = 0
+        }
+
         guard !strokes.isEmpty else {
             return MotionPath(
                 segments: [MotionSegment(kind: .hold, startTime: 0, endTime: totalDuration,
-                                         startPosition: 0.5, endPosition: 0.5,
+                                         startPosition: baseline, endPosition: baseline,
                                          speed: .medium, isGhost: false)],
                 timeRange: 0...totalDuration)
         }
@@ -90,14 +131,28 @@ enum ScratchNotationTravelMotionPath {
             appendHold(start: last.endTime, end: totalDuration)
         }
 
-        // Normalize raw positions into 0...1 across the whole phrase (centre maps to a constant,
-        // both ends sit at centre so a looped pattern is seamless).
+        // Map raw positions into 0...1.
+        //   • .perPhrase            — fit the phrase's own min…max (centre maps to a constant,
+        //                             both ends sit at centre so a looped pattern is seamless).
+        //   • .absoluteSigned       — map the signed excursion directly (centre 0.5, ± by
+        //                             direction) so the display scale is preserved; reverse dips
+        //                             below the mid-line (raw signed read, not notation).
+        //   • .absoluteAboveBaseline — fold the sign (|value|): baseline 0, every stroke rises to
+        //                             its travel height, nothing below the baseline; the loop seam
+        //                             closes at the baseline because holds/centre map to 0.
         let allRaw = spans.flatMap { [$0.startPos, $0.endPos] }
         let low = allRaw.min() ?? -1
         let high = allRaw.max() ?? 1
         let range = high - low
         func normalized(_ value: CGFloat) -> CGFloat {
-            range > epsilon ? (value - low) / range : 0.5
+            switch scaling {
+            case .perPhrase:
+                return range > epsilon ? (value - low) / range : 0.5
+            case .absoluteSigned:
+                return min(1, max(0, 0.5 + 0.5 * value))
+            case .absoluteAboveBaseline:
+                return min(1, max(0, abs(value)))
+            }
         }
 
         // `speed` is a fixed renderer-hint placeholder (.medium) — it drives only line weight /
