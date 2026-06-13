@@ -1785,6 +1785,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var debugHandObservationsFound = 0
     private var debugDirectionChanges = 0
     private var debugMissedFrameCount = 0
+    private var debugVisionReturnedHand = 0
     private var debugLastROI: CGRect = .zero
     #endif
     private var lastStarAwardAt: Date?
@@ -3255,6 +3256,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         do {
             try requestHandler.perform([handPoseRequest])
+            #if DEBUG
+            if handPoseRequest.results?.first != nil {
+                debugVisionReturnedHand += 1
+            }
+            #endif
             guard let observation = handPoseRequest.results?.first,
                   let rawTrackedPoint = trackedHandPoint(from: observation, layout: layout, trackingRegion: trackingRegion) else {
                 handleHandTrackingMiss()
@@ -4422,6 +4428,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let handObservationsFound: Int
         let directionChanges: Int
         let missedFrames: Int
+        let visionReturnedHand: Int
         let currentROI: CGRect
         let audioScratchCount: Int
     }
@@ -4433,6 +4440,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             handObservationsFound: debugHandObservationsFound,
             directionChanges: debugDirectionChanges,
             missedFrames: debugMissedFrameCount,
+            visionReturnedHand: debugVisionReturnedHand,
             currentROI: debugLastROI,
             audioScratchCount: scratchDetectionCount
         )

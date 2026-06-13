@@ -934,7 +934,57 @@ struct MacAnalyzerView: View {
                         ? Double(handObs) / Double(totalFrames) : nil
                     let missRate: Double? = totalFrames > 0
                         ? Double(missed) / Double(totalFrames) : nil
+                    // Pre-compute ROI and diagnostic verdict outside
+                    // the ViewBuilder so the if/else chain is legal.
+                    let roi = stats.currentROI
+                    let isFullFrame = roi.origin.x <= 0.001 && roi.origin.y <= 0.001
+                        && abs(roi.size.width - 1.0) <= 0.001 && abs(roi.size.height - 1.0) <= 0.001
+                    let diagHandHitRate = totalFrames > 0
+                        ? Double(handObs) / Double(totalFrames) : 0.0
+                    let diagHandDetectRate = totalFrames > 0
+                        ? Double(stats.visionReturnedHand) / Double(totalFrames) : 0.0
+                    let diagSamples = liveTimeline?.samples.count ?? 0
+                    let diagDuration = liveTimeline?.endTime ?? 0
+                    let diagDensity: Double = diagDuration > 0
+                        ? Double(diagSamples) / diagDuration : 0
+                    let diag = { () -> (verdict: String, color: Color) in
+                        if !isFullFrame && diagHandHitRate < 0.15 {
+                            return ("ROI restricted \u{2014} verify hand is inside deck region", .orange)
+                        } else if isFullFrame && diagHandDetectRate < 0.15 {
+                            return ("ROI full-frame \u{2014} Vision is not detecting hand reliably", .red)
+                        } else if handObs > 0 && stats.visionReturnedHand > 0
+                                  && Double(stats.visionReturnedHand) / Double(handObs) > 2.5 {
+                            return ("Vision sees hands but platter gate rejects most points", .orange)
+                        } else if diagDensity > 0 && diagDensity < 10.0 {
+                            return ("Raw samples too sparse for lane rendering", .orange)
+                        } else if diagHandHitRate >= 0.30 {
+                            return ("Diagnostics look adequate", .green)
+                        } else {
+                            return ("Diagnostics look adequate", .green)
+                        }
+                    }()
+
                     VStack(spacing: 8) {
+                        diagnosticRow(
+                            title: "ROI x",
+                            value: String(format: "%.4f", roi.origin.x)
+                        )
+                        diagnosticRow(
+                            title: "ROI y",
+                            value: String(format: "%.4f", roi.origin.y)
+                        )
+                        diagnosticRow(
+                            title: "ROI w",
+                            value: String(format: "%.4f", roi.size.width)
+                        )
+                        diagnosticRow(
+                            title: "ROI h",
+                            value: String(format: "%.4f", roi.size.height)
+                        )
+                        diagnosticRow(
+                            title: "ROI classification",
+                            value: isFullFrame ? "Full-frame" : "Restricted"
+                        )
                         diagnosticRow(
                             title: "Vision frames analyzed",
                             value: "\(stats.framesAnalyzed)"
@@ -947,6 +997,30 @@ struct MacAnalyzerView: View {
                             title: "Missed hand frames",
                             value: "\(missed)"
                         )
+                        diagnosticRow(
+                            title: "Vision hands found",
+                            value: "\(stats.visionReturnedHand)"
+                        )
+                        if let ltl2 = liveTimeline {
+                            let sampleCount = ltl2.samples.count
+                            diagnosticRow(
+                                title: "Valid raw platter samples",
+                                value: "\(sampleCount)"
+                            )
+                            let handObsLocal = handObs
+                            if handObsLocal > 0 {
+                                let ratio = Double(sampleCount) / Double(handObsLocal)
+                                diagnosticRow(
+                                    title: "Samples per hand obs",
+                                    value: String(format: "%.2f", ratio)
+                                )
+                            } else {
+                                diagnosticRow(
+                                    title: "Samples per hand obs",
+                                    value: "no hand observations"
+                                )
+                            }
+                        }
                         if let hr = hitRate {
                             diagnosticRow(
                                 title: "Vision hit rate",
@@ -977,6 +1051,10 @@ struct MacAnalyzerView: View {
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.orange)
                         }
+                        Text(diag.verdict)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(diag.color)
+                            .padding(.top, 8)
                     }
                     .padding(.top, 8)
                 }
