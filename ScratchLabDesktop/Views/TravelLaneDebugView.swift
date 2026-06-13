@@ -289,8 +289,18 @@ struct TravelLaneDebugView: View {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
                 let data = try Data(contentsOf: url)
-                loadedModel = try ScratchTimelineProvenance.displayModel(
-                    from: data, calibration: calibration, fullScaleTravelPercent: fullScaleTravelPercent)
+                // Try old RANE-format ScratchTimeline first (cc6Step events → C++ analysis).
+                if let model = try? ScratchTimelineProvenance.displayModel(
+                    from: data, calibration: calibration, fullScaleTravelPercent: fullScaleTravelPercent) {
+                    loadedModel = model
+                    loadedName = url.lastPathComponent
+                    loadError = nil
+                    return
+                }
+                // Fall back: try detected-notation sidecar (recordMovementEvents → direct preview).
+                let preview = try ScratchDetectedNotationLaneAdapter.previewModel(from: data)
+                loadedModel = ScratchNotationLaneDisplayAdapter.displayModel(
+                    from: preview, fullScaleTravelPercent: fullScaleTravelPercent)
                 loadedName = url.lastPathComponent
                 loadError = nil
             } catch {
