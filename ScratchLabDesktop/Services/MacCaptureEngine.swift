@@ -1786,6 +1786,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var debugDirectionChanges = 0
     private var debugMissedFrameCount = 0
     private var debugVisionReturnedHand = 0
+    private var debugTrackedPointReturnedNil = 0
+    private var debugTrackedPointReturnedPoint = 0
+    private var debugJointsInspectedTotal = 0
+    private var debugJointsRejectedLowConfidence = 0
+    private var debugJointsRejectedOutsideROI = 0
+    private var debugJointsAcceptedCandidates = 0
+    private var debugObserveSkippedNotRecording = 0
+    private var debugObserveAttempted = 0
     private var debugLastROI: CGRect = .zero
     #endif
     private var lastStarAwardAt: Date?
@@ -2278,6 +2286,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.debugDirectionChanges = 0
                 self.debugMissedFrameCount = 0
                 self.debugVisionReturnedHand = 0
+                self.debugTrackedPointReturnedNil = 0
+                self.debugTrackedPointReturnedPoint = 0
+                self.debugJointsInspectedTotal = 0
+                self.debugJointsRejectedLowConfidence = 0
+                self.debugJointsRejectedOutsideROI = 0
+                self.debugJointsAcceptedCandidates = 0
+                self.debugObserveSkippedNotRecording = 0
+                self.debugObserveAttempted = 0
                 // debugLastROI intentionally left alone — it will be
                 // updated on the next analyzed frame.
                 #endif
@@ -3274,11 +3290,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             #endif
             guard let observation = handPoseRequest.results?.first,
                   let rawTrackedPoint = trackedHandPoint(from: observation, layout: layout, trackingRegion: trackingRegion) else {
+                #if DEBUG
+                debugTrackedPointReturnedNil += 1
+                #endif
                 handleHandTrackingMiss()
                 return
             }
 
             #if DEBUG
+            debugTrackedPointReturnedPoint += 1
             debugHandObservationsFound += 1
             let prevState = lastPublishedHandMotionState
             #endif
@@ -3295,6 +3315,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             if platterPositionRecorder.isRecording {
                 let takeRelativeTime = max(0, now - platterRecordingStartTime)
                 platterPositionRecorder.observe(point: rawTrackedPoint, at: takeRelativeTime)
+                #if DEBUG
+                debugObserveAttempted += 1
+                #endif
+            } else {
+                #if DEBUG
+                debugObserveSkippedNotRecording += 1
+                #endif
             }
             platterRecorderLock.unlock()
             let movementState = handMotionState(from: direction)
@@ -3560,15 +3587,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         var bestCandidate: (point: CGPoint, score: CGFloat)?
 
+        #if DEBUG
+        self.debugJointsInspectedTotal += jointNames.count
+        #endif
         for jointName in jointNames {
             guard let recognizedPoint = try? observation.recognizedPoint(jointName),
                   recognizedPoint.confidence >= 0.16 else {
+                #if DEBUG
+                self.debugJointsRejectedLowConfidence += 1
+                #endif
                 continue
             }
 
             let point = recognizedPoint.location
-            guard trackingRegion.contains(point) else { continue }
+            guard trackingRegion.contains(point) else {
+                #if DEBUG
+                self.debugJointsRejectedOutsideROI += 1
+                #endif
+                continue
+            }
 
+            #if DEBUG
+            self.debugJointsAcceptedCandidates += 1
+            #endif
             var score = CGFloat(recognizedPoint.confidence) * 1.6
             score += jointWeights[jointName] ?? 0
             score += (1 - point.y) * 0.95
@@ -4440,6 +4481,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let directionChanges: Int
         let missedFrames: Int
         let visionReturnedHand: Int
+        let trackedPointReturnedNil: Int
+        let trackedPointReturnedPoint: Int
+        let jointsInspectedTotal: Int
+        let jointsRejectedLowConfidence: Int
+        let jointsRejectedOutsideROI: Int
+        let jointsAcceptedCandidates: Int
+        let observeSkippedNotRecording: Int
+        let observeAttempted: Int
         let currentROI: CGRect
         let audioScratchCount: Int
     }
@@ -4452,6 +4501,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             directionChanges: debugDirectionChanges,
             missedFrames: debugMissedFrameCount,
             visionReturnedHand: debugVisionReturnedHand,
+            trackedPointReturnedNil: debugTrackedPointReturnedNil,
+            trackedPointReturnedPoint: debugTrackedPointReturnedPoint,
+            jointsInspectedTotal: debugJointsInspectedTotal,
+            jointsRejectedLowConfidence: debugJointsRejectedLowConfidence,
+            jointsRejectedOutsideROI: debugJointsRejectedOutsideROI,
+            jointsAcceptedCandidates: debugJointsAcceptedCandidates,
+            observeSkippedNotRecording: debugObserveSkippedNotRecording,
+            observeAttempted: debugObserveAttempted,
             currentROI: debugLastROI,
             audioScratchCount: scratchDetectionCount
         )

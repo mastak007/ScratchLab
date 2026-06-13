@@ -947,16 +947,28 @@ struct MacAnalyzerView: View {
                     let diagDuration = liveTimeline?.endTime ?? 0
                     let diagDensity: Double = diagDuration > 0
                         ? Double(diagSamples) / diagDuration : 0
+                    let lowConfRejectRate: Double = stats.jointsInspectedTotal > 0
+                        ? Double(stats.jointsRejectedLowConfidence) / Double(stats.jointsInspectedTotal) : 0
+                    let roiRejectRate: Double = stats.jointsInspectedTotal > 0
+                        ? Double(stats.jointsRejectedOutsideROI) / Double(stats.jointsInspectedTotal) : 0
+                    let recorderDropRate: Double = (stats.trackedPointReturnedPoint + stats.observeSkippedNotRecording) > 0
+                        ? Double(stats.observeSkippedNotRecording) / Double(stats.trackedPointReturnedPoint + stats.observeSkippedNotRecording) : 0
                     let diag = { () -> (verdict: String, color: Color) in
                         if !isFullFrame && diagHandHitRate < 0.15 {
                             return ("ROI restricted \u{2014} verify hand is inside deck region", .orange)
                         } else if isFullFrame && diagHandDetectRate < 0.15 {
                             return ("ROI full-frame \u{2014} Vision is not detecting hand reliably", .red)
-                        } else if handObs > 0 && stats.visionReturnedHand > 0
-                                  && Double(stats.visionReturnedHand) / Double(handObs) > 2.5 {
-                            return ("Vision sees hands but platter gate rejects most points", .orange)
+                        } else if stats.trackedPointReturnedNil > 0
+                                  && lowConfRejectRate > 0.5 {
+                            return ("Low joint confidence is rejecting most Vision hands", .orange)
+                        } else if stats.trackedPointReturnedNil > 0
+                                  && roiRejectRate > 0.3 {
+                            return ("ROI containment is rejecting most Vision hands", .orange)
+                        } else if stats.observeSkippedNotRecording > 0
+                                  && recorderDropRate > 0.5 {
+                            return ("Recorder inactive is dropping accepted points", .orange)
                         } else if diagDensity > 0 && diagDensity < 10.0 {
-                            return ("Raw samples too sparse for lane rendering", .orange)
+                            return ("Recorder receives points but raw density remains low", .orange)
                         } else if diagHandHitRate >= 0.30 {
                             return ("Diagnostics look adequate", .green)
                         } else {
@@ -1021,6 +1033,35 @@ struct MacAnalyzerView: View {
                                 )
                             }
                         }
+                        // Phase 6 — rejection breakdown counters.
+                        diagnosticRow(
+                            title: "Tracked point returned",
+                            value: "\(stats.trackedPointReturnedPoint)"
+                        )
+                        diagnosticRow(
+                            title: "Tracked point nil",
+                            value: "\(stats.trackedPointReturnedNil)"
+                        )
+                        diagnosticRow(
+                            title: "Low-confidence joint rejects",
+                            value: "\(stats.jointsRejectedLowConfidence)"
+                        )
+                        diagnosticRow(
+                            title: "Outside-ROI joint rejects",
+                            value: "\(stats.jointsRejectedOutsideROI)"
+                        )
+                        diagnosticRow(
+                            title: "Accepted joint candidates",
+                            value: "\(stats.jointsAcceptedCandidates)"
+                        )
+                        diagnosticRow(
+                            title: "Recorder-not-recording drops",
+                            value: "\(stats.observeSkippedNotRecording)"
+                        )
+                        diagnosticRow(
+                            title: "Recorder observe calls",
+                            value: "\(stats.observeAttempted)"
+                        )
                         if let hr = hitRate {
                             diagnosticRow(
                                 title: "Vision hit rate",
