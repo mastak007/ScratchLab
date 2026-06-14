@@ -1062,6 +1062,19 @@ struct MacAnalyzerView: View {
                             title: "Recorder observe calls",
                             value: "\(stats.observeAttempted)"
                         )
+                        diagnosticRow(
+                            title: "MIDI events this take",
+                            value: "\(stats.midiEventsCapturedThisTake)"
+                        )
+                        if let ltlMidi = liveTimeline,
+                           ltlMidi.endTime > 0,
+                           stats.midiEventsCapturedThisTake > 0 {
+                            let midiRate = Double(stats.midiEventsCapturedThisTake) / ltlMidi.endTime
+                            diagnosticRow(
+                                title: "MIDI events/sec",
+                                value: String(format: "%.0f", midiRate)
+                            )
+                        }
                         if let hr = hitRate {
                             diagnosticRow(
                                 title: "Vision hit rate",
@@ -1096,6 +1109,12 @@ struct MacAnalyzerView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(diag.color)
                             .padding(.top, 8)
+                        if stats.midiEventsCapturedThisTake > 5000 {
+                            Text("High MIDI event volume may slow Review")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .padding(.top, 4)
+                        }
                     }
                     .padding(.top, 8)
                 }

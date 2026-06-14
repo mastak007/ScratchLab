@@ -1794,6 +1794,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var debugJointsAcceptedCandidates = 0
     private var debugObserveSkippedNotRecording = 0
     private var debugObserveAttempted = 0
+    private var debugMidiEventsCapturedThisTake = 0
     private var debugLastROI: CGRect = .zero
     #endif
     private var lastStarAwardAt: Date?
@@ -2294,6 +2295,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.debugJointsAcceptedCandidates = 0
                 self.debugObserveSkippedNotRecording = 0
                 self.debugObserveAttempted = 0
+                // debugMidiEventsCapturedThisTake is reset under midiCaptureLock
+                // in openMIDIInputForRecording(), alongside capturedMidiCCEvents.
                 // debugLastROI intentionally left alone — it will be
                 // updated on the next analyzed frame.
                 #endif
@@ -4201,6 +4204,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         capturedMidiCCEvents = []
         midiRecordingStartTime = CACurrentMediaTime()
+        #if DEBUG
+        debugMidiEventsCapturedThisTake = 0
+        #endif
         midiCaptureLock.unlock()
         reconnectSelectedMIDIInput()
     }
@@ -4391,6 +4397,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         midiCaptureLock.lock()
         capturedMidiCCEvents.append(event)
+        #if DEBUG
+        debugMidiEventsCapturedThisTake += 1
+        #endif
         midiCaptureLock.unlock()
     }
 
@@ -4489,12 +4498,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let jointsAcceptedCandidates: Int
         let observeSkippedNotRecording: Int
         let observeAttempted: Int
+        let midiEventsCapturedThisTake: Int
         let currentROI: CGRect
         let audioScratchCount: Int
     }
 
     func captureDebugStats() -> DebugStats {
-        DebugStats(
+        let midiCount = midiCaptureLock.withLock { debugMidiEventsCapturedThisTake }
+        return DebugStats(
             framesReceived: debugFramesReceived,
             framesAnalyzed: debugFramesAnalyzed,
             handObservationsFound: debugHandObservationsFound,
@@ -4509,6 +4520,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             jointsAcceptedCandidates: debugJointsAcceptedCandidates,
             observeSkippedNotRecording: debugObserveSkippedNotRecording,
             observeAttempted: debugObserveAttempted,
+            midiEventsCapturedThisTake: midiCount,
             currentROI: debugLastROI,
             audioScratchCount: scratchDetectionCount
         )
