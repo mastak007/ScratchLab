@@ -108,6 +108,7 @@
 		772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B2000010 /* AppIcon.icns */; };
 		7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */; };
 		7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */; };
+		VCG0001000VCG001VCG00001 /* VisionCaptureGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */; };
 		86B4C659CD7D512697B5F324 /* FileManager+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */; };
 		894649E8285210A15FA709AD /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
 		8A689B811423AC79DCD5A667 /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
@@ -462,6 +463,7 @@
 		7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLabWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTracker.swift; sourceTree = "<group>"; };
 		7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTrackerTests.swift; sourceTree = "<group>"; };
+		VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCaptureGateTests.swift; sourceTree = "<group>"; };
 		814A24D8C57AEC800882D641 /* Entry+InfoZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+InfoZIP.swift"; sourceTree = "<group>"; };
 		822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchMotionCaptureStore.swift; sourceTree = "<group>"; };
 		822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StagedCaptureRecovery.swift; sourceTree = "<group>"; };
@@ -721,6 +723,7 @@
 			children = (
 				2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */,
 				7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */,
+				VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */,
 				CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */,
 				SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */,
 				PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */,
@@ -1616,6 +1619,7 @@
 				SLCORE00000000000000BF51 /* ScratchRawPlatterLaneAdapterTests.swift in Sources */,
 				2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */,
 				7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */,
+				VCG0001000VCG001VCG00001 /* VisionCaptureGateTests.swift in Sources */,
 				CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */,
 				SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */,
 				PVM0001000PVM001PVM00003 /* PhraseViewportModelTests.swift in Sources */,

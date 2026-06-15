@@ -960,7 +960,7 @@ struct MacAnalyzerView: View {
                             return ("ROI full-frame \u{2014} Vision is not detecting hand reliably", .red)
                         } else if stats.trackedPointReturnedNil > 0
                                   && lowConfRejectRate > 0.5 {
-                            return ("Low joint confidence is rejecting most Vision hands", .orange)
+                            return ("Low joint confidence is rejecting most Vision hands \u{2014} threshold \(String(format: "%.2f", stats.jointConfidenceThreshold))", .orange)
                         } else if stats.trackedPointReturnedNil > 0
                                   && roiRejectRate > 0.3 {
                             return ("ROI containment is rejecting most Vision hands", .orange)
@@ -1055,6 +1055,22 @@ struct MacAnalyzerView: View {
                             value: "\(stats.jointsAcceptedCandidates)"
                         )
                         diagnosticRow(
+                            title: "Joint confidence threshold",
+                            value: String(format: "%.2f", stats.jointConfidenceThreshold)
+                        )
+                        diagnosticRow(
+                            title: "Relaxed-threshold accepted",
+                            value: "\(stats.jointsRelaxedAccepted)"
+                        )
+                        diagnosticRow(
+                            title: "Continuity-filled samples",
+                            value: "\(stats.continuityFilledSamples)"
+                        )
+                        diagnosticRow(
+                            title: "Impossible-jump rejects",
+                            value: "\(stats.impossibleJumpRejects)"
+                        )
+                        diagnosticRow(
                             title: "Recorder-not-recording drops",
                             value: "\(stats.observeSkippedNotRecording)"
                         )
@@ -1073,6 +1089,51 @@ struct MacAnalyzerView: View {
                             diagnosticRow(
                                 title: "MIDI events/sec",
                                 value: String(format: "%.0f", midiRate)
+                            )
+                        }
+                        // Phase 7 — classifier promotion stage counters.
+                        if stats.rawMovementEventsCreated > 0
+                            || stats.rawEndTimeEqualsStart > 0
+                            || stats.finalRecordMovementCount > 0 {
+                            diagnosticRow(
+                                title: "Builder silently dropped",
+                                value: "\(stats.rawEndTimeEqualsStart)"
+                            )
+                            diagnosticRow(
+                                title: "Builder raw events",
+                                value: "\(stats.rawMovementEventsCreated)"
+                            )
+                            diagnosticRow(
+                                title: "Normalized events",
+                                value: "\(stats.normalizedMovementCount)"
+                            )
+                            diagnosticRow(
+                                title: "Fused events",
+                                value: "\(stats.fusedMovementCount)"
+                            )
+                            diagnosticRow(
+                                title: "Trusted accepted",
+                                value: "\(stats.trustedDirectionalCount)"
+                            )
+                            diagnosticRow(
+                                title: "Final record events",
+                                value: "\(stats.finalRecordMovementCount)"
+                            )
+                            diagnosticRow(
+                                title: "Rejected not fused",
+                                value: "\(stats.trustDropNotFused)"
+                            )
+                            diagnosticRow(
+                                title: "Rejected low confidence",
+                                value: "\(stats.trustDropLowConfidence)"
+                            )
+                            diagnosticRow(
+                                title: "Rejected low audio overlap",
+                                value: "\(stats.trustDropLowAudioOverlap)"
+                            )
+                            diagnosticRow(
+                                title: "Notation source",
+                                value: stats.notationSource
                             )
                         }
                         if let hr = hitRate {
@@ -1111,6 +1172,34 @@ struct MacAnalyzerView: View {
                             .padding(.top, 8)
                         if stats.midiEventsCapturedThisTake > 5000 {
                             Text("High MIDI event volume may slow Review")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .padding(.top, 4)
+                        }
+                        if stats.rawEndTimeEqualsStart > 0,
+                           stats.rawMovementEventsCreated == 0 {
+                            Text("Builder created movements but all were silently dropped (endTime == startTime) — extreme tracking direction mismatch")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.red)
+                                .padding(.top, 4)
+                        }
+                        if stats.trustDropNotFused > 0,
+                           stats.fusedMovementCount == 0,
+                           stats.trustedDirectionalCount == 0 {
+                            Text("Classifier rejected video-only motion before promotion")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .padding(.top, 4)
+                        } else if stats.trustedDirectionalCount > 0,
+                                  stats.finalRecordMovementCount == 0 {
+                            Text("Trusted events exist but did not reach final record stage")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .padding(.top, 4)
+                        } else if stats.trustedDirectionalCount > 0
+                                  && stats.finalRecordMovementCount > 0
+                                  && stats.notationSource == "partial" {
+                            Text("Classifier needs audio fusion before trusted notation")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.orange)
                                 .padding(.top, 4)

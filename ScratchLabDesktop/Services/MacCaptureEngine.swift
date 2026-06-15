@@ -143,6 +143,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     enum RoutineMovementRawDropReason: String, CaseIterable {
+        case endTimeEqualsStart  // furthestPosition never advanced; check shouldAdvanceExtreme logic
         case durationTooShort
         case deltaTooSmall
     }
@@ -570,11 +571,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
 
+            // Camera-space X is unmirrored: rightward = x increasing.
+            // .back  = semantic backward = camera-rightward → track MAXIMUM x (largest seen)
+            // .forward = semantic forward = camera-leftward → track MINIMUM x (smallest seen)
             let shouldAdvanceExtreme: Bool
             switch activeMovement.direction {
-            case .forward:
-                shouldAdvanceExtreme = position >= currentExtreme
             case .back:
+                shouldAdvanceExtreme = position >= currentExtreme
+            case .forward:
                 shouldAdvanceExtreme = position <= currentExtreme
             default:
                 shouldAdvanceExtreme = false
@@ -596,7 +600,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             } else {
                 endTime = activeMovement.latestTime
             }
-            guard endTime > activeMovement.startTime else { return }
+            guard endTime > activeMovement.startTime else {
+                #if DEBUG
+                debugSession?.recordRawDrop(.endTimeEqualsStart)
+                #endif
+                return
+            }
             let duration = endTime - activeMovement.startTime
             guard duration >= 0.045 else {
                 #if DEBUG
@@ -1773,6 +1782,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var lastPublishedAudioLevelTime: CFTimeInterval = 0
     private var smoothedHandPoint: CGPoint?
     private var missedHandTrackingFrames = 0
+    private let standardJointConfidenceThreshold: Float = 0.16
+    private let recordingJointConfidenceThreshold: Float = 0.07
+    private let platterContinuityGapSeconds: CFTimeInterval = 0.15
+    private let maxPlatterJumpVelocity: Double = 4.5
+    private var lastContinuityHandPoint: CGPoint?
+    private var lastContinuityHandPointTime: CFTimeInterval = 0
     #if DEBUG
     @Published private(set) var routineMovementDiagnostics: RoutineMovementDiagnosticsSnapshot?
     private var activeRoutineMovementDebugSession: RoutineMovementDebugSession?
@@ -1796,6 +1811,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var debugObserveAttempted = 0
     private var debugMidiEventsCapturedThisTake = 0
     private var debugLastROI: CGRect = .zero
+    private var debugJointsRelaxedAccepted = 0
+    private var debugContinuityFilledSamples = 0
+    private var debugImpossibleJumpRejects = 0
     #endif
     private var lastStarAwardAt: Date?
     private var lastPublishedRigLayout: DJRigLayout?
@@ -2295,6 +2313,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.debugJointsAcceptedCandidates = 0
                 self.debugObserveSkippedNotRecording = 0
                 self.debugObserveAttempted = 0
+                self.debugJointsRelaxedAccepted = 0
+                self.debugContinuityFilledSamples = 0
+                self.debugImpossibleJumpRejects = 0
+                self.lastContinuityHandPoint = nil
+                self.lastContinuityHandPointTime = 0
                 // debugMidiEventsCapturedThisTake is reset under midiCaptureLock
                 // in openMIDIInputForRecording(), alongside capturedMidiCCEvents.
                 // debugLastROI intentionally left alone — it will be
@@ -3291,14 +3314,63 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 debugVisionReturnedHand += 1
             }
             #endif
-            guard let observation = handPoseRequest.results?.first,
-                  let rawTrackedPoint = trackedHandPoint(from: observation, layout: layout, trackingRegion: trackingRegion) else {
+
+            let observation = handPoseRequest.results?.first
+            let activeThreshold: Float = isRoutineRecording
+                ? recordingJointConfidenceThreshold
+                : standardJointConfidenceThreshold
+            let rawTrackedPoint = observation.flatMap {
+                trackedHandPoint(from: $0, layout: layout, trackingRegion: trackingRegion,
+                                 minimumJointConfidence: activeThreshold)
+            }
+
+            guard let rawTrackedPoint else {
                 #if DEBUG
                 debugTrackedPointReturnedNil += 1
                 #endif
-                handleHandTrackingMiss()
+                // Continuity bridge: during recording, fill the platter recorder with
+                // the last accepted point for short gaps so the raw timeline stays
+                // dense. The direction tracker and builder state are intentionally
+                // frozen — not feeding miss() prevents the holdFrames countdown from
+                // consuming the bridge window prematurely.
+                if isRoutineRecording,
+                   let lastPoint = lastContinuityHandPoint,
+                   now - lastContinuityHandPointTime < platterContinuityGapSeconds {
+                    platterRecorderLock.lock()
+                    if platterPositionRecorder.isRecording {
+                        let takeRelativeTime = max(0, now - platterRecordingStartTime)
+                        platterPositionRecorder.observe(point: lastPoint, at: takeRelativeTime)
+                    }
+                    platterRecorderLock.unlock()
+                    #if DEBUG
+                    debugContinuityFilledSamples += 1
+                    #endif
+                } else {
+                    lastContinuityHandPoint = nil
+                    handleHandTrackingMiss()
+                }
                 return
             }
+
+            // Reject impossible positional jumps: a new point requiring hand velocity
+            // exceeding maxPlatterJumpVelocity is Vision noise, not real motion.
+            if let lastPoint = lastContinuityHandPoint {
+                let elapsed = max(0.001, now - lastContinuityHandPointTime)
+                if Self.isImpossibleHandJump(
+                    from: lastPoint, to: rawTrackedPoint,
+                    elapsed: elapsed, maxVelocity: maxPlatterJumpVelocity
+                ) {
+                    #if DEBUG
+                    debugImpossibleJumpRejects += 1
+                    #endif
+                    lastContinuityHandPoint = nil
+                    handleHandTrackingMiss()
+                    return
+                }
+            }
+
+            lastContinuityHandPoint = rawTrackedPoint
+            lastContinuityHandPointTime = now
 
             #if DEBUG
             debugTrackedPointReturnedPoint += 1
@@ -3560,7 +3632,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return DJRigLayout(zones: DJRigLayout.zones(in: union, tuning: currentZoneTuning), confidence: 0.32)
     }
 
-    private func trackedHandPoint(from observation: VNHumanHandPoseObservation, layout: DJRigLayout?, trackingRegion: CGRect) -> CGPoint? {
+    private func trackedHandPoint(
+        from observation: VNHumanHandPoseObservation,
+        layout: DJRigLayout?,
+        trackingRegion: CGRect,
+        minimumJointConfidence: Float = 0.16
+    ) -> CGPoint? {
         let deckZones = layout?.zones.filter { $0.role != .mixer } ?? []
         let mixerZone = layout?.zone(for: .mixer)
         let highlightedZone = layout?.zone(for: highlightedZoneRole)
@@ -3595,7 +3672,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         #endif
         for jointName in jointNames {
             guard let recognizedPoint = try? observation.recognizedPoint(jointName),
-                  recognizedPoint.confidence >= 0.16 else {
+                  recognizedPoint.confidence >= minimumJointConfidence else {
                 #if DEBUG
                 self.debugJointsRejectedLowConfidence += 1
                 #endif
@@ -3612,6 +3689,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             #if DEBUG
             self.debugJointsAcceptedCandidates += 1
+            if recognizedPoint.confidence < standardJointConfidenceThreshold {
+                self.debugJointsRelaxedAccepted += 1
+            }
             #endif
             var score = CGFloat(recognizedPoint.confidence) * 1.6
             score += jointWeights[jointName] ?? 0
@@ -3789,6 +3869,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         handDirectionTracker.reset()
         smoothedHandPoint = nil
         missedHandTrackingFrames = 0
+        lastContinuityHandPoint = nil
+        lastContinuityHandPointTime = 0
         #if DEBUG
         debugLastRawDirection = .idle
         #endif
@@ -4481,6 +4563,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    /// Returns true when the hand would need to travel faster than `maxVelocity`
+    /// normalised image-units per second to reach `to` from `from` in `elapsed`
+    /// seconds. Rejects Vision noise spikes before they contaminate the platter
+    /// timeline or direction tracker. Tested via `VisionCaptureGateTests`.
+    static func isImpossibleHandJump(
+        from: CGPoint,
+        to: CGPoint,
+        elapsed: TimeInterval,
+        maxVelocity: Double = 4.5
+    ) -> Bool {
+        guard elapsed > 0 else { return false }
+        let dx = abs(Double(to.x) - Double(from.x))
+        return (dx / elapsed) > maxVelocity
+    }
+
     #if DEBUG
     /// Snapshot of detection counters for in-session debugging.
     struct DebugStats {
@@ -4496,15 +4593,30 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let jointsRejectedLowConfidence: Int
         let jointsRejectedOutsideROI: Int
         let jointsAcceptedCandidates: Int
+        let jointsRelaxedAccepted: Int
+        let continuityFilledSamples: Int
+        let impossibleJumpRejects: Int
+        let jointConfidenceThreshold: Float
         let observeSkippedNotRecording: Int
         let observeAttempted: Int
         let midiEventsCapturedThisTake: Int
+        let rawEndTimeEqualsStart: Int
+        let rawMovementEventsCreated: Int
+        let normalizedMovementCount: Int
+        let fusedMovementCount: Int
+        let trustedDirectionalCount: Int
+        let finalRecordMovementCount: Int
+        let trustDropNotFused: Int
+        let trustDropLowConfidence: Int
+        let trustDropLowAudioOverlap: Int
+        let notationSource: String
         let currentROI: CGRect
         let audioScratchCount: Int
     }
 
     func captureDebugStats() -> DebugStats {
         let midiCount = midiCaptureLock.withLock { debugMidiEventsCapturedThisTake }
+        let diag = routineMovementDiagnostics
         return DebugStats(
             framesReceived: debugFramesReceived,
             framesAnalyzed: debugFramesAnalyzed,
@@ -4518,9 +4630,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             jointsRejectedLowConfidence: debugJointsRejectedLowConfidence,
             jointsRejectedOutsideROI: debugJointsRejectedOutsideROI,
             jointsAcceptedCandidates: debugJointsAcceptedCandidates,
+            jointsRelaxedAccepted: debugJointsRelaxedAccepted,
+            continuityFilledSamples: debugContinuityFilledSamples,
+            impossibleJumpRejects: debugImpossibleJumpRejects,
+            jointConfidenceThreshold: isRoutineRecording ? recordingJointConfidenceThreshold : standardJointConfidenceThreshold,
             observeSkippedNotRecording: debugObserveSkippedNotRecording,
             observeAttempted: debugObserveAttempted,
             midiEventsCapturedThisTake: midiCount,
+            rawEndTimeEqualsStart: diag?.rawDropReasons["endTimeEqualsStart"] ?? 0,
+            rawMovementEventsCreated: diag?.rawMovementEventsCreated ?? 0,
+            normalizedMovementCount: diag?.normalizedMovementEvents ?? 0,
+            fusedMovementCount: diag?.fusedMovementEvents ?? 0,
+            trustedDirectionalCount: diag?.trustedDirectionalEvents ?? 0,
+            finalRecordMovementCount: diag?.finalRecordMovementEvents ?? 0,
+            trustDropNotFused: diag?.trustDropReasons["notFused"] ?? 0,
+            trustDropLowConfidence: diag?.trustDropReasons["lowConfidence"] ?? 0,
+            trustDropLowAudioOverlap: diag?.trustDropReasons["lowAudioOverlap"] ?? 0,
+            notationSource: lastRoutineDetectedNotation?.notationSource ?? "none",
             currentROI: debugLastROI,
             audioScratchCount: scratchDetectionCount
         )
