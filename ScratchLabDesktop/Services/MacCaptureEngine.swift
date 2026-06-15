@@ -569,6 +569,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     final class RoutineDetectedNotationBuilder {
+        /// Minimum raw-movement position delta before a movement event is emitted.
+        /// Independent of the normalizer threshold so builder and normalizer can
+        /// be tuned separately.
+        private static let minRawMovementPositionDelta: Double = 0.01
+
         private struct ActiveMovement {
             let direction: CXLDirection
             let startTime: TimeInterval
@@ -740,7 +745,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let resolvedStartPosition = activeMovement.startPosition
                 ?? Self.defaultStartPosition(for: activeMovement.direction)
             let distance = abs(resolvedEndPosition - resolvedStartPosition)
-            guard distance >= RoutineNotationEventNormalizer.minPositionDelta / 2 else {
+            guard distance >= Self.minRawMovementPositionDelta else {
                 #if DEBUG
                 debugSession?.recordRawDrop(.deltaTooSmall)
                 #endif
@@ -793,7 +798,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     struct RoutineNotationEventNormalizer {
         static let minStrokeDuration: TimeInterval = 0.055
-        static let minPositionDelta: Double = 0.02
+        static let minPositionDelta: Double = 0.015
         static let minSpeedForStroke: Double = 0.14
         static let maxMergeGap: TimeInterval = 0.08
         static let maxAudioAlignGap: TimeInterval = 0.09
