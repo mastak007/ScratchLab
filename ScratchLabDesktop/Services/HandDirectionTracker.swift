@@ -27,7 +27,7 @@ final class HandDirectionTracker {
     /// Minimum net displacement across the window to reject micro-jitter.
     static let displacementThreshold: CGFloat = 0.010
     /// Consecutive agreeing frames before committing a new active direction.
-    static let commitFrames = 2
+    static let commitFrames = 1
     /// Missed frames before dropping the held direction to `.idle`.
     static let holdFrames = 3
     /// Missed frames before resetting fully to `.searching`.
@@ -64,6 +64,23 @@ final class HandDirectionTracker {
     private(set) var lastWeightedVelocity: CGFloat = 0
     /// History count at the time computeRawDirection last ran.
     private(set) var lastHistoryCount: Int = 0
+
+    // MARK: - Commit-latency diagnostics (read-only accumulators)
+
+    /// Times a raw moving-forward or moving-backward direction first appeared
+    /// (pending reset from a non-moving direction to either moving direction).
+    private(set) var rawDirectionAppearedMoving = 0
+    /// Times committed direction successfully changed to a moving direction.
+    private(set) var committedDirectionChanges = 0
+    /// Times a moving pending direction was abandoned before commitFrames was
+    /// reached (raw flipped to idle or the opposite direction before commit).
+    private(set) var pendingRawDirectionResetBeforeCommit = 0
+    /// Committed a moving direction after 1 consecutive raw observation.
+    private(set) var commitLatency1 = 0
+    /// Committed a moving direction after 2 consecutive raw observations.
+    private(set) var commitLatency2 = 0
+    /// Committed a moving direction after 3+ consecutive raw observations.
+    private(set) var commitLatency3Plus = 0
 
     // MARK: - Displacement/velocity distribution diagnostics (read-only accumulators)
 
@@ -181,6 +198,12 @@ final class HandDirectionTracker {
         lastNetDisplacement = 0
         lastWeightedVelocity = 0
         lastHistoryCount = 0
+        rawDirectionAppearedMoving = 0
+        committedDirectionChanges = 0
+        pendingRawDirectionResetBeforeCommit = 0
+        commitLatency1 = 0
+        commitLatency2 = 0
+        commitLatency3Plus = 0
         displacementAbsMin = .infinity
         displacementAbsMax = 0
         velocityAbsMin = .infinity
@@ -279,9 +302,16 @@ final class HandDirectionTracker {
     }
 
     private func updateCommitted(with raw: Direction) {
+        let wasPendingMoving = (pending == .movingForward || pending == .movingBackward)
+
         if raw == pending {
             pendingCount += 1
         } else {
+            // Pending direction reset — if the old pending was a moving direction
+            // that never reached commitFrames, it was abandoned before commit.
+            if wasPendingMoving && pendingCount < Self.commitFrames && committed != pending {
+                pendingRawDirectionResetBeforeCommit += 1
+            }
             pending = raw
             pendingCount = 1
         }
@@ -291,11 +321,32 @@ final class HandDirectionTracker {
             // Idle commits immediately — stops showing stale direction.
             committed = .idle
         case .movingForward, .movingBackward:
+            // Count new raw-direction appearances (pending just reset to this
+            // moving direction with count 1 and wasn't already committed).
+            if pendingCount == 1 {
+                rawDirectionAppearedMoving += 1
+            }
             if pendingCount >= Self.commitFrames {
+                if committed != raw {
+                    committedDirectionChanges += 1
+                }
                 committed = raw
             }
         case .searching:
             committed = .searching
+        }
+
+        // Record commit latency when a moving direction is first committed.
+        // Tracked on the call where pendingCount reaches commitFrames AND
+        // committed just changed to this raw direction. This avoids counting
+        // sustained commits where pendingCount keeps growing.
+        if raw == pending, (raw == .movingForward || raw == .movingBackward),
+           pendingCount == Self.commitFrames {
+            switch pendingCount {
+            case 1:  commitLatency1 += 1
+            case 2:  commitLatency2 += 1
+            default: commitLatency3Plus += 1
+            }
         }
     }
 }

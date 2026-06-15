@@ -4794,6 +4794,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let historyCount2: Int
         let historyCount3: Int
         let historyCount4: Int
+        // Direction tracker commit-latency diagnostics
+        let trackerRawDirectionAppearedMoving: Int
+        let trackerCommittedDirectionChanges: Int
+        let trackerPendingResetBeforeCommit: Int
+        let trackerCommitLatency1: Int
+        let trackerCommitLatency2: Int
+        let trackerCommitLatency3Plus: Int
         let trackedXMin: Double
         let trackedXMax: Double
         let trackedYMin: Double
@@ -4874,6 +4881,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             historyCount2: handDirectionTracker.historyCount2,
             historyCount3: handDirectionTracker.historyCount3,
             historyCount4: handDirectionTracker.historyCount4,
+            trackerRawDirectionAppearedMoving: handDirectionTracker.rawDirectionAppearedMoving,
+            trackerCommittedDirectionChanges: handDirectionTracker.committedDirectionChanges,
+            trackerPendingResetBeforeCommit: handDirectionTracker.pendingRawDirectionResetBeforeCommit,
+            trackerCommitLatency1: handDirectionTracker.commitLatency1,
+            trackerCommitLatency2: handDirectionTracker.commitLatency2,
+            trackerCommitLatency3Plus: handDirectionTracker.commitLatency3Plus,
             trackedXMin: handDirectionTracker.trackedPointXMin.isFinite ? Double(handDirectionTracker.trackedPointXMin) : 0,
             trackedXMax: Double(handDirectionTracker.trackedPointXMax),
             trackedYMin: handDirectionTracker.trackedPointYMin.isFinite ? Double(handDirectionTracker.trackedPointYMin) : 0,
@@ -5078,6 +5091,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             historyCount2: tracker.historyCount2,
             historyCount3: tracker.historyCount3,
             historyCount4: tracker.historyCount4,
+            trackerRawDirectionAppearedMoving: tracker.rawDirectionAppearedMoving,
+            trackerCommittedDirectionChanges: tracker.committedDirectionChanges,
+            trackerPendingResetBeforeCommit: tracker.pendingRawDirectionResetBeforeCommit,
+            trackerCommitLatency1: tracker.commitLatency1,
+            trackerCommitLatency2: tracker.commitLatency2,
+            trackerCommitLatency3Plus: tracker.commitLatency3Plus,
             trackedXMin: tracker.trackedPointXMin.isFinite ? Double(tracker.trackedPointXMin) : 0,
             trackedXMax: Double(tracker.trackedPointXMax),
             trackedYMin: tracker.trackedPointYMin.isFinite ? Double(tracker.trackedPointYMin) : 0,
@@ -5126,6 +5145,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             "[velDist] min=\(String(format: "%.4f", diag?.velocityAbsMin ?? 0)) max=\(String(format: "%.4f", diag?.velocityAbsMax ?? 0)) <3=\(diag?.velBucketBelow003 ?? 0) 3-6=\(diag?.velBucket003to006 ?? 0) 6-10=\(diag?.velBucket006to010 ?? 0) 10-20=\(diag?.velBucket010to020 ?? 0) >20=\(diag?.velBucketAbove020 ?? 0)",
             "[trackedRange] x=[\(String(format: "%.4f", diag?.trackedXMin ?? 0)),\(String(format: "%.4f", diag?.trackedXMax ?? 0))] y=[\(String(format: "%.4f", diag?.trackedYMin ?? 0)),\(String(format: "%.4f", diag?.trackedYMax ?? 0))]",
             "[histCounts] 1=\(diag?.historyCount1 ?? 0) 2=\(diag?.historyCount2 ?? 0) 3=\(diag?.historyCount3 ?? 0) 4=\(diag?.historyCount4 ?? 0)",
+            "[commitLatency] appeared=\(diag?.trackerRawDirectionAppearedMoving ?? 0) committed=\(diag?.trackerCommittedDirectionChanges ?? 0) reset=\(diag?.trackerPendingResetBeforeCommit ?? 0) L1=\(diag?.trackerCommitLatency1 ?? 0) L2=\(diag?.trackerCommitLatency2 ?? 0) L3+=\(diag?.trackerCommitLatency3Plus ?? 0)",
             "[raw=\(diag?.rawMovementEventsCreated ?? 0) norm=\(diag?.normalizedMovementCount ?? 0) fused=\(diag?.fusedMovementCount ?? 0) trusted=\(diag?.trustedDirectionalCount ?? 0) final=\(diag?.finalRecordMovementCount ?? 0)]",
             "[pubCalls=\(diag?.publishHandTrackingCalls ?? 0) pubSkips=\(diag?.publishHandTrackingDedupSkips ?? 0) starts=\(diag?.activeMovementStarts ?? 0) attempts=\(diag?.activeMovementFinishAttempts ?? 0) merges=\(diag?.mergedSegments ?? 0)]",
             "[rawDrops=\(dropStr(rawDrops))]",
