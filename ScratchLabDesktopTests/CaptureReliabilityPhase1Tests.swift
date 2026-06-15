@@ -4916,20 +4916,22 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 100)
         let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
 
+        // .movingRight = semantic forward = camera-leftward → x must DECREASE
+        // .movingLeft  = semantic backward = camera-rightward → x must INCREASE
         let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
-            (100.00, .steady, 0.50),
-            (100.05, .movingRight, 0.56),
+            (100.00, .steady,      0.50),
+            (100.05, .movingRight, 0.84),
             (100.10, .movingRight, 0.68),
-            (100.16, .movingRight, 0.84),
-            (100.20, .movingLeft, 0.78),
-            (100.26, .movingLeft, 0.60),
-            (100.32, .movingLeft, 0.32),
-            (100.38, .movingRight, 0.46),
+            (100.16, .movingRight, 0.56),
+            (100.20, .movingLeft,  0.32),
+            (100.26, .movingLeft,  0.60),
+            (100.32, .movingLeft,  0.78),
+            (100.38, .movingRight, 0.88),
             (100.44, .movingRight, 0.70),
-            (100.50, .movingRight, 0.88),
-            (100.56, .movingLeft, 0.74),
-            (100.62, .movingLeft, 0.52),
-            (100.70, .movingLeft, 0.20)
+            (100.50, .movingRight, 0.46),
+            (100.56, .movingLeft,  0.20),
+            (100.62, .movingLeft,  0.52),
+            (100.70, .movingLeft,  0.74)
         ]
 
         for (time, state, x) in observations {
@@ -4953,13 +4955,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testRoutineDetectedNotationBuilderSplitsDirectionChangesInsteadOfMergingStrokes() {
         let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 200)
 
+        // .movingRight = semantic forward = camera-leftward → x must DECREASE
+        // .movingLeft  = semantic backward = camera-rightward → x must INCREASE
         let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
-            (200.00, .movingRight, 0.24),
+            (200.00, .movingRight, 0.78),
             (200.07, .movingRight, 0.48),
-            (200.13, .movingRight, 0.78),
-            (200.18, .movingLeft, 0.72),
-            (200.24, .movingLeft, 0.51),
-            (200.31, .movingLeft, 0.18)
+            (200.13, .movingRight, 0.24),
+            (200.18, .movingLeft,  0.18),
+            (200.24, .movingLeft,  0.51),
+            (200.31, .movingLeft,  0.72)
         ]
 
         for (time, state, x) in observations {
@@ -4985,19 +4989,21 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 300)
         let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
 
+        // .movingRight = semantic forward = camera-leftward → x must DECREASE
+        // .movingLeft  = semantic backward = camera-rightward → x must INCREASE
         let observations: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = [
-            (300.00, .movingRight, 0.40),
+            (300.00, .movingRight, 0.64),
             (300.06, .movingRight, 0.52),
-            (300.12, .movingRight, 0.64),
-            (300.18, .movingLeft, 0.58),
-            (300.24, .movingLeft, 0.46),
-            (300.30, .movingLeft, 0.34),
-            (300.36, .movingRight, 0.42),
+            (300.12, .movingRight, 0.40),
+            (300.18, .movingLeft,  0.34),
+            (300.24, .movingLeft,  0.46),
+            (300.30, .movingLeft,  0.58),
+            (300.36, .movingRight, 0.66),
             (300.42, .movingRight, 0.54),
-            (300.48, .movingRight, 0.66),
-            (300.54, .movingLeft, 0.58),
-            (300.60, .movingLeft, 0.46),
-            (300.66, .movingLeft, 0.34)
+            (300.48, .movingRight, 0.42),
+            (300.54, .movingLeft,  0.34),
+            (300.60, .movingLeft,  0.46),
+            (300.66, .movingLeft,  0.58)
         ]
 
         for (time, state, x) in observations {
