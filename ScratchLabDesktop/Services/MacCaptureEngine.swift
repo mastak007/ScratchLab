@@ -176,6 +176,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let fusedMovementEvents: Int
         let trustedDirectionalEvents: Int
         let finalRecordMovementEvents: Int
+        let activeMovementStarts: Int
+        let activeMovementFinishAttempts: Int
+        let builderInputAccepted: Int
+        let builderInputRejectedDirection: Int
+        let builderRejectedSteady: Int
+        let builderRejectedSearching: Int
+        let steadyInsufficientHistory: Int
+        let steadyDisplacementTooSmall: Int
+        let steadyVelocityTooLow: Int
+        let builderInputExtended: Int
+        let publishHandTrackingCalls: Int
+        let publishHandTrackingDedupSkips: Int
+        let impossibleJumpRejects: Int
+        let platterObserveAttempted: Int
+        let platterObserveSkippedNotRecording: Int
         let handPoseIntervalMS: Int
         let rawDropReasons: [String: Int]
         let normalizedDropReasons: [String: Int]
@@ -201,6 +216,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         var fusedMovementEvents = 0
         var trustedDirectionalEvents = 0
         var finalRecordMovementEvents = 0
+        var activeMovementStarts = 0
+        var activeMovementFinishAttempts = 0
+        var builderInputAccepted = 0
+        var builderInputRejectedDirection = 0
+        var builderRejectedSteady = 0
+        var builderRejectedSearching = 0
+        var steadyInsufficientHistory = 0
+        var steadyDisplacementTooSmall = 0
+        var steadyVelocityTooLow = 0
+        var builderInputExtended = 0
+        var publishHandTrackingCalls = 0
+        var publishHandTrackingDedupSkips = 0
+        var impossibleJumpRejects = 0
+        var platterObserveAttempted = 0
+        var platterObserveSkippedNotRecording = 0
 
         private var rawDropReasons: [RoutineMovementRawDropReason: Int] = [:]
         private var normalizedDropReasons: [RoutineMovementNormalizedDropReason: Int] = [:]
@@ -269,6 +299,67 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             finalRecordMovementEvents = count
         }
 
+        func recordActiveMovementStart() {
+            activeMovementStarts += 1
+        }
+
+        func recordActiveMovementFinishAttempt() {
+            activeMovementFinishAttempts += 1
+        }
+
+        func recordBuilderInputAccepted() {
+            builderInputAccepted += 1
+        }
+
+        func recordBuilderInputRejectedDirection(state: HandMotionState) {
+            builderInputRejectedDirection += 1
+            switch state {
+            case .steady:
+                builderRejectedSteady += 1
+            case .searching:
+                builderRejectedSearching += 1
+            case .movingLeft, .movingRight:
+                break // should not reach here — these pass the guard
+            }
+        }
+
+        func recordSteadyIdleReason(_ reason: HandDirectionTracker.IdleReason) {
+            switch reason {
+            case .insufficientHistory:
+                steadyInsufficientHistory += 1
+            case .displacementTooSmall:
+                steadyDisplacementTooSmall += 1
+            case .velocityTooLow:
+                steadyVelocityTooLow += 1
+            case .none:
+                break // direction was active, not idle
+            }
+        }
+
+        func recordBuilderInputExtended() {
+            builderInputExtended += 1
+        }
+
+        func recordPublishHandTrackingCall() {
+            publishHandTrackingCalls += 1
+        }
+
+        func recordPublishHandTrackingDedupSkip() {
+            publishHandTrackingDedupSkips += 1
+        }
+
+        func recordImpossibleJumpReject() {
+            impossibleJumpRejects += 1
+        }
+
+        func recordPlatterObserveAttempted() {
+            platterObserveAttempted += 1
+        }
+
+        func recordPlatterObserveSkippedNotRecording() {
+            platterObserveSkippedNotRecording += 1
+        }
+
         func recordTrustDrop(_ reason: RoutineMovementTrustDropReason) {
             trustDropReasons[reason, default: 0] += 1
         }
@@ -288,6 +379,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 fusedMovementEvents: fusedMovementEvents,
                 trustedDirectionalEvents: trustedDirectionalEvents,
                 finalRecordMovementEvents: finalRecordMovementEvents,
+                activeMovementStarts: activeMovementStarts,
+                activeMovementFinishAttempts: activeMovementFinishAttempts,
+                builderInputAccepted: builderInputAccepted,
+                builderInputRejectedDirection: builderInputRejectedDirection,
+                builderRejectedSteady: builderRejectedSteady,
+                builderRejectedSearching: builderRejectedSearching,
+                steadyInsufficientHistory: steadyInsufficientHistory,
+                steadyDisplacementTooSmall: steadyDisplacementTooSmall,
+                steadyVelocityTooLow: steadyVelocityTooLow,
+                builderInputExtended: builderInputExtended,
+                publishHandTrackingCalls: publishHandTrackingCalls,
+                publishHandTrackingDedupSkips: publishHandTrackingDedupSkips,
+                impossibleJumpRejects: impossibleJumpRejects,
+                platterObserveAttempted: platterObserveAttempted,
+                platterObserveSkippedNotRecording: platterObserveSkippedNotRecording,
                 handPoseIntervalMS: handPoseIntervalMS,
                 rawDropReasons: dictionary(from: rawDropReasons),
                 normalizedDropReasons: dictionary(from: normalizedDropReasons),
@@ -511,6 +617,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                         elapsed: elapsed
                     )
                     self.activeMovement = activeMovement
+                    #if DEBUG
+                    debugSession?.recordBuilderInputExtended()
+                    #endif
                     return
                 }
 
@@ -518,7 +627,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.activeMovement = nil
             }
 
-            guard newDirection == .forward || newDirection == .back else { return }
+            guard newDirection == .forward || newDirection == .back else {
+                #if DEBUG
+                debugSession?.recordBuilderInputRejectedDirection(state: state)
+                #endif
+                return
+            }
+            #if DEBUG
+            debugSession?.recordBuilderInputAccepted()
+            #endif
 
             let movement = ActiveMovement(
                 direction: newDirection,
@@ -533,6 +650,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 peakConfidence: confidence
             )
             self.activeMovement = movement
+            #if DEBUG
+            debugSession?.recordActiveMovementStart()
+            #endif
         }
 
         func movementEvents(
@@ -591,6 +711,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         private func finishActiveMovement(_ activeMovement: ActiveMovement) {
+            #if DEBUG
+            debugSession?.recordActiveMovementFinishAttempt()
+            #endif
             let resolvedEndPosition = activeMovement.furthestPosition
                 ?? activeMovement.latestPosition
                 ?? Self.defaultEndPosition(for: activeMovement.direction)
@@ -1790,6 +1913,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var lastContinuityHandPointTime: CFTimeInterval = 0
     #if DEBUG
     @Published private(set) var routineMovementDiagnostics: RoutineMovementDiagnosticsSnapshot?
+    @Published private(set) var frozenReviewDiagnostics: DebugStats?
     private var activeRoutineMovementDebugSession: RoutineMovementDebugSession?
     private var debugLastRawDirection: HandDirectionTracker.Direction = .idle
     #endif
@@ -1950,6 +2074,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         #if DEBUG
         activeRoutineMovementDebugSession = nil
         publishRoutineMovementDiagnostics(nil)
+        frozenReviewDiagnostics = nil
         debugLastRawDirection = .idle
         #endif
         resetAudioSignalLevel()
@@ -1963,10 +2088,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             self.activeRoutineDetectedNotationBuilder = nil
             self.activeRoutineAudioNotationDetector = nil
-            #if DEBUG
-            self.activeRoutineMovementDebugSession = nil
-            self.publishRoutineMovementDiagnostics(nil)
-            #endif
+            // Diagnostics survive across recording stop — captureOutput didFinishRecordingTo
+            // publishes the final snapshot. They are reset at the start of the next recording.
             self.audioQueue.async {
                 self.activeRoutineAudioCaptureWriter = nil
                 self.publishRoutineAudioCaptureDiagnostics(nil)
@@ -3036,6 +3159,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         #if DEBUG
         publishRoutineMovementDiagnostics(activeRoutineMovementDebugSession?.snapshot())
+        replayDiagnosticsFromPlatterTimeline()
+        writeReplayDiagnosticsToDisk()
         #endif
 
         sidecar = sidecar.finalized(
@@ -3362,6 +3487,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 ) {
                     #if DEBUG
                     debugImpossibleJumpRejects += 1
+                    activeRoutineMovementDebugSession?.recordImpossibleJumpReject()
                     #endif
                     lastContinuityHandPoint = nil
                     handleHandTrackingMiss()
@@ -3392,16 +3518,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 platterPositionRecorder.observe(point: rawTrackedPoint, at: takeRelativeTime)
                 #if DEBUG
                 debugObserveAttempted += 1
+                activeRoutineMovementDebugSession?.recordPlatterObserveAttempted()
                 #endif
             } else {
                 #if DEBUG
                 debugObserveSkippedNotRecording += 1
+                activeRoutineMovementDebugSession?.recordPlatterObserveSkippedNotRecording()
                 #endif
             }
             platterRecorderLock.unlock()
             let movementState = handMotionState(from: direction)
 
             #if DEBUG
+            if movementState == .steady {
+                activeRoutineMovementDebugSession?.recordSteadyIdleReason(handDirectionTracker.lastIdleReason)
+            }
             if direction != debugLastRawDirection {
                 activeRoutineMovementDebugSession?.recordRawDirectionChange()
                 debugLastRawDirection = direction
@@ -3800,8 +3931,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard lastPublishedHandDetected != detected
             || lastPublishedHandPosition != position
             || stateChanged else {
+            #if DEBUG
+            activeRoutineMovementDebugSession?.recordPublishHandTrackingDedupSkip()
+            #endif
             return
         }
+        #if DEBUG
+        activeRoutineMovementDebugSession?.recordPublishHandTrackingCall()
+        #endif
 
         let prevState = lastPublishedHandMotionState
         lastPublishedHandDetected = detected
@@ -4612,6 +4749,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let notationSource: String
         let currentROI: CGRect
         let audioScratchCount: Int
+        // Movement funnel counters (from RoutineMovementDiagnosticsSnapshot)
+        let builderInputAccepted: Int
+        let builderInputRejectedDirection: Int
+        let builderRejectedSteady: Int
+        let builderRejectedSearching: Int
+        let steadyInsufficientHistory: Int
+        let steadyDisplacementTooSmall: Int
+        let steadyVelocityTooLow: Int
+        let builderInputExtended: Int
+        let publishHandTrackingCalls: Int
+        let publishHandTrackingDedupSkips: Int
+        let activeMovementStarts: Int
+        let activeMovementFinishAttempts: Int
+        let mergedSegments: Int
+        let builderSamplesReceived: Int
+        let rawDropReasons: [String: Int]
+        let normalizedDropReasons: [String: Int]
+        let trustDropReasons: [String: Int]
+        let platterObserveFromSession: Int
+        let platterObserveSkippedFromSession: Int
+        let impossibleJumpFromSession: Int
+        // Direction tracker displacement/velocity distribution
+        let displacementAbsMin: Double
+        let displacementAbsMax: Double
+        let velocityAbsMin: Double
+        let velocityAbsMax: Double
+        let dispBucketBelow002: Int
+        let dispBucket002to005: Int
+        let dispBucket005to010: Int
+        let dispBucket010to020: Int
+        let dispBucketAbove020: Int
+        let velBucketBelow003: Int
+        let velBucket003to006: Int
+        let velBucket006to010: Int
+        let velBucket010to020: Int
+        let velBucketAbove020: Int
+        let historyCount1: Int
+        let historyCount2: Int
+        let historyCount3: Int
+        let historyCount4: Int
+        let trackedXMin: Double
+        let trackedXMax: Double
+        let trackedYMin: Double
+        let trackedYMax: Double
+        let replaySourceLabel: String
     }
 
     func captureDebugStats() -> DebugStats {
@@ -4648,7 +4830,50 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             trustDropLowAudioOverlap: diag?.trustDropReasons["lowAudioOverlap"] ?? 0,
             notationSource: lastRoutineDetectedNotation?.notationSource ?? "none",
             currentROI: debugLastROI,
-            audioScratchCount: scratchDetectionCount
+            audioScratchCount: scratchDetectionCount,
+            builderInputAccepted: diag?.builderInputAccepted ?? 0,
+            builderInputRejectedDirection: diag?.builderInputRejectedDirection ?? 0,
+            builderRejectedSteady: diag?.builderRejectedSteady ?? 0,
+            builderRejectedSearching: diag?.builderRejectedSearching ?? 0,
+            steadyInsufficientHistory: diag?.steadyInsufficientHistory ?? 0,
+            steadyDisplacementTooSmall: diag?.steadyDisplacementTooSmall ?? 0,
+            steadyVelocityTooLow: diag?.steadyVelocityTooLow ?? 0,
+            builderInputExtended: diag?.builderInputExtended ?? 0,
+            publishHandTrackingCalls: diag?.publishHandTrackingCalls ?? 0,
+            publishHandTrackingDedupSkips: diag?.publishHandTrackingDedupSkips ?? 0,
+            activeMovementStarts: diag?.activeMovementStarts ?? 0,
+            activeMovementFinishAttempts: diag?.activeMovementFinishAttempts ?? 0,
+            mergedSegments: diag?.mergedSegments ?? 0,
+            builderSamplesReceived: diag?.builderSamplesReceived ?? 0,
+            rawDropReasons: diag?.rawDropReasons ?? [:],
+            normalizedDropReasons: diag?.normalizedDropReasons ?? [:],
+            trustDropReasons: diag?.trustDropReasons ?? [:],
+            platterObserveFromSession: diag?.platterObserveAttempted ?? 0,
+            platterObserveSkippedFromSession: diag?.platterObserveSkippedNotRecording ?? 0,
+            impossibleJumpFromSession: diag?.impossibleJumpRejects ?? 0,
+            displacementAbsMin: handDirectionTracker.displacementAbsMin.isFinite ? Double(handDirectionTracker.displacementAbsMin) : 0,
+            displacementAbsMax: Double(handDirectionTracker.displacementAbsMax),
+            velocityAbsMin: handDirectionTracker.velocityAbsMin.isFinite ? Double(handDirectionTracker.velocityAbsMin) : 0,
+            velocityAbsMax: Double(handDirectionTracker.velocityAbsMax),
+            dispBucketBelow002: handDirectionTracker.dispBucketBelow002,
+            dispBucket002to005: handDirectionTracker.dispBucket002to005,
+            dispBucket005to010: handDirectionTracker.dispBucket005to010,
+            dispBucket010to020: handDirectionTracker.dispBucket010to020,
+            dispBucketAbove020: handDirectionTracker.dispBucketAbove020,
+            velBucketBelow003: handDirectionTracker.velBucketBelow003,
+            velBucket003to006: handDirectionTracker.velBucket003to006,
+            velBucket006to010: handDirectionTracker.velBucket006to010,
+            velBucket010to020: handDirectionTracker.velBucket010to020,
+            velBucketAbove020: handDirectionTracker.velBucketAbove020,
+            historyCount1: handDirectionTracker.historyCount1,
+            historyCount2: handDirectionTracker.historyCount2,
+            historyCount3: handDirectionTracker.historyCount3,
+            historyCount4: handDirectionTracker.historyCount4,
+            trackedXMin: handDirectionTracker.trackedPointXMin.isFinite ? Double(handDirectionTracker.trackedPointXMin) : 0,
+            trackedXMax: Double(handDirectionTracker.trackedPointXMax),
+            trackedYMin: handDirectionTracker.trackedPointYMin.isFinite ? Double(handDirectionTracker.trackedPointYMin) : 0,
+            trackedYMax: Double(handDirectionTracker.trackedPointYMax),
+            replaySourceLabel: "live"
         )
     }
 
@@ -4663,6 +4888,271 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: ", ")
+    }
+
+    /// DEBUG synthetic replay: replays the last drained platter-position
+    /// timeline through a fresh direction-tracker → builder → normalizer →
+    /// fusion pipeline and populates `frozenReviewDiagnostics`.
+    ///
+    /// Fidelity (direction diagnosis): **identical**.
+    /// `PlatterPositionRecorder.observe` stores
+    /// `position[i] = Σ(rawTrackedPoint.x[j] - rawTrackedPoint.x[j-1])`.
+    /// The direction tracker computes `dx = position[i] - position[i-1]`
+    /// = `rawTrackedPoint.x[i] - rawTrackedPoint.x[i-1]`, identical to the
+    /// live pass. Timestamps are take-relative; `dt` is identical.
+    /// Velocity, displacement, committed direction, and steady-idle reasons
+    /// are thus identical to the live-capture pass.
+    ///
+    /// NOT identical (confidence, dedup, y-axis):
+    /// - Confidence: platter records `1.0`; the replay uses tracker-derived
+    ///   confidence which may differ from the live `publishHandTrackingIfNeeded`
+    ///   path. This affects normalization confidence-drop rates.
+    /// - Y-axis: not persisted in the platter timeline; stubbed at `0.5`.
+    ///   HandDirectionTracker only uses `dx` (not `dy`), so direction is
+    ///   unaffected, but builder position depends on x only.
+    /// - Publish dedup: every sample feeds the builder (live may skip
+    ///   unchanged state/position pairs via `publishHandTrackingIfNeeded`).
+    /// - Audio: no audio events in replay (normalization has no burst rescue).
+    ///   `normDrops` and `trustDrops` may differ from live.
+    ///
+    /// Thresholds are unchanged. No capture/ROI/notation behaviour changes.
+    func replayDiagnosticsFromPlatterTimeline() {
+        // Try in-memory timeline first, then disk-saved raw platter timeline.
+        let timeline: PlatterPositionTimeline?
+        if let mem = lastDrainedPlatterPositionTimeline, !mem.samples.isEmpty {
+            timeline = mem
+        } else if let loaded = Self.loadLatestSavedPlatterTimeline() {
+            timeline = loaded
+        } else {
+            frozenReviewDiagnostics = nil
+            return
+        }
+        guard let timeline, !timeline.samples.isEmpty else {
+            frozenReviewDiagnostics = nil
+            return
+        }
+
+        // Fresh pipeline — mirrors the live capture path.
+        let tracker = HandDirectionTracker()
+        let debugSession = RoutineMovementDebugSession(handPoseInterval: activeHandPoseInterval)
+        let builder = RoutineDetectedNotationBuilder(
+            startedAt: timeline.startTime,
+            debugSession: debugSession
+        )
+
+        // Replay each sample through tracker → builder.
+        // Tracker receives sample.position directly (identical dx/dt to live).
+        // Builder receives a reconstructed [0,1] coordinate from cumulative
+        // deltas since sample.position is integrated displacement, not an
+        // absolute normalized hand-point x.
+        var runningX: Double = 0.5
+        var lastPlatterPosition: Double = timeline.samples.first?.position ?? 0
+        for sample in timeline.samples {
+            let delta = sample.position - lastPlatterPosition
+            runningX += delta
+            runningX = min(max(runningX, 0), 1)
+            lastPlatterPosition = sample.position
+
+            let trackerPoint = CGPoint(x: sample.position, y: 0.5)
+            let builderPoint = CGPoint(x: runningX, y: 0.5)
+            let now = sample.time
+
+            let direction = tracker.recordObservation(rawPoint: trackerPoint, at: now)
+            let movementState = handMotionState(from: direction)
+
+            // Mirror live debugging: record samples + direction changes.
+            debugSession.recordSample(
+                rawPoint: trackerPoint,
+                displayedPoint: builderPoint,
+                confidence: Double(tracker.confidence),
+                rawDirection: direction,
+                semanticState: movementState
+            )
+
+            // Record steady-idle reason from replay tracker.
+            if movementState == .steady {
+                debugSession.recordSteadyIdleReason(tracker.lastIdleReason)
+            }
+
+            // Feed builder (no dedup — every sample, synthetic path).
+            builder.recordObservation(
+                state: movementState,
+                position: builderPoint,
+                confidence: Double(tracker.confidence),
+                now: now
+            )
+        }
+
+        // Drain builder + normalize (no audio events in replay).
+        let rawEvents = builder.movementEvents(now: timeline.endTime)
+        let normalizer = RoutineNotationEventNormalizer()
+        _ = normalizer.normalize(
+            events: rawEvents,
+            audioEvents: [],
+            debugSession: debugSession
+        )
+        let fusionEngine = RoutineNotationFusionEngine()
+        _ = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: rawEvents,
+            detectedLabel: lastScratchDetection?.scratchName,
+            labelSource: lastScratchDetection == nil ? "unknown" : "detected",
+            labelConfidence: lastScratchDetection?.confidence,
+            debugSession: debugSession
+        )
+
+        // Populate frozenReviewDiagnostics from replay output.
+        let diag = debugSession.snapshot()
+        frozenReviewDiagnostics = DebugStats(
+            framesReceived: diag.handObservationsReceived,
+            framesAnalyzed: diag.handObservationsReceived,
+            handObservationsFound: diag.handObservationsReceived,
+            directionChanges: diag.semanticDirectionChanges,
+            missedFrames: 0,
+            visionReturnedHand: diag.handObservationsReceived,
+            trackedPointReturnedNil: 0,
+            trackedPointReturnedPoint: diag.handObservationsReceived,
+            jointsInspectedTotal: 0,
+            jointsRejectedLowConfidence: 0,
+            jointsRejectedOutsideROI: 0,
+            jointsAcceptedCandidates: 0,
+            jointsRelaxedAccepted: 0,
+            continuityFilledSamples: 0,
+            impossibleJumpRejects: 0,
+            jointConfidenceThreshold: recordingJointConfidenceThreshold,
+            observeSkippedNotRecording: 0,
+            observeAttempted: diag.handObservationsReceived,
+            midiEventsCapturedThisTake: 0,
+            rawEndTimeEqualsStart: diag.rawDropReasons["endTimeEqualsStart"] ?? 0,
+            rawMovementEventsCreated: diag.rawMovementEventsCreated,
+            normalizedMovementCount: diag.normalizedMovementEvents,
+            fusedMovementCount: diag.fusedMovementEvents,
+            trustedDirectionalCount: diag.trustedDirectionalEvents,
+            finalRecordMovementCount: diag.finalRecordMovementEvents,
+            trustDropNotFused: diag.trustDropReasons["notFused"] ?? 0,
+            trustDropLowConfidence: diag.trustDropReasons["lowConfidence"] ?? 0,
+            trustDropLowAudioOverlap: diag.trustDropReasons["lowAudioOverlap"] ?? 0,
+            notationSource: lastRoutineDetectedNotation?.notationSource ?? "replay:platterSynthetic",
+            currentROI: debugLastROI,
+            audioScratchCount: 0,
+            builderInputAccepted: diag.builderInputAccepted,
+            builderInputRejectedDirection: diag.builderInputRejectedDirection,
+            builderRejectedSteady: diag.builderRejectedSteady,
+            builderRejectedSearching: diag.builderRejectedSearching,
+            steadyInsufficientHistory: diag.steadyInsufficientHistory,
+            steadyDisplacementTooSmall: diag.steadyDisplacementTooSmall,
+            steadyVelocityTooLow: diag.steadyVelocityTooLow,
+            builderInputExtended: diag.builderInputExtended,
+            publishHandTrackingCalls: diag.builderSamplesReceived,
+            publishHandTrackingDedupSkips: 0,
+            activeMovementStarts: diag.activeMovementStarts,
+            activeMovementFinishAttempts: diag.activeMovementFinishAttempts,
+            mergedSegments: diag.mergedSegments,
+            builderSamplesReceived: diag.builderSamplesReceived,
+            rawDropReasons: diag.rawDropReasons,
+            normalizedDropReasons: diag.normalizedDropReasons,
+            trustDropReasons: diag.trustDropReasons,
+            platterObserveFromSession: timeline.samples.count,
+            platterObserveSkippedFromSession: 0,
+            impossibleJumpFromSession: 0,
+            displacementAbsMin: tracker.displacementAbsMin.isFinite ? Double(tracker.displacementAbsMin) : 0,
+            displacementAbsMax: Double(tracker.displacementAbsMax),
+            velocityAbsMin: tracker.velocityAbsMin.isFinite ? Double(tracker.velocityAbsMin) : 0,
+            velocityAbsMax: Double(tracker.velocityAbsMax),
+            dispBucketBelow002: tracker.dispBucketBelow002,
+            dispBucket002to005: tracker.dispBucket002to005,
+            dispBucket005to010: tracker.dispBucket005to010,
+            dispBucket010to020: tracker.dispBucket010to020,
+            dispBucketAbove020: tracker.dispBucketAbove020,
+            velBucketBelow003: tracker.velBucketBelow003,
+            velBucket003to006: tracker.velBucket003to006,
+            velBucket006to010: tracker.velBucket006to010,
+            velBucket010to020: tracker.velBucket010to020,
+            velBucketAbove020: tracker.velBucketAbove020,
+            historyCount1: tracker.historyCount1,
+            historyCount2: tracker.historyCount2,
+            historyCount3: tracker.historyCount3,
+            historyCount4: tracker.historyCount4,
+            trackedXMin: tracker.trackedPointXMin.isFinite ? Double(tracker.trackedPointXMin) : 0,
+            trackedXMax: Double(tracker.trackedPointXMax),
+            trackedYMin: tracker.trackedPointYMin.isFinite ? Double(tracker.trackedPointYMin) : 0,
+            trackedYMax: Double(tracker.trackedPointYMax),
+            replaySourceLabel: "replay:platterSynthetic"
+        )
+    }
+
+    /// Load the most recent raw platter timeline saved at finalize time.
+    /// Persist raw platter timeline + funnel diagnostic text alongside the
+    /// sidecar so replay works after relaunch and diagnostics are inspectable.
+    private func writeReplayDiagnosticsToDisk() {
+        guard let sidecarURL = activeRoutineRecordingSidecarURL else { return }
+        let baseName = sidecarURL.deletingPathExtension().lastPathComponent
+        let dir = sidecarURL.deletingLastPathComponent()
+
+        // Save raw platter timeline as Codable JSON.
+        var platterWriteError: String? = nil
+        if let tl = lastDrainedPlatterPositionTimeline {
+            let platterURL = dir.appendingPathComponent("\(baseName)_raw_platter_timeline.json")
+            do {
+                try JSONEncoder().encode(tl).write(to: platterURL, options: .atomic)
+            } catch {
+                platterWriteError = error.localizedDescription
+            }
+        } else {
+            platterWriteError = "lastDrainedPlatterPositionTimeline nil"
+        }
+
+        // Write human-readable funnel diagnostics.
+        let diag = frozenReviewDiagnostics
+        let label = diag?.replaySourceLabel ?? "nil"
+        let rawDrops = diag?.rawDropReasons ?? [:]
+        let normDrops = diag?.normalizedDropReasons ?? [:]
+        let trustDrops = diag?.trustDropReasons ?? [:]
+        func dropStr(_ d: [String: Int]) -> String {
+            d.isEmpty ? "none" : d.sorted(by: { $0.value > $1.value }).map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+        }
+        let lines = [
+            "replay_executed=true",
+            "platter_write_error=\(platterWriteError ?? "none")",
+            "[source=\(label)]",
+            "platterAttempted=\(diag?.platterObserveFromSession ?? 0) builderAcc=\(diag?.builderInputAccepted ?? 0) builderRej=\(diag?.builderInputRejectedDirection ?? 0) (steady=\(diag?.builderRejectedSteady ?? 0) searching=\(diag?.builderRejectedSearching ?? 0)) builderExt=\(diag?.builderInputExtended ?? 0)",
+            "[steadyBreakdown] insufficientHistory=\(diag?.steadyInsufficientHistory ?? 0) displacementTooSmall=\(diag?.steadyDisplacementTooSmall ?? 0) velocityTooLow=\(diag?.steadyVelocityTooLow ?? 0)",
+            "[dispDist] min=\(String(format: "%.4f", diag?.displacementAbsMin ?? 0)) max=\(String(format: "%.4f", diag?.displacementAbsMax ?? 0)) <2=\(diag?.dispBucketBelow002 ?? 0) 2-5=\(diag?.dispBucket002to005 ?? 0) 5-10=\(diag?.dispBucket005to010 ?? 0) 10-20=\(diag?.dispBucket010to020 ?? 0) >20=\(diag?.dispBucketAbove020 ?? 0)",
+            "[velDist] min=\(String(format: "%.4f", diag?.velocityAbsMin ?? 0)) max=\(String(format: "%.4f", diag?.velocityAbsMax ?? 0)) <3=\(diag?.velBucketBelow003 ?? 0) 3-6=\(diag?.velBucket003to006 ?? 0) 6-10=\(diag?.velBucket006to010 ?? 0) 10-20=\(diag?.velBucket010to020 ?? 0) >20=\(diag?.velBucketAbove020 ?? 0)",
+            "[trackedRange] x=[\(String(format: "%.4f", diag?.trackedXMin ?? 0)),\(String(format: "%.4f", diag?.trackedXMax ?? 0))] y=[\(String(format: "%.4f", diag?.trackedYMin ?? 0)),\(String(format: "%.4f", diag?.trackedYMax ?? 0))]",
+            "[histCounts] 1=\(diag?.historyCount1 ?? 0) 2=\(diag?.historyCount2 ?? 0) 3=\(diag?.historyCount3 ?? 0) 4=\(diag?.historyCount4 ?? 0)",
+            "[raw=\(diag?.rawMovementEventsCreated ?? 0) norm=\(diag?.normalizedMovementCount ?? 0) fused=\(diag?.fusedMovementCount ?? 0) trusted=\(diag?.trustedDirectionalCount ?? 0) final=\(diag?.finalRecordMovementCount ?? 0)]",
+            "[pubCalls=\(diag?.publishHandTrackingCalls ?? 0) pubSkips=\(diag?.publishHandTrackingDedupSkips ?? 0) starts=\(diag?.activeMovementStarts ?? 0) attempts=\(diag?.activeMovementFinishAttempts ?? 0) merges=\(diag?.mergedSegments ?? 0)]",
+            "[rawDrops=\(dropStr(rawDrops))]",
+            "[normDrops=\(dropStr(normDrops))]",
+            "[trustDrops=\(dropStr(trustDrops))]",
+            "replay_source_label=\(label)",
+        ]
+        let text = lines.joined(separator: "\n")
+        let funnelURL = dir.appendingPathComponent("\(baseName)_funnel_diag.txt")
+        try? text.write(to: funnelURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func loadLatestSavedPlatterTimeline() -> PlatterPositionTimeline? {
+        let dirs = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        guard let base = dirs.first else { return nil }
+        let capturesDir = base
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("RoutineCaptures", isDirectory: true)
+        let pattern = "*_raw_platter_timeline.json"
+        guard let files = try? FileManager.default.contentsOfDirectory(at: capturesDir, includingPropertiesForKeys: [.contentModificationDateKey], options: [])
+        else { return nil }
+        let matching = files.filter { $0.lastPathComponent.hasSuffix("_raw_platter_timeline.json") }
+        let sorted = matching.sorted {
+            let d0 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+            let d1 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+            return d0 > d1
+        }
+        guard let latest = sorted.first,
+              let data = try? Data(contentsOf: latest),
+              let timeline = try? JSONDecoder().decode(PlatterPositionTimeline.self, from: data)
+        else { return nil }
+        return timeline
     }
     #endif
 }

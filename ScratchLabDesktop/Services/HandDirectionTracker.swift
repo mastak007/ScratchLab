@@ -50,6 +50,46 @@ final class HandDirectionTracker {
         case searching
     }
 
+    // MARK: - Idle reason diagnostics (read-only, set by computeRawDirection)
+
+    enum IdleReason: String {
+        case insufficientHistory     // history.count < 2
+        case displacementTooSmall    // abs(netDisplacement) < threshold
+        case velocityTooLow          // abs(velocity) <= threshold
+        case none                    // direction is movingForward/movingBackward
+    }
+
+    private(set) var lastIdleReason: IdleReason = .none
+    private(set) var lastNetDisplacement: CGFloat = 0
+    private(set) var lastWeightedVelocity: CGFloat = 0
+    /// History count at the time computeRawDirection last ran.
+    private(set) var lastHistoryCount: Int = 0
+
+    // MARK: - Displacement/velocity distribution diagnostics (read-only accumulators)
+
+    private(set) var displacementAbsMin: CGFloat = .infinity
+    private(set) var displacementAbsMax: CGFloat = 0
+    private(set) var velocityAbsMin: CGFloat = .infinity
+    private(set) var velocityAbsMax: CGFloat = 0
+    private(set) var dispBucketBelow002 = 0
+    private(set) var dispBucket002to005 = 0
+    private(set) var dispBucket005to010 = 0
+    private(set) var dispBucket010to020 = 0
+    private(set) var dispBucketAbove020 = 0
+    private(set) var velBucketBelow003 = 0
+    private(set) var velBucket003to006 = 0
+    private(set) var velBucket006to010 = 0
+    private(set) var velBucket010to020 = 0
+    private(set) var velBucketAbove020 = 0
+    private(set) var historyCount1 = 0
+    private(set) var historyCount2 = 0
+    private(set) var historyCount3 = 0
+    private(set) var historyCount4 = 0
+    private(set) var trackedPointXMin: CGFloat = .infinity
+    private(set) var trackedPointXMax: CGFloat = 0
+    private(set) var trackedPointYMin: CGFloat = .infinity
+    private(set) var trackedPointYMax: CGFloat = 0
+
     // MARK: - State
 
     private struct Sample {
@@ -89,6 +129,10 @@ final class HandDirectionTracker {
     @discardableResult
     func recordObservation(rawPoint: CGPoint, at time: CFTimeInterval) -> Direction {
         ScratchLabPerformanceSignpost.event("HandDirectionAnalyze")
+        trackedPointXMin = min(trackedPointXMin, rawPoint.x)
+        trackedPointXMax = max(trackedPointXMax, rawPoint.x)
+        trackedPointYMin = min(trackedPointYMin, rawPoint.y)
+        trackedPointYMax = max(trackedPointYMax, rawPoint.y)
         missedCount = 0
         history.append(Sample(position: rawPoint, time: time))
         if history.count > Self.historyCapacity {
@@ -132,12 +176,52 @@ final class HandDirectionTracker {
         pendingCount = 0
         missedCount = 0
         direction = .idle
+        // Reset diagnostic accumulators
+        lastIdleReason = .none
+        lastNetDisplacement = 0
+        lastWeightedVelocity = 0
+        lastHistoryCount = 0
+        displacementAbsMin = .infinity
+        displacementAbsMax = 0
+        velocityAbsMin = .infinity
+        velocityAbsMax = 0
+        dispBucketBelow002 = 0
+        dispBucket002to005 = 0
+        dispBucket005to010 = 0
+        dispBucket010to020 = 0
+        dispBucketAbove020 = 0
+        velBucketBelow003 = 0
+        velBucket003to006 = 0
+        velBucket006to010 = 0
+        velBucket010to020 = 0
+        velBucketAbove020 = 0
+        historyCount1 = 0
+        historyCount2 = 0
+        historyCount3 = 0
+        historyCount4 = 0
+        trackedPointXMin = .infinity
+        trackedPointXMax = 0
+        trackedPointYMin = .infinity
+        trackedPointYMax = 0
     }
 
     // MARK: - Private
 
     private func computeRawDirection() -> Direction {
-        guard history.count >= 2 else { return .idle }
+        lastHistoryCount = history.count
+        // History count distribution
+        switch history.count {
+        case 1: historyCount1 += 1
+        case 2: historyCount2 += 1
+        case 3: historyCount3 += 1
+        default: historyCount4 += 1
+        }
+        guard history.count >= 2 else {
+            lastIdleReason = .insufficientHistory
+            lastNetDisplacement = 0
+            lastWeightedVelocity = 0
+            return .idle
+        }
 
         // Compute a recency-weighted mean of consecutive-pair velocities.
         // This correctly handles direction reversals and doesn't drift on jitter.
@@ -154,17 +238,43 @@ final class HandDirectionTracker {
         }
 
         let netDisplacement = history[history.count - 1].position.x - history[0].position.x
-        guard totalWeight > 0, abs(netDisplacement) >= Self.displacementThreshold else {
+        lastNetDisplacement = netDisplacement
+        let velocity = weightedVelocity / totalWeight
+        lastWeightedVelocity = velocity
+
+        // Accumulate displacement distribution
+        let absDisp = abs(netDisplacement)
+        if absDisp < .infinity { displacementAbsMin = min(displacementAbsMin, absDisp) }
+        displacementAbsMax = max(displacementAbsMax, absDisp)
+        if absDisp < 0.002        { dispBucketBelow002 += 1 }
+        else if absDisp < 0.005   { dispBucket002to005 += 1 }
+        else if absDisp < 0.010   { dispBucket005to010 += 1 }
+        else if absDisp < 0.020   { dispBucket010to020 += 1 }
+        else                       { dispBucketAbove020 += 1 }
+
+        // Accumulate velocity distribution
+        let absVel = abs(velocity)
+        if absVel < .infinity { velocityAbsMin = min(velocityAbsMin, absVel) }
+        velocityAbsMax = max(velocityAbsMax, absVel)
+        if absVel < 0.03          { velBucketBelow003 += 1 }
+        else if absVel < 0.06     { velBucket003to006 += 1 }
+        else if absVel < 0.10     { velBucket006to010 += 1 }
+        else if absVel < 0.20     { velBucket010to020 += 1 }
+        else                       { velBucketAbove020 += 1 }
+
+        guard totalWeight > 0, absDisp >= Self.displacementThreshold else {
+            lastIdleReason = .displacementTooSmall
             return .idle
         }
 
-        let velocity = weightedVelocity / totalWeight
-
         if velocity > Self.velocityThreshold {
+            lastIdleReason = .none
             return .movingForward
         } else if velocity < -Self.velocityThreshold {
+            lastIdleReason = .none
             return .movingBackward
         }
+        lastIdleReason = .velocityTooLow
         return .idle
     }
 

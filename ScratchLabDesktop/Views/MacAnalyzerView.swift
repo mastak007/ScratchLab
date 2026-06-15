@@ -922,7 +922,7 @@ struct MacAnalyzerView: View {
                 // the platter recorder (which never thins samples).
                 // DEBUG only; reads live counters that reset each take.
                 if liveTimeline != nil {
-                    let stats = captureEngine.captureDebugStats()
+                    let stats = captureEngine.frozenReviewDiagnostics ?? captureEngine.captureDebugStats()
                     let totalFrames = max(
                         stats.framesAnalyzed,
                         stats.handObservationsFound + stats.missedFrames,
@@ -1091,45 +1091,63 @@ struct MacAnalyzerView: View {
                                 value: String(format: "%.0f", midiRate)
                             )
                         }
-                        // Phase 7 — classifier promotion stage counters.
-                        if stats.rawMovementEventsCreated > 0
-                            || stats.rawEndTimeEqualsStart > 0
-                            || stats.finalRecordMovementCount > 0 {
+                        // Phase 7 — full Movement funnel (ungated, frozen at recording stop).
+                        // Displays even when all counters are zero so the UI proves the data path.
+                        if let frozen = captureEngine.frozenReviewDiagnostics, frozen.rawMovementEventsCreated == 0,
+                           stats.rawMovementEventsCreated == 0 {
+                            // Neither frozen nor live has movement events — show placeholder.
                             diagnosticRow(
-                                title: "Builder silently dropped",
-                                value: "\(stats.rawEndTimeEqualsStart)"
+                                title: "Movement funnel",
+                                value: "unavailable"
                             )
+                        } else {
+                            let platterIn = captureEngine.frozenReviewDiagnostics?.platterObserveFromSession ?? stats.platterObserveFromSession
+                            let builderAcc = captureEngine.frozenReviewDiagnostics?.builderInputAccepted ?? stats.builderInputAccepted
+                            let builderRej = captureEngine.frozenReviewDiagnostics?.builderInputRejectedDirection ?? stats.builderInputRejectedDirection
+                            let builderExt = captureEngine.frozenReviewDiagnostics?.builderInputExtended ?? stats.builderInputExtended
+                            let rawEv = captureEngine.frozenReviewDiagnostics?.rawMovementEventsCreated ?? stats.rawMovementEventsCreated
+                            let normEv = captureEngine.frozenReviewDiagnostics?.normalizedMovementCount ?? stats.normalizedMovementCount
+                            let fusedEv = captureEngine.frozenReviewDiagnostics?.fusedMovementCount ?? stats.fusedMovementCount
+                            let trustedEv = captureEngine.frozenReviewDiagnostics?.trustedDirectionalCount ?? stats.trustedDirectionalCount
+                            let finalEv = captureEngine.frozenReviewDiagnostics?.finalRecordMovementCount ?? stats.finalRecordMovementCount
                             diagnosticRow(
-                                title: "Builder raw events",
-                                value: "\(stats.rawMovementEventsCreated)"
+                                title: "Movement funnel",
+                                value: "platter[\(platterIn)] → builder[acc:\(builderAcc) rej:\(builderRej) ext:\(builderExt)] → raw[\(rawEv)] → norm[\(normEv)] → fused[\(fusedEv)] → trusted[\(trustedEv)] → final[\(finalEv)]"
                             )
+                            let plAtt = captureEngine.frozenReviewDiagnostics?.platterObserveFromSession ?? stats.platterObserveFromSession
+                            let plSkip = captureEngine.frozenReviewDiagnostics?.platterObserveSkippedFromSession ?? stats.platterObserveSkippedFromSession
+                            let plJump = captureEngine.frozenReviewDiagnostics?.impossibleJumpFromSession ?? stats.impossibleJumpFromSession
                             diagnosticRow(
-                                title: "Normalized events",
-                                value: "\(stats.normalizedMovementCount)"
+                                title: "Platter detail",
+                                value: "attempted[\(plAtt)] skippedNotRec[\(plSkip)] jumpRejects[\(plJump)]"
                             )
+                            let pubCalls = captureEngine.frozenReviewDiagnostics?.publishHandTrackingCalls ?? stats.publishHandTrackingCalls
+                            let pubSkips = captureEngine.frozenReviewDiagnostics?.publishHandTrackingDedupSkips ?? stats.publishHandTrackingDedupSkips
+                            let starts = captureEngine.frozenReviewDiagnostics?.activeMovementStarts ?? stats.activeMovementStarts
+                            let attempts = captureEngine.frozenReviewDiagnostics?.activeMovementFinishAttempts ?? stats.activeMovementFinishAttempts
                             diagnosticRow(
-                                title: "Fused events",
-                                value: "\(stats.fusedMovementCount)"
+                                title: "Builder detail",
+                                value: "calls[\(pubCalls)] dedupSkips[\(pubSkips)] starts[\(starts)] finishAttempts[\(attempts)]"
                             )
+                            let rawDrops = captureEngine.frozenReviewDiagnostics?.rawDropReasons ?? stats.rawDropReasons
                             diagnosticRow(
-                                title: "Trusted accepted",
-                                value: "\(stats.trustedDirectionalCount)"
+                                title: "Segmentation drops",
+                                value: MacCaptureEngine.summarizeDebugCounters(rawDrops)
                             )
+                            let merges = captureEngine.frozenReviewDiagnostics?.mergedSegments ?? stats.mergedSegments
                             diagnosticRow(
-                                title: "Final record events",
-                                value: "\(stats.finalRecordMovementCount)"
+                                title: "Segmentation merges",
+                                value: "\(merges)"
                             )
+                            let normDrops = captureEngine.frozenReviewDiagnostics?.normalizedDropReasons ?? stats.normalizedDropReasons
                             diagnosticRow(
-                                title: "Rejected not fused",
-                                value: "\(stats.trustDropNotFused)"
+                                title: "Normalization drops",
+                                value: MacCaptureEngine.summarizeDebugCounters(normDrops)
                             )
+                            let trustDrops = captureEngine.frozenReviewDiagnostics?.trustDropReasons ?? stats.trustDropReasons
                             diagnosticRow(
-                                title: "Rejected low confidence",
-                                value: "\(stats.trustDropLowConfidence)"
-                            )
-                            diagnosticRow(
-                                title: "Rejected low audio overlap",
-                                value: "\(stats.trustDropLowAudioOverlap)"
+                                title: "Trust drops",
+                                value: MacCaptureEngine.summarizeDebugCounters(trustDrops)
                             )
                             diagnosticRow(
                                 title: "Notation source",
@@ -2157,6 +2175,70 @@ struct MacAnalyzerView: View {
     private var reviewMotionSampleCount: Int {
         captureEngine.lastDrainedPlatterPositionTimeline?.samples.count ?? 0
     }
+
+    #if DEBUG
+    @ViewBuilder
+    private var movementFunnelInlineView: some View {
+        let frozen = captureEngine.frozenReviewDiagnostics
+        let live = captureEngine.captureDebugStats()
+        let stats = frozen ?? live
+        let replayLabel = frozen?.replaySourceLabel ?? "live"
+        VStack(alignment: .leading, spacing: 3) {
+            Text("DEBUG FUNNEL ROW RENDERED")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.orange)
+            Text("[source=\(replayLabel)] platterAttempted=\(stats.platterObserveFromSession) builderAcc=\(stats.builderInputAccepted) builderRej=\(stats.builderInputRejectedDirection) (steady=\(stats.builderRejectedSteady) searching=\(stats.builderRejectedSearching)) builderExt=\(stats.builderInputExtended)")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[steadyBreakdown] insufficientHistory=\(stats.steadyInsufficientHistory) displacementTooSmall=\(stats.steadyDisplacementTooSmall) velocityTooLow=\(stats.steadyVelocityTooLow)")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[dispDist] min=\(String(format: "%.4f", stats.displacementAbsMin)) max=\(String(format: "%.4f", stats.displacementAbsMax)) <2=\(stats.dispBucketBelow002) 2-5=\(stats.dispBucket002to005) 5-10=\(stats.dispBucket005to010) 10-20=\(stats.dispBucket010to020) >20=\(stats.dispBucketAbove020)")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[velDist] min=\(String(format: "%.4f", stats.velocityAbsMin)) max=\(String(format: "%.4f", stats.velocityAbsMax)) <3=\(stats.velBucketBelow003) 3-6=\(stats.velBucket003to006) 6-10=\(stats.velBucket006to010) 10-20=\(stats.velBucket010to020) >20=\(stats.velBucketAbove020)")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[trackedRange] x=[\(String(format: "%.4f", stats.trackedXMin)),\(String(format: "%.4f", stats.trackedXMax))] y=[\(String(format: "%.4f", stats.trackedYMin)),\(String(format: "%.4f", stats.trackedYMax))]")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[histCounts] 1=\(stats.historyCount1) 2=\(stats.historyCount2) 3=\(stats.historyCount3) 4=\(stats.historyCount4)")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[raw=\(stats.rawMovementEventsCreated) norm=\(stats.normalizedMovementCount) fused=\(stats.fusedMovementCount) trusted=\(stats.trustedDirectionalCount) final=\(stats.finalRecordMovementCount)]")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[pubCalls=\(stats.publishHandTrackingCalls) pubSkips=\(stats.publishHandTrackingDedupSkips) starts=\(stats.activeMovementStarts) attempts=\(stats.activeMovementFinishAttempts) merges=\(stats.mergedSegments)]")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[rawDrops=\(dictStr(stats.rawDropReasons))]")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[normDrops=\(dictStr(stats.normalizedDropReasons))]")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("[trustDrops=\(dictStr(stats.trustDropReasons))]")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func dictStr(_ d: [String: Int]) -> String {
+        if d.isEmpty { return "none" }
+        return d.sorted(by: { $0.value > $1.value }).map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+    }
+    #endif
 
     /// Slice F-B — Review-only render-time window for the target notation
     /// chart. When a captured snapshot exists, the window is
@@ -3363,25 +3445,47 @@ struct MacAnalyzerView: View {
                     diagnosticRow(title: "Audio buffers skipped", value: "\(captureEngine.routineAudioBuffersSkipped)")
                     #if DEBUG
                     if let movementDiagnostics = captureEngine.routineMovementDiagnostics {
+                        // --- Funnel: raw platter → final RecordMovement ---
                         diagnosticRow(
-                            title: "Movement pipeline",
-                            value: "\(movementDiagnostics.finalRecordMovementEvents) final / \(movementDiagnostics.trustedDirectionalEvents) trusted / \(movementDiagnostics.fusedMovementEvents) fused / \(movementDiagnostics.normalizedMovementEvents) normalized / \(movementDiagnostics.rawMovementEventsCreated) raw"
+                            title: "Movement funnel",
+                            value: "platter[\(movementDiagnostics.platterObserveAttempted)] → builder[acc:\(movementDiagnostics.builderInputAccepted) rej:\(movementDiagnostics.builderInputRejectedDirection) ext:\(movementDiagnostics.builderInputExtended)] → raw[\(movementDiagnostics.rawMovementEventsCreated)] → norm[\(movementDiagnostics.normalizedMovementEvents)] → fused[\(movementDiagnostics.fusedMovementEvents)] → trusted[\(movementDiagnostics.trustedDirectionalEvents)] → final[\(movementDiagnostics.finalRecordMovementEvents)]"
                         )
+                        diagnosticRow(
+                            title: "Platter detail",
+                            value: "attempted[\(movementDiagnostics.platterObserveAttempted)] skippedNotRec[\(movementDiagnostics.platterObserveSkippedNotRecording)] jumpRejects[\(movementDiagnostics.impossibleJumpRejects)]"
+                        )
+                        // --- Builder detail (starts / attempts / publish gate) ---
+                        diagnosticRow(
+                            title: "Builder detail",
+                            value: "calls[\(movementDiagnostics.publishHandTrackingCalls)] dedupSkips[\(movementDiagnostics.publishHandTrackingDedupSkips)] starts[\(movementDiagnostics.activeMovementStarts)] finishAttempts[\(movementDiagnostics.activeMovementFinishAttempts)]"
+                        )
+                        // --- Segmentation stage (raw → normalized) ---
+                        diagnosticRow(
+                            title: "Segmentation drops",
+                            value: MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.rawDropReasons)
+                        )
+                        diagnosticRow(
+                            title: "Segmentation merges",
+                            value: "\(movementDiagnostics.mergedSegments)"
+                        )
+                        // --- Normalization stage drops ---
+                        diagnosticRow(
+                            title: "Normalization drops",
+                            value: MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.normalizedDropReasons)
+                        )
+                        // --- Promotion / trust stage ---
+                        diagnosticRow(
+                            title: "Trust drops",
+                            value: MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.trustDropReasons)
+                        )
+                        // --- Sample-level detail ---
                         diagnosticRow(
                             title: "Movement samples",
                             value: "\(movementDiagnostics.observationsWithConfidence)/\(movementDiagnostics.handObservationsReceived) confident, \(movementDiagnostics.builderSamplesReceived) builder"
                         )
                         diagnosticRow(
-                            title: "Movement directions",
-                            value: "\(movementDiagnostics.semanticDirectionChanges) semantic / \(movementDiagnostics.rawDirectionChanges) raw"
-                        )
-                        diagnosticRow(
                             title: "Video frames",
                             value: "\(movementDiagnostics.framesAnalyzed)/\(movementDiagnostics.framesReceived) analyzed @ \(movementDiagnostics.handPoseIntervalMS)ms"
-                        )
-                        diagnosticRow(
-                            title: "Movement drops",
-                            value: "raw[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.rawDropReasons))] norm[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.normalizedDropReasons))] trust[\(MacCaptureEngine.summarizeDebugCounters(movementDiagnostics.trustDropReasons))]"
                         )
                     }
                     #endif
@@ -4026,12 +4130,14 @@ struct MacAnalyzerView: View {
                 // Tucked behind a disclosure so it's available but not
                 // dominant when every value is zero.
                 DisclosureGroup {
-                    HStack(spacing: 8) {
-                        testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
-                        testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
-                        testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
-                        testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
-                        testLabMetricBadge(title: "Motion samples", value: "\(reviewMotionSampleCount)", color: reviewMotionSampleCount == 0 ? .secondary : .green)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
+                            testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
+                            testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
+                            testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
+                            testLabMetricBadge(title: "Motion samples", value: "\(reviewMotionSampleCount)", color: reviewMotionSampleCount == 0 ? .secondary : .green)
+                        }
                     }
                     .padding(.top, 8)
                 } label: {
@@ -4525,6 +4631,13 @@ struct MacAnalyzerView: View {
                 Text("Captured evidence")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
+                #if DEBUG
+                Text("DEBUG SENTINEL")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 6)
+                    .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+                #endif
                 Spacer(minLength: 0)
                 HStack(spacing: 4) {
                     Image(systemName: capturedSource.systemImage)
@@ -4573,6 +4686,27 @@ struct MacAnalyzerView: View {
             }
             #if DEBUG
             debugNotationDiagnosticChip(debugCapturedNotationChipText)
+            Text("DEBUG: Captured evidence card renders")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.orange)
+            HStack(spacing: 8) {
+                Button("Replay from platter") {
+                    captureEngine.replayDiagnosticsFromPlatterTimeline()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                let label = captureEngine.frozenReviewDiagnostics?.replaySourceLabel ?? ""
+                if label == "replay:platterSynthetic" {
+                    Text("replayed")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.green)
+                } else if label.isEmpty || label == "live" {
+                    Text("tap to replay")
+                        .font(.system(size: 9, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            movementFunnelInlineView
             #endif
         }
         .padding(16)

@@ -5048,6 +5048,148 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(normalized.isEmpty)
     }
 
+    // MARK: - Synthetic Baby Scratch 12–15 Hz reliability (diagnostics only, no threshold changes)
+
+    /// Generates alternating .movingRight / .movingLeft observations for a synthetic
+    /// 12–15 Hz Baby Scratch: each half-stroke ≈ 80 ms (67–83 ms), 2 observations per
+    /// half-stroke, position sweeps across ~0.4 normalised units per half-stroke.
+    private func makeBabyScratchObservations(
+        halfStrokeCount: Int,
+        halfStrokePeriod: TimeInterval = 0.080,
+        samplesPerHalfStroke: Int = 2,
+        startTime: TimeInterval = 0,
+        baseConfidence: Double = 0.84
+    ) -> [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] {
+        var out: [(TimeInterval, MacCaptureEngine.HandMotionState, Double)] = []
+        let sampleInterval = halfStrokePeriod / Double(samplesPerHalfStroke)
+        // Position extremes: forward (camera-leftward) goes from high→low x,
+        // backward goes from low→high x (matches existing builder conventions).
+        for i in 0..<halfStrokeCount {
+            let base = startTime + Double(i) * halfStrokePeriod
+            let isForward = (i % 2 == 0) // even → .movingRight (forward)
+            let state: MacCaptureEngine.HandMotionState = isForward ? .movingRight : .movingLeft
+            let startX = isForward ? 0.70 : 0.30
+            let endX   = isForward ? 0.30 : 0.70
+            for s in 0..<samplesPerHalfStroke {
+                let t = base + Double(s) * sampleInterval
+                let frac = Double(s) / Double(max(1, samplesPerHalfStroke - 1))
+                let x = startX + (endX - startX) * frac
+                out.append((t, state, x))
+            }
+        }
+        return out
+    }
+
+    func testSyntheticBabyScratchRepeatedForwardBackProducesMultipleRawMovements() {
+        // 10 s at 12.5 Hz → 125 half-strokes, each ~80 ms, 2 obs each = 250 obs.
+        let observations = makeBabyScratchObservations(halfStrokeCount: 125)
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0)
+
+        for (time, state, x) in observations {
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.84,
+                now: time
+            )
+        }
+
+        let rawEvents = builder.movementEvents(now: 10.02)
+
+        // At 125 half-strokes, we expect the vast majority to survive.
+        // Allow a small margin for edge effects (first/last stroke may be partial).
+        XCTAssertGreaterThan(rawEvents.count, 100,
+                             "Expected >100 raw movements from 125 half-strokes, got \(rawEvents.count)")
+        // They must alternate direction.
+        let directions = rawEvents.map(\.direction)
+        for i in 1..<directions.count {
+            XCTAssertNotEqual(directions[i], directions[i - 1],
+                              "Adjacent movements must have opposite directions at index \(i)")
+        }
+    }
+
+    func testSyntheticBabyScratchMiddleStrokesDoNotCollapseIntoSilence() {
+        // 11 s at 13.6 Hz → ~150 half-strokes.
+        let observations = makeBabyScratchObservations(
+            halfStrokeCount: 150,
+            halfStrokePeriod: 0.0735 // ~13.6 Hz
+        )
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0)
+
+        for (time, state, x) in observations {
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.88,
+                now: time
+            )
+        }
+
+        let rawEvents = builder.movementEvents(now: 11.05)
+
+        // Events must span the entire capture, not just the beginning or end.
+        let totalSpan = (rawEvents.last?.endTime ?? 0) - (rawEvents.first?.startTime ?? 0)
+        XCTAssertGreaterThan(totalSpan, 9.0,
+                             "Movement events must span ≥9 s of an 11 s capture, got \(String(format: "%.2f", totalSpan)) s")
+
+        // The middle third of the time span must contain movements.
+        guard let firstStart = rawEvents.first?.startTime,
+              let lastEnd = rawEvents.last?.endTime else {
+            XCTFail("Expected non-empty event list")
+            return
+        }
+        let midStart = firstStart + (lastEnd - firstStart) / 3
+        let midEnd   = firstStart + 2 * (lastEnd - firstStart) / 3
+        let middleEvents = rawEvents.filter { $0.startTime >= midStart && $0.endTime <= midEnd }
+        XCTAssertGreaterThan(middleEvents.count, 20,
+                             "Middle third of capture must contain >20 movements, got \(middleEvents.count)")
+
+        // Every normalized event must classify as a stroke kind (not hold-only).
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+        let normalized = normalizer.normalize(events: rawEvents, audioEvents: [])
+        XCTAssertGreaterThan(normalized.count, 20,
+                             "Normalized events must survive, got \(normalized.count)")
+    }
+
+    func testSyntheticFlatGestureProducesZeroMovements() {
+        // 8 s of steady hand with tiny positional noise — no intentional movement.
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0)
+        let noisePositions: [Double] = [0.500, 0.503, 0.498, 0.501, 0.497, 0.502, 0.499, 0.504]
+        for i in 0..<100 {
+            let t = Double(i) * 0.08
+            let x = noisePositions[i % noisePositions.count]
+            builder.recordObservation(
+                state: .steady,
+                position: CGPoint(x: x, y: 0.5),
+                confidence: 0.90,
+                now: t
+            )
+        }
+
+        let rawEvents = builder.movementEvents(now: 8.0)
+        XCTAssertEqual(rawEvents.count, 0,
+                       "Flat/steady gesture must produce zero raw movements, got \(rawEvents.count)")
+    }
+
+    func testSyntheticSearchingAndSteadyOnlyProducesZeroMovements() {
+        // 8 s alternating .searching / .steady — no committed direction anywhere.
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0)
+        for i in 0..<80 {
+            let t = Double(i) * 0.10
+            let state: MacCaptureEngine.HandMotionState = (i % 2 == 0) ? .searching : .steady
+            builder.recordObservation(
+                state: state,
+                position: CGPoint(x: 0.5, y: 0.5),
+                confidence: 0.80,
+                now: t
+            )
+        }
+
+        let rawEvents = builder.movementEvents(now: 8.0)
+        XCTAssertEqual(rawEvents.count, 0,
+                       "Searching/steady-only must produce zero raw movements, got \(rawEvents.count)")
+    }
+
     func testNotationFusionFallsBackToPartialWhenMotionIsOnlyJitter() {
         let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
         let audioSnapshot = ScratchAudioNotationSnapshot(
