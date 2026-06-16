@@ -370,9 +370,9 @@ struct MacAnalyzerView: View {
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
     @State private var isShowingStagingInspector = false
-    /// Timecode input diagnostics tap (Batch 1 — diagnostics only, no decoder).
-    /// Used by the Timecode Input card in the Advanced workspace sidebar.
-    @StateObject private var timecodeInputTap = TimecodeInputTap(sampleRate: 44100, channelCount: 2)
+    /// Timecode control pipeline (Batch 3 — control pipeline integration).
+    /// Used by the Timecode Control card in the Advanced workspace sidebar.
+    @StateObject private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
     #endif
 
     private var stagingInspectorContexts: [StagingInspectorContext] {
@@ -1503,10 +1503,7 @@ struct MacAnalyzerView: View {
 #if DEBUG
         case .timecodeInput:
             VStack(alignment: .leading, spacing: 22) {
-                TimecodeInputStatusCard(
-                    tap: timecodeInputTap,
-                    diagnostics: TimecodeSignalDiagnostics()
-                )
+                TimecodeControlCard(pipeline: timecodePipeline)
             }
 #endif
         }

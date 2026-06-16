@@ -6,19 +6,22 @@ import Foundation
 /// timeline path.
 ///
 /// The adapter takes a `TimecodeDecodeResult` and produces a
-/// `PlatterPositionTimeline` with `.timecodeFixture` source, suitable for
-/// consumption by the existing `ScratchMotionLane` renderer and notation
-/// pipeline — no second scratch engine required.
+/// `PlatterPositionTimeline` with `.timecodeFixture` or `.timecodeLive`
+/// source (configurable at init), suitable for consumption by the existing
+/// `ScratchMotionLane` renderer and notation pipeline — no second scratch
+/// engine required.
 ///
 /// ## Processing
 ///
 /// 1. Filter frames by minimum confidence.
 /// 2. Clamp velocity to a configurable maximum rate.
 /// 3. Integrate delta positions into cumulative platter-axis displacement.
-/// 4. Wrap in `PlatterPositionTimeline` with `.timecodeFixture` source.
+/// 4. Wrap in `PlatterPositionTimeline` with the configured source.
 ///
 /// **Batch 2:** Prototype / fixture-driven only. Returns `nil` when the
 /// decode result contains no trusted frames.
+/// **Batch 3:** Also used by `TimecodeControlPipeline` with `.timecodeLive`
+/// source for the prototype control path.
 ///
 /// Access is internal — consumed via `@testable import ScratchLab` in tests.
 /// The return type `PlatterPositionTimeline` is internal, so public methods

@@ -17,10 +17,16 @@ import Foundation
 /// hand tracker, and `< 1` when interpolated, hand-authored, or
 /// extrapolated. Phase 1 does not interpret the value beyond storing it;
 /// future renderer work may use it to draw uncertainty rails.
-struct PlatterPositionSample: Equatable, Sendable, Codable {
-    let time: TimeInterval
-    let position: Double
-    let confidence: Double
+public struct PlatterPositionSample: Equatable, Sendable, Codable {
+    public let time: TimeInterval
+    public let position: Double
+    public let confidence: Double
+
+    public init(time: TimeInterval, position: Double, confidence: Double) {
+        self.time = time
+        self.position = position
+        self.confidence = confidence
+    }
 }
 
 // MARK: - PlatterPositionTimeline
@@ -35,10 +41,10 @@ struct PlatterPositionSample: Equatable, Sendable, Codable {
 /// future bundled-demo JSONs and in-memory fixtures round-trip cleanly;
 /// the session export schema `scratchlab_session_export_v4` is
 /// unchanged and does not embed this type.
-struct PlatterPositionTimeline: Equatable, Sendable, Codable {
+public struct PlatterPositionTimeline: Equatable, Sendable, Codable {
     /// Where the timeline came from. Used by the renderer's
     /// substrate-selection logic and by uncertainty rendering.
-    enum Source: String, Equatable, Sendable, Codable {
+    public enum Source: String, Equatable, Sendable, Codable {
         /// Produced by the live capture pipeline from the hand tracker.
         case liveCapture
         /// Authored alongside a bundled demo reel.
@@ -46,14 +52,20 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
         /// Hand-authored for a fixture or lesson asset.
         case coachAuthored
         /// Produced by the prototype timecode decoder from a synthetic
-        /// fixture. Live timecode will add a separate case in Batch 3.
+        /// fixture (Batch 2). Not used for live timecode.
         case timecodeFixture
+
+        /// Produced by the prototype timecode control pipeline from
+        /// live or synthetic timecode input (Batch 3). Distinct from
+        /// `.timecodeFixture` which is reserved for offline
+        /// fixture-only decoder output.
+        case timecodeLive
     }
 
-    let source: Source
-    let startTime: TimeInterval
-    let endTime: TimeInterval
-    let samples: [PlatterPositionSample]
+    public let source: Source
+    public let startTime: TimeInterval
+    public let endTime: TimeInterval
+    public let samples: [PlatterPositionSample]
 
     // MARK: Failing memberwise initialiser
 
@@ -66,7 +78,7 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
     ///
     /// Returns `nil` when any invariant fails. Empty samples are
     /// permitted — interpolation simply returns `nil`.
-    init?(source: Source,
+    public init?(source: Source,
           startTime: TimeInterval,
           endTime: TimeInterval,
           samples: [PlatterPositionSample]) {
@@ -90,7 +102,7 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
         case samples
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let source = try container.decode(Source.self, forKey: .source)
         let startTime = try container.decode(TimeInterval.self, forKey: .startTime)
@@ -119,7 +131,7 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
     /// `[startTime, endTime]`. When `time` falls before the first
     /// sample or after the last sample but still inside the timeline
     /// span, the nearest sample's position is returned (clamped).
-    func position(at time: TimeInterval) -> Double? {
+    public func position(at time: TimeInterval) -> Double? {
         guard !samples.isEmpty else { return nil }
         guard time >= startTime, time <= endTime else { return nil }
         // Clamp to sample range when the query falls in the
@@ -145,7 +157,7 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
     /// Min / max position across the sample span. Nil when samples are
     /// empty. The renderer uses this to map unbounded platter-axis
     /// displacement units onto the lane's cross-axis 0…1.
-    var positionRange: ClosedRange<Double>? {
+    public var positionRange: ClosedRange<Double>? {
         guard let first = samples.first else { return nil }
         var lo = first.position
         var hi = first.position
