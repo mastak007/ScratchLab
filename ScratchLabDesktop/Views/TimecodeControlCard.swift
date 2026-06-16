@@ -20,6 +20,7 @@ import SwiftUI
 struct TimecodeControlCard: View {
 
     @ObservedObject var pipeline: TimecodeControlPipeline
+    @ObservedObject var bridge: TimecodePlaybackBridge
 
     /// Persisted mode so the picker survives view disappearance.
     @AppStorage("scratchlab.mac.timecodeMode") private var persistedModeRaw: String = TimecodeControlMode.disabled.rawValue
@@ -27,6 +28,8 @@ struct TimecodeControlCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             modeSection
+            Divider().opacity(0.3)
+            playbackBridgeSection
             Divider().opacity(0.3)
 #if ENABLE_TIMECODE_LIVE_TAP
             liveTapSection
@@ -76,6 +79,85 @@ struct TimecodeControlCard: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+        }
+    }
+
+    // MARK: - Playback bridge section (Batch 8)
+
+    private var playbackBridgeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Playback Bridge")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            // Toggle
+            Toggle(isOn: $bridge.playbackDriveEnabled) {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.rectangle")
+                        .font(.system(size: 11))
+                    Text("Drive playback from prototype timecode")
+                        .font(.system(size: 12, weight: .medium))
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(pipeline.mode != .controlPrototype)
+
+            // Bridge state
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(bridgeStateColor)
+                    .frame(width: 6, height: 6)
+                Text(bridge.state.label)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(bridgeStateColor)
+            }
+
+            // Current drive info
+            if let drive = bridge.currentDrive {
+                HStack(spacing: 8) {
+                    Text("Dir: \(drive.direction.rawValue)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    Text("Rate: \(String(format: "%.2f", drive.rate)) u/s")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    Text(drive.sourceLabel)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Replay override indicator
+            if bridge.isReplayActive {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                    Text("Replay active — timecode blocked")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                }
+            }
+
+            // Prototype warnings
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Prototype only")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                Text("Not final Serato/SDJ support")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var bridgeStateColor: Color {
+        switch bridge.state {
+        case .disabled:                 return Color(nsColor: .secondaryLabelColor)
+        case .armed:                    return Color(nsColor: .systemYellow)
+        case .driving:                  return Color(nsColor: .systemGreen)
+        case .blockedByBadSignal:       return Color(nsColor: .systemRed)
+        case .blockedByReplay:          return Color(nsColor: .systemBlue)
+        case .blockedByDiagnosticsOnly: return Color(nsColor: .systemOrange)
         }
     }
 
@@ -703,6 +785,7 @@ private struct TimecodeRecordingSection: View {
 /// timecode control card with synthetic feed buttons.
 struct TimecodeControlCard_Host: View {
     @StateObject private var pipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
+    @StateObject private var bridge = TimecodePlaybackBridge()
 
     /// Accumulate raw buffers here for manual flush; the pipeline also
     /// accumulates internally, but these are the raw [Float] arrays we
@@ -712,7 +795,7 @@ struct TimecodeControlCard_Host: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                TimecodeControlCard(pipeline: pipeline)
+                TimecodeControlCard(pipeline: pipeline, bridge: bridge)
 
                 // Test-feed buttons
                 VStack(alignment: .leading, spacing: 8) {

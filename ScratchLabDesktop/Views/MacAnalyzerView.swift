@@ -373,6 +373,7 @@ struct MacAnalyzerView: View {
     /// Timecode control pipeline (Batch 3 — control pipeline integration).
     /// Used by the Timecode Control card in the Advanced workspace sidebar.
     @StateObject private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
+    @StateObject private var timecodeBridge = TimecodePlaybackBridge()
 
 #if ENABLE_TIMECODE_LIVE_TAP
     /// Periodic flush timer for the timecode decode accumulator.
@@ -1518,7 +1519,7 @@ struct MacAnalyzerView: View {
 #if DEBUG
         case .timecodeInput:
             VStack(alignment: .leading, spacing: 22) {
-                TimecodeControlCard(pipeline: timecodePipeline)
+                TimecodeControlCard(pipeline: timecodePipeline, bridge: timecodeBridge)
             }
 #if ENABLE_TIMECODE_LIVE_TAP
             .onAppear {
