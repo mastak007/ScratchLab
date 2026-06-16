@@ -45,6 +45,9 @@ struct PlatterPositionTimeline: Equatable, Sendable, Codable {
         case bundledDemo
         /// Hand-authored for a fixture or lesson asset.
         case coachAuthored
+        /// Produced by the prototype timecode decoder from a synthetic
+        /// fixture. Live timecode will add a separate case in Batch 3.
+        case timecodeFixture
     }
 
     let source: Source
