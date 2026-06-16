@@ -373,6 +373,14 @@ struct MacAnalyzerView: View {
     /// Timecode control pipeline (Batch 3 — control pipeline integration).
     /// Used by the Timecode Control card in the Advanced workspace sidebar.
     @StateObject private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
+
+#if ENABLE_TIMECODE_LIVE_TAP
+    /// Periodic flush timer for the timecode decode accumulator.
+    /// Fires at ~10 Hz so decoded motion latency stays low while
+    /// batching enough frames for meaningful phase analysis.
+    private let timecodeFlushTimer = Timer.publish(every: 0.1, on: .main, in: .common)
+        .autoconnect()
+#endif
     #endif
 
     private var stagingInspectorContexts: [StagingInspectorContext] {
@@ -554,6 +562,13 @@ struct MacAnalyzerView: View {
             guard routineSessionStore.selectedSessionID == config.sessionID else { return }
             routineSessionStore.updateSelectedSession(config: config)
         }
+#if ENABLE_TIMECODE_LIVE_TAP
+        .onReceive(timecodeFlushTimer) { _ in
+            guard timecodePipeline.liveTapEnabled,
+                  timecodePipeline.mode == .controlPrototype else { return }
+            timecodePipeline.flushDecode()
+        }
+#endif
         .sheet(isPresented: $isShowingRawJSONInspector, onDismiss: {
             rawJSONInspector.close()
         }) {
@@ -1505,6 +1520,20 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 22) {
                 TimecodeControlCard(pipeline: timecodePipeline)
             }
+#if ENABLE_TIMECODE_LIVE_TAP
+            .onAppear {
+                captureEngine.timecodeAudioCallback = { [weak timecodePipeline] left, right, sampleRate, hostTime in
+                    guard let pipeline = timecodePipeline,
+                          pipeline.liveTapEnabled,
+                          pipeline.mode != .disabled else { return }
+                    pipeline.pushStereoBuffer(left: left, right: right,
+                                              sampleRate: sampleRate, hostTime: hostTime)
+                }
+            }
+            .onDisappear {
+                captureEngine.timecodeAudioCallback = nil
+            }
+#endif
 #endif
         }
     }

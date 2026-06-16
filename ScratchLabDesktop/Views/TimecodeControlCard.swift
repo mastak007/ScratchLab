@@ -28,6 +28,10 @@ struct TimecodeControlCard: View {
         VStack(alignment: .leading, spacing: 14) {
             modeSection
             Divider().opacity(0.3)
+#if ENABLE_TIMECODE_LIVE_TAP
+            liveTapSection
+            Divider().opacity(0.3)
+#endif
             diagnosticsSection
             Divider().opacity(0.3)
             calibrationSection
@@ -279,6 +283,85 @@ struct TimecodeControlCard: View {
                 .foregroundStyle(count > 0 ? color : .secondary)
         }
     }
+
+    // MARK: - Live tap section
+
+#if ENABLE_TIMECODE_LIVE_TAP
+    private var liveTapSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Live Tap")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text("Status")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 72, alignment: .leading)
+                liveTapStatusBadge()
+            }
+
+            Toggle(isOn: $pipeline.liveTapEnabled) {
+                HStack(spacing: 6) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 11))
+                    Text("Enable live timecode tap")
+                        .font(.system(size: 12, weight: .medium))
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(pipeline.mode == .disabled)
+
+            // Last buffer age
+            if pipeline.liveTapEnabled, let lastBuffer = pipeline.lastBufferReceivedAt {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text("Last buffer: \(RelativeDateTimeFormatter().localizedString(for: lastBuffer, relativeTo: Date()))")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Prototype disclaimer
+            Text("Prototype — live audio tap for timecode decoding")
+                .font(.system(size: 9, weight: .regular))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func liveTapStatusBadge() -> some View {
+        let status = liveTapStatus
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(Color(status.color))
+                .frame(width: 6, height: 6)
+            Text(status.label)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(status.color))
+        }
+    }
+
+    private var liveTapStatus: (label: String, color: Color) {
+        guard pipeline.liveTapEnabled else {
+            return ("Disabled", Color(nsColor: .secondaryLabelColor))
+        }
+        guard pipeline.mode != .disabled else {
+            return ("Mode off", Color(nsColor: .secondaryLabelColor))
+        }
+        if let lastBuffer = pipeline.lastBufferReceivedAt {
+            let age = Date().timeIntervalSince(lastBuffer)
+            if age < 0.5 {
+                return ("Receiving", .green)
+            } else if age < 2.0 {
+                return ("Stale", .orange)
+            }
+        }
+        return ("Waiting", .yellow)
+    }
+#endif
 }
 
 // MARK: - Standalone debug host

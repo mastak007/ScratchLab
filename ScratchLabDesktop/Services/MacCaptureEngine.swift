@@ -1968,6 +1968,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let seratoDirectCaptureDeviceName = "ScratchLab Direct Serato"
     private let seratoDirectCaptureDeviceUIDValue = "com.machelpnz.scratchlab.mac.serato-direct-capture"
 
+#if ENABLE_TIMECODE_LIVE_TAP
+    /// Optional callback for the timecode live audio tap.
+    ///
+    /// Set from the UI layer (MacAnalyzerView) when the timecode live
+    /// tap is enabled; cleared when the timecode section disappears.
+    ///
+    /// Called on `audioQueue` with separate left/right Float32 channel
+    /// data normalised to [-1, +1].
+    ///
+    /// **Batch 4:** DEBUG/prototype only. Stripped from Release builds.
+    var timecodeAudioCallback: ((_ left: [Float], _ right: [Float], _ sampleRate: Double, _ hostTime: UInt64?) -> Void)?
+#endif
+
     private var isRunning = false
     /// When true, live Vision hand-pose processing, audio-level publishing,
     /// scratch detection, platter observing, and diagnostics accumulation
@@ -3764,6 +3777,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         defer { ScratchLabPerformanceSignpost.end("AudioAnalyze", signpostID) }
 
         guard let audioPacket = Self.audioPacket(from: sampleBuffer) else { return }
+
+#if ENABLE_TIMECODE_LIVE_TAP
+        // Forward stereo audio to the timecode live tap, if enabled.
+        if let callback = timecodeAudioCallback,
+           let stereoResult = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer) {
+            callback(stereoResult.left, stereoResult.right, stereoResult.sampleRate, stereoResult.hostTime)
+        }
+#endif
 
         let measuredLevel = Self.level(from: audioPacket.samples)
         let hasFiniteMeasuredLevel = measuredLevel.isFinite

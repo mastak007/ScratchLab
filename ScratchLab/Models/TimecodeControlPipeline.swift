@@ -112,6 +112,12 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
 
     // MARK: - Mode
 
+    /// Whether the live audio tap is enabled. Default is `false`.
+    /// When false, the callback in MacAnalyzerView short-circuits before
+    /// calling `pushStereoBuffer`. Test-feed buttons in the debug host
+    /// bypass this gate.
+    @Published public var liveTapEnabled: Bool = false
+
     /// Current timecode control mode. Default is `.disabled`.
     @Published public var mode: TimecodeControlMode = .disabled {
         didSet {
@@ -177,6 +183,10 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     /// Aggregate signal health from the most recent diagnostics pass.
     @Published public private(set) var signalHealth: SignalHealth = .noSignal
 
+    /// Wall-clock time of the most recently received live audio buffer,
+    /// or `nil` when no buffer has been received since the last reset.
+    @Published public private(set) var lastBufferReceivedAt: Date?
+
     /// The internal diagnostics tap, exposed for UI binding (e.g.
     /// `TimecodeInputStatusCard`). Updated on each `pushStereoBuffer()`
     /// call.
@@ -235,10 +245,12 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             return
 
         case .diagnosticsOnly:
+            lastBufferReceivedAt = Date()
             runDiagnostics(left: left, right: right, sampleRate: sampleRate, hostTime: hostTime)
             // Do NOT accumulate or decode.
 
         case .controlPrototype:
+            lastBufferReceivedAt = Date()
             runDiagnostics(left: left, right: right, sampleRate: sampleRate, hostTime: hostTime)
             accumulateStereoInput(left: left, right: right, sampleRate: sampleRate, hostTime: hostTime)
         }
@@ -378,6 +390,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         currentRate = 0
         lastDropReason = nil
         signalHealth = .noSignal
+        lastBufferReceivedAt = nil
     }
 
     /// Reset only the debug counters (not calibration or mode).

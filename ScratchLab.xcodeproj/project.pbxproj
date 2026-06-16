@@ -67,6 +67,9 @@
 		TCA000006TCA006TCA00001 /* TimecodeControlPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */; };
 		TCA000007TCA007TCA00001 /* TimecodeControlMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000007TCR007TCR00001 /* TimecodeControlMode.swift */; };
 		TCT000002TCT002TCT00001 /* TimecodeLiveIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */; };
+		TCA000010TCA010TCA00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */; };
+		TCB000010TCB010TCB00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */; };
+		TCT000003TCT003TCT00001 /* TimecodeLiveTapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
 		51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
@@ -577,6 +580,8 @@
 		TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeControlPipeline.swift; path = TimecodeControlPipeline.swift; sourceTree = "<group>"; };
 		TCR000009TCR009TCR00001 /* TimecodeControlCard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeControlCard.swift; path = TimecodeControlCard.swift; sourceTree = "<group>"; };
 		TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeLiveIntegrationTests.swift; path = TimecodeLiveIntegrationTests.swift; sourceTree = "<group>"; };
+		TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeCMSampleBufferAdapter.swift; path = TimecodeCMSampleBufferAdapter.swift; sourceTree = "<group>"; };
+		TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeLiveTapTests.swift; path = TimecodeLiveTapTests.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnosticsTests.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
 		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
@@ -850,6 +855,7 @@
 				FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */,
 				TCR000006TCR006TCR00001 /* TimecodeDecoderTests.swift */,
 				TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */,
+				TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1054,6 +1060,7 @@
 				TCR000005TCR005TCR00001 /* TimecodePlatterAdapter.swift */,
 				TCR000007TCR007TCR00001 /* TimecodeControlMode.swift */,
 				TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */,
+				TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1566,6 +1573,7 @@
 				A5000066 /* ReviewAudioOnsetPreview.swift in Sources */,
 				2C4B2B2BD4F9BA27F7911B8D /* TimecodeInputStatusCard.swift in Sources */,
 				TCB000008TCB008TCB00001 /* TimecodeControlCard.swift in Sources */,
+				TCA000010TCA010TCA00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */,
 				D089BA0E666DF21B4EE91767 /* TimecodeInputSample.swift in Sources */,
 				B12CAD53EF004A129E9C2684 /* TimecodeAudioBuffer.swift in Sources */,
 				14D30A730D2E3376F83B18F1 /* TimecodeSourceState.swift in Sources */,
@@ -1710,6 +1718,7 @@
 				TCB000005TCB005TCB00001 /* TimecodePlatterAdapter.swift in Sources */,
 				TCB000006TCB006TCB00001 /* TimecodeControlPipeline.swift in Sources */,
 				TCB000007TCB007TCB00001 /* TimecodeControlMode.swift in Sources */,
+				TCB000010TCB010TCB00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {
@@ -1807,6 +1816,7 @@
 				8D4B3424898BEBDDC8D70A9A /* TimecodeSignalDiagnosticsTests.swift in Sources */,
 				TCT000001TCT001TCT00001 /* TimecodeDecoderTests.swift in Sources */,
 			TCT000002TCT002TCT00001 /* TimecodeLiveIntegrationTests.swift in Sources */,
+				TCT000003TCT003TCT00001 /* TimecodeLiveTapTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
@@ -1858,6 +1868,7 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "ScratchLabDesktop/ScratchLabDesktop-Bridging-Header.h";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ENABLE_TIMECODE_LIVE_TAP";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -2188,6 +2199,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ENABLE_TIMECODE_LIVE_TAP";
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ScratchLab.app/Contents/MacOS/ScratchLab";
 				TEST_TARGET_NAME = ScratchLabDesktop;
