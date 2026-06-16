@@ -9,7 +9,13 @@ import SwiftUI
 /// Displays source state, L/R level bars, signal health badge, and
 /// per-buffer warnings (silence, clipping, channel imbalance, mono suspect).
 ///
+/// When a validation snapshot or fixture report is provided, a "Copy Report"
+/// button appears at the bottom so the developer can copy the evidence-only
+/// diagnostic summary to clipboard. The report is explicitly labelled
+/// "prototype only" with no commercial compatibility claim.
+///
 /// **Batch 1:** Diagnostics only. No decoder, no commercial compatibility.
+/// **Batch 9:** Copyable validation report support.
 /// This card lives behind `#if DEBUG` and is not compiled in release builds.
 struct TimecodeInputStatusCard: View {
 
@@ -19,8 +25,17 @@ struct TimecodeInputStatusCard: View {
     /// The diagnostics engine to use.
     let diagnostics: TimecodeSignalDiagnostics
 
+    /// Optional live-session validation snapshot from the pipeline.
+    /// When non-nil, included in the copyable report.
+    var validationSnapshot: TimecodeValidationSnapshot? = nil
+
+    /// Optional fixture validation report from the fixture loader.
+    /// When non-nil, included in the copyable report.
+    var fixtureReport: TimecodeFixtureValidationReport? = nil
+
     @State private var latestDiagnosis: TimecodeSignalDiagnostics.Diagnosis?
     @State private var timer: Timer?
+    @State private var copyConfirmation: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -29,6 +44,7 @@ struct TimecodeInputStatusCard: View {
             levelRow
             healthRow
             warningsRow
+            reportSection
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(ScratchLabDesign.Card.compactPadding)
@@ -234,6 +250,86 @@ struct TimecodeInputStatusCard: View {
             Text(text)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.primary)
+        }
+    }
+
+    // MARK: - Report (Batch 9)
+
+    /// True when at least one report source is available.
+    private var hasReport: Bool {
+        validationSnapshot != nil || fixtureReport != nil
+    }
+
+    @ViewBuilder
+    private var reportSection: some View {
+        if hasReport {
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Validation Report")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 8)
+
+                    Button(action: copyReport) {
+                        Label(
+                            copyConfirmation ? "Copied" : "Copy Report",
+                            systemImage: copyConfirmation ? "checkmark.circle.fill" : "doc.on.doc"
+                        )
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 10, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(copyConfirmation ? Color(nsColor: .systemGreen) : .secondary)
+                }
+
+                // Compact summary line
+                if let snap = validationSnapshot {
+                    Text("[Live] \(snap.validationStatus.label) — \(snap.acceptedMotionSamples) accepted, "
+                         + "conf \(String(format: "%.3f", snap.decoderConfidence))")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                if let report = fixtureReport {
+                    Text(report.compactSummary)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Text("Prototype only — not a compatibility claim")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func copyReport() {
+        var lines: [String] = []
+
+        if let snap = validationSnapshot {
+            lines.append(snap.debugText)
+        }
+
+        if let report = fixtureReport {
+            if !lines.isEmpty { lines.append("") }
+            lines.append(report.debugText)
+        }
+
+        guard !lines.isEmpty else { return }
+
+        let combined = lines.joined(separator: "\n")
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(combined, forType: .string)
+
+        copyConfirmation = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            copyConfirmation = false
         }
     }
 
