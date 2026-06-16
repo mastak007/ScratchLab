@@ -67,6 +67,34 @@ public struct TimecodeControlCounters: Equatable, Sendable {
     /// Maximum absolute decoded rate observed during this session.
     public var maxAbsRate: Double = 0
 
+    /// EMA-smoothed rate after the most recent stability filter pass.
+    public var smoothedRate: Double = 0
+
+    /// True when the stability filter updated the EMA this flush.
+    public var smoothingActive: Bool = false
+
+    /// Total frames rejected by the stability filter as rate spikes or
+    /// low-confidence this session.
+    public var rejectedSpikeCount: Int = 0
+
+    /// Number of flush windows where the dropout duration was within the
+    /// short-hold window (≥ shortDropoutHoldMs, < longDropoutFailMs).
+    public var heldDropoutCount: Int = 0
+
+    /// Number of flush windows where the dropout duration exceeded
+    /// longDropoutFailMs (filter failed closed and reset EMA state).
+    public var longDropoutCount: Int = 0
+
+    /// Human-readable label for the most recent spike or confidence rejection.
+    public var lastSpikeReason: String = ""
+
+    /// Duration of the current (or most recently cleared) dropout window in
+    /// milliseconds.
+    public var lastDropoutDuration: Double = 0
+
+    /// Maximum absolute smoothed rate observed across all decode windows.
+    public var maxAbsSmoothedRate: Double = 0
+
     public init() {}
 }
 
@@ -201,6 +229,8 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     private var accumulatedStereoInputs: [TimecodePhaseDecoder.StereoInput] = []
     private var decodeSessionStartDate: Date = Date()
     private let diagnosticsEngine = TimecodeSignalDiagnostics()
+    private let stabilityFilter = TimecodeMotionStabilityFilter()
+    private var stabilityFilterState = TimecodeStabilityFilterState()
 
     /// Internal decoder instance. Recreated when calibration changes
     /// affect decoder configuration.
@@ -284,7 +314,27 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         accumulatedStereoInputs.removeAll(keepingCapacity: true)
         lock.unlock()
 
-        guard mode == .controlPrototype, !inputs.isEmpty else {
+        guard mode == .controlPrototype else {
+            return nil
+        }
+
+        // When no buffers arrived this window the decoder is skipped, but the
+        // stability filter must still run so the dropout clock advances.
+        guard !inputs.isEmpty else {
+            let flushTime = Date().timeIntervalSince(decodeSessionStartDate)
+            let filterResult = stabilityFilter.filter(
+                frames: [],
+                state: stabilityFilterState,
+                flushRelativeTime: flushTime
+            )
+            stabilityFilterState = filterResult.state
+            var c = counters
+            c.smoothedRate = filterResult.metrics.smoothedRate
+            c.smoothingActive = false
+            c.heldDropoutCount += filterResult.metrics.heldDropoutCount
+            c.longDropoutCount += filterResult.metrics.longDropoutCount
+            c.lastDropoutDuration = filterResult.metrics.lastDropoutDuration
+            counters = c
             return nil
         }
 
@@ -301,40 +351,22 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         c.signalHealth = decodeResult.signalHealth.rawValue
         signalHealth = decodeResult.signalHealth
 
-        if decodeResult.frames.isEmpty {
-            // No frames decoded — record drop reason
-            if let reason = decodeResult.dropoutReason {
-                c.lastDropReason = reason.rawValue
-                lastDropReason = reason
-                switch reason {
-                case .silence:          c.droppedSilence += 1
-                case .clipped:          c.droppedClipped += 1
-                case .lowConfidence:    c.droppedLowConfidence += 1
-                case .channelFault:     c.droppedChannelFault += 1
-                case .noPhaseLock:      /* counted as weak signal */ c.droppedWeakSignal += 1
-                }
+        // Record per-decode-window drop reason from the decoder
+        if decodeResult.frames.isEmpty, let reason = decodeResult.dropoutReason {
+            c.lastDropReason = reason.rawValue
+            lastDropReason = reason
+            switch reason {
+            case .silence:          c.droppedSilence += 1
+            case .clipped:          c.droppedClipped += 1
+            case .lowConfidence:    c.droppedLowConfidence += 1
+            case .channelFault:     c.droppedChannelFault += 1
+            case .noPhaseLock:      c.droppedWeakSignal += 1
             }
-            c.averageConfidence = 0
-            counters = c
-            latestPlatterTimeline = nil
-            currentDirection = .unknown
-            currentRate = 0
-#if DEBUG
-            prototypeRecorder.recordDrop(reason: lastDropReason?.rawValue ?? "no_decoded_frames")
-#endif
-            return nil
         }
 
-        // Build adapter with calibration applied
-        let adapter = TimecodePlatterAdapter(
-            minConfidence: minConfidence,
-            maxRate: maxRate,
-            source: .timecodeLive
-        )
-
-        // Apply rate scaling to decoded frames before adapting
+        // Apply calibration (rate scale, invert) to decoded frames
         var calibratedFrames = decodeResult.frames
-        if rateScale != 1.0 || invertDirection {
+        if !calibratedFrames.isEmpty && (rateScale != 1.0 || invertDirection) {
             var cumulativePosition: Double = 0
             for i in 0..<calibratedFrames.count {
                 var frame = calibratedFrames[i]
@@ -355,18 +387,64 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             }
         }
 
-        // Wrap calibrated frames in a result for the adapter
-        let calibratedResult = TimecodeDecodeResult(
+        // Apply stability filter (runs even on empty batch to track dropout timing)
+        let flushTime = inputs.last?.relativeTime ?? 0
+        let filterResult = stabilityFilter.filter(
             frames: calibratedFrames,
+            state: stabilityFilterState,
+            flushRelativeTime: flushTime
+        )
+        stabilityFilterState = filterResult.state
+
+        // Accumulate stability counters
+        c.smoothedRate = filterResult.metrics.smoothedRate
+        c.smoothingActive = filterResult.metrics.smoothingActive
+        c.rejectedSpikeCount += filterResult.metrics.rejectedSpikeCount
+        c.heldDropoutCount += filterResult.metrics.heldDropoutCount
+        c.longDropoutCount += filterResult.metrics.longDropoutCount
+        if !filterResult.metrics.lastSpikeReason.isEmpty {
+            c.lastSpikeReason = filterResult.metrics.lastSpikeReason
+        }
+        c.lastDropoutDuration = filterResult.metrics.lastDropoutDuration
+        c.maxAbsSmoothedRate = max(c.maxAbsSmoothedRate, filterResult.metrics.maxAbsSmoothedRate)
+
+        // No trusted output (decoder empty, spike-rejected, or dropout)?
+        guard !filterResult.accepted.isEmpty else {
+            if filterResult.metrics.rejectedSpikeCount > 0 && !decodeResult.frames.isEmpty {
+                c.lastDropReason = filterResult.metrics.lastSpikeReason
+            }
+            c.averageConfidence = decodeResult.averageConfidence
+            counters = c
+            latestPlatterTimeline = nil
+            currentDirection = .unknown
+            currentRate = 0
+#if DEBUG
+            let dropReason = decodeResult.dropoutReason?.rawValue
+                ?? (filterResult.metrics.rejectedSpikeCount > 0 ? "rejected_spike" : "no_trusted_frames")
+            prototypeRecorder.recordDrop(reason: dropReason)
+#endif
+            return nil
+        }
+
+        // Build adapter with current calibration thresholds
+        let adapter = TimecodePlatterAdapter(
+            minConfidence: minConfidence,
+            maxRate: maxRate,
+            source: .timecodeLive
+        )
+
+        // Wrap stabilized frames for the adapter
+        let stabilizedResult = TimecodeDecodeResult(
+            frames: filterResult.accepted,
             averageConfidence: decodeResult.averageConfidence,
             signalHealth: decodeResult.signalHealth,
             dropoutReason: decodeResult.dropoutReason,
             counters: decodeResult.counters
         )
-        latestDecodeResult = calibratedResult
+        latestDecodeResult = stabilizedResult
 
-        // Update current direction/rate from calibrated value
-        if let lastFrame = calibratedFrames.last {
+        // Update current direction/rate from last accepted (stabilized) frame
+        if let lastFrame = filterResult.accepted.last {
             currentDirection = lastFrame.direction
             currentRate = lastFrame.velocity
         }
@@ -375,12 +453,12 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         c.maxAbsRate = max(c.maxAbsRate, abs(currentRate))
 
         // Adapt to platter timeline
-        let timeline = adapter.adapt(calibratedResult)
+        let timeline = adapter.adapt(stabilizedResult)
         latestPlatterTimeline = timeline
 
         // Update counters
         c.acceptedMotionSamples += timeline?.samples.count ?? 0
-        c.droppedLowConfidence += max(0, decodeResult.counters.decodedSamples - (timeline?.samples.count ?? 0))
+        c.droppedLowConfidence += max(0, filterResult.accepted.count - (timeline?.samples.count ?? 0))
         c.averageConfidence = decodeResult.averageConfidence
         c.lastDropReason = ""
         c.signalHealth = decodeResult.signalHealth.rawValue
@@ -456,6 +534,14 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             averageConfidence: counters.averageConfidence,
             lastDropReason: counters.lastDropReason,
             sourceLabel: counters.sourceLabel,
+            smoothedRate: counters.smoothedRate,
+            smoothingActive: counters.smoothingActive,
+            rejectedSpikeCount: counters.rejectedSpikeCount,
+            heldDropoutCount: counters.heldDropoutCount,
+            longDropoutCount: counters.longDropoutCount,
+            lastSpikeReason: counters.lastSpikeReason,
+            lastDropoutDuration: counters.lastDropoutDuration,
+            maxAbsSmoothedRate: counters.maxAbsSmoothedRate,
             validationStatus: status
         )
     }
@@ -478,6 +564,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         lastDropReason = nil
         signalHealth = .noSignal
         lastBufferReceivedAt = nil
+        stabilityFilterState = TimecodeStabilityFilterState()
     }
 
     /// Reset only the debug counters (not calibration or mode).

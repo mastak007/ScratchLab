@@ -154,6 +154,33 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// Source label for this pipeline's output (e.g. `"timecode_live"`).
     public var sourceLabel: String
 
+    // MARK: - Stability metrics (Batch 7)
+
+    /// EMA-smoothed rate after the most recent stability filter pass.
+    public var smoothedRate: Double
+
+    /// True when the stability filter updated the EMA in the last flush.
+    public var smoothingActive: Bool
+
+    /// Total frames rejected by the stability filter as spikes or
+    /// low-confidence this session.
+    public var rejectedSpikeCount: Int
+
+    /// Number of flush windows in the short-dropout-hold window this session.
+    public var heldDropoutCount: Int
+
+    /// Number of flush windows where the long dropout threshold was exceeded.
+    public var longDropoutCount: Int
+
+    /// Most recent spike or confidence rejection reason.
+    public var lastSpikeReason: String
+
+    /// Duration of the current or most recently cleared dropout window in ms.
+    public var lastDropoutDuration: Double
+
+    /// Maximum absolute smoothed rate observed this session.
+    public var maxAbsSmoothedRate: Double
+
     // MARK: - Classification
 
     /// High-level validation status derived from the other fields.
@@ -186,6 +213,14 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         averageConfidence: Double,
         lastDropReason: String,
         sourceLabel: String,
+        smoothedRate: Double = 0,
+        smoothingActive: Bool = false,
+        rejectedSpikeCount: Int = 0,
+        heldDropoutCount: Int = 0,
+        longDropoutCount: Int = 0,
+        lastSpikeReason: String = "",
+        lastDropoutDuration: Double = 0,
+        maxAbsSmoothedRate: Double = 0,
         validationStatus: TimecodeValidationStatus
     ) {
         self.mode = mode
@@ -212,6 +247,14 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         self.averageConfidence = averageConfidence
         self.lastDropReason = lastDropReason
         self.sourceLabel = sourceLabel
+        self.smoothedRate = smoothedRate
+        self.smoothingActive = smoothingActive
+        self.rejectedSpikeCount = rejectedSpikeCount
+        self.heldDropoutCount = heldDropoutCount
+        self.longDropoutCount = longDropoutCount
+        self.lastSpikeReason = lastSpikeReason
+        self.lastDropoutDuration = lastDropoutDuration
+        self.maxAbsSmoothedRate = maxAbsSmoothedRate
         self.validationStatus = validationStatus
     }
 
@@ -277,8 +320,11 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         L RMS / Peak:    \(String(format: "%.4f / %.4f", leftRMS, leftPeak))
         R RMS / Peak:    \(String(format: "%.4f / %.4f", rightRMS, rightPeak))
         Direction:       \(decodedDirection)
-        Rate:            \(String(format: "%.3f u/s", decodedRate))
+        Rate (raw):      \(String(format: "%.3f u/s", decodedRate))
+        Rate (smoothed): \(String(format: "%.3f u/s", smoothedRate))
+        Smoothing:       \(smoothingActive ? "active" : "inactive")
         Max abs rate:    \(String(format: "%.3f u/s", maxAbsRate))
+        Max smo rate:    \(String(format: "%.3f u/s", maxAbsSmoothedRate))
         Confidence:      \(String(format: "%.3f", decoderConfidence))
         Accepted:        \(acceptedMotionSamples)
         Recorded:        \(recordedSamples)
@@ -287,8 +333,13 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         Dropped ch fault:\(droppedChannelFault)
         Dropped weak:    \(droppedWeakSignal)
         Dropped low conf:\(droppedLowConfidence)
+        Rejected spikes: \(rejectedSpikeCount)
+        Held dropouts:   \(heldDropoutCount)
+        Long dropouts:   \(longDropoutCount)
+        Dropout dur ms:  \(String(format: "%.1f", lastDropoutDuration))
         Dir changes:     \(directionChanges)
         Last drop:       \(lastDropReason.isEmpty ? "(none)" : lastDropReason)
+        Last spike:      \(lastSpikeReason.isEmpty ? "(none)" : lastSpikeReason)
         Source:          \(sourceLabel)
         Status:          \(validationStatus.rawValue)
         NOT sent to notation (prototype only)

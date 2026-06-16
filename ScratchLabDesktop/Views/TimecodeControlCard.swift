@@ -325,6 +325,62 @@ struct TimecodeControlCard: View {
                 }
             }
 
+            // Stability metrics (Batch 7)
+            Divider().opacity(0.2)
+
+            HStack(spacing: 8) {
+                stabilityMetricPair(
+                    label: "Raw rate",
+                    value: String(format: "%.2f u/s", snap.decodedRate)
+                )
+                stabilityMetricPair(
+                    label: "Smoothed",
+                    value: String(format: "%.2f u/s", snap.smoothedRate)
+                )
+            }
+            HStack(spacing: 8) {
+                stabilityMetricPair(
+                    label: "Spikes",
+                    value: "\(snap.rejectedSpikeCount)"
+                )
+                stabilityMetricPair(
+                    label: "Held drops",
+                    value: "\(snap.heldDropoutCount)"
+                )
+                stabilityMetricPair(
+                    label: "Long drops",
+                    value: "\(snap.longDropoutCount)"
+                )
+            }
+            if snap.smoothingActive {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                    Text("Smoothing active")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                }
+            }
+            if snap.lastDropoutDuration > 0 {
+                stabilityMetricPair(
+                    label: "Dropout",
+                    value: String(format: "%.0f ms", snap.lastDropoutDuration)
+                )
+            }
+            if !snap.lastSpikeReason.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "bolt.trianglebadge.exclamationmark.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                    Text("Spike: \(snap.lastSpikeReason)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.primary)
+                }
+            }
+
+            Divider().opacity(0.2)
+
             // Last drop reason
             if !snap.lastDropReason.isEmpty {
                 HStack(spacing: 5) {
@@ -414,6 +470,17 @@ struct TimecodeControlCard: View {
             Text(value)
                 .font(.system(size: 12, weight: .regular, design: mono ? .monospaced : .default))
                 .foregroundStyle(color)
+        }
+    }
+
+    private func stabilityMetricPair(label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.primary)
         }
     }
 
