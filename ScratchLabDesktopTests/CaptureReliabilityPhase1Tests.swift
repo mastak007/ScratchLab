@@ -11185,3 +11185,41 @@ final class ReplayPlatterSourceTrustGateTests: XCTestCase {
                        "Default isReplaySource=false must behave like live source")
     }
 }
+
+final class LiveInputSuspensionTests: XCTestCase {
+
+    // MARK: - Tests
+
+    func testReviewSuspensionSkipsLiveInputWhenNotRecording() {
+        // Suspended=true, recording=false: the guard must block processing.
+        XCTAssertTrue(
+            MacCaptureEngine.isLiveInputEffectivelySuspended(
+                suspendedForReview: true,
+                routineRecordingActive: false
+            ),
+            "Review suspension with no active recording must skip live input"
+        )
+    }
+
+    func testReviewSuspensionDoesNotSkipWhileRoutineRecording() {
+        // Suspended=true, recording=true: recording must not be interrupted.
+        XCTAssertFalse(
+            MacCaptureEngine.isLiveInputEffectivelySuspended(
+                suspendedForReview: true,
+                routineRecordingActive: true
+            ),
+            "Review suspension must not skip live input while a routine recording is active"
+        )
+    }
+
+    func testReviewSuspensionResumeAllowsLiveInputAgain() {
+        // Suspended=false: normal operation, processing must be allowed.
+        XCTAssertFalse(
+            MacCaptureEngine.isLiveInputEffectivelySuspended(
+                suspendedForReview: false,
+                routineRecordingActive: false
+            ),
+            "After suspension is cleared, live input must be allowed"
+        )
+    }
+}

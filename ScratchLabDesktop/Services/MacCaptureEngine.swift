@@ -4024,13 +4024,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         performerMonitorDemandQueue.sync { performerMonitorStreamingEnabled }
     }
 
+    /// Returns true when live input should be skipped because the Review tab
+    /// suspended it and no routine recording is protecting against suspension.
+    /// Pure function of two booleans — tested in LiveInputSuspensionTests
+    /// without any AV, camera, or UI dependencies.
+    static func isLiveInputEffectivelySuspended(
+        suspendedForReview: Bool,
+        routineRecordingActive: Bool
+    ) -> Bool {
+        suspendedForReview && !routineRecordingActive
+    }
+
     /// Live capture-sample processing is enabled when the engine is
     /// running, recording, CXL-recording, or streaming performer-monitor
     /// frames.  When `isLiveInputSuspendedForReview` is true, processing
     /// is disabled UNLESS a routine recording is active — recordings are
     /// never suspended so take capture is never interrupted.
     private var shouldProcessCaptureSamples: Bool {
-        guard !isLiveInputSuspendedForReview || isRoutineRecording else { return false }
+        guard !Self.isLiveInputEffectivelySuspended(
+            suspendedForReview: isLiveInputSuspendedForReview,
+            routineRecordingActive: isRoutineRecording
+        ) else { return false }
         return isRunning || isRoutineRecording || cxlRecorder.isRecording || shouldPublishPerformerMonitorFrame
     }
 
