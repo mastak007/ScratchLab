@@ -361,4 +361,176 @@ final class CameraNotationOverlayTests: XCTestCase {
         XCTAssertEqual(strokes.count, 2,
                        "Target mode must show all strokes at time 0")
     }
+
+    // MARK: - Persistence: defaults when missing
+
+    func testCameraOverlayCalibrationDefaultsWhenMissing() {
+        // Ensure no persisted values exist.
+        let cleaner = CameraNotationOverlayCalibration()
+        cleaner.clearPersisted()
+
+        let cal = CameraNotationOverlayCalibration()
+        XCTAssertEqual(cal.platterCenter.x, 0.5, accuracy: 1e-9,
+                       "Default center.x when no persisted key")
+        XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-9,
+                       "Default center.y when no persisted key")
+        XCTAssertEqual(cal.platterRadius, 0.35, accuracy: 1e-9,
+                       "Default radius when no persisted key")
+        XCTAssertEqual(cal.angleOffset, 0.0, accuracy: 1e-9,
+                       "Default angle offset when no persisted key")
+        XCTAssertFalse(cal.isLocked,
+                       "Default unlocked when no persisted key")
+
+        cal.clearPersisted()
+    }
+
+    // MARK: - Persistence: round-trip
+
+    func testCameraOverlayCalibrationPersistsRoundTrip() {
+        // Clean start.
+        let cleaner = CameraNotationOverlayCalibration()
+        cleaner.clearPersisted()
+
+        // Write non-default values through a first instance.
+        let calA = CameraNotationOverlayCalibration()
+        calA.platterCenter = CGPoint(x: 0.3, y: 0.7)
+        calA.platterRadius = 0.25
+        calA.angleOffset = 0.4
+        calA.isLocked = true
+
+        // Let the async save (receive(on: DispatchQueue.main)) complete.
+        let saveExp = expectation(description: "auto-save completes")
+        DispatchQueue.main.async { saveExp.fulfill() }
+        wait(for: [saveExp], timeout: 1.0)
+
+        // Create a second instance — it must read the persisted values.
+        let calB = CameraNotationOverlayCalibration()
+        XCTAssertEqual(calB.platterCenter.x, 0.3, accuracy: 1e-9,
+                       "Persisted center.x must round-trip")
+        XCTAssertEqual(calB.platterCenter.y, 0.7, accuracy: 1e-9,
+                       "Persisted center.y must round-trip")
+        XCTAssertEqual(calB.platterRadius, 0.25, accuracy: 1e-9,
+                       "Persisted radius must round-trip")
+        XCTAssertEqual(calB.angleOffset, 0.4, accuracy: 1e-9,
+                       "Persisted angle offset must round-trip")
+        XCTAssertTrue(calB.isLocked,
+                      "Persisted locked state must round-trip")
+
+        calB.clearPersisted()
+    }
+
+    // MARK: - Persistence: clamping on load / safe static helpers
+
+    func testCameraOverlayCalibrationSafeClampHelpers() {
+        // Center clamp
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeCenterClamp(-0.5), 0.0,
+                       "Negative center must clamp to 0")
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeCenterClamp(1.8), 1.0,
+                       "Above-1 center must clamp to 1")
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeCenterClamp(0.42), 0.42,
+                       "Valid center must passthrough")
+
+        // Radius clamp
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeRadiusClamp(0.01), 0.05,
+                       "Below-min radius must clamp to 0.05")
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeRadiusClamp(0.9), 0.5,
+                       "Above-max radius must clamp to 0.5")
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeRadiusClamp(0.25), 0.25,
+                       "Valid radius must passthrough")
+
+        // Angle clamp
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeAngleClamp(10.0), 2 * .pi,
+                       accuracy: 1e-9,
+                       "Large positive angle must clamp to 2π")
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeAngleClamp(-10.0), -2 * .pi,
+                       accuracy: 1e-9,
+                       "Large negative angle must clamp to -2π")
+        XCTAssertEqual(CameraNotationOverlayCalibration.safeAngleClamp(0.5), 0.5,
+                       accuracy: 1e-9,
+                       "Valid angle must passthrough")
+    }
+
+    func testCameraOverlayCalibrationClampsInvalidAngle() {
+        let cal = CameraNotationOverlayCalibration()
+
+        cal.angleOffset = 10.0   // above 2π
+        XCTAssertEqual(cal.clampedAngleOffset, 2 * .pi, accuracy: 1e-9,
+                       "Angle above 2π must clamp to 2π")
+
+        cal.angleOffset = -10.0  // below -2π
+        XCTAssertEqual(cal.clampedAngleOffset, -2 * .pi, accuracy: 1e-9,
+                       "Angle below -2π must clamp to -2π")
+
+        cal.angleOffset = 0.4    // within range
+        XCTAssertEqual(cal.clampedAngleOffset, 0.4, accuracy: 1e-9,
+                       "Valid angle must passthrough")
+    }
+
+    // MARK: - Reset behaviour
+
+    func testCameraOverlayCalibrationResetRestoresAllDefaults() {
+        let cal = CameraNotationOverlayCalibration()
+        cal.platterCenter = CGPoint(x: 0.2, y: 0.8)
+        cal.platterRadius = 0.45
+        cal.angleOffset = 1.2
+        cal.isLocked = true
+
+        cal.reset()
+
+        XCTAssertEqual(cal.platterCenter.x, 0.5, accuracy: 1e-9,
+                       "Reset must restore default centre x")
+        XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-9,
+                       "Reset must restore default centre y")
+        XCTAssertEqual(cal.platterRadius, 0.35, accuracy: 1e-9,
+                       "Reset must restore default radius")
+        XCTAssertEqual(cal.angleOffset, 0.0, accuracy: 1e-9,
+                       "Reset must restore default angle offset")
+        XCTAssertFalse(cal.isLocked, "Reset must unlock calibration")
+    }
+
+    // MARK: - Lock / unlock behaviour
+
+    func testLockedCalibrationIgnoresMutation() {
+        let cal = CameraNotationOverlayCalibration()
+
+        // Set known state then lock.
+        cal.setCenter(from: CGPoint(x: 200, y: 150), viewSize: CGSize(width: 400, height: 300))
+        XCTAssertEqual(cal.platterCenter.x, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-6)
+
+        cal.isLocked = true
+
+        // Attempt to set center via the public method — must be ignored.
+        cal.setCenter(from: CGPoint(x: 100, y: 75), viewSize: CGSize(width: 400, height: 300))
+        XCTAssertEqual(cal.platterCenter.x, 0.5, accuracy: 1e-6,
+                       "Locked setCenter must not change centre x")
+        XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-6,
+                       "Locked setCenter must not change centre y")
+
+        // Direct property writes still work (view-layer guard),
+        // but verify lock state itself is observable.
+        XCTAssertTrue(cal.isLocked, "isLocked must remain true")
+
+        cal.isLocked = false
+        XCTAssertFalse(cal.isLocked, "isLocked must toggle to false")
+    }
+
+    func testUnlockedCalibrationAcceptsMutation() {
+        let cal = CameraNotationOverlayCalibration()
+        cal.isLocked = false
+
+        cal.setCenter(from: CGPoint(x: 100, y: 75), viewSize: CGSize(width: 400, height: 300))
+        XCTAssertEqual(cal.platterCenter.x, 0.25, accuracy: 1e-6,
+                       "Unlocked setCenter must update centre x")
+        XCTAssertEqual(cal.platterCenter.y, 0.25, accuracy: 1e-6,
+                       "Unlocked setCenter must update centre y")
+
+        cal.platterRadius = 0.20
+        XCTAssertEqual(cal.platterRadius, 0.20, accuracy: 1e-9,
+                       "Unlocked radius write must take effect")
+
+        cal.angleOffset = 0.8
+        XCTAssertEqual(cal.angleOffset, 0.8, accuracy: 1e-9,
+                       "Unlocked angle write must take effect")
+    }
 }

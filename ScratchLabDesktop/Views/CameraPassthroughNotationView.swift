@@ -137,6 +137,11 @@ struct CameraPassthroughNotationView: View {
 
     // MARK: - Drawing helpers
 
+    /// Effective starting angle incorporating calibration offset (radians).
+    private var effectiveStartAngle: Double {
+        -.pi / 2 + calibration.clampedAngleOffset
+    }
+
     /// Compute the view-space platter centre and radius from calibration state.
     private func platterViewParams(size: CGSize) -> (center: CGPoint, radius: CGFloat) {
         let c = calibration.clampedCenter
@@ -182,7 +187,8 @@ struct CameraPassthroughNotationView: View {
         let strokes = CameraNotationOverlayGeometry.arcStrokes(
             from: model,
             currentTime: currentTime,
-            maxRadius: params.radius
+            maxRadius: params.radius,
+            startAngle: effectiveStartAngle
         )
         for stroke in strokes {
             let alpha = 0.55  // base alpha; could modulate by confidence if desired
@@ -228,7 +234,10 @@ struct CameraPassthroughNotationView: View {
         guard let model else { return }
         let params = platterViewParams(size: size)
         let fraction = model.cursorFraction(at: currentTime)
-        let angle = CameraNotationOverlayGeometry.angle(timeFraction: fraction)
+        let angle = CameraNotationOverlayGeometry.angle(
+            timeFraction: fraction,
+            startAngle: effectiveStartAngle
+        )
         let cursorPoint = CameraNotationOverlayGeometry.point(
             angle: angle,
             travelFraction: 1.0,  // cursor sits on the platter edge
@@ -263,11 +272,15 @@ struct CameraPassthroughNotationView: View {
                 Divider().background(Color.white.opacity(0.2))
             }
 
+            // Center display (read-only)
+            centerDisplayRow
+
             // Radius slider
             HStack {
                 Text("Radius")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.8))
+                    .frame(width: 40, alignment: .leading)
                 Slider(
                     value: Binding(
                         get: { calibration.clampedRadius },
@@ -280,6 +293,26 @@ struct CameraPassthroughNotationView: View {
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.7))
                     .frame(minWidth: 36, alignment: .trailing)
+            }
+
+            // Angle offset slider
+            HStack {
+                Text("Angle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.8))
+                    .frame(width: 40, alignment: .leading)
+                Slider(
+                    value: Binding(
+                        get: { calibration.clampedAngleOffset },
+                        set: { calibration.angleOffset = $0 }
+                    ),
+                    in: CameraNotationOverlayCalibration.angleOffsetRange
+                )
+                .disabled(calibration.isLocked)
+                Text(String(format: "%+.2f", calibration.clampedAngleOffset))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.7))
+                    .frame(minWidth: 42, alignment: .trailing)
             }
 
             // Action buttons
@@ -309,7 +342,7 @@ struct CameraPassthroughNotationView: View {
 
                 Spacer(minLength: 8)
 
-                Text("Tap platter centre to calibrate")
+                Text("Tap deck center, adjust radius, then lock.")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.45))
             }
@@ -319,6 +352,21 @@ struct CameraPassthroughNotationView: View {
         .background(controlBg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
+    }
+
+    /// Read-only display of the current normalized platter centre.
+    private var centerDisplayRow: some View {
+        let c = calibration.clampedCenter
+        return HStack(spacing: 6) {
+            Text("Center")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.8))
+                .frame(width: 40, alignment: .leading)
+            Text(String(format: "(%.2f, %.2f)", c.x, c.y))
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.55))
+            Spacer()
+        }
     }
 
     // MARK: - Transport row
