@@ -347,6 +347,7 @@ struct MacAnalyzerView: View {
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
     @State private var reviewNotesDraft: String = ""
     @State private var reviewerNameDraft: String = ""
+    @State private var showNotationOverlay = false
     #if DEBUG
     /// Cache the overlay timeline and its diagnostics so neither
     /// `ReviewOverlayTimeline.build()` nor `OverlayTimingDiagnostics.compute()`
@@ -4680,6 +4681,29 @@ struct MacAnalyzerView: View {
                     .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
                 #endif
                 Spacer(minLength: 0)
+                Button {
+                    showNotationOverlay.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "waveform.path")
+                            .font(.system(size: 10, weight: .semibold))
+                            .accessibilityHidden(true)
+                        Text("Notation Overlay")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    }
+                    .foregroundStyle(
+                        showNotationOverlay ? Color.white : Color.white.opacity(0.55)
+                    )
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    showNotationOverlay
+                        ? Color.white.opacity(0.15)
+                        : Color.white.opacity(0.07),
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
                 HStack(spacing: 4) {
                     Image(systemName: capturedSource.systemImage)
                         .font(.system(size: 11, weight: .semibold))
@@ -4724,6 +4748,12 @@ struct MacAnalyzerView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
                 .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            if showNotationOverlay,
+               let snapshot = currentRoutineNotationSnapshot,
+               !snapshot.recordMovementEvents.isEmpty {
+                LiveNotationOverlayPlayable(snapshot: snapshot)
+                    .id(snapshot.capturedAt)
             }
             #if DEBUG
             debugNotationDiagnosticChip(debugCapturedNotationChipText)
@@ -7637,6 +7667,278 @@ private struct ReviewOverlayPlayableSurface: View {
     }
 }
 
+/// Performer-facing notation display that reuses `LiveNotationOverlayModel`
+/// and `LiveNotationOverlayView` to render captured strokes at a larger,
+/// more readable size suitable for a second monitor, Sidecar/iPad, or
+/// booth display.
+///
+/// Takes an optional `DetectedNotationSnapshot` from the capture engine's
+/// latest routine take. When the snapshot carries record-movement events,
+/// builds a `LiveNotationOverlayModel` in `.captured` mode with an
+/// `OverlayReplayController` for independent playback. The `.captured`
+/// mode guard ensures no future strokes appear before `currentTime`
+/// reaches their `startTime`.
+///
+/// When the snapshot is `nil` or has no movement events, an empty state
+/// is shown.
+///
+/// This view does NOT add camera permissions, ARKit, Vision tracking,
+/// network streaming, or external-display auto-routing. It is a display-
+/// mode wrapper around the existing live notation overlay components.
+private struct PerformerNotationDisplayView: View {
+
+    let snapshot: CaptureCore.DetectedNotationSnapshot?
+
+    @State private var controller: OverlayReplayController
+    private let model: LiveNotationOverlayModel?
+
+    init(snapshot: CaptureCore.DetectedNotationSnapshot?) {
+        self.snapshot = snapshot
+        if let snapshot, !snapshot.recordMovementEvents.isEmpty {
+            let duration = max(snapshot.capturedEvidenceEndTime ?? 0, 0.1)
+            self.model = LiveNotationOverlayModel(
+                events: snapshot.recordMovementEvents,
+                duration: duration,
+                mode: .captured
+            )
+            let timeline = SessionReplayTimeline.build(
+                from: snapshot,
+                takeDuration: duration
+            )
+            self._controller = State(
+                initialValue: OverlayReplayController(timeline: timeline)
+            )
+        } else {
+            self.model = nil
+            self._controller = State(
+                initialValue: OverlayReplayController(
+                    timeline: SessionReplayTimeline(
+                        takeDurationSeconds: 0,
+                        events: []
+                    )
+                )
+            )
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let model {
+                notationCanvas(model: model)
+            } else {
+                emptyState
+            }
+
+            if model != nil {
+                performerTransportRow
+            }
+        }
+    }
+
+    // MARK: - Notation canvas
+
+    private func notationCanvas(model: LiveNotationOverlayModel) -> some View {
+        TimelineView(.animation(paused: !controller.isPlaying)) { context in
+            let hostTime = context.date.timeIntervalSinceReferenceDate
+            let currentTime = controller.currentTime(at: hostTime)
+            LiveNotationOverlayView(model: model, currentTime: currentTime)
+                .frame(height: 220)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+                .onChange(of: shouldAutoStop(cursor: currentTime)) { _, atEnd in
+                    if atEnd { controller.tick(hostTime: hostTime) }
+                }
+        }
+    }
+
+    // MARK: - Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "waveform.slash")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.white.opacity(0.28))
+
+            Text("No Notation Captured")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+
+            Text("Record a take to see captured strokes here.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.38))
+        }
+        .frame(maxWidth: .infinity, minHeight: 220)
+        .background(
+            Color(white: 0.10),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+    }
+
+    // MARK: - Transport
+
+    private var performerTransportRow: some View {
+        HStack(spacing: 14) {
+            Button {
+                controller.restart(
+                    hostTime: Date().timeIntervalSinceReferenceDate
+                )
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(!controller.hasTimeline)
+
+            Button {
+                let hostTime = Date().timeIntervalSinceReferenceDate
+                if controller.isPlaying {
+                    controller.pause(hostTime: hostTime)
+                } else {
+                    controller.play(hostTime: hostTime)
+                }
+            } label: {
+                Image(systemName: controller.isPlaying
+                    ? "pause.fill" : "play.fill")
+                    .font(.system(size: 18, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!controller.hasTimeline)
+
+            TimelineView(.animation(paused: !controller.isPlaying)) { context in
+                let cursor = controller.currentTime(
+                    at: context.date.timeIntervalSinceReferenceDate
+                )
+                Text(
+                    String(
+                        format: "%.1fs / %.1fs",
+                        cursor,
+                        controller.duration
+                    )
+                )
+                .font(.system(
+                    size: 18,
+                    weight: .semibold,
+                    design: .monospaced
+                ))
+                .foregroundStyle(.white.opacity(0.82))
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func shouldAutoStop(cursor: TimeInterval) -> Bool {
+        guard controller.isPlaying else { return false }
+        return cursor >= controller.duration
+    }
+}
+
+/// Live notation overlay card — single captured-notation lane with a
+/// time-synced cursor. Uses the same `OverlayReplayController` + `TimelineView`
+/// pattern as `ReviewOverlayPlayableSurface` but drives `LiveNotationOverlayView`
+/// instead of the two-lane diff view.
+///
+/// The `.captured` mode guard in `LiveNotationOverlayModel` ensures no future
+/// strokes appear before `currentTime` reaches their `startTime`.
+/// The `.id(snapshot.capturedAt)` caller-side modifier resets this view when
+/// the take changes, recreating the controller from scratch.
+private struct LiveNotationOverlayPlayable: View {
+
+    let snapshot: CaptureCore.DetectedNotationSnapshot
+
+    @State private var controller: OverlayReplayController
+    private let model: LiveNotationOverlayModel
+
+    init(snapshot: CaptureCore.DetectedNotationSnapshot) {
+        self.snapshot = snapshot
+        let duration = max(snapshot.capturedEvidenceEndTime ?? 0, 0.1)
+        self.model = LiveNotationOverlayModel(
+            events: snapshot.recordMovementEvents,
+            duration: duration,
+            mode: .captured
+        )
+        let timeline = SessionReplayTimeline.build(from: snapshot, takeDuration: duration)
+        self._controller = State(initialValue: OverlayReplayController(timeline: timeline))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TimelineView(.animation(paused: !controller.isPlaying)) { context in
+                let hostTime = context.date.timeIntervalSinceReferenceDate
+                let currentTime = controller.currentTime(at: hostTime)
+                LiveNotationOverlayView(model: model, currentTime: currentTime)
+                    .frame(height: 80)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .onChange(of: shouldAutoStop(cursor: currentTime)) { _, atEnd in
+                        if atEnd { controller.tick(hostTime: hostTime) }
+                    }
+            }
+
+            overlayTransportRow
+
+            Text("Captured strokes with live cursor · strokes reveal as cursor advances.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+
+    @ViewBuilder
+    private var overlayTransportRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                controller.restart(hostTime: Date().timeIntervalSinceReferenceDate)
+            } label: {
+                Label("Restart", systemImage: "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!controller.hasTimeline)
+
+            Button {
+                let hostTime = Date().timeIntervalSinceReferenceDate
+                if controller.isPlaying {
+                    controller.pause(hostTime: hostTime)
+                } else {
+                    controller.play(hostTime: hostTime)
+                }
+            } label: {
+                Label(
+                    controller.isPlaying ? "Pause" : "Play",
+                    systemImage: controller.isPlaying ? "pause.fill" : "play.fill"
+                )
+                .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(!controller.hasTimeline)
+
+            Spacer(minLength: 8)
+
+            TimelineView(.animation(paused: !controller.isPlaying)) { context in
+                let cursor = controller.currentTime(at: context.date.timeIntervalSinceReferenceDate)
+                Text(String(format: "%.2fs / %.2fs", cursor, controller.duration))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .accessibilityLabel("Overlay position")
+                    .accessibilityValue(
+                        String(format: "%.2f seconds of %.2f", cursor, controller.duration)
+                    )
+            }
+        }
+    }
+
+    private func shouldAutoStop(cursor: TimeInterval) -> Bool {
+        guard controller.isPlaying else { return false }
+        return cursor >= controller.duration
+    }
+}
+
 private struct RoutineSessionRow: View {
     let title: String
     let subtitle: String
@@ -8132,6 +8434,7 @@ struct MacPerformerMonitorView: View {
     private enum MonitorMode: String, CaseIterable, Identifiable {
         case cue
         case deck
+        case notation
 
         var id: String { rawValue }
 
@@ -8141,6 +8444,8 @@ struct MacPerformerMonitorView: View {
                 return "Cue"
             case .deck:
                 return "Deck View"
+            case .notation:
+                return "Notation"
             }
         }
     }
@@ -8166,8 +8471,10 @@ struct MacPerformerMonitorView: View {
 
                 if monitorMode == .cue {
                     cueMonitorContent
-                } else {
+                } else if monitorMode == .deck {
                     deckMonitorContent
+                } else {
+                    notationMonitorContent
                 }
 
                 Spacer(minLength: 0)
@@ -8205,7 +8512,7 @@ struct MacPerformerMonitorView: View {
                         .font(.system(size: 28, weight: .semibold))
                         .foregroundStyle(.white)
 
-                    Text("Use Cue for the next drill instruction, or Deck View for the live camera, guide boxes, and scratch feedback.")
+                    Text("Cue shows the next drill instruction, Deck View shows the live camera, Notation shows captured strokes for practice at decks.")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(0.72))
 
@@ -8337,6 +8644,27 @@ struct MacPerformerMonitorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var notationMonitorContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Live Notation Display")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+
+            Text("Captured strokes with live cursor. Ideal for second monitor, Sidecar, or booth display while practising at decks.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.64))
+                .fixedSize(horizontal: false, vertical: true)
+
+            PerformerNotationDisplayView(
+                snapshot: captureEngine.lastRoutineDetectedNotation
+            )
+            .id(captureEngine.lastRoutineDetectedNotation?.capturedAt)
+
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
