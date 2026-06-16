@@ -259,6 +259,9 @@ struct MacAnalyzerView: View {
         case midiFader
         case monitor
         case captureDetails
+#if DEBUG
+        case timecodeInput
+#endif
 
         var id: String { rawValue }
 
@@ -270,6 +273,9 @@ struct MacAnalyzerView: View {
             case .midiFader:      return "MIDI & fader"
             case .monitor:        return "Monitor / Connection"
             case .captureDetails: return "Capture details"
+#if DEBUG
+            case .timecodeInput:  return "Timecode Input"
+#endif
             }
         }
 
@@ -281,6 +287,9 @@ struct MacAnalyzerView: View {
             case .midiFader:      return "slider.horizontal.3"
             case .monitor:        return "dot.radiowaves.left.and.right"
             case .captureDetails: return "doc.text.magnifyingglass"
+#if DEBUG
+            case .timecodeInput:  return "waveform.badge.magnifyingglass"
+#endif
             }
         }
     }
@@ -361,6 +370,9 @@ struct MacAnalyzerView: View {
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
     @State private var isShowingStagingInspector = false
+    /// Timecode input diagnostics tap (Batch 1 — diagnostics only, no decoder).
+    /// Used by the Timecode Input card in the Advanced workspace sidebar.
+    @StateObject private var timecodeInputTap = TimecodeInputTap(sampleRate: 44100, channelCount: 2)
     #endif
 
     private var stagingInspectorContexts: [StagingInspectorContext] {
@@ -1488,6 +1500,15 @@ struct MacAnalyzerView: View {
                 }
                 cxlCaptureCard
             }
+#if DEBUG
+        case .timecodeInput:
+            VStack(alignment: .leading, spacing: 22) {
+                TimecodeInputStatusCard(
+                    tap: timecodeInputTap,
+                    diagnostics: TimecodeSignalDiagnostics()
+                )
+            }
+#endif
         }
     }
 

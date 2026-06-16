@@ -7,48 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		SLCORE00000000000000BF01 /* ScratchAnalysisCore.cpp in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR03 /* ScratchAnalysisCore.cpp */; };
-		SLCORE00000000000000BF02 /* ScratchAnalysisBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR05 /* ScratchAnalysisBridge.mm */; };
-		SLCORE00000000000000BF03 /* ScratchAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR06 /* ScratchAnalysis.swift */; };
-		SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */; };
-		SLCORE00000000000000BF05 /* ScratchAnalysisFixtureAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */; };
-		SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */; };
-		SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */; };
-		SLCORE00000000000000BF33 /* ScratchDetectedNotationLaneAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */; };
-		SLCORE00000000000000BF50 /* ScratchRawPlatterLaneAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */; };
-		SLCORE00000000000000BF11 /* ScratchAnalysisNotationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */; };
-		SLCORE00000000000000BF14 /* ScratchAnalysisNotationComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */; };
-		SLCORE00000000000000BF16 /* ScratchAnalysisNotationComparisonExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */; };
-		SLCORE00000000000000BF18 /* ScratchAnalysisNotationIntentExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR25 /* ScratchAnalysisNotationIntentExport.swift */; };
-		SLCORE00000000000000BF19 /* ScratchAnalysisNotationIntentExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR26 /* ScratchAnalysisNotationIntentExportTests.swift */; };
-		SLCORE00000000000000BF20 /* ScratchNotationIntentDebugFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */; };
-		SLCORE00000000000000BF22 /* ScratchNotationLanePreviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */; };
-		SLCORE00000000000000BF24 /* ScratchNotationLaneDisplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */; };
-		SLCORE00000000000000BF30 /* ScratchTimelineProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */; };
-		SLCORE00000000000000BF31 /* ScratchTimelineProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */; };
-		SLCORE00000000000000BF32 /* ScratchStrokeGeometryTravelAmplitudeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */; };
-		SLCORE00000000000000BF26 /* ScratchNotationTravelMotionPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */; };
-		SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */; };
-		SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */; };
-		SLCORE00000000000000BF23 /* ScratchNotationLanePreviewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */; };
-		SLCORE00000000000000BF21 /* ScratchNotationIntentDebugFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */; };
-		SLCORE00000000000000BF17 /* ScratchAnalysisNotationComparisonExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */; };
-		SLCORE00000000000000BF15 /* ScratchAnalysisNotationComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */; };
-		SLCORE00000000000000BF12 /* ScratchAnalysisNotationIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */; };
-		SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */; };
-		SLCORE00000000000000BF09 /* ScratchAnalysisCheckedInFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */; };
-		SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */; };
-		SLCORE00000000000000BF10 /* ScratchAnalysisTrimmedRealFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */; };
-		SLCORE00000000000000BFR2 /* scratch_timeline_cc6_real_trimmed_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */; };
-		SLCORE00000000000000BF13 /* ScratchAnalysisRealFaderFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */; };
-		SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */; };
-		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
-		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
-		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
-		VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */; };
 		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
 		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
 		10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000008 /* DJRigLayoutDetector.swift */; };
+		14D30A730D2E3376F83B18F1 /* TimecodeSourceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */; };
 		1564CE6A18C3FD1BE1056920 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		1AAA02E0C9B68FC63E1855FD /* Archive+MemoryFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02E4CEF8129F5BD651B9FFE /* Archive+MemoryFile.swift */; };
 		1EB5D329CFC53135D9B1B22B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000027 /* Assets.xcassets */; };
@@ -57,12 +19,13 @@
 		2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */; };
 		203015F013837B25E7DAB626 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC2FA5C155AEA197428B94F6 /* Foundation.framework */; };
 		210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* MacCameraPreviewView.swift */; };
-		219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
-		219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
-		219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
-		219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
-		VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
+		219D8D60A93840FC9A724C11 /* CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* CoachInstructions */; };
+		219D8D61A93840FC9A724C11 /* CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* CoachDemoAudio */; };
+		219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* CoachDemoMotion */; };
+		219D8D63A93840FC9A724C11 /* Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Notation */; };
 		283607B7B4D70607A9ECD49F /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
+		286B96641152894682458B21 /* TimecodeInputTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */; };
+		2C4B2B2BD4F9BA27F7911B8D /* TimecodeInputStatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207BAC452827202EE87BABD7 /* TimecodeInputStatusCard.swift */; };
 		2C64569FCF5593D3CB171D25 /* WatchMotionCaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */; };
 		2C64569FCF5593D3CB171D26 /* StagedCaptureRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */; };
 		2C64569FCF5593D3CB171D27 /* StagingInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B3 /* StagingInspector.swift */; };
@@ -76,24 +39,21 @@
 		37D8315725EAF63490E7ACB0 /* WatchMotionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDD250716FA81582843E833 /* WatchMotionCapture.swift */; };
 		37FCA3B16EABFCA2E9AB4817 /* URL+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */; };
 		37FCE1C90F675A7676ED2966 /* Archive+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */; };
+		3B68EB2B270340C8214395BA /* TimecodeInputTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */; };
 		3D311B58DB11F2542812AE29 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC927BE2AC20BBF592338F0B /* Entry.swift */; };
 		3D810D416D8A393CAFAC1C69 /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
 		3E92EF295625F64D8493A11D /* Data+Compression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1783A90FC878E8D656330AFD /* Data+Compression.swift */; };
 		433D3D9F190ABCBD2FDF84E5 /* CaptureCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */; };
-		PVM0001000PVM001PVM00001 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
-		DAC0001000DAC001DAC00001 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
-		PRT0001000PRT001PRT00001 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
-		TML0001000TML001TML00001 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
-		SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */; };
-		SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
-		PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
 		433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */; };
 		43751697AA2973A2E1462B3F /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC927BE2AC20BBF592338F0B /* Entry.swift */; };
+		4934D6433CE6AA4371B2AD63 /* TimecodeAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */; };
 		4A543CD477CFCC3F9EB88C03 /* WatchCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9886FB2B8E07860472DD229 /* WatchCaptureView.swift */; };
+		4B483DA41620D1907FC95730 /* TimecodeSourceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */; };
+		4DAB9D29DE22539C24AB3F8C /* TimecodeSignalDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
-		51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */; };
-		51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */; };
+		51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
+		51C2E59E2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
 		5242E17A90BAFAD885F7DBA7 /* Archive+ReadingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */; };
 		5740240314B808EF52D6123D /* ScratchLabNotificationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000028 /* ScratchLabNotificationController.swift */; };
 		5E99E314C614D039721A33ED /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
@@ -108,17 +68,17 @@
 		772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B2000010 /* AppIcon.icns */; };
 		7D1A2B3C4E5F00027D1A2B3C /* HandDirectionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */; };
 		7D1A2B3C4E5F00047D1A2B3C /* HandDirectionTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */; };
-		VCG0001000VCG001VCG00001 /* VisionCaptureGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */; };
 		86B4C659CD7D512697B5F324 /* FileManager+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */; };
 		894649E8285210A15FA709AD /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
 		8A689B811423AC79DCD5A667 /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
+		8D4B3424898BEBDDC8D70A9A /* TimecodeSignalDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */; };
 		8E2BDEAD0BB509A80C9FAB5F /* Archive+MemoryFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02E4CEF8129F5BD651B9FFE /* Archive+MemoryFile.swift */; };
 		923253E866827B1462A8E5DF /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
 		9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000009 /* DeckGamificationOverlay.swift */; };
 		A1000001 /* ScratchLabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* ScratchLabApp.swift */; };
 		A1000002 /* MainMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* MainMenuView.swift */; };
 		A1000003 /* LevelSelectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* LevelSelectView.swift */; };
-		A1000004 /* PracticeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* PracticeModeView.swift */; };		SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SML0000000SML001SML00001 /* ScratchMotionLane.swift */; };
+		A1000004 /* PracticeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* PracticeModeView.swift */; };
 		A1000005 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
 		A1000006 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
 		A1000007 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* AudioEngine.swift */; };
@@ -137,11 +97,30 @@
 		A1000029 /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		A1000030 /* ScratchCoachViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000033 /* ScratchCoachViews.swift */; };
 		A1000031 /* ScratchMotionAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000034 /* ScratchMotionAnalysis.swift */; };
+		A5000061 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
+		A5000062 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
+		A5000063 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
+		A5000064 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
+		A5000065 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
+		A5000066 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
+		A5000071 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
+		A5000072 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
+		A5000073 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
+		A5000074 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
+		A5000075 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
+		A5000076 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
 		A60078D9753742B268C05075 /* Archive+WritingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */; };
 		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
 		AA200002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA200001 /* PrivacyInfo.xcprivacy */; };
 		AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */; };
+		APG1001000APG001APG00001 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
+		APG1001000APG001APG00002 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
+		APG2011000APG002APG00001 /* AudioPhraseGridProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG2010000APG002APG00001 /* AudioPhraseGridProjectionTests.swift */; };
+		APS1001000APS001APS00001 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
+		APS1001000APS001APS00002 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
+		APS2011000APS002APS00001 /* AudioPhraseSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */; };
 		B0EB2B9C16A1ABE80872091D /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
+		B12CAD53EF004A129E9C2684 /* TimecodeAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */; };
 		B177BD601DFAC77063AACF21 /* Archive+Progress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472ED49B7202325C8D3C8887 /* Archive+Progress.swift */; };
 		B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000001 /* ScratchLabDesktopApp.swift */; };
 		B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000005 /* MacCaptureEngine.swift */; };
@@ -155,10 +134,12 @@
 		B5AA0008A1B2C3D4E5F60709 /* ScratchCoachViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000033 /* ScratchCoachViews.swift */; };
 		B5AA0009A1B2C3D4E5F60709 /* ScratchMotionAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000034 /* ScratchMotionAnalysis.swift */; };
 		B7E427E9960BFF0ECAA43B45 /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
-		B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
-		B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
-		B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
-		B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
+		B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* CoachInstructions */; };
+		B9AF9ED6370241CF8BEFDB7C /* CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* CoachDemoAudio */; };
+		B9AF9ED7370241CF8BEFDB7C /* CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* CoachDemoMotion */; };
+		B9AF9ED8370241CF8BEFDB7C /* Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Notation */; };
+		BCFC2E48C8DC97B933BA3EE3 /* TimecodeInputSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */; };
+		BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */; };
 		C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
 		C68BC19238996C9C92EB97A3 /* WatchMotionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDD250716FA81582843E833 /* WatchMotionCapture.swift */; };
 		C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */; };
@@ -170,158 +151,48 @@
 		C71F1203A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71F1201A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift */; };
 		C7818BFED9A95C5EF1069EA5 /* Data+Compression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1783A90FC878E8D656330AFD /* Data+Compression.swift */; };
 		C9A445A1CEC870F63F5DD579 /* Archive+Progress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472ED49B7202325C8D3C8887 /* Archive+Progress.swift */; };
-		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
-		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
-		D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */; };
-		PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
-		DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
-		PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
-		TML0001000TML001TML00002 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
-		SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */; };
-		SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
-		PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
-		PPT0011000PPT001PPT00001 /* PlatterPositionTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */; };
-		NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
-		NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
-		NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
-		NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
-		NGP3001000NGP003NGP00001 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
-		NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
-		NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */; };
-		NGF1011000NGF001NGF00001 /* NotationGrammarFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */; };
-		TGN1001000TGN001TGN00001 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
-		TGN1001000TGN001TGN00002 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
-		TGN2011000TGN002TGN00001 /* TimingGridTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN2010000TGN002TGN00001 /* TimingGridTests.swift */; };
-		GAN1001000GAN001GAN00001 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
-		GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
-		GAN2011000GAN002GAN00001 /* GridAnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */; };
-		TWE1001000TWE001TWE00001 /* TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* TimingWindow.swift */; };
-		TWE1001000TWE001TWE00002 /* TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* TimingWindow.swift */; };
-		TWE2011000TWE002TWE00001 /* TimingWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */; };
-		PHR1001000PHR001PHR00001 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
-		PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
-		PHR2011000PHR002PHR00001 /* PhraseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR2010000PHR002PHR00001 /* PhraseTests.swift */; };
-		ETM1001000ETM001ETM00001 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
-		ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
-		ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */; };
-		PTS1001000PTS001PTS00001 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
-		PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
-		PTS2011000PTS002PTS00001 /* PhraseTimingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */; };
-		APS1001000APS001APS00001 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
-		APS1001000APS001APS00002 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
-		APS2011000APS002APS00001 /* AudioPhraseSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */; };
-		APG1001000APG001APG00001 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
-		APG1001000APG001APG00002 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
-		APG2011000APG002APG00001 /* AudioPhraseGridProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG2010000APG002APG00001 /* AudioPhraseGridProjectionTests.swift */; };
-		TOM1001000TOM001TOM00001 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
-		TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
-		TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */; };
-		SFV1001000SFV001SFV00001 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
-		SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
-		SFV2011000SFV002SFV00001 /* ScratchFamilyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */; };
-		SFA1001000SFA001SFA00001 /* ScratchFamilyAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */; };
-		SFA1001000SFA001SFA00002 /* ScratchFamilyAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */; };
-		SFA2011000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */; };
-		SFS1001000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
-		SFS1001000SFS001SFS00002 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
-		SFS2011000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */; };
-		SFM1001000SFM001SFM00001 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
-		SFM1001000SFM001SFM00002 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
-		SFM2011000SFM002SFM00001 /* ScratchFamilySummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */; };
-		CEV1001000CEV001CEV00001 /* CoachingEventVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */; };
-		CEV1001000CEV001CEV00002 /* CoachingEventVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */; };
-		CEV2011000CEV002CEV00001 /* CoachingEventVocabularyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */; };
 		CES1001000CES001CES00001 /* CoachingEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CES1000000CES001CES00001 /* CoachingEvent.swift */; };
 		CES1001000CES001CES00002 /* CoachingEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CES1000000CES001CES00001 /* CoachingEvent.swift */; };
 		CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CES2010000CES002CES00001 /* CoachingEventTests.swift */; };
-		DCE1001000DCE001DCE00001 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
-		DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
-		DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */; };
-		PCE1001000PCE001PCE00001 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
-		PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
-		PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */; };
+		CEV1001000CEV001CEV00001 /* CoachingEventVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */; };
+		CEV1001000CEV001CEV00002 /* CoachingEventVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */; };
+		CEV2011000CEV002CEV00001 /* CoachingEventVocabularyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */; };
+		CNC0001000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */; };
+		CNO0001000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */; };
+		CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */; };
+		COT0001000COT001COT00001 /* CameraNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */; };
+		CPN0001000CPN001CPN00001 /* CameraPassthroughNotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */; };
 		CSM1001000CSM001CSM00001 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
 		CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
 		CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */; };
-		NPM1001000NPM001NPM00001 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
-		NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
-		NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */; };
-		NLG1001000NLG001NLG00001 /* NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */; };
-		NLG1001000NLG001NLG00002 /* NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */; };
-		NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */; };
-		NPH1001000NPH001NPH00001 /* NotationPlayheadGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */; };
-		NPH1001000NPH001NPH00002 /* NotationPlayheadGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */; };
-		NPH2011000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */; };
-		NGG1001000NGG001NGG00001 /* NotationGridlineGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */; };
-		NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */; };
-		NGG2011000NGG002NGG00001 /* NotationGridlineGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */; };
-		NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
-		NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
-		NVW2011000NVW002NVW00001 /* NotationViewportWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */; };
-		NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
-		NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
-		NRM2011000NRM002NRM00001 /* NotationReplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */; };
-		SNA1001000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
-		SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
-		SNA2011000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */; };
-		SRA1001000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
-		SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
-		SRA2011000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */; };
+		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
+		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
+		D089BA0E666DF21B4EE91767 /* TimecodeInputSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */; };
+		D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */; };
+		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
+		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
+		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
+		DAC0001000DAC001DAC00001 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
+		DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
+		DBFB37055166C93C8253E561 /* Entry+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */; };
+		DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000004 /* HandMotionOverlay.swift */; };
+		DCE1001000DCE001DCE00001 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
+		DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
+		DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */; };
 		DLH2011000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */; };
 		DRN1001000DRN001DRN00001 /* DebugReviewNotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */; };
 		DRN1001000DRN001DRN00002 /* DebugReviewNotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */; };
 		DRT2011000DRT002DRT00001 /* DebugReviewNotationCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRT2010000DRT002DRT00001 /* DebugReviewNotationCardTests.swift */; };
-		NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
-		NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
-		NLP1001000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */; };
-		NLP1001000NLP001NLP00002 /* NotationLaneGeometryViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */; };
-		NLH1001000NLH001NLH00001 /* DebugNotationLaneHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */; };
-		NLH1001000NLH001NLH00002 /* DebugNotationLaneHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */; };
-		NLV2011000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */; };
-		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
-		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
-		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
-		BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */; };
-		SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
-		SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
-		SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */; };
-		SQA0001000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */; };
-		SQA0002000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */; };
-		SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */; };
-		SRT0001000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
-		SRT0002000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
-		SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */; };
-		SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
-		SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
-		SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */; };
-		ROT0001000ROT001ROT00001 /* ReviewOverlayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */; };
-		RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */; };
-		ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */; };
-		ORC0001000ORC001ORC00001 /* OverlayReplayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */; };
-		ORT0001000ORT001ORT00001 /* OverlayReplayControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */; };
-		OTD0001000OTD001OTD00001 /* OverlayTimingDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */; };
-		OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */; };
-		ODD0001000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */; };
-		ODT0001000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */; };
-		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
-		CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */; };
-		LNO0001000LNO001LNO00001 /* LiveNotationOverlayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */; };
-		CNO0001000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */; };
-		CNC0001000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */; };
-		LNV0001000LNV001LNV00001 /* LiveNotationOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */; };
-		CPN0001000CPN001CPN00001 /* CameraPassthroughNotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */; };
-		LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */; };
-		COT0001000COT001COT00001 /* CameraNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */; };
-		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
-		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
-		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
-		DBFB37055166C93C8253E561 /* Entry+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */; };
-		DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000004 /* HandMotionOverlay.swift */; };
+		DTF0001000DTF001DTF00001 /* DemoTimingFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */; };
 		E629FE9BA4457C9CDA41CC02 /* FileManager+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */; };
 		E683712604E8409CBC7FFE46 /* FileManager+ZIPDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66649EBF865FFA9347DA6AC9 /* FileManager+ZIPDeprecated.swift */; };
+		E703D86CF507D3F590ED4BD7 /* TimecodeSignalDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */; };
 		EB645FFD7E2F31E32D6E9C9F /* Entry+InfoZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 814A24D8C57AEC800882D641 /* Entry+InfoZIP.swift */; };
 		EDDA780D51CD02F97E88392C /* Archive+WritingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */; };
 		EF87E430A869CF00E737DC00 /* Archive.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5340BA4F19B19302EC6A347 /* Archive.swift */; };
+		ETM1001000ETM001ETM00001 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
+		ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
+		ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */; };
 		F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
 		F3000002A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
 		F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
@@ -330,38 +201,180 @@
 		F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
 		F929B11FB58F943E64F03E30 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8A10821073521D744B544DE /* Cocoa.framework */; };
 		F95848EF855E7286F839A321 /* ScratchLabWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */; };
+		GAN1001000GAN001GAN00001 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
+		GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
+		GAN2011000GAN002GAN00001 /* GridAnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */; };
+		LNO0001000LNO001LNO00001 /* LiveNotationOverlayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */; };
+		LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */; };
+		LNV0001000LNV001LNV00001 /* LiveNotationOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */; };
+		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
+		NGF1011000NGF001NGF00001 /* NotationGrammarFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */; };
+		NGG1001000NGG001NGG00001 /* NotationGridlineGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */; };
+		NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */; };
+		NGG2011000NGG002NGG00001 /* NotationGridlineGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */; };
+		NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
+		NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
+		NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
+		NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
+		NGP3001000NGP003NGP00001 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
+		NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
+		NGP4011000NGP004NGP00001 /* NotationGrammarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */; };
+		NLG1001000NLG001NLG00001 /* NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */; };
+		NLG1001000NLG001NLG00002 /* NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */; };
+		NLG2011000NLG002NLG00001 /* NotationLaneGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */; };
+		NLH1001000NLH001NLH00001 /* DebugNotationLaneHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */; };
+		NLH1001000NLH001NLH00002 /* DebugNotationLaneHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */; };
+		NLP1001000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */; };
+		NLP1001000NLP001NLP00002 /* NotationLaneGeometryViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */; };
+		NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
+		NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
+		NLV2011000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */; };
+		NPH1001000NPH001NPH00001 /* NotationPlayheadGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */; };
+		NPH1001000NPH001NPH00002 /* NotationPlayheadGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */; };
+		NPH2011000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */; };
+		NPM1001000NPM001NPM00001 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
+		NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
+		NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */; };
+		NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
+		NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
+		NRM2011000NRM002NRM00001 /* NotationReplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */; };
 		NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NST0000000NST001NST00001 /* NotationSheetTests.swift */; };
 		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
+		NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
+		NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
+		NVW2011000NVW002NVW00001 /* NotationViewportWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */; };
+		ODD0001000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */; };
+		ODT0001000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */; };
+		ORC0001000ORC001ORC00001 /* OverlayReplayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */; };
+		ORT0001000ORT001ORT00001 /* OverlayReplayControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */; };
+		OTD0001000OTD001OTD00001 /* OverlayTimingDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */; };
+		OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */; };
+		PCE1001000PCE001PCE00001 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
+		PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
+		PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */; };
+		PHR1001000PHR001PHR00001 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
+		PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
+		PHR2011000PHR002PHR00001 /* PhraseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR2010000PHR002PHR00001 /* PhraseTests.swift */; };
+		PPR0001000PPR001PPR00001 /* PlatterPositionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */; };
+		PPR0011000PPR001PPR00001 /* PlatterPositionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */; };
+		PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
+		PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
+		PPT0011000PPT001PPT00001 /* PlatterPositionTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */; };
+		PRT0001000PRT001PRT00001 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
+		PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
+		PTS1001000PTS001PTS00001 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
+		PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
+		PTS2011000PTS002PTS00001 /* PhraseTimingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */; };
+		PVM0001000PVM001PVM00001 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
+		PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
+		PVM0001000PVM001PVM00003 /* PhraseViewportModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */; };
+		RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */; };
+		ROT0001000ROT001ROT00001 /* ReviewOverlayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */; };
+		ROX0001000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */; };
+		SARF0001000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */; };
+		SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */; };
+		SCT0001000SCT001SCT00001 /* ScratchClassifying.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */; };
+		SFA1001000SFA001SFA00001 /* ScratchFamilyAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */; };
+		SFA1001000SFA001SFA00002 /* ScratchFamilyAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */; };
+		SFA2011000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */; };
+		SFM1001000SFM001SFM00001 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
+		SFM1001000SFM001SFM00002 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
+		SFM2011000SFM002SFM00001 /* ScratchFamilySummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */; };
+		SFS1001000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
+		SFS1001000SFS001SFS00002 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
+		SFS2011000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */; };
+		SFV1001000SFV001SFV00001 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
+		SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
+		SFV2011000SFV002SFV00001 /* ScratchFamilyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */; };
 		SLB0010001SLB001SLB00001 /* ScratchLabBrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */; };
-		SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */; };
-		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
+		SLCORE00000000000000BF01 /* ScratchAnalysisCore.cpp in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR03 /* ScratchAnalysisCore.cpp */; };
+		SLCORE00000000000000BF02 /* ScratchAnalysisBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR05 /* ScratchAnalysisBridge.mm */; };
+		SLCORE00000000000000BF03 /* ScratchAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR06 /* ScratchAnalysis.swift */; };
+		SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */; };
+		SLCORE00000000000000BF05 /* ScratchAnalysisFixtureAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */; };
+		SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */; };
+		SLCORE00000000000000BF07 /* ScratchAnalysisTimelineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */; };
+		SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */; };
+		SLCORE00000000000000BF09 /* ScratchAnalysisCheckedInFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */; };
+		SLCORE00000000000000BF10 /* ScratchAnalysisTrimmedRealFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */; };
+		SLCORE00000000000000BF11 /* ScratchAnalysisNotationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */; };
+		SLCORE00000000000000BF12 /* ScratchAnalysisNotationIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */; };
+		SLCORE00000000000000BF13 /* ScratchAnalysisRealFaderFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */; };
+		SLCORE00000000000000BF14 /* ScratchAnalysisNotationComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */; };
+		SLCORE00000000000000BF15 /* ScratchAnalysisNotationComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */; };
+		SLCORE00000000000000BF16 /* ScratchAnalysisNotationComparisonExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */; };
+		SLCORE00000000000000BF17 /* ScratchAnalysisNotationComparisonExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */; };
+		SLCORE00000000000000BF18 /* ScratchAnalysisNotationIntentExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR25 /* ScratchAnalysisNotationIntentExport.swift */; };
+		SLCORE00000000000000BF19 /* ScratchAnalysisNotationIntentExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR26 /* ScratchAnalysisNotationIntentExportTests.swift */; };
+		SLCORE00000000000000BF20 /* ScratchNotationIntentDebugFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */; };
+		SLCORE00000000000000BF21 /* ScratchNotationIntentDebugFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */; };
+		SLCORE00000000000000BF22 /* ScratchNotationLanePreviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */; };
+		SLCORE00000000000000BF23 /* ScratchNotationLanePreviewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */; };
+		SLCORE00000000000000BF24 /* ScratchNotationLaneDisplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */; };
+		SLCORE00000000000000BF25 /* ScratchNotationLaneDisplayModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */; };
+		SLCORE00000000000000BF26 /* ScratchNotationTravelMotionPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */; };
+		SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */; };
 		SLCORE00000000000000BF28 /* TravelLaneDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR35 /* TravelLaneDebugView.swift */; };
 		SLCORE00000000000000BF29 /* TravelLaneDebugComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */; };
+		SLCORE00000000000000BF30 /* ScratchTimelineProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */; };
+		SLCORE00000000000000BF31 /* ScratchTimelineProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */; };
+		SLCORE00000000000000BF32 /* ScratchStrokeGeometryTravelAmplitudeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */; };
+		SLCORE00000000000000BF33 /* ScratchDetectedNotationLaneAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */; };
 		SLCORE00000000000000BF34 /* ScratchDetectedNotationLaneAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR41 /* ScratchDetectedNotationLaneAdapterTests.swift */; };
+		SLCORE00000000000000BF50 /* ScratchRawPlatterLaneAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */; };
 		SLCORE00000000000000BF51 /* ScratchRawPlatterLaneAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR51 /* ScratchRawPlatterLaneAdapterTests.swift */; };
+		SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */; };
+		SLCORE00000000000000BFR2 /* scratch_timeline_cc6_real_trimmed_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */; };
+		SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */; };
+		SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */; };
+		SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SML0000000SML001SML00001 /* ScratchMotionLane.swift */; };
+		SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
+		SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
+		SNA1001000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
+		SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
+		SNA2011000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */; };
+		SNC0010001SNC001SNC00001 /* ScratchNotationCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */; };
 		SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */; };
 		SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */; };
-		PVM0001000PVM001PVM00003 /* PhraseViewportModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */; };
-		DTF0001000DTF001DTF00001 /* DemoTimingFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */; };
 		SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
 		SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
-		SCT0001000SCT001SCT00001 /* ScratchClassifying.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */; };
+		SQA0001000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */; };
+		SQA0002000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */; };
+		SQT0001000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */; };
+		SRA1001000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
+		SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
+		SRA2011000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */; };
+		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
+		SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
+		SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
+		SRM0001000SRM001SRM00001 /* SessionReviewMetadataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */; };
+		SRT0001000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
+		SRT0002000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
+		SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
+		SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
+		SRX0001000SRX001SRX00001 /* SessionReplayTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */; };
+		SRY0001000SRY001SRY00001 /* SessionReplayClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */; };
+		SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */; };
+		SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */; };
 		STS0001000STS001STS00001 /* ScratchTypeMetadataSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */; };
-		SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */; };
 		STT0001000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */; };
-		SARF0001000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */; };
-		A5000061 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
-		A5000062 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
-		A5000063 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
-		A5000064 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
-		A5000065 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
-		A5000071 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
-		A5000072 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
-		A5000073 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
-		A5000074 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
-		A5000075 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
-		A5000066 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
-		A5000076 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
+		TGN1001000TGN001TGN00001 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
+		TGN1001000TGN001TGN00002 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
+		TGN2011000TGN002TGN00001 /* TimingGridTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN2010000TGN002TGN00001 /* TimingGridTests.swift */; };
+		TML0001000TML001TML00001 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
+		TML0001000TML001TML00002 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
+		TOM1001000TOM001TOM00001 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
+		TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
+		TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */; };
+		TWE1001000TWE001TWE00001 /* TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* TimingWindow.swift */; };
+		TWE1001000TWE001TWE00002 /* TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* TimingWindow.swift */; };
+		TWE2011000TWE002TWE00001 /* TimingWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */; };
+		VCG0001000VCG001VCG00001 /* VisionCaptureGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */; };
+		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
+		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
+		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
+		VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */; };
+		VPRESB01VPRESB01VPRESB01 /* VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* VirtualPlatter */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -385,7 +398,6 @@
 		517A55FE2FAE1C02009EC734 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			dstPath = /usr/share/man/man1/;
-			dstSubfolder = None;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 1;
@@ -393,7 +405,6 @@
 		A6000010 /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolder = Product;
 			files = (
 				1F43B56CDA679F906F8F1F25 /* ScratchLabWatch.app in Embed Watch Content */,
 			);
@@ -402,55 +413,15 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		SLCORE00000000000000FR01 /* ScratchNotationTypes.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = ScratchNotationTypes.hpp; sourceTree = "<group>"; };
-		SLCORE00000000000000FR02 /* ScratchAnalysisCore.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = ScratchAnalysisCore.hpp; sourceTree = "<group>"; };
-		SLCORE00000000000000FR03 /* ScratchAnalysisCore.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ScratchAnalysisCore.cpp; sourceTree = "<group>"; };
-		SLCORE00000000000000FR04 /* ScratchAnalysisBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScratchAnalysisBridge.h; sourceTree = "<group>"; };
-		SLCORE00000000000000FR05 /* ScratchAnalysisBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ScratchAnalysisBridge.mm; sourceTree = "<group>"; };
-		SLCORE00000000000000FR06 /* ScratchAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysis.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR07 /* ScratchLabDesktop-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "ScratchLabDesktop-Bridging-Header.h"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisBridgeTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisFixtureAdapter.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisFixtureDecodeTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisTimelineAdapter.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationAdapter.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationComparison.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationComparisonExport.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR25 /* ScratchAnalysisNotationIntentExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchAnalysisNotationIntentExport.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR26 /* ScratchAnalysisNotationIntentExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationIntentExportTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationIntentDebugFormatter.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationLanePreviewModel.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationLaneDisplayModel.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchTimelineProvenance.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTimelineProvenanceTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometryTravelAmplitudeTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR41 /* ScratchDetectedNotationLaneAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchDetectedNotationLaneAdapterTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR51 /* ScratchRawPlatterLaneAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchRawPlatterLaneAdapterTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchNotationTravelMotionPath.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchDetectedNotationLaneAdapter.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Analysis/ScratchRawPlatterLaneAdapter.swift"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTravelMotionPathTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLaneDisplayModelTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLanePreviewModelTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationIntentDebugFormatterTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationComparisonExportTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationComparisonTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationIntentTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealRaneFixtureTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Fixtures/scratch_timeline_cc6_baby_fixture.json"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisCheckedInFixtureTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisTrimmedRealFixtureTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Fixtures/scratch_timeline_cc6_real_trimmed_fixture.json"; sourceTree = "<group>"; };
-		SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealFaderFixtureTests.swift; sourceTree = "<group>"; };
-		SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "Fixtures/scratch_timeline_cc6_real_fader_cut_fixture.json"; sourceTree = "<group>"; };
-		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
-		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
-		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
+		03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSourceState.swift; path = TimecodeSourceState.swift; sourceTree = "<group>"; };
 		0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ReadingDeprecated.swift"; sourceTree = "<group>"; };
 		148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+WritingDeprecated.swift"; sourceTree = "<group>"; };
 		176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionSharePresenter.swift; sourceTree = "<group>"; };
 		1783A90FC878E8D656330AFD /* Data+Compression.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Data+Compression.swift"; sourceTree = "<group>"; };
+		1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeInputTap.swift; path = TimecodeInputTap.swift; sourceTree = "<group>"; };
 		2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureReliabilityPhase1Tests.swift; sourceTree = "<group>"; };
+		207BAC452827202EE87BABD7 /* TimecodeInputStatusCard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeInputStatusCard.swift; path = TimecodeInputStatusCard.swift; sourceTree = "<group>"; };
+		297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnostics.swift; path = TimecodeSignalDiagnostics.swift; sourceTree = "<group>"; };
 		32CC571642E05056BEF1F753 /* LICENSE */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
 		35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchLabWatchApp.swift; sourceTree = "<group>"; };
 		39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIP.swift"; sourceTree = "<group>"; };
@@ -463,7 +434,7 @@
 		517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ScratchLabDatasetBuilder; sourceTree = BUILT_PRODUCTS_DIR; };
 		518282CE2F5DD2800077484A /* ScratchLab 2.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ScratchLab 2.xctestplan"; sourceTree = "<group>"; };
 		51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachPreviewView.swift; sourceTree = "<group>"; };
-		51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Coach/Coach.usdz; sourceTree = "<group>"; };
+		51C2E59F2FA1B00000E87B79 /* Coach.usdz */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Coach/Coach.usdz; sourceTree = "<group>"; };
 		60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+BackingConfiguration.swift"; sourceTree = "<group>"; };
 		66649EBF865FFA9347DA6AC9 /* FileManager+ZIPDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIPDeprecated.swift"; sourceTree = "<group>"; };
 		6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+Serialization.swift"; sourceTree = "<group>"; };
@@ -471,7 +442,6 @@
 		7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLabWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7D1A2B3C4E5F00017D1A2B3C /* HandDirectionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTracker.swift; sourceTree = "<group>"; };
 		7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandDirectionTrackerTests.swift; sourceTree = "<group>"; };
-		VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCaptureGateTests.swift; sourceTree = "<group>"; };
 		814A24D8C57AEC800882D641 /* Entry+InfoZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+InfoZIP.swift"; sourceTree = "<group>"; };
 		822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchMotionCaptureStore.swift; sourceTree = "<group>"; };
 		822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StagedCaptureRecovery.swift; sourceTree = "<group>"; };
@@ -479,10 +449,11 @@
 		8EDD250716FA81582843E833 /* WatchMotionCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchMotionCapture.swift; sourceTree = "<group>"; };
 		99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Data+CompressionDeprecated.swift"; sourceTree = "<group>"; };
 		9B0FC101729EC232E4DCDC86 /* Archive+Writing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Writing.swift"; sourceTree = "<group>"; };
+		9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeAudioBuffer.swift; path = TimecodeAudioBuffer.swift; sourceTree = "<group>"; };
 		A2000001 /* ScratchLabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabApp.swift; sourceTree = "<group>"; };
 		A2000002 /* MainMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainMenuView.swift; sourceTree = "<group>"; };
 		A2000003 /* LevelSelectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelSelectView.swift; sourceTree = "<group>"; };
-		A2000004 /* PracticeModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeModeView.swift; sourceTree = "<group>"; };		SML0000000SML001SML00001 /* ScratchMotionLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionLane.swift; sourceTree = "<group>"; };
+		A2000004 /* PracticeModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeModeView.swift; sourceTree = "<group>"; };
 		A2000005 /* Scratch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scratch.swift; sourceTree = "<group>"; };
 		A2000006 /* GameState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameState.swift; sourceTree = "<group>"; };
 		A2000007 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
@@ -504,22 +475,31 @@
 		A2000027 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000028 /* ScratchLabNotificationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabNotificationController.swift; sourceTree = "<group>"; };
 		A2000030 /* StagingInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagingInspectorView.swift; sourceTree = "<group>"; };
-		A2000031 /* Resources/CoachInstructions */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachInstructions; sourceTree = "<group>"; };
-		A2000032 /* Resources/CoachDemoAudio */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoAudio; sourceTree = "<group>"; };
+		A2000031 /* CoachInstructions */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachInstructions; sourceTree = "<group>"; };
+		A2000032 /* CoachDemoAudio */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoAudio; sourceTree = "<group>"; };
 		A2000033 /* ScratchCoachViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchCoachViews.swift; sourceTree = "<group>"; };
 		A2000034 /* ScratchMotionAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionAnalysis.swift; sourceTree = "<group>"; };
-		A2000035 /* Resources/CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
-		A2000036 /* Resources/Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
-		VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
-		A2000040 /* Resources/reference_beginner */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_beginner; sourceTree = "<group>"; };
-		A2000041 /* Resources/reference_champ */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_champ; sourceTree = "<group>"; };
-		A2000042 /* Resources/reference_pro */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_pro; sourceTree = "<group>"; };
+		A2000035 /* CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
+		A2000036 /* Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
+		A2000040 /* reference_beginner */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_beginner; sourceTree = "<group>"; };
+		A2000041 /* reference_champ */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_champ; sourceTree = "<group>"; };
+		A2000042 /* reference_pro */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_pro; sourceTree = "<group>"; };
 		A3000001 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5000051 /* ScratchClassLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassLabel.swift; sourceTree = "<group>"; };
+		A5000052 /* NotationCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidate.swift; sourceTree = "<group>"; };
+		A5000053 /* AudioOnsetDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOnsetDetector.swift; sourceTree = "<group>"; };
+		A5000054 /* NotationCandidateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateBuilder.swift; sourceTree = "<group>"; };
+		A5000055 /* NotationCandidateDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateDiagnostics.swift; sourceTree = "<group>"; };
+		A5000056 /* ReviewAudioOnsetPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewAudioOnsetPreview.swift; sourceTree = "<group>"; };
 		AA100001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AA200001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Helpers.swift"; sourceTree = "<group>"; };
 		AC2FA5C155AEA197428B94F6 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		AC927BE2AC20BBF592338F0B /* Entry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Entry.swift; sourceTree = "<group>"; };
+		APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Phrasing/AudioPhraseGridProjection.swift; sourceTree = "<group>"; };
+		APG2010000APG002APG00001 /* AudioPhraseGridProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPhraseGridProjectionTests.swift; sourceTree = "<group>"; };
+		APS1000000APS001APS00001 /* AudioPhraseSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Phrasing/AudioPhraseSummary.swift; sourceTree = "<group>"; };
+		APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPhraseSummaryTests.swift; sourceTree = "<group>"; };
 		B2000001 /* ScratchLabDesktopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesktopApp.swift; sourceTree = "<group>"; };
 		B2000002 /* MacAnalyzerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAnalyzerView.swift; sourceTree = "<group>"; };
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
@@ -532,153 +512,194 @@
 		B2000010 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		B2000011 /* ScratchLabDesktop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScratchLabDesktop.entitlements; sourceTree = "<group>"; };
 		B9886FB2B8E07860472DD229 /* WatchCaptureView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchCaptureView.swift; sourceTree = "<group>"; };
+		BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabyPlatterFixtureDecodeTests.swift; sourceTree = "<group>"; };
 		C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaptureReliability.swift; sourceTree = "<group>"; };
 		C11CD9497FC8B738E59E347C /* Archive+Reading.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Reading.swift"; sourceTree = "<group>"; };
 		C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchCaptureHubView.swift; sourceTree = "<group>"; };
 		C71F1101A1B2C3D4E5F60711 /* ClickTrackEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClickTrackEngine.swift; sourceTree = "<group>"; };
 		C71F1201A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchLabBeatEngine.swift; sourceTree = "<group>"; };
+		CES1000000CES001CES00001 /* CoachingEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEvent.swift; sourceTree = "<group>"; };
+		CES2010000CES002CES00001 /* CoachingEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventTests.swift; sourceTree = "<group>"; };
+		CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventVocabulary.swift; sourceTree = "<group>"; };
+		CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventVocabularyTests.swift; sourceTree = "<group>"; };
+		CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayCalibration.swift; sourceTree = "<group>"; };
+		CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayGeometry.swift; sourceTree = "<group>"; };
+		CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedNotationTravelTests.swift; sourceTree = "<group>"; };
+		COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayTests.swift; sourceTree = "<group>"; };
+		CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPassthroughNotationView.swift; sourceTree = "<group>"; };
+		CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventSummary.swift; sourceTree = "<group>"; };
+		CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventSummaryTests.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
 		D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureCore.swift; sourceTree = "<group>"; };
-		PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModel.swift; sourceTree = "<group>"; };
+		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAudioClock.swift; sourceTree = "<group>"; };
-		PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeReelTimeline.swift; sourceTree = "<group>"; };
-		TML0000000TML001TML00001 /* TimingLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingLane.swift; sourceTree = "<group>"; };
-		SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometry.swift; sourceTree = "<group>"; };
-		SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionRenderer.swift; sourceTree = "<group>"; };
-		PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimeline.swift; sourceTree = "<group>"; };
-		NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitive.swift; sourceTree = "<group>"; };
-		NGP2000000NGP002NGP00001 /* GrammarParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/GrammarParameters.swift; sourceTree = "<group>"; };
-		NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitiveDerivation.swift; sourceTree = "<group>"; };
-		NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarTests.swift; sourceTree = "<group>"; };
-		NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarFixtureTests.swift; sourceTree = "<group>"; };
-		TGN1000000TGN001TGN00001 /* TimingGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingGrid.swift; sourceTree = "<group>"; };
-		TGN2010000TGN002TGN00001 /* TimingGridTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingGridTests.swift; sourceTree = "<group>"; };
-		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
-		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
-		TWE1000000TWE001TWE00001 /* TimingWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingWindow.swift; sourceTree = "<group>"; };
-		TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingWindowTests.swift; sourceTree = "<group>"; };
-		PHR1000000PHR001PHR00001 /* Phrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/Phrase.swift; sourceTree = "<group>"; };
-		PHR2010000PHR002PHR00001 /* PhraseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTests.swift; sourceTree = "<group>"; };
-		ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/ExpectedTiming.swift; sourceTree = "<group>"; };
-		ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpectedTimingTests.swift; sourceTree = "<group>"; };
-		PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/PhraseTimingSummary.swift; sourceTree = "<group>"; };
-		PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTimingSummaryTests.swift; sourceTree = "<group>"; };
-		APS1000000APS001APS00001 /* AudioPhraseSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Phrasing/AudioPhraseSummary.swift; sourceTree = "<group>"; };
-		APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPhraseSummaryTests.swift; sourceTree = "<group>"; };
-		APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Phrasing/AudioPhraseGridProjection.swift; sourceTree = "<group>"; };
-		APG2010000APG002APG00001 /* AudioPhraseGridProjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPhraseGridProjectionTests.swift; sourceTree = "<group>"; };
-		TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingOriginMarker.swift; sourceTree = "<group>"; };
-		TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingOriginMarkerTests.swift; sourceTree = "<group>"; };
-		SFV1000000SFV001SFV00001 /* ScratchFamily.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamily.swift; sourceTree = "<group>"; };
-		SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyTests.swift; sourceTree = "<group>"; };
-		SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilyAttachment.swift; sourceTree = "<group>"; };
-		SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyAttachmentTests.swift; sourceTree = "<group>"; };
-		SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilyAnnotationSet.swift; sourceTree = "<group>"; };
-		SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyAnnotationSetTests.swift; sourceTree = "<group>"; };
-		SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilySummary.swift; sourceTree = "<group>"; };
-		SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilySummaryTests.swift; sourceTree = "<group>"; };
-		CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventVocabulary.swift; sourceTree = "<group>"; };
-		CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventVocabularyTests.swift; sourceTree = "<group>"; };
-		CES1000000CES001CES00001 /* CoachingEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEvent.swift; sourceTree = "<group>"; };
-		CES2010000CES002CES00001 /* CoachingEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventTests.swift; sourceTree = "<group>"; };
+		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
 		DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/DriftCoachingEvaluator.swift; sourceTree = "<group>"; };
 		DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriftCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
-		PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/PhraseCoachingEvaluator.swift; sourceTree = "<group>"; };
-		PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
-		CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventSummary.swift; sourceTree = "<group>"; };
-		CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventSummaryTests.swift; sourceTree = "<group>"; };
-		NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPresentationModel.swift; sourceTree = "<group>"; };
-		NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPresentationModelTests.swift; sourceTree = "<group>"; };
-		NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationLaneGeometry.swift; sourceTree = "<group>"; };
-		NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryTests.swift; sourceTree = "<group>"; };
-		NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPlayheadGeometry.swift; sourceTree = "<group>"; };
-		NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPlayheadGeometryTests.swift; sourceTree = "<group>"; };
-		NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationGridlineGeometry.swift; sourceTree = "<group>"; };
-		NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGridlineGeometryTests.swift; sourceTree = "<group>"; };
-		NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationViewportWindow.swift; sourceTree = "<group>"; };
-		NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationViewportWindowTests.swift; sourceTree = "<group>"; };
-		NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationReplayModel.swift; sourceTree = "<group>"; };
-		NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationReplayModelTests.swift; sourceTree = "<group>"; };
-		SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/ScratchNotationPresentationAdapter.swift; sourceTree = "<group>"; };
-		SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPresentationAdapterTests.swift; sourceTree = "<group>"; };
-		SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/SessionReplayPresentationAdapter.swift; sourceTree = "<group>"; };
-		SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayPresentationAdapterTests.swift; sourceTree = "<group>"; };
 		DLH2010000DLH002DLH00001 /* DebugNotationLaneHostViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugNotationLaneHostViewTests.swift; sourceTree = "<group>"; };
 		DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugReviewNotationCard.swift; sourceTree = "<group>"; };
 		DRT2010000DRT002DRT00001 /* DebugReviewNotationCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugReviewNotationCardTests.swift; sourceTree = "<group>"; };
-		NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryView.swift; sourceTree = "<group>"; };
-		NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryViewPreview.swift; sourceTree = "<group>"; };
-		NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugNotationLaneHostView.swift; sourceTree = "<group>"; };
-		NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryViewTests.swift; sourceTree = "<group>"; };
-		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
-		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
-		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
-		PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorderTests.swift; sourceTree = "<group>"; };
-		BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabyPlatterFixtureDecodeTests.swift; sourceTree = "<group>"; };
-		SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReviewValidator.swift; sourceTree = "<group>"; };
-		SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReviewMetadataTests.swift; sourceTree = "<group>"; };
-		SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionQualityAnalyzer.swift; sourceTree = "<group>"; };
-		SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionQualityAnalyzerTests.swift; sourceTree = "<group>"; };
-		SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayTimeline.swift; sourceTree = "<group>"; };
-		SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayTimelineTests.swift; sourceTree = "<group>"; };
-		SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayClock.swift; sourceTree = "<group>"; };
-		SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayClockTests.swift; sourceTree = "<group>"; };
-		ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimeline.swift; sourceTree = "<group>"; };
-		RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayLaneView.swift; sourceTree = "<group>"; };
-		ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimelineTests.swift; sourceTree = "<group>"; };
-		ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayReplayController.swift; sourceTree = "<group>"; };
-		ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayReplayControllerTests.swift; sourceTree = "<group>"; };
-		OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnostics.swift; sourceTree = "<group>"; };
-		OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnosticsTests.swift; sourceTree = "<group>"; };
-		ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnostics.swift; sourceTree = "<group>"; };
-		ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnosticsTests.swift; sourceTree = "<group>"; };
-		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
-		CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedNotationTravelTests.swift; sourceTree = "<group>"; };
-		LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayModel.swift; sourceTree = "<group>"; };
-		CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayGeometry.swift; sourceTree = "<group>"; };
-		CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayCalibration.swift; sourceTree = "<group>"; };
-		LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayView.swift; sourceTree = "<group>"; };
-		CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPassthroughNotationView.swift; sourceTree = "<group>"; };
-		LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayTests.swift; sourceTree = "<group>"; };
-		COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayTests.swift; sourceTree = "<group>"; };
-		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
-		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
-		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
+		DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoTimingFoundationTests.swift; sourceTree = "<group>"; };
 		E9B72DE2BF30889F57FDADD5 /* WatchMotionRecorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchMotionRecorder.swift; sourceTree = "<group>"; };
+		ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/ExpectedTiming.swift; sourceTree = "<group>"; };
+		ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpectedTimingTests.swift; sourceTree = "<group>"; };
 		F02E4CEF8129F5BD651B9FFE /* Archive+MemoryFile.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+MemoryFile.swift"; sourceTree = "<group>"; };
 		F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+ZIP64.swift"; sourceTree = "<group>"; };
 		F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionUploadManager.swift; sourceTree = "<group>"; };
 		F5340BA4F19B19302EC6A347 /* Archive.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Archive.swift; sourceTree = "<group>"; };
+		F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeInputSample.swift; path = TimecodeInputSample.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnosticsTests.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
+		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
+		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
+		LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayModel.swift; sourceTree = "<group>"; };
+		LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayTests.swift; sourceTree = "<group>"; };
+		LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayView.swift; sourceTree = "<group>"; };
+		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
+		NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarFixtureTests.swift; sourceTree = "<group>"; };
+		NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationGridlineGeometry.swift; sourceTree = "<group>"; };
+		NGG2010000NGG002NGG00001 /* NotationGridlineGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGridlineGeometryTests.swift; sourceTree = "<group>"; };
+		NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitive.swift; sourceTree = "<group>"; };
+		NGP2000000NGP002NGP00001 /* GrammarParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/GrammarParameters.swift; sourceTree = "<group>"; };
+		NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Grammar/NotationPrimitiveDerivation.swift; sourceTree = "<group>"; };
+		NGP4010000NGP004NGP00001 /* NotationGrammarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarTests.swift; sourceTree = "<group>"; };
+		NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationLaneGeometry.swift; sourceTree = "<group>"; };
+		NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryTests.swift; sourceTree = "<group>"; };
+		NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugNotationLaneHostView.swift; sourceTree = "<group>"; };
+		NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryViewPreview.swift; sourceTree = "<group>"; };
+		NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryView.swift; sourceTree = "<group>"; };
+		NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryViewTests.swift; sourceTree = "<group>"; };
+		NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPlayheadGeometry.swift; sourceTree = "<group>"; };
+		NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPlayheadGeometryTests.swift; sourceTree = "<group>"; };
+		NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPresentationModel.swift; sourceTree = "<group>"; };
+		NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPresentationModelTests.swift; sourceTree = "<group>"; };
+		NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationReplayModel.swift; sourceTree = "<group>"; };
+		NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationReplayModelTests.swift; sourceTree = "<group>"; };
 		NST0000000NST001NST00001 /* NotationSheetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationSheetTests.swift; sourceTree = "<group>"; };
 		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
+		NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationViewportWindow.swift; sourceTree = "<group>"; };
+		NVW2010000NVW002NVW00001 /* NotationViewportWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationViewportWindowTests.swift; sourceTree = "<group>"; };
+		ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnostics.swift; sourceTree = "<group>"; };
+		ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnosticsTests.swift; sourceTree = "<group>"; };
+		ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayReplayController.swift; sourceTree = "<group>"; };
+		ORT0000000ORT001ORT00001 /* OverlayReplayControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayReplayControllerTests.swift; sourceTree = "<group>"; };
+		OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnostics.swift; sourceTree = "<group>"; };
+		OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayTimingDiagnosticsTests.swift; sourceTree = "<group>"; };
+		PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/PhraseCoachingEvaluator.swift; sourceTree = "<group>"; };
+		PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseCoachingEvaluatorTests.swift; sourceTree = "<group>"; };
+		PHR1000000PHR001PHR00001 /* Phrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/Phrase.swift; sourceTree = "<group>"; };
+		PHR2010000PHR002PHR00001 /* PhraseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTests.swift; sourceTree = "<group>"; };
+		PPR0000000PPR001PPR00001 /* PlatterPositionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorder.swift; sourceTree = "<group>"; };
+		PPR0010000PPR001PPR00001 /* PlatterPositionRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionRecorderTests.swift; sourceTree = "<group>"; };
+		PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimeline.swift; sourceTree = "<group>"; };
+		PPT0010000PPT001PPT00001 /* PlatterPositionTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterPositionTimelineTests.swift; sourceTree = "<group>"; };
+		PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeReelTimeline.swift; sourceTree = "<group>"; };
+		PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/PhraseTimingSummary.swift; sourceTree = "<group>"; };
+		PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseTimingSummaryTests.swift; sourceTree = "<group>"; };
+		PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModel.swift; sourceTree = "<group>"; };
+		PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModelTests.swift; sourceTree = "<group>"; };
+		RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayLaneView.swift; sourceTree = "<group>"; };
+		ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimeline.swift; sourceTree = "<group>"; };
+		ROX0000000ROX001ROX00001 /* ReviewOverlayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewOverlayTimelineTests.swift; sourceTree = "<group>"; };
+		SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzerReferenceFoldersTests.swift; sourceTree = "<group>"; };
+		SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifierRegistryTests.swift; sourceTree = "<group>"; };
+		SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifying.swift; sourceTree = "<group>"; };
+		SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilyAttachment.swift; sourceTree = "<group>"; };
+		SFA2010000SFA002SFA00001 /* ScratchFamilyAttachmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyAttachmentTests.swift; sourceTree = "<group>"; };
+		SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilySummary.swift; sourceTree = "<group>"; };
+		SFM2010000SFM002SFM00001 /* ScratchFamilySummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilySummaryTests.swift; sourceTree = "<group>"; };
+		SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamilyAnnotationSet.swift; sourceTree = "<group>"; };
+		SFS2010000SFS002SFS00001 /* ScratchFamilyAnnotationSetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyAnnotationSetTests.swift; sourceTree = "<group>"; };
+		SFV1000000SFV001SFV00001 /* ScratchFamily.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Semantics/ScratchFamily.swift; sourceTree = "<group>"; };
+		SFV2010000SFV002SFV00001 /* ScratchFamilyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFamilyTests.swift; sourceTree = "<group>"; };
 		SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabBrandMark.swift; sourceTree = "<group>"; };
-		SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignTokens.swift; sourceTree = "<group>"; };
-		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR01 /* ScratchNotationTypes.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = ScratchNotationTypes.hpp; sourceTree = "<group>"; };
+		SLCORE00000000000000FR02 /* ScratchAnalysisCore.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = ScratchAnalysisCore.hpp; sourceTree = "<group>"; };
+		SLCORE00000000000000FR03 /* ScratchAnalysisCore.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ScratchAnalysisCore.cpp; sourceTree = "<group>"; };
+		SLCORE00000000000000FR04 /* ScratchAnalysisBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScratchAnalysisBridge.h; sourceTree = "<group>"; };
+		SLCORE00000000000000FR05 /* ScratchAnalysisBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ScratchAnalysisBridge.mm; sourceTree = "<group>"; };
+		SLCORE00000000000000FR06 /* ScratchAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysis.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR07 /* ScratchLabDesktop-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "ScratchLabDesktop-Bridging-Header.h"; sourceTree = "<group>"; };
+		SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisBridgeTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR09 /* ScratchAnalysisFixtureAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysisFixtureAdapter.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisFixtureDecodeTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR11 /* ScratchAnalysisTimelineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysisTimelineAdapter.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealRaneFixtureTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Fixtures/scratch_timeline_cc6_baby_fixture.json; sourceTree = "<group>"; };
+		SLCORE00000000000000FR14 /* ScratchAnalysisCheckedInFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisCheckedInFixtureTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR15 /* ScratchAnalysisTrimmedRealFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisTrimmedRealFixtureTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Fixtures/scratch_timeline_cc6_real_trimmed_fixture.json; sourceTree = "<group>"; };
+		SLCORE00000000000000FR17 /* ScratchAnalysisNotationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysisNotationAdapter.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR18 /* ScratchAnalysisNotationIntentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationIntentTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisRealFaderFixtureTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Fixtures/scratch_timeline_cc6_real_fader_cut_fixture.json; sourceTree = "<group>"; };
+		SLCORE00000000000000FR21 /* ScratchAnalysisNotationComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysisNotationComparison.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR22 /* ScratchAnalysisNotationComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationComparisonTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR23 /* ScratchAnalysisNotationComparisonExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysisNotationComparisonExport.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR24 /* ScratchAnalysisNotationComparisonExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationComparisonExportTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR25 /* ScratchAnalysisNotationIntentExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchAnalysisNotationIntentExport.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR26 /* ScratchAnalysisNotationIntentExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalysisNotationIntentExportTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR27 /* ScratchNotationIntentDebugFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchNotationIntentDebugFormatter.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR28 /* ScratchNotationIntentDebugFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationIntentDebugFormatterTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR29 /* ScratchNotationLanePreviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchNotationLanePreviewModel.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR30 /* ScratchNotationLanePreviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLanePreviewModelTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR31 /* ScratchNotationLaneDisplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchNotationLaneDisplayModel.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR32 /* ScratchNotationLaneDisplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationLaneDisplayModelTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR33 /* ScratchNotationTravelMotionPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchNotationTravelMotionPath.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTravelMotionPathTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR35 /* TravelLaneDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelLaneDebugView.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TravelLaneDebugComparisonTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchTimelineProvenance.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTimelineProvenanceTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometryTravelAmplitudeTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchDetectedNotationLaneAdapter.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR41 /* ScratchDetectedNotationLaneAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchDetectedNotationLaneAdapterTests.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchRawPlatterLaneAdapter.swift; sourceTree = "<group>"; };
+		SLCORE00000000000000FR51 /* ScratchRawPlatterLaneAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchRawPlatterLaneAdapterTests.swift; sourceTree = "<group>"; };
+		SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignTokens.swift; sourceTree = "<group>"; };
+		SML0000000SML001SML00001 /* ScratchMotionLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionLane.swift; sourceTree = "<group>"; };
+		SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionRenderer.swift; sourceTree = "<group>"; };
+		SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/ScratchNotationPresentationAdapter.swift; sourceTree = "<group>"; };
+		SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPresentationAdapterTests.swift; sourceTree = "<group>"; };
+		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimeline.swift; sourceTree = "<group>"; };
 		SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationTimelineTests.swift; sourceTree = "<group>"; };
-		PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModelTests.swift; sourceTree = "<group>"; };
-		DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoTimingFoundationTests.swift; sourceTree = "<group>"; };
 		SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPhraseChartView.swift; sourceTree = "<group>"; };
-		SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifying.swift; sourceTree = "<group>"; };
+		SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionQualityAnalyzer.swift; sourceTree = "<group>"; };
+		SQT0000000SQT001SQT00001 /* SessionQualityAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionQualityAnalyzerTests.swift; sourceTree = "<group>"; };
+		SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/SessionReplayPresentationAdapter.swift; sourceTree = "<group>"; };
+		SRA2010000SRA002SRA00001 /* SessionReplayPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayPresentationAdapterTests.swift; sourceTree = "<group>"; };
+		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
+		SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayClock.swift; sourceTree = "<group>"; };
+		SRM0000000SRM001SRM00001 /* SessionReviewMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReviewMetadataTests.swift; sourceTree = "<group>"; };
+		SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReplayTimeline.swift; sourceTree = "<group>"; };
+		SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionReviewValidator.swift; sourceTree = "<group>"; };
+		SRX0000000SRX001SRX00001 /* SessionReplayTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayTimelineTests.swift; sourceTree = "<group>"; };
+		SRY0000000SRY001SRY00001 /* SessionReplayClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayClockTests.swift; sourceTree = "<group>"; };
+		SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometry.swift; sourceTree = "<group>"; };
 		STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTypeMetadataSafety.swift; sourceTree = "<group>"; };
-		SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassifierRegistryTests.swift; sourceTree = "<group>"; };
 		STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTypeMetadataSafetyTests.swift; sourceTree = "<group>"; };
-		SARF0000000SARF1SARF00001 /* ScratchAnalyzerReferenceFoldersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzerReferenceFoldersTests.swift; sourceTree = "<group>"; };
-		A5000051 /* ScratchClassLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchClassLabel.swift; sourceTree = "<group>"; };
-		A5000052 /* NotationCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidate.swift; sourceTree = "<group>"; };
-		A5000053 /* AudioOnsetDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOnsetDetector.swift; sourceTree = "<group>"; };
-		A5000054 /* NotationCandidateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateBuilder.swift; sourceTree = "<group>"; };
-		A5000055 /* NotationCandidateDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationCandidateDiagnostics.swift; sourceTree = "<group>"; };
-		A5000056 /* ReviewAudioOnsetPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewAudioOnsetPreview.swift; sourceTree = "<group>"; };
+		TGN1000000TGN001TGN00001 /* TimingGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingGrid.swift; sourceTree = "<group>"; };
+		TGN2010000TGN002TGN00001 /* TimingGridTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingGridTests.swift; sourceTree = "<group>"; };
+		TML0000000TML001TML00001 /* TimingLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingLane.swift; sourceTree = "<group>"; };
+		TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingOriginMarker.swift; sourceTree = "<group>"; };
+		TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingOriginMarkerTests.swift; sourceTree = "<group>"; };
+		TWE1000000TWE001TWE00001 /* TimingWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingWindow.swift; sourceTree = "<group>"; };
+		TWE2010000TWE002TWE00001 /* TimingWindowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingWindowTests.swift; sourceTree = "<group>"; };
+		VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCaptureGateTests.swift; sourceTree = "<group>"; };
+		VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatter.swift; sourceTree = "<group>"; };
+		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
+		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
+		VPRES001VPRES001VPRES001 /* VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		517A56012FAE1C02009EC734 /* ScratchLabDatasetBuilder */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ScratchLabDatasetBuilder;
 			sourceTree = "<group>";
 		};
@@ -715,25 +736,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		SLCORE0000000000000GRP01 /* ScratchLabCore */ = {
-			isa = PBXGroup;
-			children = (
-				SLCORE00000000000000FR01 /* ScratchNotationTypes.hpp */,
-				SLCORE00000000000000FR02 /* ScratchAnalysisCore.hpp */,
-				SLCORE00000000000000FR03 /* ScratchAnalysisCore.cpp */,
-			);
-			path = ScratchLabCore;
-			sourceTree = "<group>";
-		};
-		SLCORE0000000000000GRP02 /* ScratchLabCoreBridge */ = {
-			isa = PBXGroup;
-			children = (
-				SLCORE00000000000000FR04 /* ScratchAnalysisBridge.h */,
-				SLCORE00000000000000FR05 /* ScratchAnalysisBridge.mm */,
-			);
-			path = ScratchLabCoreBridge;
-			sourceTree = "<group>";
-		};
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -818,6 +820,7 @@
 				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
 				SLCORE00000000000000FR16 /* scratch_timeline_cc6_real_trimmed_fixture.json */,
 				SLCORE00000000000000FR20 /* scratch_timeline_cc6_real_fader_cut_fixture.json */,
+				FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -912,15 +915,15 @@
 				A5000050 /* ML */,
 				A5000008 /* Services */,
 				A2000012 /* Assets.xcassets */,
-				51C2E59F2FA1B00000E87B79 /* Resources/Coach/Coach.usdz */,
-				A2000031 /* Resources/CoachInstructions */,
-				A2000032 /* Resources/CoachDemoAudio */,
-				A2000035 /* Resources/CoachDemoMotion */,
-				A2000036 /* Resources/Notation */,
-				VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */,
-				A2000040 /* Resources/reference_beginner */,
-				A2000041 /* Resources/reference_champ */,
-				A2000042 /* Resources/reference_pro */,
+				51C2E59F2FA1B00000E87B79 /* Coach.usdz */,
+				A2000031 /* CoachInstructions */,
+				A2000032 /* CoachDemoAudio */,
+				A2000035 /* CoachDemoMotion */,
+				A2000036 /* Notation */,
+				VPRES001VPRES001VPRES001 /* VirtualPlatter */,
+				A2000040 /* reference_beginner */,
+				A2000041 /* reference_champ */,
+				A2000042 /* reference_pro */,
 				A2000013 /* Info.plist */,
 				AA100001 /* PrivacyInfo.xcprivacy */,
 				28D8D49DD481E6AE162278BE /* ThirdParty */,
@@ -946,7 +949,8 @@
 				A2000002 /* MainMenuView.swift */,
 				51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */,
 				A2000003 /* LevelSelectView.swift */,
-				A2000004 /* PracticeModeView.swift */,				SML0000000SML001SML00001 /* ScratchMotionLane.swift */,
+				A2000004 /* PracticeModeView.swift */,
+				SML0000000SML001SML00001 /* ScratchMotionLane.swift */,
 				A2000014 /* AIBattleModeView.swift */,
 				A2000023 /* FormulaPlaygroundView.swift */,
 				A2000026 /* CompanionCameraView.swift */,
@@ -1009,6 +1013,11 @@
 				A2000034 /* ScratchMotionAnalysis.swift */,
 				8EDD250716FA81582843E833 /* WatchMotionCapture.swift */,
 				VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */,
+				F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */,
+				9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */,
+				03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */,
+				297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */,
+				1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1030,19 +1039,6 @@
 				A2000010 /* EquipmentDetector.swift */,
 			);
 			path = Detection;
-			sourceTree = "<group>";
-		};
-		A5000050 /* ML */ = {
-			isa = PBXGroup;
-			children = (
-				A5000051 /* ScratchClassLabel.swift */,
-				A5000052 /* NotationCandidate.swift */,
-				A5000053 /* AudioOnsetDetector.swift */,
-				A5000054 /* NotationCandidateBuilder.swift */,
-				A5000055 /* NotationCandidateDiagnostics.swift */,
-				A5000056 /* ReviewAudioOnsetPreview.swift */,
-			);
-			path = ML;
 			sourceTree = "<group>";
 		};
 		A5000008 /* Services */ = {
@@ -1076,6 +1072,19 @@
 			path = Formula;
 			sourceTree = "<group>";
 		};
+		A5000050 /* ML */ = {
+			isa = PBXGroup;
+			children = (
+				A5000051 /* ScratchClassLabel.swift */,
+				A5000052 /* NotationCandidate.swift */,
+				A5000053 /* AudioOnsetDetector.swift */,
+				A5000054 /* NotationCandidateBuilder.swift */,
+				A5000055 /* NotationCandidateDiagnostics.swift */,
+				A5000056 /* ReviewAudioOnsetPreview.swift */,
+			);
+			path = ML;
+			sourceTree = "<group>";
+		};
 		B5000001 /* ScratchLabDesktop */ = {
 			isa = PBXGroup;
 			children = (
@@ -1107,22 +1116,9 @@
 				RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */,
 				LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */,
 				CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */,
+				207BAC452827202EE87BABD7 /* TimecodeInputStatusCard.swift */,
 			);
 			path = Views;
-			sourceTree = "<group>";
-		};
-		ROM0000000ROM001ROM00001 /* Models */ = {
-			isa = PBXGroup;
-			children = (
-				ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */,
-				ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */,
-				OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */,
-				ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */,
-				LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */,
-				CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */,
-				CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */,
-			);
-			path = Models;
 			sourceTree = "<group>";
 		};
 		B5000003 /* Services */ = {
@@ -1178,6 +1174,39 @@
 			path = ScratchLabWatch;
 			sourceTree = "<group>";
 		};
+		ROM0000000ROM001ROM00001 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				ROT0000000ROT001ROT00001 /* ReviewOverlayTimeline.swift */,
+				ORC0000000ORC001ORC00001 /* OverlayReplayController.swift */,
+				OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */,
+				ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */,
+				LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */,
+				CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */,
+				CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		SLCORE0000000000000GRP01 /* ScratchLabCore */ = {
+			isa = PBXGroup;
+			children = (
+				SLCORE00000000000000FR01 /* ScratchNotationTypes.hpp */,
+				SLCORE00000000000000FR02 /* ScratchAnalysisCore.hpp */,
+				SLCORE00000000000000FR03 /* ScratchAnalysisCore.cpp */,
+			);
+			path = ScratchLabCore;
+			sourceTree = "<group>";
+		};
+		SLCORE0000000000000GRP02 /* ScratchLabCoreBridge */ = {
+			isa = PBXGroup;
+			children = (
+				SLCORE00000000000000FR04 /* ScratchAnalysisBridge.h */,
+				SLCORE00000000000000FR05 /* ScratchAnalysisBridge.mm */,
+			);
+			path = ScratchLabCoreBridge;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1190,6 +1219,8 @@
 				09C738A56A342FC5A7BBBEA3 /* Resources */,
 			);
 			buildRules = (
+			);
+			dependencies = (
 			);
 			name = ScratchLabDesktop;
 			productName = ScratchLab;
@@ -1224,6 +1255,8 @@
 			);
 			buildRules = (
 			);
+			dependencies = (
+			);
 			name = ScratchLabWatch;
 			productName = ScratchLabWatch;
 			productReference = 7C0C3A59C2BEF81474587F95 /* ScratchLabWatch.app */;
@@ -1238,6 +1271,8 @@
 				517A55FE2FAE1C02009EC734 /* CopyFiles */,
 			);
 			buildRules = (
+			);
+			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
 				517A56012FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
@@ -1307,22 +1342,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		SLCORE0000000000000RES01 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			files = (
-				SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */,
-				SLCORE00000000000000BFR2 /* scratch_timeline_cc6_real_trimmed_fixture.json in Resources */,
-				SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */,
-			);
-		};
 		09C738A56A342FC5A7BBBEA3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */,
-				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
-				B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */,
-				B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */,
-				B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */,
+				B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */,
+				51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */,
+				B9AF9ED6370241CF8BEFDB7C /* CoachDemoAudio in Resources */,
+				B9AF9ED7370241CF8BEFDB7C /* CoachDemoMotion in Resources */,
+				B9AF9ED8370241CF8BEFDB7C /* Notation in Resources */,
 				772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */,
 				AA200002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
@@ -1330,12 +1357,12 @@
 		A6000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */,
-				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
-				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
-				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
-				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
-				VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */,
+				219D8D60A93840FC9A724C11 /* CoachInstructions in Resources */,
+				51C2E59E2FA1B00000E87B79 /* Coach.usdz in Resources */,
+				219D8D61A93840FC9A724C11 /* CoachDemoAudio in Resources */,
+				219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */,
+				219D8D63A93840FC9A724C11 /* Notation in Resources */,
+				VPRESB01VPRESB01VPRESB01 /* VirtualPlatter in Resources */,
 				A1000012 /* Assets.xcassets in Resources */,
 				AA100002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
@@ -1344,6 +1371,14 @@
 			isa = PBXResourcesBuildPhase;
 			files = (
 				1EB5D329CFC53135D9B1B22B /* Assets.xcassets in Resources */,
+			);
+		};
+		SLCORE0000000000000RES01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+				SLCORE00000000000000BFR1 /* scratch_timeline_cc6_baby_fixture.json in Resources */,
+				SLCORE00000000000000BFR2 /* scratch_timeline_cc6_real_trimmed_fixture.json in Resources */,
+				SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */
@@ -1492,6 +1527,12 @@
 				A5000064 /* NotationCandidateBuilder.swift in Sources */,
 				A5000065 /* NotationCandidateDiagnostics.swift in Sources */,
 				A5000066 /* ReviewAudioOnsetPreview.swift in Sources */,
+				2C4B2B2BD4F9BA27F7911B8D /* TimecodeInputStatusCard.swift in Sources */,
+				D089BA0E666DF21B4EE91767 /* TimecodeInputSample.swift in Sources */,
+				B12CAD53EF004A129E9C2684 /* TimecodeAudioBuffer.swift in Sources */,
+				14D30A730D2E3376F83B18F1 /* TimecodeSourceState.swift in Sources */,
+				4DAB9D29DE22539C24AB3F8C /* TimecodeSignalDiagnostics.swift in Sources */,
+				286B96641152894682458B21 /* TimecodeInputTap.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
@@ -1506,7 +1547,8 @@
 				A1000002 /* MainMenuView.swift in Sources */,
 				51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */,
 				A1000003 /* LevelSelectView.swift in Sources */,
-				A1000004 /* PracticeModeView.swift in Sources */,				SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */,
+				A1000004 /* PracticeModeView.swift in Sources */,
+				SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */,
 				SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */,
 				A1000025 /* CompanionCameraView.swift in Sources */,
 				A1000029 /* StagingInspectorView.swift in Sources */,
@@ -1611,6 +1653,11 @@
 				A5000074 /* NotationCandidateBuilder.swift in Sources */,
 				A5000075 /* NotationCandidateDiagnostics.swift in Sources */,
 				A5000076 /* ReviewAudioOnsetPreview.swift in Sources */,
+				BCFC2E48C8DC97B933BA3EE3 /* TimecodeInputSample.swift in Sources */,
+				4934D6433CE6AA4371B2AD63 /* TimecodeAudioBuffer.swift in Sources */,
+				4B483DA41620D1907FC95730 /* TimecodeSourceState.swift in Sources */,
+				E703D86CF507D3F590ED4BD7 /* TimecodeSignalDiagnostics.swift in Sources */,
+				3B68EB2B270340C8214395BA /* TimecodeInputTap.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {
@@ -1705,6 +1752,7 @@
 				CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */,
 				LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */,
 				COT0001000COT001COT00001 /* CameraNotationOverlayTests.swift in Sources */,
+				8D4B3424898BEBDDC8D70A9A /* TimecodeSignalDiagnosticsTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
@@ -1725,15 +1773,9 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		3A736F4180F83313301E9FDB /* Debug configuration for PBXNativeTarget "ScratchLabDesktop" */ = {
+		3A736F4180F83313301E9FDB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-					HEADER_SEARCH_PATHS = (
-						"$(inherited)",
-						"$(SRCROOT)/ScratchLabCore",
-						"$(SRCROOT)/ScratchLabCoreBridge",
-					);
-					SWIFT_OBJC_BRIDGING_HEADER = "ScratchLabDesktop/ScratchLabDesktop-Bridging-Header.h";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements;
@@ -1744,6 +1786,11 @@
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ScratchLabCore",
+					"$(SRCROOT)/ScratchLabCoreBridge",
+				);
 				INFOPLIST_FILE = ScratchLabDesktop/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1756,11 +1803,12 @@
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "ScratchLabDesktop/ScratchLabDesktop-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
 		};
-		517A56042FAE1C02009EC734 /* Debug configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */ = {
+		517A56042FAE1C02009EC734 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -1778,7 +1826,7 @@
 			};
 			name = Debug;
 		};
-		517A56052FAE1C02009EC734 /* Release configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */ = {
+		517A56052FAE1C02009EC734 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -1795,7 +1843,7 @@
 			};
 			name = Release;
 		};
-		603A142E5314F88632102AC2 /* Release configuration for PBXNativeTarget "ScratchLabWatch" */ = {
+		603A142E5314F88632102AC2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -1818,15 +1866,9 @@
 			};
 			name = Release;
 		};
-		91AC8DEE4C1E0E1CB26D90C6 /* Release configuration for PBXNativeTarget "ScratchLabDesktop" */ = {
+		91AC8DEE4C1E0E1CB26D90C6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-					HEADER_SEARCH_PATHS = (
-						"$(inherited)",
-						"$(SRCROOT)/ScratchLabCore",
-						"$(SRCROOT)/ScratchLabCoreBridge",
-					);
-					SWIFT_OBJC_BRIDGING_HEADER = "ScratchLabDesktop/ScratchLabDesktop-Bridging-Header.h";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements;
@@ -1837,6 +1879,11 @@
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ScratchLabCore",
+					"$(SRCROOT)/ScratchLabCoreBridge",
+				);
 				INFOPLIST_FILE = ScratchLabDesktop/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1849,11 +1896,12 @@
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "ScratchLabDesktop/ScratchLabDesktop-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
-		A7000002 /* Debug configuration for PBXProject "ScratchLab" */ = {
+		A7000002 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -1919,7 +1967,7 @@
 			};
 			name = Debug;
 		};
-		A7000004 /* Release configuration for PBXProject "ScratchLab" */ = {
+		A7000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -1979,7 +2027,7 @@
 			};
 			name = Release;
 		};
-		A7000005 /* Debug configuration for PBXNativeTarget "ScratchLab" */ = {
+		A7000005 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -2015,7 +2063,7 @@
 			};
 			name = Debug;
 		};
-		A7000006 /* Release configuration for PBXNativeTarget "ScratchLab" */ = {
+		A7000006 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -2051,7 +2099,7 @@
 			};
 			name = Release;
 		};
-		D45E6C1B1D8B6CA44CC6D5C0 /* Debug configuration for PBXNativeTarget "ScratchLabWatch" */ = {
+		D45E6C1B1D8B6CA44CC6D5C0 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -2073,7 +2121,7 @@
 			};
 			name = Debug;
 		};
-		F9TESTDBG10AA0010AA10AA /* Debug configuration for PBXNativeTarget "ScratchLabDesktopTests" */ = {
+		F9TESTDBG10AA0010AA10AA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -2092,7 +2140,7 @@
 			};
 			name = Debug;
 		};
-		F9TESTREL10AA0010AA10AA /* Release configuration for PBXNativeTarget "ScratchLabDesktopTests" */ = {
+		F9TESTREL10AA0010AA10AA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -2117,48 +2165,48 @@
 		1F6AE3CD8C7FF1C984081879 /* Build configuration list for PBXNativeTarget "ScratchLabWatch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				603A142E5314F88632102AC2 /* Release configuration for PBXNativeTarget "ScratchLabWatch" */,
-				D45E6C1B1D8B6CA44CC6D5C0 /* Debug configuration for PBXNativeTarget "ScratchLabWatch" */,
+				603A142E5314F88632102AC2 /* Release */,
+				D45E6C1B1D8B6CA44CC6D5C0 /* Debug */,
 			);
 			defaultConfigurationName = Release;
 		};
 		517A56062FAE1C02009EC734 /* Build configuration list for PBXNativeTarget "ScratchLabDatasetBuilder" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				517A56042FAE1C02009EC734 /* Debug configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */,
-				517A56052FAE1C02009EC734 /* Release configuration for PBXNativeTarget "ScratchLabDatasetBuilder" */,
+				517A56042FAE1C02009EC734 /* Debug */,
+				517A56052FAE1C02009EC734 /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
 		A7000001 /* Build configuration list for PBXProject "ScratchLab" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A7000002 /* Debug configuration for PBXProject "ScratchLab" */,
-				A7000004 /* Release configuration for PBXProject "ScratchLab" */,
+				A7000002 /* Debug */,
+				A7000004 /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
 		A7000003 /* Build configuration list for PBXNativeTarget "ScratchLab" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A7000005 /* Debug configuration for PBXNativeTarget "ScratchLab" */,
-				A7000006 /* Release configuration for PBXNativeTarget "ScratchLab" */,
+				A7000005 /* Debug */,
+				A7000006 /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
 		AE4F9A0B7D72F7BED9B7101B /* Build configuration list for PBXNativeTarget "ScratchLabDesktop" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				91AC8DEE4C1E0E1CB26D90C6 /* Release configuration for PBXNativeTarget "ScratchLabDesktop" */,
-				3A736F4180F83313301E9FDB /* Debug configuration for PBXNativeTarget "ScratchLabDesktop" */,
+				91AC8DEE4C1E0E1CB26D90C6 /* Release */,
+				3A736F4180F83313301E9FDB /* Debug */,
 			);
 			defaultConfigurationName = Release;
 		};
 		F9TESTCFG10AA0010AA10AA /* Build configuration list for PBXNativeTarget "ScratchLabDesktopTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				F9TESTREL10AA0010AA10AA /* Release configuration for PBXNativeTarget "ScratchLabDesktopTests" */,
-				F9TESTDBG10AA0010AA10AA /* Debug configuration for PBXNativeTarget "ScratchLabDesktopTests" */,
+				F9TESTREL10AA0010AA10AA /* Release */,
+				F9TESTDBG10AA0010AA10AA /* Debug */,
 			);
 			defaultConfigurationName = Release;
 		};
