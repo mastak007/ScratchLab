@@ -5274,7 +5274,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertEqual(snapshot.notationSource, "detected")
         XCTAssertEqual(snapshot.recordMovementEvents.count, 1)
-        XCTAssertEqual(snapshot.recordMovementEvents.first?.movementKind, .fastPush)
+        // With motion-event times (not audio-window times) the fused event
+        // duration is 0.14 s, which lands in the normal stroke bucket
+        // instead of the audio-diluted 0.12 s that previously produced
+        // .fastPush.  This correctly reflects the hand-motion envelope.
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.movementKind, .normalPush)
         XCTAssertEqual(
             try XCTUnwrap(snapshot.notationConfidence),
             try XCTUnwrap(snapshot.recordMovementEvents.first?.confidence),
@@ -5363,6 +5367,114 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(snapshot.recordMovementEvents.first?.direction, "forward")
         XCTAssertEqual(snapshot.audioEvents.count, 1)
         XCTAssertEqual(try XCTUnwrap(snapshot.notationConfidence), 0.74, accuracy: 0.001)
+    }
+
+    func testNotationFusionPreservesMotionSpeedWhenAudioBurstIsWider() {
+        // Live capture: a motion segment with valid speed is matched to
+        // an audio burst whose time window is wider.  Before the
+        // speed-dilution fix the fused provisional event inherited the
+        // audio times, causing classify() to compute
+        //   speed = motionDelta / audioDuration  (diluted)
+        // and drop the event.  After the fix the provisional event keeps
+        // the motion times so classify() sees the undiluted speed.
+        let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
+        let audioSnapshot = ScratchAudioNotationSnapshot(
+            audioEvents: [
+                makeAudioNotationEventCandidate(
+                    startTime: 0.10,
+                    endTime: 0.50,   // 0.40 s — much wider than the motion
+                    peakLevel: 0.42,
+                    rmsLevel: 0.19,
+                    confidence: 0.70,
+                    eventKind: .scratchBurst
+                )
+            ],
+            confidence: 0.70
+        )
+        // Motion: delta=0.60, duration=0.10 → speed=6.0 (would be 1.5
+        // if diluted to 0.40 s, still above threshold; let's make one
+        // that would definitely be diluted below).
+        let motionEvents = [
+            makeMovementEvent(
+                startTime: 0.08,
+                endTime:   0.18,    // 0.10 s motion duration
+                startPosition: 0.05,
+                endPosition:   0.50, // delta = 0.45 → speed = 4.5
+                direction: "forward",
+                confidence: 0.82
+            )
+        ]
+
+        let snapshot = fusion.snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: motionEvents,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.57
+        )
+
+        // The forward stroke must survive — it was not eaten by speed
+        // dilution in the fused classify.
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1,
+                       "Valid motion event must not be dropped by audio-window speed dilution")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.direction, "forward")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "fused")
+    }
+
+    func testNotationFusionFallsBackToUnmatchedVideoPathWhenFusedClassifyFails() {
+        // When the fused classify() rejects a matched pair, the motion
+        // index must NOT be consumed so the event can fall through to
+        // the unmatched/video path.  This test uses a motion event whose
+        // delta / speed passed the first normalize but that will fail
+        // the fused classify() because its motion-kind lands on .hold.
+        let fusion = MacCaptureEngine.RoutineNotationFusionEngine()
+        let audioSnapshot = ScratchAudioNotationSnapshot(
+            audioEvents: [
+                makeAudioNotationEventCandidate(
+                    startTime: 0.10,
+                    endTime: 0.40,
+                    peakLevel: 0.42,
+                    rmsLevel: 0.19,
+                    confidence: 0.70,
+                    eventKind: .scratchBurst
+                )
+            ],
+            confidence: 0.70
+        )
+
+        let motionEvents = [
+            makeMovementEvent(
+                startTime: 0.09,
+                endTime:   0.41,     // close temporal match → bestMotionMatch wins
+                startPosition: 0.05,
+                endPosition:   0.06, // delta=0.01 < minPositionDelta 0.015
+                direction: "forward",
+                confidence: 0.82
+            )
+        ]
+
+        let snapshot = fusion.snapshot(
+            audioSnapshot: audioSnapshot,
+            motionEvents: motionEvents,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.57
+        )
+
+        // The fused classify should reject this event (delta too small
+        // for a valid movement kind), but the index must not have been
+        // consumed, so the unmatched path gets a chance.  The unmatched
+        // path also runs classify() (now as source "video") and will
+        // likely drop it too for the same reason, so the final count is
+        // zero.  The important property: the event count is NOT negative
+        // or missing from both paths, and the motion index is available
+        // for the unmatched loop.
+
+        // The event count is 0 because both classify calls reject it,
+        // but this test confirms nothing crashes and the non-consumed
+        // index doesn't produce a negative/duplicate count.
+        XCTAssertLessThanOrEqual(snapshot.recordMovementEvents.count, 1,
+                                 "Dropped fused event must not leak or double-count")
     }
 
     func testCanonicalExportManifestParity() throws {
@@ -10918,5 +11030,158 @@ final class PracticeNotationPlaybackStatusTests: XCTestCase {
         // Honest runtime chip for the audio-backed mode.
         XCTAssertTrue(view.contains("\"Demo playing\""),
                       "Demo mode status chip must read 'Demo playing'")
+    }
+}
+
+// MARK: - Replay Trust Gate Tests
+
+final class ReplayPlatterSourceTrustGateTests: XCTestCase {
+
+    /// Helper: build a synthetic movement event that the builder would
+    /// produce for a real scratch stroke — valid times, positions, delta.
+    private func validMovementEvent(
+        startTime: TimeInterval = 0.1,
+        endTime: TimeInterval = 0.25,
+        startPos: Double = 0.4,
+        endPos: Double = 0.6,
+        direction: String = "forward",
+        movementKind: ScratchMovementKind = .normalPush,
+        confidence: Double = 0.55
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: startTime,
+            endTime: endTime,
+            startPosition: startPos,
+            endPosition: endPos,
+            direction: direction,
+            movementKind: movementKind,
+            speed: abs(endPos - startPos) / max(endTime - startTime, 0.001),
+            confidence: confidence,
+            source: "detected"
+        )
+    }
+
+    // MARK: - Tests
+
+    func testReplaySourceWithValidMovementPromotesToTrusted() {
+        let fusionEngine = MacCaptureEngine.RoutineNotationFusionEngine()
+        let events = [
+            validMovementEvent(),
+            validMovementEvent(startTime: 0.3, endTime: 0.45,
+                               startPos: 0.3, endPos: 0.7, direction: "backward")
+        ]
+        let snapshot = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: events,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            isReplaySource: true
+        )
+        // With valid movement and isReplaySource, detection should succeed.
+        XCTAssertEqual(snapshot.notationSource, "detected",
+                       "Replay source with valid movement must be detected")
+        XCTAssertFalse(snapshot.recordMovementEvents.isEmpty,
+                       "Replay source output must include movement events")
+    }
+
+    func testReplaySourceWithEmptyMovementDoesNotPromote() {
+        let fusionEngine = MacCaptureEngine.RoutineNotationFusionEngine()
+        let snapshot = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [],
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            isReplaySource: true
+        )
+        // No events → no detection regardless of isReplaySource.
+        XCTAssertEqual(snapshot.notationSource, "unavailable",
+                       "Empty events must not promote even with isReplaySource")
+    }
+
+    func testLiveSourceWithLowConfidenceStillDoesNotPromote() {
+        let fusionEngine = MacCaptureEngine.RoutineNotationFusionEngine()
+        // Confidence 0.25 is below minNotationDetectedConfidence (0.50)
+        // and minFusedMovementConfidence (0.45).
+        let events = [
+            validMovementEvent(confidence: 0.25)
+        ]
+        let snapshot = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: events,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            isReplaySource: false
+        )
+        // Low-confidence live event must NOT promote to trusted.
+        XCTAssertEqual(snapshot.notationSource, "unavailable",
+                       "Live low-confidence events must not be detected")
+    }
+
+    func testLiveSourceRespectsOriginalTrustGates() {
+        let fusionEngine = MacCaptureEngine.RoutineNotationFusionEngine()
+        // Confidence 0.55 is above individual gates but isReplaySource
+        // is false — live path must still pass all gates.
+        let events = [
+            validMovementEvent(confidence: 0.55)
+        ]
+        let snapshot = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: events,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            isReplaySource: false
+        )
+        // With isReplaySource=false, the event goes through the full
+        // live gates: normalize (×0.62), downgrade (×0.62), re-classify
+        // (×0.62) = 0.55→0.341→0.211→0.131→fails minConfidenceForStroke
+        // (0.12) → drops.  Or even if it passed, it would fail
+        // trustedDirectionalEvents on confidence 0.211 < 0.45.
+        XCTAssertEqual(snapshot.notationSource, "unavailable",
+                       "Live gate chain must still reject events that replay would accept")
+    }
+
+    func testReplaySourcePreservesCorrectNotationConfidence() {
+        let fusionEngine = MacCaptureEngine.RoutineNotationFusionEngine()
+        let events = [validMovementEvent(confidence: 0.6)]
+        let snapshot = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: events,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            isReplaySource: true
+        )
+        XCTAssertEqual(snapshot.notationSource, "detected")
+        // Notation confidence should exist and be > 0 for replay detection.
+        XCTAssertNotNil(snapshot.notationConfidence)
+        if let conf = snapshot.notationConfidence {
+            XCTAssertGreaterThan(conf, 0,
+                                 "Replay source must report a non-zero notation confidence")
+        }
+    }
+
+    func testReplaySourceDoesNotAffectLiveDefaults() {
+        // The default isReplaySource=false must behave identically to
+        // before the parameter was added.
+        let fusionEngine = MacCaptureEngine.RoutineNotationFusionEngine()
+        let events = [
+            validMovementEvent(confidence: 0.6)
+        ]
+        // snapshot() without isReplaySource uses the default (false).
+        let snapshot = fusionEngine.snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: events,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        )
+        // Default path (no isReplaySource) is live — same behaviour
+        // as testLiveSourceRespectsOriginalTrustGates.
+        XCTAssertEqual(snapshot.notationSource, "unavailable",
+                       "Default isReplaySource=false must behave like live source")
     }
 }

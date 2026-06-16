@@ -160,6 +160,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case lowConfidence
         case notFused
         case lowAudioOverlap
+        /// Replay-only: event passed the replay-source trust gate
+        /// (skips live confidence + fusion requirements because the
+        /// evidence comes from a deterministic platter timeline, not
+        /// from a live uncertain Vision tracker).
+        case replaySourceTrusted
     }
 
     struct RoutineMovementDiagnosticsSnapshot {
@@ -195,6 +200,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let rawDropReasons: [String: Int]
         let normalizedDropReasons: [String: Int]
         let trustDropReasons: [String: Int]
+        /// Replay-only: number of events trusted via the replay-source
+        /// path (not counted as drops because replay evidence is
+        /// deterministic).  Always zero for live captures.
+        let replaySourceTrusted: Int
         let recentSamples: [String]
         let recentDirections: [String]
     }
@@ -293,6 +302,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         func recordTrustedDirectionalCount(_ count: Int) {
             trustedDirectionalEvents = count
+        }
+
+        var replaySourceTrusted = 0
+
+        func recordReplaySourceTrusted() {
+            replaySourceTrusted += 1
         }
 
         func recordFinalMovementCount(_ count: Int) {
@@ -398,6 +413,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 rawDropReasons: dictionary(from: rawDropReasons),
                 normalizedDropReasons: dictionary(from: normalizedDropReasons),
                 trustDropReasons: dictionary(from: trustDropReasons),
+                replaySourceTrusted: replaySourceTrusted,
                 recentSamples: recentSamples,
                 recentDirections: recentDirections
             )
@@ -1007,12 +1023,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             labelSource: String,
             labelConfidence: Double?,
             capturedAt: Date = Date(),
-            debugSession: RoutineMovementDebugSession? = nil
+            debugSession: RoutineMovementDebugSession? = nil,
+            isReplaySource: Bool = false
         ) -> CaptureCore.DetectedNotationSnapshot {
             let candidateMovementEvents = fuseMovementEvents(
                 audioEvents: audioSnapshot.audioEvents,
                 motionEvents: motionEvents,
-                debugSession: debugSession
+                debugSession: debugSession,
+                isReplaySource: isReplaySource
             )
             let audioEvents = audioSnapshot.audioEvents.map {
                 CaptureCore.DetectedNotationAudioEvent(
@@ -1029,16 +1047,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let trustedDirectionalEvents = trustedDirectionalEvents(
                 from: candidateMovementEvents,
                 audioEvents: audioSnapshot.audioEvents,
-                debugSession: debugSession
+                debugSession: debugSession,
+                isReplaySource: isReplaySource
             )
             #if DEBUG
             debugSession?.recordFinalMovementCount(candidateMovementEvents.count)
             #endif
-            let detectedConfidence = trustedDirectionalEvents.isEmpty
-                ? nil
-                : trustedDirectionalEvents.map(\.confidence).reduce(0, +) / Double(trustedDirectionalEvents.count)
-            let hasDetectedDirectionalNotation = trustedDirectionalEvents.count >= Self.minDirectionalEventCount
-                && (detectedConfidence ?? 0) >= Self.minNotationDetectedConfidence
+            let detectedConfidence: Double?
+            if trustedDirectionalEvents.isEmpty {
+                detectedConfidence = nil
+            } else if isReplaySource {
+                // Replay from a recorded platter timeline: confidence
+                // is derived from the deterministic reconstruction,
+                // not from a live Vision tracker. Use the actual
+                // mean confidence for notation display but do not
+                // gate hasDetectedDirectionalNotation on it.
+                detectedConfidence = trustedDirectionalEvents.map(\.confidence).reduce(0, +) / Double(trustedDirectionalEvents.count)
+            } else {
+                detectedConfidence = trustedDirectionalEvents.map(\.confidence).reduce(0, +) / Double(trustedDirectionalEvents.count)
+            }
+            let hasDetectedDirectionalNotation: Bool
+            if isReplaySource {
+                hasDetectedDirectionalNotation = trustedDirectionalEvents.count >= Self.minDirectionalEventCount
+            } else {
+                hasDetectedDirectionalNotation = trustedDirectionalEvents.count >= Self.minDirectionalEventCount
+                    && (detectedConfidence ?? 0) >= Self.minNotationDetectedConfidence
+            }
 
             let notationSource: String
             if hasDetectedDirectionalNotation {
@@ -1084,13 +1118,25 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         private func trustedDirectionalEvents(
             from events: [CaptureCore.DetectedNotationRecordMovementEvent],
             audioEvents: [ScratchAudioNotationEventCandidate],
-            debugSession: RoutineMovementDebugSession? = nil
+            debugSession: RoutineMovementDebugSession? = nil,
+            isReplaySource: Bool = false
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             let burstAudioEvents = audioEvents.filter { event in
                 event.eventKind == .scratchBurst || event.eventKind == .possibleDrag
             }
 
             let trusted = events.filter { event in
+                if isReplaySource {
+                    // Deterministic reconstruction from a recorded
+                    // platter timeline.  Live confidence and fusion
+                    // provenance are not required; the builder already
+                    // enforced minimum duration (0.045s) and delta
+                    // (0.01).  Accept the event as trusted.
+                    #if DEBUG
+                    debugSession?.recordReplaySourceTrusted()
+                    #endif
+                    return true
+                }
                 guard event.confidence >= Self.minFusedMovementConfidence else {
                     #if DEBUG
                     debugSession?.recordTrustDrop(.lowConfidence)
@@ -1121,7 +1167,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         private func fuseMovementEvents(
             audioEvents: [ScratchAudioNotationEventCandidate],
             motionEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
-            debugSession: RoutineMovementDebugSession? = nil
+            debugSession: RoutineMovementDebugSession? = nil,
+            isReplaySource: Bool = false
         ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
             let normalizedMotionEvents = normalizer.normalize(
                 events: motionEvents,
@@ -1176,23 +1223,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
 
             for (index, motionEvent) in normalizedMotionEvents.enumerated() where !usedMotionIndexes.contains(index) {
-                let downgradedEvent = CaptureCore.DetectedNotationRecordMovementEvent(
-                    startTime: motionEvent.startTime,
-                    endTime: motionEvent.endTime,
-                    startPosition: motionEvent.startPosition,
-                    endPosition: motionEvent.endPosition,
-                    direction: motionEvent.direction,
-                    movementKind: motionEvent.movementKind,
-                    speed: motionEvent.speed,
-                    confidence: min(1, max(0, motionEvent.confidence * RoutineNotationEventNormalizer.unconfirmedConfidenceMultiplier)),
-                    source: "video"
-                )
-                if let classified = normalizer.classify(
-                    event: downgradedEvent,
-                    audioEvents: burstAudioEvents,
-                    debugSession: debugSession
-                ) {
-                    fused.append(classified)
+                if isReplaySource {
+                    // Deterministic platter replay: no live Vision
+                    // uncertainty, no audio to fuse against.  Preserve
+                    // the normalized event unchanged — do not apply
+                    // the unconfirmed-confidence multiplier a second
+                    // time and do not re-classify (which would apply
+                    // the multiplier a third time).  The builder has
+                    // already verified minimum duration and delta.
+                    fused.append(motionEvent)
+                } else {
+                    let downgradedEvent = CaptureCore.DetectedNotationRecordMovementEvent(
+                        startTime: motionEvent.startTime,
+                        endTime: motionEvent.endTime,
+                        startPosition: motionEvent.startPosition,
+                        endPosition: motionEvent.endPosition,
+                        direction: motionEvent.direction,
+                        movementKind: motionEvent.movementKind,
+                        speed: motionEvent.speed,
+                        confidence: min(1, max(0, motionEvent.confidence * RoutineNotationEventNormalizer.unconfirmedConfidenceMultiplier)),
+                        source: "video"
+                    )
+                    if let classified = normalizer.classify(
+                        event: downgradedEvent,
+                        audioEvents: burstAudioEvents,
+                        debugSession: debugSession
+                    ) {
+                        fused.append(classified)
+                    }
                 }
             }
 
@@ -4922,6 +4980,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let trackedYMin: Double
         let trackedYMax: Double
         let replaySourceLabel: String
+        /// Number of events trusted through the deterministic replay
+        /// path (always zero for live captures).
+        let replaySourceTrusted: Int
     }
 
     func captureDebugStats() -> DebugStats {
@@ -5007,7 +5068,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             trackedXMax: Double(handDirectionTracker.trackedPointXMax),
             trackedYMin: handDirectionTracker.trackedPointYMin.isFinite ? Double(handDirectionTracker.trackedPointYMin) : 0,
             trackedYMax: Double(handDirectionTracker.trackedPointYMax),
-            replaySourceLabel: "live"
+            replaySourceLabel: "live",
+            replaySourceTrusted: 0
         )
     }
 
@@ -5132,7 +5194,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: lastScratchDetection == nil ? "unknown" : "detected",
             labelConfidence: lastScratchDetection?.confidence,
-            debugSession: debugSession
+            debugSession: debugSession,
+            isReplaySource: true
         )
 
         // Populate frozenReviewDiagnostics from replay output.
@@ -5217,7 +5280,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             trackedXMax: Double(tracker.trackedPointXMax),
             trackedYMin: tracker.trackedPointYMin.isFinite ? Double(tracker.trackedPointYMin) : 0,
             trackedYMax: Double(tracker.trackedPointYMax),
-            replaySourceLabel: "replay:platterSynthetic"
+            replaySourceLabel: "replay:platterSynthetic",
+            replaySourceTrusted: diag.replaySourceTrusted
         )
     }
 

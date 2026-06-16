@@ -2219,6 +2219,7 @@ struct MacAnalyzerView: View {
                 Line("[commitLatency] appeared=\(stats.trackerRawDirectionAppearedMoving) committed=\(stats.trackerCommittedDirectionChanges) reset=\(stats.trackerPendingResetBeforeCommit) L1=\(stats.trackerCommitLatency1) L2=\(stats.trackerCommitLatency2) L3+=\(stats.trackerCommitLatency3Plus)", isWarning: stats.trackerPendingResetBeforeCommit > 0),
                 Line("[raw=\(stats.rawMovementEventsCreated) norm=\(stats.normalizedMovementCount) fused=\(stats.fusedMovementCount) trusted=\(stats.trustedDirectionalCount) final=\(stats.finalRecordMovementCount)]"),
                 Line("[pubCalls=\(stats.publishHandTrackingCalls) pubSkips=\(stats.publishHandTrackingDedupSkips) starts=\(stats.activeMovementStarts) attempts=\(stats.activeMovementFinishAttempts) merges=\(stats.mergedSegments)]"),
+                Line("[replaySourceTrusted=\(stats.replaySourceTrusted)]", isWarning: stats.replaySourceLabel == "replay:platterSynthetic" && stats.replaySourceTrusted == 0),
                 Line("[rawDrops=\(Self.dictStr(stats.rawDropReasons))]"),
                 Line("[normDrops=\(Self.dictStr(stats.normalizedDropReasons))]"),
                 Line("[trustDrops=\(Self.dictStr(stats.trustDropReasons))]"),
