@@ -35,6 +35,43 @@ final class CameraNotationOverlayTests: XCTestCase {
         LiveNotationOverlayModel(events: events, duration: duration, mode: .captured)
     }
 
+    /// Snapshot builder matching the pattern used by
+    /// `LiveNotationOverlayTests.makePerformerSnapshot`.
+    private func makeSnapshot(
+        events: [CaptureCore.DetectedNotationRecordMovementEvent],
+        extraDuration: Double? = nil
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        var audioEvents: [CaptureCore.DetectedNotationAudioEvent] = []
+        if let extra = extraDuration {
+            let movementMax = events.map(\.endTime).max() ?? 0
+            if extra > movementMax {
+                audioEvents.append(CaptureCore.DetectedNotationAudioEvent(
+                    startTime: extra - 0.01,
+                    endTime: extra,
+                    duration: 0.01,
+                    peakLevel: 0.5,
+                    rmsLevel: 0.3,
+                    confidence: 0.8,
+                    eventKind: "onset",
+                    source: "test"
+                ))
+            }
+        }
+        return CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: nil,
+            detectedLabel: nil,
+            labelSource: "",
+            labelConfidence: nil,
+            detectionSources: ["test"],
+            recordMovementEvents: events,
+            audioEvents: audioEvents,
+            faderEvents: [],
+            mixerMidiEvents: [],
+            capturedAt: Date()
+        )
+    }
+
     // MARK: - Calibration clamping
 
     func testCameraOverlayCalibrationClampsCenterAndRadius() {
@@ -532,5 +569,510 @@ final class CameraNotationOverlayTests: XCTestCase {
         cal.angleOffset = 0.8
         XCTAssertEqual(cal.angleOffset, 0.8, accuracy: 1e-9,
                        "Unlocked angle write must take effect")
+    }
+
+    // MARK: - Target notation adapter
+
+    func testTargetNotationAdapterMapsAllStrokes() {
+        // Use the real bundled baby_scratch.json.
+        guard let notation = ScratchNotation.babyScratch else {
+            XCTFail("Baby Scratch notation must load from bundle")
+            return
+        }
+        let model = LiveNotationOverlayModel.targetNotation(from: notation)
+
+        XCTAssertEqual(model.events.count, notation.strokes.count,
+                       "Each ScratchNotation.Stroke must map to one event")
+        XCTAssertEqual(model.mode, .target,
+                       "Factory must produce .target mode")
+        XCTAssertEqual(model.duration, notation.timelineDuration,
+                       accuracy: 1e-9,
+                       "Duration must equal notation.timelineDuration")
+        XCTAssertFalse(model.isEmpty,
+                       "Non-empty notation must produce non-empty model")
+    }
+
+    func testTargetNotationAdapterPreservesDirection() {
+        guard let notation = ScratchNotation.babyScratch else {
+            XCTFail("Baby Scratch notation must load from bundle")
+            return
+        }
+        let model = LiveNotationOverlayModel.targetNotation(from: notation)
+
+        for (index, event) in model.events.enumerated() {
+            let stroke = notation.strokes[index]
+            XCTAssertEqual(event.direction, stroke.direction.rawValue,
+                           "Event \(index) direction must match source stroke")
+        }
+        // Explicit forward / backward check on known alternating indices.
+        // Stroke 0 = forward, Stroke 1 = backward per baby_scratch.json.
+        XCTAssertEqual(model.events[0].direction, "forward",
+                       "Baby scratch stroke 0 is forward")
+        XCTAssertEqual(model.events[1].direction, "backward",
+                       "Baby scratch stroke 1 is backward")
+    }
+
+    func testTargetNotationAdapterUsesFixedTravel() {
+        guard let notation = ScratchNotation.babyScratch else {
+            XCTFail("Baby Scratch notation must load from bundle")
+            return
+        }
+        let model = LiveNotationOverlayModel.targetNotation(from: notation)
+
+        for (index, event) in model.events.enumerated() {
+            let travel = CapturedNotationStrokeGeometry.travelFraction(for: event)
+            XCTAssertEqual(travel, 0.5, accuracy: 1e-6,
+                           "Event \(index): target travel must be fixed 0.5, " +
+                           "not captured amplitude")
+            XCTAssertEqual(event.startPosition, 0.0, accuracy: 1e-6,
+                           "Target startPosition must be 0.0")
+            XCTAssertEqual(event.endPosition, 0.5, accuracy: 1e-6,
+                           "Target endPosition must be 0.5")
+        }
+    }
+
+    func testTargetModeDoesNotUseCapturedAmplitude() {
+        // Build a target model with large apparent travel from the adapter.
+        // Even though the adapter uses fixed 0.5 travel, verify it never
+        // takes on captured-style full-range travel.
+        let events = [
+            makeEvent(startTime: 0.0, endTime: 0.5,
+                      startPosition: 0.0, endPosition: 1.0),  // full range captured
+        ]
+        let capturedModel = makeCapturedModel(events: events, duration: 1.0)
+        let capturedTravel = capturedModel.visibleEvents(at: 1.0)
+            .map { CapturedNotationStrokeGeometry.travelFraction(for: $0) }
+
+        // Captured model should use actual amplitude.
+        XCTAssertEqual(capturedTravel.first ?? 0, 1.0, accuracy: 1e-6,
+                       "Captured model must use actual amplitude")
+
+        // Target model from the real adapter must use fixed 0.5 travel.
+        guard let notation = ScratchNotation.babyScratch else {
+            XCTFail("Baby Scratch notation must load from bundle")
+            return
+        }
+        let targetModel = LiveNotationOverlayModel.targetNotation(from: notation)
+        let targetTravels = targetModel.visibleEvents(at: 0)
+            .map { CapturedNotationStrokeGeometry.travelFraction(for: $0) }
+        XCTAssertFalse(targetTravels.isEmpty, "Target model must have visible events")
+        for travel in targetTravels {
+            XCTAssertEqual(travel, 0.5, accuracy: 1e-6,
+                           "Target mode must not use captured amplitude")
+        }
+    }
+
+    func testCameraOverlayTargetModeShowsPlannedStrokes() {
+        // Build a target model that spans 2.0 s with 3 events.
+        // At time 0, all future events must be visible — coach display
+        // is instructional and may reveal planned strokes.
+        let events = [
+            makeEvent(startTime: 0.2, endTime: 0.4),
+            makeEvent(startTime: 0.6, endTime: 0.8),
+            makeEvent(startTime: 1.2, endTime: 1.5),
+        ]
+        let targetModel = LiveNotationOverlayModel(
+            events: events, duration: 2.0, mode: .target
+        )
+        let strokes = CameraNotationOverlayGeometry.arcStrokes(
+            from: targetModel, currentTime: 0.0, maxRadius: 100
+        )
+        XCTAssertEqual(strokes.count, 3,
+                       "Target mode must show all planned strokes at time 0")
+    }
+
+    func testCameraOverlayModeSwitchPreservesCalibration() {
+        let cal = CameraNotationOverlayCalibration()
+        cal.platterCenter = CGPoint(x: 0.3, y: 0.7)
+        cal.platterRadius = 0.25
+        cal.angleOffset = 0.4
+        cal.isLocked = true
+
+        // Simulate the mode-switch path: calibration is a separate
+        // @StateObject, untouched by model/controller rebuild.
+        // Switching mode rebuilds only model + controller.
+        let capturedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [
+            makeEvent(startTime: 0.0, endTime: 0.5)
+        ]
+        let targetModel = LiveNotationOverlayModel(
+            events: capturedEvents, duration: 1.0, mode: .target
+        )
+
+        // Build captured-mode model (simulating Performance switch)
+        _ = LiveNotationOverlayModel(
+            events: capturedEvents, duration: 1.0, mode: .captured
+        )
+        // Build target-mode model (simulating Coach switch)
+        _ = targetModel
+
+        // Calibration must be unchanged across both "switches".
+        XCTAssertEqual(cal.platterCenter.x, 0.3, accuracy: 1e-9,
+                       "Mode switch must not alter calibration centre x")
+        XCTAssertEqual(cal.platterCenter.y, 0.7, accuracy: 1e-9,
+                       "Mode switch must not alter calibration centre y")
+        XCTAssertEqual(cal.platterRadius, 0.25, accuracy: 1e-9,
+                       "Mode switch must not alter calibration radius")
+        XCTAssertEqual(cal.angleOffset, 0.4, accuracy: 1e-9,
+                       "Mode switch must not alter calibration angle")
+        XCTAssertTrue(cal.isLocked, "Mode switch must not alter lock state")
+    }
+
+    // MARK: - Controller seek (currentTime preservation)
+
+    func testOverlayReplayControllerSeekPreservesTime() {
+        let timeline = SessionReplayTimeline(
+            takeDurationSeconds: 5.0, events: []
+        )
+        var controller = OverlayReplayController(timeline: timeline)
+        XCTAssertTrue(controller.hasTimeline)
+
+        // Seek to a mid-phrase time and verify it sticks.
+        controller.seek(to: 2.5, hostTime: 0)
+        XCTAssertEqual(controller.currentTime, 2.5, accuracy: 1e-9,
+                       "seek(to:) must set currentTime to the requested value")
+        XCTAssertFalse(controller.isPlaying,
+                       "seek(to:) must pause the controller")
+
+        // Seek below zero → clamped to 0.
+        controller.seek(to: -1.0, hostTime: 0)
+        XCTAssertEqual(controller.currentTime, 0.0, accuracy: 1e-9,
+                       "seek(to:) must clamp negative times to 0")
+
+        // Seek beyond duration → clamped to duration.
+        controller.seek(to: 10.0, hostTime: 0)
+        XCTAssertEqual(controller.currentTime, 5.0, accuracy: 1e-9,
+                       "seek(to:) must clamp past-end times to duration")
+
+        // Seek on an empty controller is a no-op.
+        let emptyTimeline = SessionReplayTimeline(takeDurationSeconds: 0, events: [])
+        var emptyController = OverlayReplayController(timeline: emptyTimeline)
+        XCTAssertFalse(emptyController.hasTimeline)
+        emptyController.seek(to: 3.0, hostTime: 0)
+        XCTAssertEqual(emptyController.currentTime, 0.0, accuracy: 1e-9,
+                       "seek(to:) must be a no-op when hasTimeline is false")
+    }
+
+    func testCameraOverlayModeSwitchSamplesVisiblePlaybackTime() {
+        // During active playback, `controller.currentTime` is a stored
+        // value that may be stale — the visible cursor position is
+        // `controller.currentTime(at: hostTime)`.  Mode switching must
+        // sample the latter, not the former.
+        let timeline = SessionReplayTimeline(
+            takeDurationSeconds: 10.0, events: []
+        )
+        var controller = OverlayReplayController(timeline: timeline)
+
+        let startHost: TimeInterval = 1000.0
+        controller.play(hostTime: startHost)
+        XCTAssertTrue(controller.isPlaying)
+
+        // Let 2.5 s of "wall-clock" elapse.
+        let switchHost = startHost + 2.5
+
+        // Stale stored value: controller.currentTime still reports the
+        // anchor value (0.0), not the elapsed playback position.
+        let stale = controller.currentTime
+        XCTAssertEqual(stale, 0.0, accuracy: 1e-9,
+                       "Stored currentTime is stale during playback (anchor=0)")
+
+        // Correct visible cursor: derived from host-time.
+        let visible = controller.currentTime(at: switchHost)
+        XCTAssertEqual(visible, 2.5, accuracy: 1e-9,
+                       "currentTime(at:) must report elapsed playback position")
+
+        // The mode-switch handler must sample currentTime(at: hostTime),
+        // otherwise it would preserve the stale value and jump backwards.
+        XCTAssertNotEqual(visible, stale,
+                          "Visible time must differ from stale stored time")
+    }
+
+    func testCameraOverlayModeSwitchDuringPlaybackDoesNotRestoreStaleStoredTime() {
+        // End-to-end: play, elapse time, switch mode, verify cursor
+        // matches the visible playback position — not the stale stored
+        // currentTime.
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+        let capturedEvents = [
+            makeEvent(startTime: 0.0, endTime: 0.5,
+                      startPosition: 0.0, endPosition: 0.8),
+            makeEvent(startTime: 0.6, endTime: 1.0,
+                      startPosition: 0.2, endPosition: 0.9),
+        ]
+        let snapshot = makeSnapshot(events: capturedEvents)
+
+        // --- Coach mode, start playback ---
+        var (_, coachController) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .target,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        let startHost: TimeInterval = 2000.0
+        coachController.play(hostTime: startHost)
+        XCTAssertTrue(coachController.isPlaying)
+
+        // Elapse 1.25 s on the playback wall-clock.
+        let switchHost = startHost + 1.25
+        let visibleTime = coachController.currentTime(at: switchHost)
+        XCTAssertEqual(visibleTime, 1.25, accuracy: 1e-3)
+
+        // --- Switch to Performance mode, preserving visible time ---
+        var (_, perfController) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .captured,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        perfController.seek(to: visibleTime, hostTime: switchHost)
+
+        // Captured duration is ~1.0 s (max endTime from events).  1.25 s
+        // exceeds that, so the seek must clamp, but the controller must
+        // NOT land at 0.0 (which would be the stale stored currentTime
+        // of a fresh OverlayReplayController).
+        XCTAssertEqual(perfController.currentTime, perfController.duration,
+                       accuracy: 1e-3,
+                       "Preserved visible time must clamp to new duration, " +
+                       "not reset to 0 (stale stored currentTime)")
+    }
+
+    func testCameraOverlayModeSwitchPreservesControllerTime() {
+        // Build a Coach-mode model and controller, advance time, then
+        // switch to Performance mode via the real factory + seek path.
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+        let capturedEvents = [
+            makeEvent(startTime: 0.0, endTime: 0.5,
+                      startPosition: 0.0, endPosition: 0.8),
+            makeEvent(startTime: 0.6, endTime: 1.0,
+                      startPosition: 0.2, endPosition: 0.9),
+        ]
+        let snapshot = makeSnapshot(events: capturedEvents)
+
+        // Start in Coach mode and seek to 2.0 s.
+        var (_, coachController) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .target,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        coachController.seek(to: 2.0, hostTime: 0)
+        XCTAssertEqual(coachController.currentTime, 2.0, accuracy: 1e-9)
+
+        // Switch to Performance mode, preserving time.
+        let preservedTime = coachController.currentTime
+        var (_, perfController) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .captured,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        perfController.seek(to: preservedTime, hostTime: 0)
+
+        // Snapshot duration is ~1.0 s (max capturedEvidenceEndTime from events),
+        // which is less than 2.0, so the preserved time clamps to the new duration.
+        let perfDuration = perfController.duration
+        XCTAssertEqual(perfController.currentTime, perfDuration, accuracy: 1e-9,
+                       "Preserved time must clamp to new controller duration")
+    }
+
+    func testCameraOverlayModeSwitchClampsControllerTimeToNewDuration() {
+        // Coach duration (~5.07 s for baby_scratch) > captured duration (~1.0 s).
+        // Switching Coach → Performance clamps to the shorter captured duration.
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+        let capturedEvents = [
+            makeEvent(startTime: 0.0, endTime: 0.5,
+                      startPosition: 0.0, endPosition: 0.8),
+        ]
+        let snapshot = makeSnapshot(events: capturedEvents)
+
+        // Coach mode, cursor at 3.0 s.
+        var (_, coachController) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .target,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        coachController.seek(to: 3.0, hostTime: 0)
+        XCTAssertGreaterThan(coachController.duration, 1.0,
+                             "Coach duration must exceed captured duration")
+
+        // Switch to Performance mode → time clamps down.
+        let preservedTime = coachController.currentTime
+        var (_, perfController) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .captured,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        perfController.seek(to: preservedTime, hostTime: 0)
+        XCTAssertEqual(perfController.currentTime, perfController.duration,
+                       accuracy: 1e-9,
+                       "Preserved time must clamp to shorter captured duration")
+
+        // Reverse: Performance at 0.3 s → Coach (longer) preserves 0.3 s.
+        perfController.seek(to: 0.3, hostTime: 0)
+        let perfTime = perfController.currentTime
+        var (_, coachController2) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .target,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        coachController2.seek(to: perfTime, hostTime: 0)
+        XCTAssertEqual(coachController2.currentTime, 0.3, accuracy: 1e-9,
+                       "Time must be preserved exactly when old ≤ new duration")
+    }
+
+    func testCameraOverlayModeSwitchPreservesCalibrationAndMode() {
+        let cal = CameraNotationOverlayCalibration()
+        cal.platterCenter = CGPoint(x: 0.3, y: 0.7)
+        cal.platterRadius = 0.25
+        cal.angleOffset = 0.4
+        cal.isLocked = true
+
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+        let capturedEvents = [
+            makeEvent(startTime: 0.0, endTime: 0.5)
+        ]
+        let snapshot = makeSnapshot(events: capturedEvents)
+
+        // Coach → Performance rebuild.
+        var (coachModel, coachCtrl) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .target,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        coachCtrl.seek(to: 1.2, hostTime: 0)
+        let preservedTime = coachCtrl.currentTime
+        XCTAssertEqual(coachModel?.mode, .target,
+                       "Coach model must be .target mode")
+
+        var (perfModel, perfCtrl) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .captured,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        perfCtrl.seek(to: preservedTime, hostTime: 0)
+        XCTAssertEqual(perfModel?.mode, .captured,
+                       "Performance model must be .captured mode")
+
+        // Calibration must be unchanged across both rebuilds.
+        XCTAssertEqual(cal.platterCenter.x, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(cal.platterCenter.y, 0.7, accuracy: 1e-9)
+        XCTAssertEqual(cal.platterRadius, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(cal.angleOffset, 0.4, accuracy: 1e-9)
+        XCTAssertTrue(cal.isLocked)
+    }
+
+    func testCameraOverlayModeSwitchKeepsCapturedFutureGuard() {
+        // After switching to Performance mode, future strokes must
+        // remain guarded.
+        let events = [
+            makeEvent(startTime: 0.2, endTime: 0.4,
+                      startPosition: 0.0, endPosition: 0.8),
+            makeEvent(startTime: 0.6, endTime: 0.8,
+                      startPosition: 0.2, endPosition: 0.9),
+            makeEvent(startTime: 1.2, endTime: 1.5,
+                      startPosition: 0.1, endPosition: 0.7),
+        ]
+        let snapshot = makeSnapshot(events: events)
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+
+        // Build Performance controller + model.
+        var (perfModel, perfCtrl) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .captured,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        guard let model = perfModel else {
+            XCTFail("Performance model must build from valid snapshot")
+            return
+        }
+        perfCtrl.seek(to: 0.5, hostTime: 0)
+        let currentTime = perfCtrl.currentTime
+
+        // At 0.5 s, only first stroke should be visible.
+        let visible = model.visibleEvents(at: currentTime)
+        XCTAssertEqual(visible.count, 1,
+                       "Captured guard: only first stroke visible at 0.5 s")
+        XCTAssertEqual(visible.first?.startTime ?? -1, 0.2, accuracy: 1e-9,
+                       "Visible stroke must be the first one")
+
+        // Seek to end — all three visible.
+        perfCtrl.seek(to: 2.0, hostTime: 0)
+        let visibleAtEnd = model.visibleEvents(at: perfCtrl.currentTime)
+        XCTAssertEqual(visibleAtEnd.count, 3,
+                       "All strokes visible at end of phrase")
+    }
+
+    func testCameraOverlayModeSwitchKeepsCoachFutureStrokesVisible() {
+        // After switching to Coach mode, all planned strokes must be
+        // visible even at time 0.
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+        let events = [
+            makeEvent(startTime: 0.0, endTime: 0.5)
+        ]
+        let snapshot = makeSnapshot(events: events)
+
+        // Build Coach controller + model.
+        var (coachModel, coachCtrl) = CameraPassthroughNotationView
+            .buildModelAndController(
+                mode: .target,
+                snapshot: snapshot,
+                targetModel: targetModel
+            )
+        guard let model = coachModel else {
+            XCTFail("Coach model must build from valid target notation")
+            return
+        }
+        coachCtrl.seek(to: 0.0, hostTime: 0)
+
+        // At time 0, all target strokes must be visible.
+        let visible = model.visibleEvents(at: coachCtrl.currentTime)
+        XCTAssertFalse(visible.isEmpty,
+                       "Coach mode must show target strokes at time 0")
+        // All target events (19 for baby_scratch) must be visible.
+        XCTAssertEqual(visible.count, targetModel.events.count,
+                       "All target strokes must be visible in Coach mode at time 0")
+    }
+
+    func testCameraOverlayTargetEmptyState() {
+        // nil notation → empty model
+        let nilModel = LiveNotationOverlayModel.targetNotation(from: nil)
+        XCTAssertTrue(nilModel.isEmpty, "nil notation must produce empty model")
+        XCTAssertEqual(nilModel.duration, 0, accuracy: 1e-9,
+                       "nil notation must produce zero-duration model")
+        XCTAssertFalse(nilModel.hasMeaningfulStrokes(at: 0),
+                       "Empty model must have no meaningful strokes")
+
+        // Empty strokes → empty model
+        let emptyNotation = ScratchNotation(
+            version: 1, scratchID: "test", demoStart: 0, demoEnd: 0,
+            phraseStart: nil, phraseEnd: nil, timingBasis: "test",
+            strokes: []
+        )
+        let emptyModel = LiveNotationOverlayModel.targetNotation(from: emptyNotation)
+        XCTAssertTrue(emptyModel.isEmpty, "Notation with no strokes must produce empty model")
+        XCTAssertEqual(emptyModel.duration, 0, accuracy: 1e-9,
+                       "Empty-strokes notation must produce zero-duration model")
+
+        // Arc-stroke rendering of empty model must be safe.
+        let strokes = CameraNotationOverlayGeometry.arcStrokes(
+            from: nilModel, currentTime: 0, maxRadius: 100
+        )
+        XCTAssertTrue(strokes.isEmpty, "Empty target model must produce empty arc strokes")
     }
 }

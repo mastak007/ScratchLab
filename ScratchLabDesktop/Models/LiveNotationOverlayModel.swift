@@ -16,7 +16,7 @@ import Foundation
 /// modes, so silence/idle columns remain empty.
 struct LiveNotationOverlayModel: Equatable {
 
-    enum Mode: Equatable {
+    enum Mode: Equatable, Hashable {
         case target    // coach/reference — all strokes visible always
         case captured  // performance — strokes revealed as currentTime advances
     }
@@ -67,4 +67,51 @@ struct LiveNotationOverlayModel: Equatable {
     }
 
     var isEmpty: Bool { events.isEmpty }
+
+    // MARK: - Factory: target notation from ScratchNotation
+
+    /// Build a `.target`-mode model from an authored `ScratchNotation`.
+    ///
+    /// Each `ScratchNotation.Stroke` becomes one
+    /// `DetectedNotationRecordMovementEvent` with:
+    /// - timing: `startTime` / `endTime` from the stroke
+    /// - direction: `stroke.direction.rawValue` (`"forward"` / `"backward"`)
+    /// - **fixed instructional travel**: `startPosition = 0.0`,
+    ///   `endPosition = 0.5` (travel fraction = 0.5) so target mode
+    ///   never uses captured movement amplitude
+    /// - `movementKind`: from `stroke.movementKind`
+    /// - `confidence`: `1.0`, `source`: `"target_notation"`
+    ///
+    /// An empty or `nil` notation produces an empty model with
+    /// `duration = 0`, which callers can treat as the empty state.
+    static func targetNotation(
+        from notation: ScratchNotation?
+    ) -> LiveNotationOverlayModel {
+        guard let notation, !notation.strokes.isEmpty else {
+            return LiveNotationOverlayModel(
+                events: [],
+                duration: 0,
+                mode: .target
+            )
+        }
+        let events: [CaptureCore.DetectedNotationRecordMovementEvent] =
+            notation.strokes.map { stroke in
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: stroke.startTime,
+                    endTime: stroke.endTime,
+                    startPosition: 0.0,
+                    endPosition: 0.5,
+                    direction: stroke.direction.rawValue,
+                    movementKind: stroke.movementKind,
+                    speed: 0.5,
+                    confidence: 1.0,
+                    source: "target_notation"
+                )
+            }
+        return LiveNotationOverlayModel(
+            events: events,
+            duration: notation.timelineDuration,
+            mode: .target
+        )
+    }
 }

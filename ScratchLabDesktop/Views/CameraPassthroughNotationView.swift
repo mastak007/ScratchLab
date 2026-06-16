@@ -28,11 +28,12 @@ import AVFoundation
 struct CameraPassthroughNotationView: View {
 
     let captureSession: AVCaptureSession
-    let snapshot: CaptureCore.DetectedNotationSnapshot?
+    private let snapshot: CaptureCore.DetectedNotationSnapshot?
 
     @StateObject private var calibration = CameraNotationOverlayCalibration()
     @State private var controller: OverlayReplayController
-    private let model: LiveNotationOverlayModel?
+    @State private var model: LiveNotationOverlayModel?
+    @State private var overlayMode: LiveNotationOverlayModel.Mode
 
     // MARK: - Colours (match LiveNotationOverlayView)
 
@@ -49,9 +50,57 @@ struct CameraPassthroughNotationView: View {
         self.captureSession = captureSession
         self.snapshot = snapshot
 
-        if let snapshot, !snapshot.recordMovementEvents.isEmpty {
+        // Resolve target notation once at init so we can pick a sensible
+        // default mode.  Coach mode when the target notation is available;
+        // Performance mode otherwise.
+        let targetModel = LiveNotationOverlayModel.targetNotation(
+            from: ScratchNotation.babyScratch
+        )
+        let initialMode: LiveNotationOverlayModel.Mode =
+            !targetModel.isEmpty ? .target : .captured
+        self._overlayMode = State(initialValue: initialMode)
+
+        let (initialModel, initialController) = Self.buildModelAndController(
+            mode: initialMode,
+            snapshot: snapshot,
+            targetModel: targetModel
+        )
+        self._model = State(initialValue: initialModel)
+        self._controller = State(initialValue: initialController)
+    }
+
+    // MARK: - Model / controller factory
+
+    /// Pure factory — rebuilds the `LiveNotationOverlayModel` and
+    /// `OverlayReplayController` for the given mode without touching
+    /// calibration or other view state.
+    ///
+    /// Internal (not private) so mode-switch tests can exercise the real
+    /// rebuild + seek path.
+    static func buildModelAndController(
+        mode: LiveNotationOverlayModel.Mode,
+        snapshot: CaptureCore.DetectedNotationSnapshot?,
+        targetModel: LiveNotationOverlayModel
+    ) -> (LiveNotationOverlayModel?, OverlayReplayController) {
+        switch mode {
+        case .target:
+            if targetModel.isEmpty {
+                let empty = SessionReplayTimeline(takeDurationSeconds: 0, events: [])
+                return (nil, OverlayReplayController(timeline: empty))
+            }
+            let timeline = SessionReplayTimeline(
+                takeDurationSeconds: targetModel.duration,
+                events: []
+            )
+            return (targetModel, OverlayReplayController(timeline: timeline))
+
+        case .captured:
+            guard let snapshot, !snapshot.recordMovementEvents.isEmpty else {
+                let empty = SessionReplayTimeline(takeDurationSeconds: 0, events: [])
+                return (nil, OverlayReplayController(timeline: empty))
+            }
             let duration = max(snapshot.capturedEvidenceEndTime ?? 0, 0.1)
-            self.model = LiveNotationOverlayModel(
+            let model = LiveNotationOverlayModel(
                 events: snapshot.recordMovementEvents,
                 duration: duration,
                 mode: .captured
@@ -60,16 +109,7 @@ struct CameraPassthroughNotationView: View {
                 from: snapshot,
                 takeDuration: duration
             )
-            self._controller = State(
-                initialValue: OverlayReplayController(timeline: timeline)
-            )
-        } else {
-            self.model = nil
-            self._controller = State(
-                initialValue: OverlayReplayController(
-                    timeline: SessionReplayTimeline(takeDurationSeconds: 0, events: [])
-                )
-            )
+            return (model, OverlayReplayController(timeline: timeline))
         }
     }
 
@@ -97,6 +137,24 @@ struct CameraPassthroughNotationView: View {
             )
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Camera passthrough notation overlay")
+            .onChange(of: overlayMode) { _, newMode in
+                // Sample visible cursor time using the same host-time
+                // anchor so that active-playback cursor position is
+                // preserved, not a stale stored currentTime.
+                let hostTime = Date().timeIntervalSinceReferenceDate
+                let preservedTime = controller.currentTime(at: hostTime)
+                let targetModel = LiveNotationOverlayModel.targetNotation(
+                    from: ScratchNotation.babyScratch
+                )
+                var (newModel, newController) = Self.buildModelAndController(
+                    mode: newMode,
+                    snapshot: snapshot,
+                    targetModel: targetModel
+                )
+                newController.seek(to: preservedTime, hostTime: hostTime)
+                model = newModel
+                controller = newController
+            }
         }
     }
 
@@ -121,12 +179,19 @@ struct CameraPassthroughNotationView: View {
 
     // MARK: - Empty notation state
 
+    private var emptyNotationLabel: String {
+        switch overlayMode {
+        case .target:   return "No target notation"
+        case .captured: return "No captured notation"
+        }
+    }
+
     private func emptyNotationOverlay(size: CGSize) -> some View {
         Canvas(opaque: false) { ctx, size in
             drawPlatterGuide(context: ctx, size: size)
         }
         .overlay(alignment: .center) {
-            Text("No captured notation")
+            Text(emptyNotationLabel)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.38))
                 .padding(.horizontal, 14)
@@ -266,6 +331,21 @@ struct CameraPassthroughNotationView: View {
 
     private var calibrationControls: some View {
         VStack(spacing: 10) {
+            // Mode selector
+            HStack {
+                Text("Mode")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.8))
+                    .frame(width: 40, alignment: .leading)
+                Picker("Mode", selection: $overlayMode) {
+                    Text("Coach").tag(LiveNotationOverlayModel.Mode.target)
+                    Text("Performance").tag(LiveNotationOverlayModel.Mode.captured)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Spacer()
+            }
+
             // Transport row (only when notation model exists)
             if model != nil {
                 transportRow

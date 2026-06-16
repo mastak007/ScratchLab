@@ -109,6 +109,25 @@ struct OverlayReplayController: Equatable, Sendable {
         clock.ingest(playerTime: 0, isPlaying: isPlaying, hostTime: hostTime)
     }
 
+    /// Seek the cursor to a specific time, clamped to `[0, duration]`,
+    /// and pause.  The wrapped clock is reset so no stale events fire.
+    /// No-op when `hasTimeline == false`.
+    ///
+    /// This is the minimal API for preserving cursor position across a
+    /// timeline replacement — e.g. Coach ↔ Performance mode switching
+    /// in the camera overlay.
+    mutating func seek(to time: TimeInterval,
+                       hostTime: TimeInterval) {
+        guard hasTimeline else { return }
+        let clamped = max(0, min(time, duration))
+        currentTime = clamped
+        anchorHostTime = hostTime
+        anchorPlayerTime = clamped
+        isPlaying = false
+        clock.reset()
+        clock.ingest(playerTime: clamped, isPlaying: false, hostTime: hostTime)
+    }
+
     /// Advance the controller to `hostTime` and fire any events whose
     /// `startTime` is now at or below `currentTime`. Auto-stops at
     /// `duration`. Returns the events that fired this tick, in the
