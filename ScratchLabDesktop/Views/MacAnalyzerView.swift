@@ -348,6 +348,7 @@ struct MacAnalyzerView: View {
     @State private var reviewNotesDraft: String = ""
     @State private var reviewerNameDraft: String = ""
     @State private var showNotationOverlay = false
+    @State private var showCameraPassthrough = false
     #if DEBUG
     /// Cache the overlay timeline and its diagnostics so neither
     /// `ReviewOverlayTimeline.build()` nor `OverlayTimingDiagnostics.compute()`
@@ -4704,6 +4705,29 @@ struct MacAnalyzerView: View {
                         : Color.white.opacity(0.07),
                     in: RoundedRectangle(cornerRadius: 4)
                 )
+                Button {
+                    showCameraPassthrough.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "camera.viewfinder")
+                            .font(.system(size: 10, weight: .semibold))
+                            .accessibilityHidden(true)
+                        Text("Camera Overlay")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    }
+                    .foregroundStyle(
+                        showCameraPassthrough ? Color.white : Color.white.opacity(0.55)
+                    )
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    showCameraPassthrough
+                        ? Color.white.opacity(0.15)
+                        : Color.white.opacity(0.07),
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
                 HStack(spacing: 4) {
                     Image(systemName: capturedSource.systemImage)
                         .font(.system(size: 11, weight: .semibold))
@@ -4754,6 +4778,14 @@ struct MacAnalyzerView: View {
                !snapshot.recordMovementEvents.isEmpty {
                 LiveNotationOverlayPlayable(snapshot: snapshot)
                     .id(snapshot.capturedAt)
+            }
+            if showCameraPassthrough {
+                CameraPassthroughNotationView(
+                    captureSession: captureEngine.captureSession,
+                    snapshot: currentRoutineNotationSnapshot
+                )
+                .frame(minHeight: 360)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             #if DEBUG
             debugNotationDiagnosticChip(debugCapturedNotationChipText)

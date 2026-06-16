@@ -306,8 +306,12 @@
 		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
 		CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */; };
 		LNO0001000LNO001LNO00001 /* LiveNotationOverlayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */; };
+		CNO0001000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */; };
+		CNC0001000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */; };
 		LNV0001000LNV001LNV00001 /* LiveNotationOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */; };
+		CPN0001000CPN001CPN00001 /* CameraPassthroughNotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */; };
 		LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */; };
+		COT0001000COT001COT00001 /* CameraNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -632,8 +636,12 @@
 		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
 		CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedNotationTravelTests.swift; sourceTree = "<group>"; };
 		LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayModel.swift; sourceTree = "<group>"; };
+		CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayGeometry.swift; sourceTree = "<group>"; };
+		CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayCalibration.swift; sourceTree = "<group>"; };
 		LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayView.swift; sourceTree = "<group>"; };
+		CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPassthroughNotationView.swift; sourceTree = "<group>"; };
 		LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayTests.swift; sourceTree = "<group>"; };
+		COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -787,6 +795,7 @@
 				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
 				CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */,
 				LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */,
+				COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */,
 				SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */,
 				SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */,
 				SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */,
@@ -1097,6 +1106,7 @@
 				SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */,
 				RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */,
 				LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */,
+				CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -1109,6 +1119,8 @@
 				OTD0000000OTD001OTD00001 /* OverlayTimingDiagnostics.swift */,
 				ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */,
 				LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */,
+				CNO0000000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift */,
+				CNC0000000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1445,7 +1457,10 @@
 				ODD0001000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift in Sources */,
 				RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */,
 				LNO0001000LNO001LNO00001 /* LiveNotationOverlayModel.swift in Sources */,
+				CNO0001000CNO001CNO00001 /* CameraNotationOverlayGeometry.swift in Sources */,
+				CNC0001000CNC001CNC00001 /* CameraNotationOverlayCalibration.swift in Sources */,
 				LNV0001000LNV001LNV00001 /* LiveNotationOverlayView.swift in Sources */,
+				CPN0001000CPN001CPN00001 /* CameraPassthroughNotationView.swift in Sources */,
 				5EB4210D6F24B3426C9341BB /* SessionSharePresenter.swift in Sources */,
 				F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
 				F84276F104CCF0C4B5534C4E /* StagingInspectorView.swift in Sources */,
@@ -1689,6 +1704,7 @@
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 				CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */,
 				LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */,
+				COT0001000COT001COT00001 /* CameraNotationOverlayTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
