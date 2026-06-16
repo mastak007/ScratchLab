@@ -1140,14 +1140,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     motionEvents: normalizedMotionEvents,
                     usedMotionIndexes: usedMotionIndexes
                 ) {
-                    usedMotionIndexes.insert(match.index)
                     let motionEvent = match.event
                     guard motionEvent.confidence >= Self.minMotionConfidenceForDirectionalFusion else {
+                        usedMotionIndexes.insert(match.index)
                         continue
                     }
+                    // Use motion-event times so classify() computes speed
+                    // from the motion-derived duration, not the (potentially
+                    // wider) audio-burst span. Audio overlap for trust-gate
+                    // purposes is still measured against the audio event via
+                    // audioOverlapRatio — this only fixes the speed dilution.
                     let provisionalEvent = CaptureCore.DetectedNotationRecordMovementEvent(
-                        startTime: audioEvent.startTime,
-                        endTime: audioEvent.endTime,
+                        startTime: motionEvent.startTime,
+                        endTime: motionEvent.endTime,
                         startPosition: motionEvent.startPosition,
                         endPosition: motionEvent.endPosition,
                         direction: motionEvent.direction,
@@ -1161,6 +1166,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                         audioEvents: [audioEvent],
                         debugSession: debugSession
                     ) {
+                        // Only consume the motion index once the fused event
+                        // survives classify(). Failed fused events fall
+                        // through to the unmatched/video path below.
+                        usedMotionIndexes.insert(match.index)
                         fused.append(classified)
                     }
                 }
@@ -1902,6 +1911,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let seratoDirectCaptureDeviceUIDValue = "com.machelpnz.scratchlab.mac.serato-direct-capture"
 
     private var isRunning = false
+    /// When true, live Vision hand-pose processing, audio-level publishing,
+    /// scratch detection, platter observing, and diagnostics accumulation
+    /// are suspended.  Recording (if active) is NOT suspended — the guard
+    /// in `shouldProcessCaptureSamples` always permits recording.
+    /// Set by the Review tab to drop idle CPU while the user reviews takes.
+    private var isLiveInputSuspendedForReview = false
     private let idleHandPoseInterval: CFTimeInterval = 0.12
     private let routineRecordingHandPoseInterval: CFTimeInterval = 0.04
     private var lastVisionFrameTime: CFTimeInterval = 0
@@ -1968,6 +1983,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let midiCaptureLock = NSLock()
     private var midiRecordingStartTime: CFTimeInterval = 0
     private var midiConnectedSourceName: String = ""
+    /// MIDI monitor UI-publish throttle: all incoming MIDI CC events are
+    /// still captured at full fidelity; only the @Published SwiftUI
+    /// monitor properties below are rate-limited to ~4 Hz so the main
+    /// actor isn't flooded with ~310 string-format + objectWillChange
+    /// emissions per second during active controller input.
+    private var lastMidiMonitorPublishTime: CFTimeInterval = 0
+    private var batchedMidiEventCount: Int = 0
+    private var batchedMidiCCMessage: String = ""
+    private var batchedMidiSummary: String = "No MIDI received yet"
+    private let midiMonitorPublishInterval: CFTimeInterval = 0.25
     private var isMIDILearning: Bool = false
     private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
@@ -2117,6 +2142,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.performerMonitorFrame = nil
             }
         }
+    }
+
+    /// Suspends or resumes live Vision hand-pose processing, audio-level
+    /// publishing, scratch detection, platter observing, diagnostics
+    /// accumulation, and MIDI monitor UI updates when the Review tab is
+    /// active — but NEVER suspends an active routine recording.
+    ///
+    /// On suspend: stale hand-tracking state is cleared so Review doesn't
+    /// show a frozen hand position.  On resume: tracking restarts from
+    /// scratch (next Vision frame picks it up).
+    func setLiveInputSuspendedForReview(_ suspended: Bool) {
+        guard suspended != isLiveInputSuspendedForReview else { return }
+        isLiveInputSuspendedForReview = suspended
+        if suspended {
+            // Clear stale hand-tracking state so Review doesn't show
+            // a frozen hand position from the last live frame.
+            videoQueue.async { [weak self] in
+                self?.resetPublishedVideoState()
+            }
+            Task { @MainActor [weak self] in
+                self?.handDetected = false
+                self?.handPosition = nil
+                self?.handMotionState = .searching
+            }
+        }
+        // On resume: shouldProcessCaptureSamples re-enables Vision +
+        // audio processing on the next incoming frame.  No explicit
+        // "restart" needed — the capture session keeps running.
     }
 
     func resetScratchRatingSession() {
@@ -3913,8 +3966,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         performerMonitorDemandQueue.sync { performerMonitorStreamingEnabled }
     }
 
+    /// Live capture-sample processing is enabled when the engine is
+    /// running, recording, CXL-recording, or streaming performer-monitor
+    /// frames.  When `isLiveInputSuspendedForReview` is true, processing
+    /// is disabled UNLESS a routine recording is active — recordings are
+    /// never suspended so take capture is never interrupted.
     private var shouldProcessCaptureSamples: Bool {
-        isRunning || isRoutineRecording || cxlRecorder.isRecording || shouldPublishPerformerMonitorFrame
+        guard !isLiveInputSuspendedForReview || isRoutineRecording else { return false }
+        return isRunning || isRoutineRecording || cxlRecorder.isRecording || shouldPublishPerformerMonitorFrame
     }
 
     private func publishRigLayoutIfNeeded(_ layout: DJRigLayout?, usesManualRigGuide: Bool) {
@@ -4281,10 +4340,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return min(max(rms * 10, 0), 1)
     }
 
+    /// Smallest change in `audioLevel` that triggers a new publish.
+    /// Below this, the meter is visually identical so we skip the
+    /// `@Published` write to avoid needless root-view invalidation.
+    private static let audioLevelPublishEpsilon: Float = 0.005
+
+    /// Minimum interval between *forced* no-change publishes.  Keeps the
+    /// meter from appearing permanently frozen when the actual level is
+    /// perfectly flat.  Resets on every real change.
+    private static let audioLevelPublishStaleInterval: CFTimeInterval = 0.50
+
     @MainActor
     func publishAudioSignalLevel(_ measuredLevel: Float?, receivedAt: CFTimeInterval = CACurrentMediaTime()) {
         lastReceivedAudioSampleTime = receivedAt
-        lastPublishedAudioLevelTime = receivedAt
 
         guard let measuredLevel, measuredLevel.isFinite else {
             if !hasPublishedAudioLevel {
@@ -4295,7 +4363,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let sanitizedLevel = min(max(measuredLevel, 0), 1)
         let currentLevel = audioLevel.isFinite ? audioLevel : 0
-        audioLevel = min(max((currentLevel * 0.55) + (sanitizedLevel * 0.45), 0), 1)
+        let candidateLevel = min(max((currentLevel * 0.55) + (sanitizedLevel * 0.45), 0), 1)
+
+        let wasSilent = currentLevel <= Self.audioLevelPublishEpsilon
+        let isSilent  = candidateLevel <= Self.audioLevelPublishEpsilon
+        let signalEdgeChanged = wasSilent != isSilent
+
+        let delta = abs(candidateLevel - currentLevel)
+        let significantChange = delta >= Self.audioLevelPublishEpsilon
+
+        let stale = receivedAt - lastPublishedAudioLevelTime >= Self.audioLevelPublishStaleInterval
+
+        guard significantChange || signalEdgeChanged || stale else { return }
+
+        lastPublishedAudioLevelTime = receivedAt
+        audioLevel = candidateLevel
         hasPublishedAudioLevel = true
     }
 
@@ -4589,21 +4671,49 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
         let normalizedValue = Double(value) / 127.0
         let summary = "Received CC\(controller) Ch\(channel + 1) Value\(value)"
-        let applyMonitorUpdate = {
-            self.midiEventsReceivedCount += 1
-            self.lastMIDICCMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
-            self.lastMIDIEventSummary = summary
-            self.midiListeningState = "Listening"
-            if self.midiLearnState == .listening {
-                self.midiLearnFeedback = summary
+        let ccMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
+        let isMidiLearn = midiLearnState == .listening
+
+        // Throttle @Published UI-monitor updates to ~4 Hz.
+        // Full-fidelity MIDI capture (capturedMidiCCEvents + debug counters)
+        // is never throttled — only the SwiftUI-facing string/counter
+        // properties are rate-limited to avoid flooding the main actor.
+        let now = CACurrentMediaTime()
+        midiCaptureLock.lock()
+        batchedMidiEventCount += 1
+        batchedMidiCCMessage = ccMessage
+        batchedMidiSummary = summary
+        // When live input is suspended for Review, skip UI monitor updates
+        // unless a recording is active (recording capture is never suspended).
+        // MIDI events still flow to capturedMidiCCEvents at full fidelity.
+        let suspendedForReview = isLiveInputSuspendedForReview && !isRoutineRecording
+        let shouldPublish = !suspendedForReview
+            && ((now - lastMidiMonitorPublishTime >= midiMonitorPublishInterval) || isMidiLearn)
+        if shouldPublish {
+            lastMidiMonitorPublishTime = now
+            let count = batchedMidiEventCount
+            batchedMidiEventCount = 0
+            let latestCC = batchedMidiCCMessage
+            let latestSummary = batchedMidiSummary
+            midiCaptureLock.unlock()
+            let applyMonitorUpdate = {
+                self.midiEventsReceivedCount += count
+                self.lastMIDICCMessage = latestCC
+                self.lastMIDIEventSummary = latestSummary
+                self.midiListeningState = "Listening"
+                if isMidiLearn {
+                    self.midiLearnFeedback = latestSummary
+                }
             }
-        }
-        if Thread.isMainThread {
-            applyMonitorUpdate()
-        } else {
-            Task { @MainActor in
+            if Thread.isMainThread {
                 applyMonitorUpdate()
+            } else {
+                Task { @MainActor in
+                    applyMonitorUpdate()
+                }
             }
+        } else {
+            midiCaptureLock.unlock()
         }
 
         let startTime = recordingStartTime ?? midiRecordingStartTime
@@ -4662,6 +4772,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func resetMIDIMonitoringState() {
+        midiCaptureLock.lock()
+        batchedMidiEventCount = 0
+        batchedMidiCCMessage = ""
+        batchedMidiSummary = "No MIDI received yet"
+        lastMidiMonitorPublishTime = 0
+        midiCaptureLock.unlock()
         midiEventsReceivedCount = 0
         lastMIDIEventSummary = "No MIDI received yet"
         lastMIDICCMessage = "CC -- Ch -- Value --"

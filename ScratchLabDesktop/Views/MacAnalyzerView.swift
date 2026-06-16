@@ -316,7 +316,11 @@ struct MacAnalyzerView: View {
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
     @StateObject private var demoModeController = ScratchLabDemoModeController()
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
-    @ObservedObject private var runtimeDiagnostics = ScratchLabRuntimeDiagnostics.shared
+    // REMOVED: @ObservedObject private var runtimeDiagnostics — see Fix 1.
+    // ScratchLabRuntimeDiagnostics.shared is read directly in leaf computed
+    // properties so the root MacAnalyzerView.body is not invalidated at
+    // the diagnostics 5 Hz publish rate.  Live data is still refreshed
+    // via the remaining capture-engine-driven body evaluations.
     @State private var exportMixMode: ExportMixMode = .scratchOnly
     @State private var isBuildingDemoExportPackage = false
     @State private var capturedNotationSnapshot: CaptureCore.DetectedNotationSnapshot?
@@ -343,6 +347,15 @@ struct MacAnalyzerView: View {
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
     @State private var reviewNotesDraft: String = ""
     @State private var reviewerNameDraft: String = ""
+    #if DEBUG
+    /// Cache the overlay timeline and its diagnostics so neither
+    /// `ReviewOverlayTimeline.build()` nor `OverlayTimingDiagnostics.compute()`
+    /// re-runs on every SwiftUI body evaluation — only when the captured
+    /// snapshot identity (capturedAt) or target notation changes.
+    @State private var cachedOverlayTimeline: ReviewOverlayTimeline?
+    @State private var cachedOverlayDiagnostics: OverlayTimingDiagnostics?
+    @State private var cachedOverlaySourceStamp: Date? = nil
+    #endif
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
     @State private var isShowingStagingInspector = false
@@ -473,11 +486,15 @@ struct MacAnalyzerView: View {
             captureEngine.preferMacCameraForDesktopDeck()
         }
         .onChange(of: workspaceTabRaw) { _, newValue in
-            if WorkspaceTab.resolved(from: newValue) == .capture {
+            let resolvedTab = WorkspaceTab.resolved(from: newValue)
+            // Suspend live input when entering Review to drop idle CPU.
+            // Recording is guarded inside setLiveInputSuspendedForReview.
+            captureEngine.setLiveInputSuspendedForReview(resolvedTab == .review)
+            if resolvedTab == .capture {
                 captureEngine.refreshDevices()
                 captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
             }
-            guard WorkspaceTab.resolved(from: newValue) != .practice else { return }
+            guard resolvedTab != .practice else { return }
             babyScratchDemo.stop()
             demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
@@ -1840,7 +1857,7 @@ struct MacAnalyzerView: View {
     }
 
     private var diagnosticsTickRateValue: String {
-        let tickRate = runtimeDiagnostics.notationTickRateHz
+        let tickRate = ScratchLabRuntimeDiagnostics.shared.notationTickRateHz
         let idle = !liveInputEnabled
             && babyScratchDemo.playbackState != .playing
             && !captureEngine.isRoutineRecording
@@ -2177,70 +2194,60 @@ struct MacAnalyzerView: View {
     }
 
     #if DEBUG
-    @ViewBuilder
-    private var movementFunnelInlineView: some View {
-        let frozen = captureEngine.frozenReviewDiagnostics
-        let live = captureEngine.captureDebugStats()
-        let stats = frozen ?? live
-        let replayLabel = frozen?.replaySourceLabel ?? "live"
-        VStack(alignment: .leading, spacing: 3) {
-            Text("DEBUG FUNNEL ROW RENDERED")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.orange)
-            Text("[source=\(replayLabel)] platterAttempted=\(stats.platterObserveFromSession) builderAcc=\(stats.builderInputAccepted) builderRej=\(stats.builderInputRejectedDirection) (steady=\(stats.builderRejectedSteady) searching=\(stats.builderRejectedSearching)) builderExt=\(stats.builderInputExtended)")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[steadyBreakdown] insufficientHistory=\(stats.steadyInsufficientHistory) displacementTooSmall=\(stats.steadyDisplacementTooSmall) velocityTooLow=\(stats.steadyVelocityTooLow)")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[dispDist] min=\(String(format: "%.4f", stats.displacementAbsMin)) max=\(String(format: "%.4f", stats.displacementAbsMax)) <2=\(stats.dispBucketBelow002) 2-5=\(stats.dispBucket002to005) 5-10=\(stats.dispBucket005to010) 10-20=\(stats.dispBucket010to020) >20=\(stats.dispBucketAbove020)")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[velDist] min=\(String(format: "%.4f", stats.velocityAbsMin)) max=\(String(format: "%.4f", stats.velocityAbsMax)) <3=\(stats.velBucketBelow003) 3-6=\(stats.velBucket003to006) 6-10=\(stats.velBucket006to010) 10-20=\(stats.velBucket010to020) >20=\(stats.velBucketAbove020)")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[trackedRange] x=[\(String(format: "%.4f", stats.trackedXMin)),\(String(format: "%.4f", stats.trackedXMax))] y=[\(String(format: "%.4f", stats.trackedYMin)),\(String(format: "%.4f", stats.trackedYMax))]")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[histCounts] 1=\(stats.historyCount1) 2=\(stats.historyCount2) 3=\(stats.historyCount3) 4=\(stats.historyCount4)")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[commitLatency] appeared=\(stats.trackerRawDirectionAppearedMoving) committed=\(stats.trackerCommittedDirectionChanges) reset=\(stats.trackerPendingResetBeforeCommit) L1=\(stats.trackerCommitLatency1) L2=\(stats.trackerCommitLatency2) L3+=\(stats.trackerCommitLatency3Plus)")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(stats.trackerPendingResetBeforeCommit > 0 ? .orange : .primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[raw=\(stats.rawMovementEventsCreated) norm=\(stats.normalizedMovementCount) fused=\(stats.fusedMovementCount) trusted=\(stats.trustedDirectionalCount) final=\(stats.finalRecordMovementCount)]")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[pubCalls=\(stats.publishHandTrackingCalls) pubSkips=\(stats.publishHandTrackingDedupSkips) starts=\(stats.activeMovementStarts) attempts=\(stats.activeMovementFinishAttempts) merges=\(stats.mergedSegments)]")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[rawDrops=\(dictStr(stats.rawDropReasons))]")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[normDrops=\(dictStr(stats.normalizedDropReasons))]")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("[trustDrops=\(dictStr(stats.trustDropReasons))]")
-                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
+    /// Precomputed debug funnel text so body evaluation is a shallow
+    /// array lookup rather than 20+ string-formatting calls.  Rebuilt
+    /// only when the underlying `DebugStats` identity changes.
+    private struct DebugFunnelLines: Equatable {
+        struct Line: Equatable {
+            let text: String
+            let isWarning: Bool
+            init(_ text: String, isWarning: Bool = false) {
+                self.text = text; self.isWarning = isWarning
+            }
+        }
+        let lines: [Line]
+
+        init(stats: MacCaptureEngine.DebugStats, replayLabel: String) {
+            lines = [
+                Line("DEBUG FUNNEL ROW RENDERED"),
+                Line("[source=\(replayLabel)] platterAttempted=\(stats.platterObserveFromSession) builderAcc=\(stats.builderInputAccepted) builderRej=\(stats.builderInputRejectedDirection) (steady=\(stats.builderRejectedSteady) searching=\(stats.builderRejectedSearching)) builderExt=\(stats.builderInputExtended)"),
+                Line("[steadyBreakdown] insufficientHistory=\(stats.steadyInsufficientHistory) displacementTooSmall=\(stats.steadyDisplacementTooSmall) velocityTooLow=\(stats.steadyVelocityTooLow)"),
+                Line("[dispDist] min=\(String(format: "%.4f", stats.displacementAbsMin)) max=\(String(format: "%.4f", stats.displacementAbsMax)) <2=\(stats.dispBucketBelow002) 2-5=\(stats.dispBucket002to005) 5-10=\(stats.dispBucket005to010) 10-20=\(stats.dispBucket010to020) >20=\(stats.dispBucketAbove020)"),
+                Line("[velDist] min=\(String(format: "%.4f", stats.velocityAbsMin)) max=\(String(format: "%.4f", stats.velocityAbsMax)) <3=\(stats.velBucketBelow003) 3-6=\(stats.velBucket003to006) 6-10=\(stats.velBucket006to010) 10-20=\(stats.velBucket010to020) >20=\(stats.velBucketAbove020)"),
+                Line("[trackedRange] x=[\(String(format: "%.4f", stats.trackedXMin)),\(String(format: "%.4f", stats.trackedXMax))] y=[\(String(format: "%.4f", stats.trackedYMin)),\(String(format: "%.4f", stats.trackedYMax))]"),
+                Line("[histCounts] 1=\(stats.historyCount1) 2=\(stats.historyCount2) 3=\(stats.historyCount3) 4=\(stats.historyCount4)"),
+                Line("[commitLatency] appeared=\(stats.trackerRawDirectionAppearedMoving) committed=\(stats.trackerCommittedDirectionChanges) reset=\(stats.trackerPendingResetBeforeCommit) L1=\(stats.trackerCommitLatency1) L2=\(stats.trackerCommitLatency2) L3+=\(stats.trackerCommitLatency3Plus)", isWarning: stats.trackerPendingResetBeforeCommit > 0),
+                Line("[raw=\(stats.rawMovementEventsCreated) norm=\(stats.normalizedMovementCount) fused=\(stats.fusedMovementCount) trusted=\(stats.trustedDirectionalCount) final=\(stats.finalRecordMovementCount)]"),
+                Line("[pubCalls=\(stats.publishHandTrackingCalls) pubSkips=\(stats.publishHandTrackingDedupSkips) starts=\(stats.activeMovementStarts) attempts=\(stats.activeMovementFinishAttempts) merges=\(stats.mergedSegments)]"),
+                Line("[rawDrops=\(Self.dictStr(stats.rawDropReasons))]"),
+                Line("[normDrops=\(Self.dictStr(stats.normalizedDropReasons))]"),
+                Line("[trustDrops=\(Self.dictStr(stats.trustDropReasons))]"),
+            ]
+        }
+
+        private static func dictStr(_ d: [String: Int]) -> String {
+            if d.isEmpty { return "none" }
+            return d.sorted(by: { $0.value > $1.value }).map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
         }
     }
 
-    private func dictStr(_ d: [String: Int]) -> String {
-        if d.isEmpty { return "none" }
-        return d.sorted(by: { $0.value > $1.value }).map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+    @ViewBuilder
+    private var movementFunnelInlineView: some View {
+        let frozen = captureEngine.frozenReviewDiagnostics
+        let replayLabel = frozen?.replaySourceLabel ?? "live"
+        // Precompute all debug strings once outside the ViewBuilder
+        // so SwiftUI diffing only compares pre-rendered String values,
+        // not 20+ Text interpolations + String(format:) + dict sorts.
+        let stats = frozen ?? captureEngine.captureDebugStats()
+        let funnel = DebugFunnelLines(stats: stats, replayLabel: replayLabel)
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(funnel.lines.enumerated()), id: \.offset) { _, line in
+                Text(line.text)
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundStyle(line.isWarning ? .orange : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
     #endif
 
@@ -2339,6 +2346,23 @@ struct MacAnalyzerView: View {
         let rawDisclosureLabel: String
     }
 
+    /// Slice S — resolves ONLY the input source (no card data) so the
+    /// parent can route `.liveDiagnostics` to the leaf observer without
+    /// itself observing runtimeDiagnostics.  Reads the shared singleton
+    /// without triggering parent invalidation.
+    private var reviewAudioOnsetSource: ReviewAudioOnsetSource {
+        let hasSelectedTake = currentRoutineArtifactStatus != nil
+        let takeAudioEventCount = (currentRoutineNotationSnapshot?.audioEvents ?? []).count
+        let liveSummary = ScratchLabRuntimeDiagnostics.shared.audioOnsetReviewSummary
+        let liveTiming = liveSummary.onsetCount + liveSummary.strokeCount
+            + liveSummary.uncertainCount + liveSummary.cutCount
+        return ReviewAudioOnsetSourceResolver.resolve(
+            hasSelectedTake: hasSelectedTake,
+            takeAudioEventCount: takeAudioEventCount,
+            liveTimingCandidateCount: liveTiming
+        )
+    }
+
     /// Slice S — pick the take-scoped pipeline when a take is selected
     /// with saved audio events, otherwise fall back to live diagnostics
     /// (no take selected) or hide the preview (selected take but no
@@ -2355,8 +2379,8 @@ struct MacAnalyzerView: View {
             )
         }
 
-        let liveReviewSummary = runtimeDiagnostics.audioOnsetReviewSummary
-        let liveRawSummary = runtimeDiagnostics.audioOnsetSummary
+        let liveReviewSummary = ScratchLabRuntimeDiagnostics.shared.audioOnsetReviewSummary
+        let liveRawSummary = ScratchLabRuntimeDiagnostics.shared.audioOnsetSummary
         let liveTiming = liveReviewSummary.onsetCount + liveReviewSummary.strokeCount
             + liveReviewSummary.uncertainCount + liveReviewSummary.cutCount
         let liveRawTiming = liveRawSummary.onsetCount + liveRawSummary.strokeCount
@@ -2390,7 +2414,7 @@ struct MacAnalyzerView: View {
             )
             return ReviewAudioOnsetCardData(
                 preview: preview,
-                marks: runtimeDiagnostics.audioOnsetReviewMarks,
+                marks: ScratchLabRuntimeDiagnostics.shared.audioOnsetReviewMarks,
                 rawDisclosureCount: liveRawTiming,
                 rawDisclosureLabel: "Raw (Advanced)"
             )
@@ -3493,9 +3517,9 @@ struct MacAnalyzerView: View {
                         )
                     }
                     #endif
-                    diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", runtimeDiagnostics.notationLastTickDurationMS))
+                    diagnosticRow(title: "Last notation tick", value: String(format: "%.2fms", ScratchLabRuntimeDiagnostics.shared.notationLastTickDurationMS))
                     diagnosticRow(title: "Approx tick rate", value: diagnosticsTickRateValue)
-                    diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", runtimeDiagnostics.coachLastUpdateDurationMS))
+                    diagnosticRow(title: "Last coach update", value: String(format: "%.2fms", ScratchLabRuntimeDiagnostics.shared.coachLastUpdateDurationMS))
                 }
                 .padding(.top, 8)
             } label: {
@@ -4432,84 +4456,96 @@ struct MacAnalyzerView: View {
     /// only: never overwrites captured notation, never participates in
     /// scoring or export. Hides itself when there's nothing useful to
     /// show (`preview.shouldRender == false`).
+    /// Slice P — Review-only audio-onset preview card. Diagnostic surface
+    /// only: never overwrites captured notation, never participates in
+    /// scoring or export.
+    ///
+    /// Fix 3: When the source resolves to `.liveDiagnostics`, delegates to
+    /// `ReviewLiveDiagnosticsOnsetCard` — a leaf view that OBSERVES
+    /// `ScratchLabRuntimeDiagnostics.shared` at ~5 Hz without invalidating
+    /// `MacAnalyzerView.root`.  The source check reads the singleton but
+    /// does NOT observe it, so runtimeDiagnostics changes alone no longer
+    /// trigger a full body re-evaluation.
     @ViewBuilder
     private var reviewAudioOnsetPreviewStageCard: some View {
-        // Slice S — input source is resolved upstream in
-        // `reviewAudioOnsetCardData`. When a take is selected with
-        // saved audio events the preview is take-scoped; otherwise it
-        // falls back to live diagnostics (no take) or hides
-        // (selected take with no audio events).
-        let cardData = reviewAudioOnsetCardData
-        let preview = cardData.preview
-        let marks = cardData.marks
-        if preview.shouldRender {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(preview.headerText)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Spacer(minLength: 0)
-                    Text("Preview")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
-                            in: Capsule()
-                        )
-                }
-                Text(preview.subtitleText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.66))
-                    .fixedSize(horizontal: false, vertical: true)
-                VStack(alignment: .leading, spacing: 4) {
-                    reviewAudioOnsetPreviewRow(
-                        "Source",
-                        preview.source.label
-                    )
-                    reviewAudioOnsetPreviewRow(
-                        "Timing candidates",
-                        String(preview.timingCandidateCount)
-                    )
-                    if cardData.rawDisclosureCount > preview.timingCandidateCount {
+        let source = reviewAudioOnsetSource
+        switch source {
+        case .liveDiagnostics:
+            let capturedHasEvents = currentRoutineNotationSnapshot?.hasDetectedEvents ?? false
+            ReviewLiveDiagnosticsOnsetCard(capturedHasEvents: capturedHasEvents)
+        case .selectedTakeSavedEvents, .unavailable:
+            let cardData = reviewAudioOnsetCardData
+            let preview = cardData.preview
+            let marks = cardData.marks
+            if preview.shouldRender {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(preview.headerText)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Spacer(minLength: 0)
+                        Text("Preview")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
+                                in: Capsule()
+                            )
+                    }
+                    Text(preview.subtitleText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.66))
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
                         reviewAudioOnsetPreviewRow(
-                            cardData.rawDisclosureLabel,
-                            "\(cardData.rawDisclosureCount) onsets · filtered for Review"
+                            "Source",
+                            preview.source.label
+                        )
+                        reviewAudioOnsetPreviewRow(
+                            "Timing candidates",
+                            String(preview.timingCandidateCount)
+                        )
+                        if cardData.rawDisclosureCount > preview.timingCandidateCount {
+                            reviewAudioOnsetPreviewRow(
+                                cardData.rawDisclosureLabel,
+                                "\(cardData.rawDisclosureCount) onsets · filtered for Review"
+                            )
+                        }
+                        reviewAudioOnsetPreviewRow(
+                            "First",
+                            preview.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                        )
+                        reviewAudioOnsetPreviewRow(
+                            "Last",
+                            preview.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                        )
+                        reviewAudioOnsetPreviewRow(
+                            "Uncertain",
+                            String(preview.uncertainCount)
+                        )
+                        reviewAudioOnsetPreviewRow(
+                            "Identity",
+                            preview.identityLabel
                         )
                     }
-                    reviewAudioOnsetPreviewRow(
-                        "First",
-                        preview.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
-                    )
-                    reviewAudioOnsetPreviewRow(
-                        "Last",
-                        preview.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
-                    )
-                    reviewAudioOnsetPreviewRow(
-                        "Uncertain",
-                        String(preview.uncertainCount)
-                    )
-                    reviewAudioOnsetPreviewRow(
-                        "Identity",
-                        preview.identityLabel
-                    )
+                    if preview.shouldRenderTimelineStrip(marksCount: marks.count) {
+                        reviewAudioOnsetTimelineStrip(
+                            marks: marks,
+                            firstTimestamp: preview.firstTimestamp,
+                            lastTimestamp: preview.lastTimestamp
+                        )
+                    }
+                    Text(preview.footerDisclaimer)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                if preview.shouldRenderTimelineStrip(marksCount: marks.count) {
-                    reviewAudioOnsetTimelineStrip(
-                        marks: marks,
-                        firstTimestamp: preview.firstTimestamp,
-                        lastTimestamp: preview.lastTimestamp
-                    )
-                }
-                Text(preview.footerDisclaimer)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 
@@ -4745,14 +4781,14 @@ struct MacAnalyzerView: View {
             if let targetNotation,
                let capturedSnapshot,
                hasCaptured {
-                let capturedDuration = capturedSnapshot.capturedEvidenceEndTime
-                    ?? max(0, targetNotation.timelineDuration)
-                let overlay = ReviewOverlayTimeline.build(
+                let (overlay, diagnostics) = resolvedOverlayAndDiagnostics(
                     targetNotation: targetNotation,
-                    capturedSnapshot: capturedSnapshot,
-                    capturedDuration: capturedDuration
+                    capturedSnapshot: capturedSnapshot
                 )
-                ReviewOverlayPlayableSurface(overlay: overlay)
+                ReviewOverlayPlayableSurface(
+                    overlay: overlay,
+                    diagnostics: diagnostics
+                )
             } else {
                 reviewOverlayDiffEmptyState(
                     hasTarget: targetNotation != nil,
@@ -4792,6 +4828,40 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// Returns a cached `(ReviewOverlayTimeline, OverlayTimingDiagnostics)`
+    /// pair, rebuilding only when the captured snapshot's identity
+    /// (`capturedAt` timestamp) changes.  Avoids calling the expensive
+    /// `build()` + `compute()` path on every SwiftUI body evaluation.
+    /// Cache is DEBUG-only; Release recomputes on every call (acceptable
+    /// because the DEBUG funnel view isn't rendered in Release).
+    private func resolvedOverlayAndDiagnostics(
+        targetNotation: ScratchNotation,
+        capturedSnapshot: CaptureCore.DetectedNotationSnapshot
+    ) -> (ReviewOverlayTimeline, OverlayTimingDiagnostics) {
+        #if DEBUG
+        let stamp = capturedSnapshot.capturedAt
+        if let cached = cachedOverlayTimeline,
+           let cachedDiag = cachedOverlayDiagnostics,
+           cachedOverlaySourceStamp == stamp {
+            return (cached, cachedDiag)
+        }
+        #endif
+        let capturedDuration = capturedSnapshot.capturedEvidenceEndTime
+            ?? max(0, targetNotation.timelineDuration)
+        let built = ReviewOverlayTimeline.build(
+            targetNotation: targetNotation,
+            capturedSnapshot: capturedSnapshot,
+            capturedDuration: capturedDuration
+        )
+        let diag = OverlayTimingDiagnostics.compute(overlay: built)
+        #if DEBUG
+        cachedOverlayTimeline = built
+        cachedOverlayDiagnostics = diag
+        cachedOverlaySourceStamp = stamp
+        #endif
+        return (built, diag)
     }
 
     private var reviewSummaryFooterCard: some View {
@@ -6537,7 +6607,7 @@ struct MacAnalyzerView: View {
     /// AudioOnsetDetector. Read-only: nothing here gates Practice,
     /// Review, scoring, export, or notation rendering.
     private var audioOnsetDiagnosticsCard: some View {
-        let summary = runtimeDiagnostics.audioOnsetSummary
+        let summary = ScratchLabRuntimeDiagnostics.shared.audioOnsetSummary
         let identityLabel = summary.isClassified ? "classified" : "not classified"
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -6545,7 +6615,7 @@ struct MacAnalyzerView: View {
                     .font(.headline)
                 Spacer()
                 Button("Reset") {
-                    runtimeDiagnostics.resetAudioOnsetDiagnostics()
+                    ScratchLabRuntimeDiagnostics.shared.resetAudioOnsetDiagnostics()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -7151,23 +7221,200 @@ struct MacAnalyzerView: View {
 /// Renders the lane view, the transport row, and a deterministic
 /// elapsed-time readout driven by `TimelineView(.animation)`. No
 /// editing, no scoring, no audio — visual cursor only.
+
+// MARK: - Fix 3: Diagnostics-observing leaf views (not at root)
+
+/// Observes ScratchLabRuntimeDiagnostics at ~5 Hz WITHOUT invalidating
+/// MacAnalyzerView.root — only this leaf re-renders when diagnostics
+/// publish.  Used exclusively for the live-diagnostics path in Review
+/// (no take selected with saved audio events).  Renders identically to
+/// `reviewAudioOnsetPreviewStageCard` for the live-diagnostics case.
+private struct ReviewLiveDiagnosticsOnsetCard: View {
+    @ObservedObject private var diagnostics = ScratchLabRuntimeDiagnostics.shared
+    let capturedHasEvents: Bool
+
+    var body: some View {
+        let summary = diagnostics.audioOnsetReviewSummary
+        let rawSummary = diagnostics.audioOnsetSummary
+        let marks = diagnostics.audioOnsetReviewMarks
+        let preview = ReviewAudioOnsetPreview.compute(
+            capturedHasEvents: capturedHasEvents,
+            summary: summary,
+            source: .liveDiagnostics
+        )
+        if preview.shouldRender {
+            let rawTimingCount = rawSummary.onsetCount
+                + rawSummary.strokeCount
+                + rawSummary.uncertainCount
+                + rawSummary.cutCount
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(preview.headerText)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 0)
+                    Text("Preview")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
+                            in: Capsule()
+                        )
+                }
+                Text(preview.subtitleText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.66))
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    ReviewAudioOnsetCardRow("Source", preview.source.label)
+                    ReviewAudioOnsetCardRow(
+                        "Timing candidates",
+                        String(preview.timingCandidateCount)
+                    )
+                    if rawTimingCount > preview.timingCandidateCount {
+                        ReviewAudioOnsetCardRow(
+                            "Raw (Advanced)",
+                            "\(rawTimingCount) onsets · filtered for Review"
+                        )
+                    }
+                    ReviewAudioOnsetCardRow(
+                        "First",
+                        preview.firstTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                    )
+                    ReviewAudioOnsetCardRow(
+                        "Last",
+                        preview.lastTimestamp.map { String(format: "%.2fs", $0) } ?? "—"
+                    )
+                    ReviewAudioOnsetCardRow(
+                        "Uncertain",
+                        String(preview.uncertainCount)
+                    )
+                    ReviewAudioOnsetCardRow(
+                        "Identity",
+                        preview.identityLabel
+                    )
+                }
+                if preview.shouldRenderTimelineStrip(marksCount: marks.count) {
+                    OnsetMarkTimelineStrip(
+                        marks: marks,
+                        firstTimestamp: preview.firstTimestamp,
+                        lastTimestamp: preview.lastTimestamp
+                    )
+                }
+                Text(preview.footerDisclaimer)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+}
+
+/// Single key-value row for the audio onset card (shared by the parent
+/// card and the leaf observer so the visual style stays byte-identical).
+private struct ReviewAudioOnsetCardRow: View {
+    let label: String
+    let value: String
+    init(_ label: String, _ value: String) {
+        self.label = label; self.value = value
+    }
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.66))
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+        }
+    }
+}
+
+/// Compact timing-mark strip (shared by the parent audio-onset card and
+/// the leaf observer). Renders one thin vertical tick per filtered
+/// candidate at its position within the [first, last] timestamp range.
+private struct OnsetMarkTimelineStrip: View {
+    let marks: [TimeInterval]
+    let firstTimestamp: TimeInterval?
+    let lastTimestamp: TimeInterval?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Uncertain timing marks")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.66))
+                Text("· preview only · not exported")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Canvas { context, size in
+                guard
+                    let first = firstTimestamp,
+                    let last = lastTimestamp,
+                    last >= first
+                else { return }
+                let span = last - first
+                for t in marks {
+                    let x: CGFloat
+                    if span > 0 {
+                        let frac = (t - first) / span
+                        x = max(0, min(size.width, CGFloat(frac) * size.width))
+                    } else {
+                        x = size.width / 2
+                    }
+                    let rect = CGRect(
+                        x: x - 0.75, y: 0, width: 1.5, height: size.height
+                    )
+                    context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                }
+            }
+            .frame(height: 14)
+            .background(
+                Color.white.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+            )
+            if let first = firstTimestamp,
+               let last = lastTimestamp,
+               last >= first {
+                HStack {
+                    Text(String(format: "%.2fs", first))
+                    Spacer(minLength: 0)
+                    Text(String(format: "%.2fs", last))
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+            }
+        }
+    }
+}
+
 private struct ReviewOverlayPlayableSurface: View {
 
     let overlay: ReviewOverlayTimeline
+    let diagnostics: OverlayTimingDiagnostics?
 
     @State private var controller: OverlayReplayController
 
-    init(overlay: ReviewOverlayTimeline) {
+    init(overlay: ReviewOverlayTimeline,
+         diagnostics: OverlayTimingDiagnostics? = nil) {
         self.overlay = overlay
+        self.diagnostics = diagnostics
         _controller = State(initialValue: OverlayReplayController(timeline: overlay.captured))
     }
 
     var body: some View {
         let duration = controller.duration
-        // Slice 4.5 — compute diagnostics once per body invocation
-        // (state change, overlay change) so the per-frame
-        // `TimelineView` closure only re-reads it.
-        let diagnostics = OverlayTimingDiagnostics.compute(overlay: overlay)
+        // Use precomputed diagnostics when supplied (cached by the
+        // parent card), otherwise compute on demand.
+        let resolvedDiagnostics = diagnostics
+            ?? OverlayTimingDiagnostics.compute(overlay: overlay)
         VStack(alignment: .leading, spacing: 8) {
             TimelineView(.animation(paused: !controller.isPlaying)) { context in
                 let hostTime = context.date.timeIntervalSinceReferenceDate
@@ -7176,7 +7423,7 @@ private struct ReviewOverlayPlayableSurface: View {
                     overlay: overlay,
                     playheadTime: controller.hasTimeline ? cursor : nil,
                     duration: duration > 0 ? duration : nil,
-                    diagnostics: diagnostics
+                    diagnostics: resolvedDiagnostics
                 )
                 .frame(height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -7187,7 +7434,7 @@ private struct ReviewOverlayPlayableSurface: View {
                 }
             }
 
-            diagnosticsSummaryRow(for: diagnostics)
+            diagnosticsSummaryRow(for: resolvedDiagnostics)
 
             transportRow
 
