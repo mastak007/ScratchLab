@@ -38,6 +38,8 @@ struct TimecodeControlCard: View {
             Divider().opacity(0.3)
             pipelineStatusSection
             Divider().opacity(0.3)
+            validationSection
+            Divider().opacity(0.3)
             TimecodeRecordingSection(
                 recorder: pipeline.prototypeRecorder,
                 isActive: pipeline.mode == .controlPrototype
@@ -261,6 +263,143 @@ struct TimecodeControlCard: View {
         case .forward:  return Color(nsColor: .systemGreen)
         case .backward: return Color(nsColor: .systemRed)
         case .unknown:  return Color(nsColor: .systemGray)
+        }
+    }
+
+    // MARK: - Validation section
+
+    private var validationSection: some View {
+        let snap = pipeline.makeValidationSnapshot()
+        return VStack(alignment: .leading, spacing: 8) {
+            // Header + disclaimer
+            HStack(alignment: .firstTextBaseline) {
+                Text("Validation")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Not sent to notation")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
+
+            // Big status badge
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(validationStatusColor(snap.validationStatus))
+                    .frame(width: 8, height: 8)
+                Text(snap.validationStatus.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(validationStatusColor(snap.validationStatus))
+            }
+            .padding(.vertical, 4)
+
+            // Checklist
+            VStack(alignment: .leading, spacing: 3) {
+                let totalDrop = snap.droppedSilence + snap.droppedClipped
+                    + snap.droppedChannelFault + snap.droppedWeakSignal
+                    + snap.droppedLowConfidence
+                let dropLow = totalDrop == 0
+                    || (snap.acceptedMotionSamples > 0
+                        && Double(snap.acceptedMotionSamples) > Double(totalDrop) * 0.2)
+                let isStereoOK = pipeline.latestDiagnosis.map {
+                    $0.isStereo && !$0.isMonoSuspect
+                } ?? false
+                let items: [(String, Bool)] = [
+                    ("Live tap enabled", snap.liveTapEnabled),
+                    ("Buffer received recently", snap.hasRecentBuffer),
+                    ("Stereo signal present", isStereoOK),
+                    ("Decoder confidence \u{2265} threshold",
+                     snap.decoderConfidence >= pipeline.minConfidence && snap.decoderConfidence > 0),
+                    ("Accepted motion samples > 0", snap.acceptedMotionSamples > 0),
+                    ("Drop reasons low", dropLow),
+                ]
+                ForEach(items, id: \.0) { label, ok in
+                    HStack(spacing: 5) {
+                        Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(ok ? Color(nsColor: .systemGreen) : Color(nsColor: .secondaryLabelColor))
+                        Text(label)
+                            .font(.system(size: 11))
+                            .foregroundStyle(ok ? .primary : .secondary)
+                    }
+                }
+            }
+
+            // Last drop reason
+            if !snap.lastDropReason.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemYellow))
+                    Text("Last drop: \(snap.lastDropReason)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
+                }
+            }
+
+            // Source label
+            HStack(spacing: 5) {
+                Image(systemName: "tag")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text(snap.sourceLabel)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            // Manual test checklist (informational)
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(["Move record forward → direction shows forward",
+                              "Move record backward → direction shows backward",
+                              "Stop record → rate drops to 0",
+                              "Check direction/rate update in Pipeline Status"], id: \.self) { step in
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.right.circle")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                            Text(step)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            } label: {
+                Text("Manual test steps")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            // Actions
+            HStack(spacing: 8) {
+                Button("Reset Counters") {
+                    pipeline.resetCounters()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.secondary)
+
+                Button("Copy Debug") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(snap.debugText, forType: .string)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.secondary)
+            }
+        }
+    }
+
+    private func validationStatusColor(_ status: TimecodeValidationStatus) -> Color {
+        switch status {
+        case .noSignal:               return Color(nsColor: .secondaryLabelColor)
+        case .stale:                  return Color(nsColor: .systemOrange)
+        case .receivingButNoDecode:   return Color(nsColor: .systemYellow)
+        case .decodingButDropping:    return Color(nsColor: .systemOrange)
+        case .clipped:                return Color(nsColor: .systemRed)
+        case .channelFault:           return Color(nsColor: .systemRed)
+        case .usablePrototypeControl: return Color(nsColor: .systemGreen)
         }
     }
 

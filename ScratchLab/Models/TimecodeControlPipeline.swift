@@ -64,6 +64,9 @@ public struct TimecodeControlCounters: Equatable, Sendable {
     /// (e.g. `"timecode_live"`).
     public var sourceLabel: String = "timecode_live"
 
+    /// Maximum absolute decoded rate observed during this session.
+    public var maxAbsRate: Double = 0
+
     public init() {}
 }
 
@@ -369,6 +372,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         }
         c.currentDirection = currentDirection.rawValue
         c.currentRate = currentRate
+        c.maxAbsRate = max(c.maxAbsRate, abs(currentRate))
 
         // Adapt to platter timeline
         let timeline = adapter.adapt(calibratedResult)
@@ -392,6 +396,68 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
 #endif
 
         return timeline
+    }
+
+    // MARK: - Validation snapshot
+
+    /// Build a point-in-time validation snapshot from current pipeline state.
+    ///
+    /// The snapshot is a pure value — it does not subscribe to any stream and
+    /// does not update after creation. Call this from a SwiftUI view body or
+    /// a test to get the current prototype health summary.
+    ///
+    /// - Parameter now: The reference time for computing buffer age. Defaults
+    ///   to `Date()`. Inject a fixed value in tests.
+    public func makeValidationSnapshot(now: Date = Date()) -> TimecodeValidationSnapshot {
+        let bufferAge = lastBufferReceivedAt.map { now.timeIntervalSince($0) }
+        let hasRecent = bufferAge.map { $0 < TimecodeValidationSnapshot.staleThreshold } ?? false
+        let diag = latestDiagnosis
+
+        let status = TimecodeValidationSnapshot.classify(
+            hasRecentBuffer: hasRecent,
+            lastBufferAge: bufferAge,
+            signalHealth: signalHealth,
+            acceptedMotionSamples: counters.acceptedMotionSamples,
+            droppedSilence: counters.droppedSilence,
+            droppedClipped: counters.droppedClipped,
+            droppedChannelFault: counters.droppedChannelFault,
+            droppedWeakSignal: counters.droppedWeakSignal,
+            droppedLowConfidence: counters.droppedLowConfidence
+        )
+
+#if DEBUG
+        let recordedSamples = prototypeRecorder.acceptedSampleCount
+#else
+        let recordedSamples = 0
+#endif
+
+        return TimecodeValidationSnapshot(
+            mode: mode.rawValue,
+            liveTapEnabled: liveTapEnabled,
+            hasRecentBuffer: hasRecent,
+            lastBufferAge: bufferAge,
+            signalHealth: signalHealth,
+            leftRMS: diag?.leftRMS ?? 0,
+            rightRMS: diag?.rightRMS ?? 0,
+            leftPeak: diag?.leftPeak ?? 0,
+            rightPeak: diag?.rightPeak ?? 0,
+            decodedDirection: currentDirection.rawValue,
+            decodedRate: currentRate,
+            decoderConfidence: counters.averageConfidence,
+            acceptedMotionSamples: counters.acceptedMotionSamples,
+            recordedSamples: recordedSamples,
+            droppedSilence: counters.droppedSilence,
+            droppedClipped: counters.droppedClipped,
+            droppedChannelFault: counters.droppedChannelFault,
+            droppedWeakSignal: counters.droppedWeakSignal,
+            droppedLowConfidence: counters.droppedLowConfidence,
+            directionChanges: counters.directionChanges,
+            maxAbsRate: counters.maxAbsRate,
+            averageConfidence: counters.averageConfidence,
+            lastDropReason: counters.lastDropReason,
+            sourceLabel: counters.sourceLabel,
+            validationStatus: status
+        )
     }
 
     // MARK: - Reset

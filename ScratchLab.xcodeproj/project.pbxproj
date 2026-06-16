@@ -73,6 +73,9 @@
 		TCA000013TCA013TCA00001 /* TimecodePrototypeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */; };
 		TCB000013TCB013TCB00001 /* TimecodePrototypeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */; };
 		TCT000004TCT004TCT00001 /* TimecodePrototypeRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */; };
+		TCA000015TCA015TCA00001 /* TimecodeValidationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */; };
+		TCB000015TCB015TCB00001 /* TimecodeValidationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */; };
+		TCT000005TCT005TCT00001 /* TimecodeValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000016TCR016TCR00001 /* TimecodeValidationTests.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
 		51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
@@ -587,6 +590,8 @@
 		TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeLiveTapTests.swift; path = TimecodeLiveTapTests.swift; sourceTree = "<group>"; };
 		TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeRecorder.swift; path = TimecodePrototypeRecorder.swift; sourceTree = "<group>"; };
 		TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeRecorderTests.swift; path = TimecodePrototypeRecorderTests.swift; sourceTree = "<group>"; };
+		TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeValidationSnapshot.swift; path = TimecodeValidationSnapshot.swift; sourceTree = "<group>"; };
+		TCR000016TCR016TCR00001 /* TimecodeValidationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeValidationTests.swift; path = TimecodeValidationTests.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnosticsTests.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
 		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
@@ -862,6 +867,7 @@
 				TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */,
 				TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */,
 				TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */,
+				TCR000016TCR016TCR00001 /* TimecodeValidationTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1068,6 +1074,7 @@
 				TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */,
 				TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */,
 				TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */,
+				TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1594,6 +1601,7 @@
 				TCA000006TCA006TCA00001 /* TimecodeControlPipeline.swift in Sources */,
 				TCA000007TCA007TCA00001 /* TimecodeControlMode.swift in Sources */,
 				TCA000013TCA013TCA00001 /* TimecodePrototypeRecorder.swift in Sources */,
+				TCA000015TCA015TCA00001 /* TimecodeValidationSnapshot.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
@@ -1728,6 +1736,7 @@
 				TCB000007TCB007TCB00001 /* TimecodeControlMode.swift in Sources */,
 				TCB000010TCB010TCB00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */,
 				TCB000013TCB013TCB00001 /* TimecodePrototypeRecorder.swift in Sources */,
+				TCB000015TCB015TCB00001 /* TimecodeValidationSnapshot.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {
@@ -1827,6 +1836,7 @@
 			TCT000002TCT002TCT00001 /* TimecodeLiveIntegrationTests.swift in Sources */,
 				TCT000003TCT003TCT00001 /* TimecodeLiveTapTests.swift in Sources */,
 				TCT000004TCT004TCT00001 /* TimecodePrototypeRecorderTests.swift in Sources */,
+				TCT000005TCT005TCT00001 /* TimecodeValidationTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
