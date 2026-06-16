@@ -17,6 +17,7 @@ import SwiftUI
 ///    dropped counters, last drop reason, source label.
 ///
 /// **Batch 3:** Control pipeline only. No live AVCapture wiring.
+/// **Batch 10:** Profile/preset picker, setup checklist, validation-override.
 struct TimecodeControlCard: View {
 
     @ObservedObject var pipeline: TimecodeControlPipeline
@@ -25,9 +26,19 @@ struct TimecodeControlCard: View {
     /// Persisted mode so the picker survives view disappearance.
     @AppStorage("scratchlab.mac.timecodeMode") private var persistedModeRaw: String = TimecodeControlMode.disabled.rawValue
 
+    /// Persisted preset selection.
+    @AppStorage("scratchlab.mac.timecodePreset") private var persistedPresetRaw: String = TimecodeControlPreset.scratchLabPrototype.rawValue
+
+    /// Current selected preset.
+    @State private var selectedPreset: TimecodeControlPreset = .scratchLabPrototype
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             modeSection
+            Divider().opacity(0.3)
+            profileSection
+            Divider().opacity(0.3)
+            setupChecklistSection
             Divider().opacity(0.3)
             playbackBridgeSection
             Divider().opacity(0.3)
@@ -59,10 +70,28 @@ struct TimecodeControlCard: View {
             if let restored = TimecodeControlMode(rawValue: persistedModeRaw) {
                 pipeline.mode = restored
             }
+            // Restore persisted preset
+            if let restored = TimecodeControlPreset(rawValue: persistedPresetRaw) {
+                selectedPreset = restored
+                applyPreset(restored)
+            }
         }
         .onChange(of: pipeline.mode) { newMode in
             persistedModeRaw = newMode.rawValue
         }
+        .onChange(of: selectedPreset) { newPreset in
+            persistedPresetRaw = newPreset.rawValue
+            applyPreset(newPreset)
+        }
+    }
+
+    // MARK: - Preset application
+
+    private func applyPreset(_ preset: TimecodeControlPreset) {
+        let profile = TimecodePrototypeProfile.make(preset: preset, pipeline: pipeline)
+        profile.apply(to: pipeline)
+        bridge.validationRequired = profile.validationRequired
+        bridge.validationOverride = false
     }
 
     // MARK: - Mode section
@@ -82,7 +111,155 @@ struct TimecodeControlCard: View {
         }
     }
 
-    // MARK: - Playback bridge section (Batch 8)
+    // MARK: - Profile section (Batch 10)
+
+    private var profileSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Profile")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Picker("Preset", selection: $selectedPreset) {
+                ForEach(TimecodeControlPreset.allCases, id: \.self) { preset in
+                    Text(preset.label).tag(preset)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            // Show active profile summary
+            let profile = TimecodePrototypeProfile.make(preset: selectedPreset, pipeline: pipeline)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Channel:")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(profile.inputChannel.label)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                }
+                HStack(spacing: 6) {
+                    Text("Rate scale:")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.1f×", profile.rateScale))
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                }
+                HStack(spacing: 6) {
+                    Text("Min conf:")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.2f", profile.minConfidence))
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                }
+                HStack(spacing: 6) {
+                    Text("Max rate:")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.1f u/s", profile.maxRate))
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                }
+            }
+
+            // Experimental warning for DVS preset
+            if selectedPreset.isExperimental, let warning = selectedPreset.experimentalWarning {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemYellow))
+                    Text(warning)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .systemYellow))
+                }
+            }
+
+            // Safety labels
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Prototype only — not final compatibility")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+                Text("Not sent to notation unless later enabled")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: - Setup checklist section (Batch 10)
+
+    private var setupChecklistSection: some View {
+        let snap = pipeline.makeValidationSnapshot()
+        let isStereoOK = pipeline.latestDiagnosis.map { $0.isStereo && !$0.isMonoSuspect } ?? false
+        let totalDrops = snap.droppedSilence + snap.droppedClipped
+            + snap.droppedChannelFault + snap.droppedWeakSignal
+            + snap.droppedLowConfidence
+        let dropsLow = totalDrops == 0
+            || (snap.acceptedMotionSamples > 0
+                && Double(snap.acceptedMotionSamples) > Double(totalDrops) * 0.2)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Setup Checklist")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            let items: [(String, Bool, String)] = [
+                ("Profile selected",
+                 selectedPreset != .manual || pipeline.mode != .disabled,
+                 "Select a prototype profile"),
+                ("Mode: Control Prototype",
+                 pipeline.mode == .controlPrototype,
+                 "Set mode to Timecode Prototype"),
+                ("Live tap enabled",
+                 snap.liveTapEnabled,
+                 "Enable the live audio tap"),
+                ("L/R signal present",
+                 snap.hasRecentBuffer && isStereoOK,
+                 "Check timecode input cable and source"),
+                ("Direction forward OK",
+                 pipeline.currentDirection == .forward || snap.acceptedMotionSamples > 0,
+                 "Move record forward; check direction indicator"),
+                ("Direction backward OK",
+                 pipeline.currentDirection == .backward || snap.acceptedMotionSamples > 0,
+                 "Move record backward; check direction indicator"),
+                ("Stop / idle detected",
+                 pipeline.currentRate == 0 || snap.acceptedMotionSamples > 0,
+                 "Stop record; rate should drop to zero"),
+                ("Confidence \u{2265} threshold",
+                 snap.decoderConfidence >= pipeline.minConfidence && snap.decoderConfidence > 0,
+                 "Check signal level and channel balance"),
+                ("Validation passed",
+                 snap.validationStatus == .usablePrototypeControl,
+                 "Requires accepted motion + clean signal"),
+                ("Drops low",
+                 dropsLow,
+                 "Check for silence, clipping, or channel faults"),
+            ]
+
+            ForEach(items, id: \.0) { label, ok, hint in
+                HStack(spacing: 5) {
+                    Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(ok ? Color(nsColor: .systemGreen) : Color(nsColor: .secondaryLabelColor))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(label)
+                            .font(.system(size: 11))
+                            .foregroundStyle(ok ? .primary : .secondary)
+                        if !ok {
+                            Text(hint)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+
+            // Prototype disclaimer below checklist
+            Text("Prototype only — not a compatibility checklist")
+                .font(.system(size: 9, weight: .regular))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Playback bridge section (Batch 8 / Batch 10)
 
     private var playbackBridgeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -138,6 +315,35 @@ struct TimecodeControlCard: View {
                 }
             }
 
+            // Validation override (Batch 10)
+            if bridge.state == .blockedByValidationRequired || bridge.validationRequired {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color(nsColor: .systemOrange))
+                        Text("Validation required for playback")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color(nsColor: .systemOrange))
+                    }
+                    Toggle(isOn: $bridge.validationOverride) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "hand.raised")
+                                .font(.system(size: 11))
+                            Text("Override — enable playback without validation")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    if bridge.validationOverride {
+                        Text("Warning: unvalidated timecode may produce incorrect playback")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(Color(nsColor: .systemRed))
+                    }
+                }
+            }
+
             // Prototype warnings
             VStack(alignment: .leading, spacing: 2) {
                 Text("Prototype only")
@@ -158,6 +364,8 @@ struct TimecodeControlCard: View {
         case .blockedByBadSignal:       return Color(nsColor: .systemRed)
         case .blockedByReplay:          return Color(nsColor: .systemBlue)
         case .blockedByDiagnosticsOnly: return Color(nsColor: .systemOrange)
+        case .blockedByLiveTapOff:      return Color(nsColor: .systemOrange)
+        case .blockedByValidationRequired: return Color(nsColor: .systemOrange)
         }
     }
 

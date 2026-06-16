@@ -93,6 +93,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
     /// and flushed, so it has a valid timeline and healthy counters.
     private func makeTrustedPipeline() -> TimecodeControlPipeline {
         let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true  // Batch 10: live tap must be on for bridge
         // Feed phase-progressing buffers to produce forward motion
         feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25, amplitude: 0.5)
         _ = pipeline.flushDecode()
@@ -183,6 +184,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
     func testTimecodePlaybackBridgeFailsClosedOnBadSignal() {
         // Pipeline in controlPrototype but only silence fed
         let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
         feedSilence(into: pipeline, count: 4)
         _ = pipeline.flushDecode()
 
@@ -199,6 +201,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
     func testLowConfidenceEmitsNoPlaybackControl() {
         // Pipeline in controlPrototype but with very weak signal
         let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
 
         // Feed weak signal — amplitude 0.005 is below typical decoder threshold
         let weak = sineTone(frequency: carrierFrequency, frameCount: framesPerBuffer,
@@ -316,6 +319,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
 
     func testExtremeRatesAreClamped() {
         let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
 
         // Feed phase-progressing buffers with a large phase step to produce
         // high-rate output
@@ -440,6 +444,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
     func testBridgeArmedWhenEnabledButNoTimelineYet() {
         // Pipeline in controlPrototype but no buffers fed yet
         let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
 
         let bridge = makeBridge(enabled: true)
         let drive = bridge.evaluate(pipeline: pipeline)
@@ -512,6 +517,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
 
     func testUnknownDirectionBlocksBridge() {
         let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
 
         // Feed identical channels — no phase delta, so direction will be unknown
         let tone = sineTone(frequency: carrierFrequency, frameCount: framesPerBuffer,

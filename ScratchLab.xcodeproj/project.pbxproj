@@ -87,6 +87,9 @@
 		TCB000021TCB021TCB00001 /* TimecodeFixtureValidationReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */; };
 		TCB000022TCB022TCB00001 /* TimecodeFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */; };
 		TCT000008TCT008TCT00001 /* TimecodeFixtureValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000023TCR023TCR00001 /* TimecodeFixtureValidationTests.swift */; };
+		TCA000023TCA023TCA00001 /* TimecodePrototypeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */; };
+		TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */; };
+		TCT000009TCT009TCT00001 /* TimecodePrototypeProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000025TCR025TCR00001 /* TimecodePrototypeProfileTests.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
 		51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
@@ -610,6 +613,8 @@
 		TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeFixtureValidationReport.swift; path = TimecodeFixtureValidationReport.swift; sourceTree = "<group>"; };
 		TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeFixtureLoader.swift; path = TimecodeFixtureLoader.swift; sourceTree = "<group>"; };
 		TCR000023TCR023TCR00001 /* TimecodeFixtureValidationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeFixtureValidationTests.swift; path = TimecodeFixtureValidationTests.swift; sourceTree = "<group>"; };
+		TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeProfile.swift; path = TimecodePrototypeProfile.swift; sourceTree = "<group>"; };
+		TCR000025TCR025TCR00001 /* TimecodePrototypeProfileTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeProfileTests.swift; path = TimecodePrototypeProfileTests.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnosticsTests.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
 		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
@@ -889,6 +894,7 @@
 				TCR000018TCR018TCR00001 /* TimecodeStabilityFilterTests.swift */,
 				TCR000020TCR020TCR00001 /* TimecodePlaybackBridgeTests.swift */,
 				TCR000023TCR023TCR00001 /* TimecodeFixtureValidationTests.swift */,
+			TCR000025TCR025TCR00001 /* TimecodePrototypeProfileTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1100,6 +1106,7 @@
 				TCR000017TCR017TCR00001 /* TimecodeMotionStabilityFilter.swift */,
 				TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */,
 				TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */,
+			TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -1631,6 +1638,7 @@
 				TCA000019TCA019TCA00001 /* TimecodePlaybackBridge.swift in Sources */,
 				TCA000021TCA021TCA00001 /* TimecodeFixtureValidationReport.swift in Sources */,
 				TCA000022TCA022TCA00001 /* TimecodeFixtureLoader.swift in Sources */,
+			TCA000023TCA023TCA00001 /* TimecodePrototypeProfile.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
@@ -1770,6 +1778,7 @@
 				TCB000019TCB019TCB00001 /* TimecodePlaybackBridge.swift in Sources */,
 				TCB000021TCB021TCB00001 /* TimecodeFixtureValidationReport.swift in Sources */,
 				TCB000022TCB022TCB00001 /* TimecodeFixtureLoader.swift in Sources */,
+			TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {
@@ -1873,6 +1882,7 @@
 				TCT000006TCT006TCT00001 /* TimecodeStabilityFilterTests.swift in Sources */,
 				TCT000007TCT007TCT00001 /* TimecodePlaybackBridgeTests.swift in Sources */,
 				TCT000008TCT008TCT00001 /* TimecodeFixtureValidationTests.swift in Sources */,
+			TCT000009TCT009TCT00001 /* TimecodePrototypeProfileTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

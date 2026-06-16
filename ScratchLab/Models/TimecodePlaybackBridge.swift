@@ -31,6 +31,13 @@ public enum TimecodePlaybackBridgeState: String, Equatable, Sendable, CaseIterab
     /// Bridge is blocked because the pipeline is in `.diagnosticsOnly` mode.
     case blockedByDiagnosticsOnly
 
+    /// Bridge is blocked because the live audio tap is not enabled.
+    case blockedByLiveTapOff
+
+    /// Bridge is blocked because validation has not passed and the user
+    /// has not explicitly overridden the validation requirement.
+    case blockedByValidationRequired
+
     // MARK: - Labels
 
     /// User-facing label for status displays.
@@ -42,6 +49,8 @@ public enum TimecodePlaybackBridgeState: String, Equatable, Sendable, CaseIterab
         case .blockedByBadSignal:         return "Bad Signal"
         case .blockedByReplay:            return "Replay Active"
         case .blockedByDiagnosticsOnly:   return "Diagnostics Only"
+        case .blockedByLiveTapOff:        return "Live Tap Off"
+        case .blockedByValidationRequired: return "Validation Required"
         }
     }
 
@@ -54,6 +63,8 @@ public enum TimecodePlaybackBridgeState: String, Equatable, Sendable, CaseIterab
         case .blockedByBadSignal:         return "BadSig"
         case .blockedByReplay:            return "Replay"
         case .blockedByDiagnosticsOnly:   return "Diag"
+        case .blockedByLiveTapOff:        return "TapOff"
+        case .blockedByValidationRequired: return "NoVal"
         }
     }
 }
@@ -145,6 +156,21 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
     /// The bridge blocks timecode driving while this is `true`.
     public var isReplayActive: Bool = false
 
+    /// When `true`, the user has explicitly overridden the validation
+    /// requirement gate. This allows playback to drive even when the
+    /// prototype validation status is not `.usablePrototypeControl`.
+    ///
+    /// Defaults to `false`. Must be explicitly toggled by the user after
+    /// confirming they understand the risks.
+    @Published public var validationOverride: Bool = false
+
+    /// When `true`, the bridge requires `validationStatus == .usablePrototypeControl`
+    /// before allowing playback. Set by the active profile.
+    ///
+    /// Defaults to `true` — validation is required unless the profile
+    /// explicitly sets it to `false` (e.g., manual mode).
+    public var validationRequired: Bool = true
+
     /// Maximum absolute rate allowed in position-units per second.
     /// Rates exceeding this are clamped.
     public let maxPlaybackRate: Double
@@ -173,12 +199,16 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
     public init(
         playbackDriveEnabled: Bool = false,
         isReplayActive: Bool = false,
+        validationRequired: Bool = true,
+        validationOverride: Bool = false,
         maxPlaybackRate: Double = 5.0,
         minConfidence: Double = 0.3,
         staleThreshold: TimeInterval = 2.0
     ) {
         self.playbackDriveEnabled = playbackDriveEnabled
         self.isReplayActive = isReplayActive
+        self.validationRequired = validationRequired
+        self.validationOverride = validationOverride
         self.maxPlaybackRate = maxPlaybackRate
         self.minConfidence = minConfidence
         self.staleThreshold = staleThreshold
@@ -232,14 +262,21 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
             return nil
         }
 
-        // Gate 4: Signal health must be usable
+        // Gate 4: Live tap must be enabled
+        guard pipeline.liveTapEnabled else {
+            state = .blockedByLiveTapOff
+            currentDrive = nil
+            return nil
+        }
+
+        // Gate 5: Signal health must be usable
         guard pipeline.signalHealth == .usable else {
             state = .blockedByBadSignal
             currentDrive = nil
             return nil
         }
 
-        // Gate 5: Signal must not be stale
+        // Gate 6: Signal must not be stale
         if let lastBuffer = pipeline.lastBufferReceivedAt {
             let age = now.timeIntervalSince(lastBuffer)
             if age > staleThreshold {
@@ -252,14 +289,14 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         // we still allow evaluation — the pipeline may have been fed
         // synthetic data that didn't set lastBufferReceivedAt.
 
-        // Gate 6: Confidence must meet threshold
+        // Gate 7: Confidence must meet threshold
         guard pipeline.counters.averageConfidence >= minConfidence || pipeline.counters.acceptedMotionSamples > 0 else {
             state = .blockedByBadSignal
             currentDrive = nil
             return nil
         }
 
-        // Gate 7: Pipeline must have produced a valid timeline
+        // Gate 8: Pipeline must have produced a valid timeline
         guard let timeline = pipeline.latestPlatterTimeline,
               !timeline.samples.isEmpty else {
             state = .blockedByBadSignal
@@ -267,11 +304,22 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
             return nil
         }
 
-        // Gate 8: Direction must be known
+        // Gate 9: Direction must be known
         guard pipeline.currentDirection != .unknown else {
             state = .blockedByBadSignal
             currentDrive = nil
             return nil
+        }
+
+        // Gate 10: Validation status must be usable (or user overrides)
+        if validationRequired {
+            let snap = pipeline.makeValidationSnapshot(now: now)
+            let statusOK = snap.validationStatus == .usablePrototypeControl
+            if !statusOK && !validationOverride {
+                state = .blockedByValidationRequired
+                currentDrive = nil
+                return nil
+            }
         }
 
         // --- All gates passed — produce drive output ---
@@ -300,8 +348,10 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
 
     /// Reset bridge state and clear the current drive output.
     /// Does not change `playbackDriveEnabled`.
+    /// Resets `validationOverride` to `false` for safety.
     public func reset() {
         currentDrive = nil
+        validationOverride = false
         state = playbackDriveEnabled ? .armed : .disabled
     }
 }
