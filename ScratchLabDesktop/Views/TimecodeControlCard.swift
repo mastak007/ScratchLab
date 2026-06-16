@@ -37,6 +37,11 @@ struct TimecodeControlCard: View {
             calibrationSection
             Divider().opacity(0.3)
             pipelineStatusSection
+            Divider().opacity(0.3)
+            TimecodeRecordingSection(
+                recorder: pipeline.prototypeRecorder,
+                isActive: pipeline.mode == .controlPrototype
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(ScratchLabDesign.Card.compactPadding)
@@ -362,6 +367,128 @@ struct TimecodeControlCard: View {
         return ("Waiting", .yellow)
     }
 #endif
+}
+
+// MARK: - Recording section
+
+/// Displays prototype take recording controls and stats.
+/// Observes `TimecodePrototypeRecorder` directly so updates are reactive.
+private struct TimecodeRecordingSection: View {
+
+    @ObservedObject var recorder: TimecodePrototypeRecorder
+    /// Whether the pipeline is in `.controlPrototype` mode.
+    let isActive: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Header
+            HStack(alignment: .firstTextBaseline) {
+                Text("Prototype Take")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Prototype only · Not sent to notation")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
+
+            // State badge
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 6, height: 6)
+                Text(recorder.state.label)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(stateColor)
+            }
+
+            // Controls
+            HStack(spacing: 8) {
+                Button("Start Take") { recorder.startRecording() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!isActive || recorder.state == .recording)
+
+                Button("Stop Take") { recorder.stopRecording() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(recorder.state != .recording)
+
+                Button("Clear") { recorder.clearTake() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.secondary)
+                    .disabled(recorder.state == .idle && recorder.acceptedSampleCount == 0)
+            }
+
+            // Stats grid
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
+                recorderChip(label: "Accepted", count: recorder.acceptedSampleCount, color: .green)
+                recorderChip(label: "Dropped", count: recorder.droppedSampleCount, color: .orange)
+            }
+
+            // Duration + source
+            recorderRow(label: "Duration",
+                        value: String(format: "%.2fs", recorder.recordedDuration))
+            recorderRow(label: "Source", value: recorder.sourceLabel, mono: true)
+
+            // Last drop reason
+            if !recorder.lastDropReason.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemYellow))
+                    Text("Drop: \(recorder.lastDropReason)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
+                }
+            }
+
+            // Recorded timeline summary
+            if let timeline = recorder.recordedTimeline {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemGreen))
+                    Text("Take: \(timeline.samples.count) samples · \(timeline.source.rawValue)")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .opacity(isActive ? 1.0 : 0.5)
+    }
+
+    private var stateColor: Color {
+        switch recorder.state {
+        case .idle:      return Color(nsColor: .secondaryLabelColor)
+        case .recording: return Color(nsColor: .systemRed)
+        case .stopped:   return Color(nsColor: .systemGreen)
+        }
+    }
+
+    private func recorderRow(label: String, value: String, mono: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 72, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12, weight: .regular, design: mono ? .monospaced : .default))
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private func recorderChip(label: String, count: Int, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(count > 0 ? color : .secondary)
+        }
+    }
 }
 
 // MARK: - Standalone debug host

@@ -211,6 +211,16 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         )
     }
 
+    // MARK: - Prototype recorder (DEBUG only)
+
+#if DEBUG
+    /// In-memory recorder for trusted `timecode_live` prototype takes.
+    /// Defaults idle/empty. Controlled via `startRecording` / `stopRecording` /
+    /// `clearTake`. Only receives samples when `mode == .controlPrototype` and
+    /// `flushDecode()` produces a trusted timeline.
+    public let prototypeRecorder = TimecodePrototypeRecorder()
+#endif
+
     // MARK: - Init
 
     public init(sampleRate: Double = 44100, channelCount: Int = 2) {
@@ -306,6 +316,9 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             latestPlatterTimeline = nil
             currentDirection = .unknown
             currentRate = 0
+#if DEBUG
+            prototypeRecorder.recordDrop(reason: lastDropReason?.rawValue ?? "no_decoded_frames")
+#endif
             return nil
         }
 
@@ -369,6 +382,14 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         c.signalHealth = decodeResult.signalHealth.rawValue
         lastDropReason = nil
         counters = c
+
+#if DEBUG
+        if let tl = timeline {
+            prototypeRecorder.accept(timeline: tl)
+        } else {
+            prototypeRecorder.recordDrop(reason: TimecodeDropoutReason.lowConfidence.rawValue)
+        }
+#endif
 
         return timeline
     }
