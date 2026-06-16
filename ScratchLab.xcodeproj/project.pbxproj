@@ -304,6 +304,7 @@
 		ODD0001000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */; };
 		ODT0001000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */; };
 		SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */; };
+		CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */; };
 		D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000006 /* MacScratchDetector.swift */; };
 		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
@@ -626,6 +627,7 @@
 		ODD0000000ODD001ODD00001 /* OverlayDirectionDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnostics.swift; sourceTree = "<group>"; };
 		ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayDirectionDiagnosticsTests.swift; sourceTree = "<group>"; };
 		SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionReplayDocumentTests.swift; sourceTree = "<group>"; };
+		CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturedNotationTravelTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Deprecated.swift"; sourceTree = "<group>"; };
@@ -777,6 +779,7 @@
 				OTT0000000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift */,
 				ODT0000000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift */,
 				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
+				CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */,
 				SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */,
 				SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */,
 				SLCORE00000000000000FR12 /* ScratchAnalysisRealRaneFixtureTests.swift */,
@@ -1673,6 +1676,7 @@
 				OTT0001000OTT001OTT00001 /* OverlayTimingDiagnosticsTests.swift in Sources */,
 				ODT0001000ODT001ODT00001 /* OverlayDirectionDiagnosticsTests.swift in Sources */,
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
+				CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

@@ -127,7 +127,10 @@ struct ScratchPhraseChartView: View {
 
         let duration = max(events.map(\.endTime).max() ?? 1.0, 0.1)
         let pps = size.width / CGFloat(duration)
-        let midY = size.height / 2
+        // Baseline sits near the bottom of the chart; strokes rise above it proportionally
+        // to the actual platter/hand travel distance — short scratches stay short.
+        let baseline = size.height * CGFloat(CapturedNotationStrokeGeometry.baselineFraction)
+        let maxBand  = size.height * CGFloat(CapturedNotationStrokeGeometry.maxBandFraction)
 
         drawBeatGrid(ctx: ctx, size: size, duration: duration, pps: pps,
                      labelBottomY: size.height - 2)
@@ -137,20 +140,27 @@ struct ScratchPhraseChartView: View {
             let x2 = CGFloat(event.endTime) * pps
             guard x2 > x1 else { continue }
 
+            let travel = CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: event))
+            guard travel > 0 else { continue }  // idle / no movement: draw nothing
+
             let isForward = event.direction == "forward"
-            let halfH = capturedHalfHeight(size: size, kind: event.movementKind)
-            let (y1, y2) = isForward ? (midY + halfH, midY - halfH) : (midY - halfH, midY + halfH)
+            // All strokes live ABOVE the baseline; forward `/` rises from baseline at x1
+            // to peak at x2, backward `\` falls from peak at x1 to baseline at x2.
+            let peak = baseline - travel * maxBand
+            let (p1, p2): (CGPoint, CGPoint) = isForward
+                ? (CGPoint(x: x1, y: baseline), CGPoint(x: x2, y: peak))
+                : (CGPoint(x: x1, y: peak),     CGPoint(x: x2, y: baseline))
             let color = isForward ? forwardCol : backCol
             let alpha = 0.55 + event.confidence * 0.45
 
             var path = Path()
-            path.move(to: CGPoint(x: x1, y: y1))
-            path.addLine(to: CGPoint(x: x2, y: y2))
+            path.move(to: p1)
+            path.addLine(to: p2)
             ctx.stroke(path, with: .color(color.opacity(alpha)), lineWidth: 2.5)
-            drawDots(ctx: ctx, p1: CGPoint(x: x1, y: y1), p2: CGPoint(x: x2, y: y2), alpha: alpha)
+            drawDots(ctx: ctx, p1: p1, p2: p2, alpha: alpha)
         }
 
-        drawCapturedAxisLabels(ctx: ctx, size: size, midY: midY)
+        drawCapturedAxisLabels(ctx: ctx, size: size, baseline: baseline, maxBand: maxBand)
 
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime) * pps)
@@ -158,18 +168,6 @@ struct ScratchPhraseChartView: View {
     }
 
     // MARK: - Helpers
-
-    private func capturedHalfHeight(size: CGSize, kind: ScratchMovementKind) -> CGFloat {
-        let fraction: Double = {
-            switch kind {
-            case .fastPush, .fastPull:     return 0.90
-            case .normalPush, .normalPull: return 0.62
-            case .slowDrag, .slowPullDrag: return 0.38
-            default:                       return 0.55
-            }
-        }()
-        return size.height * 0.44 * CGFloat(fraction)
-    }
 
     private func drawDots(ctx: GraphicsContext, p1: CGPoint, p2: CGPoint, alpha: Double = 1) {
         let r: CGFloat = 4
@@ -271,19 +269,22 @@ struct ScratchPhraseChartView: View {
         )
     }
 
-    private func drawCapturedAxisLabels(ctx: GraphicsContext, size: CGSize, midY: CGFloat) {
+    private func drawCapturedAxisLabels(ctx: GraphicsContext, size: CGSize,
+                                         baseline: CGFloat, maxBand: CGFloat) {
+        // Both directions peak above the baseline; labels sit near the top of the band
+        // so they read alongside their respective stroke directions without overlapping strokes.
         ctx.draw(
             Text("FWD")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(forwardCol.opacity(0.55)),
-            at: CGPoint(x: 4, y: midY - size.height * 0.38),
+            at: CGPoint(x: 4, y: baseline - maxBand * 0.92),
             anchor: .leading
         )
         ctx.draw(
             Text("BACK")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(backCol.opacity(0.55)),
-            at: CGPoint(x: 4, y: midY + size.height * 0.30),
+            at: CGPoint(x: 4, y: baseline - maxBand * 0.72),
             anchor: .leading
         )
     }
@@ -319,6 +320,41 @@ struct ScratchPhraseChartView: View {
             at: CGPoint(x: size.width / 2, y: size.height / 2),
             anchor: .center
         )
+    }
+}
+
+// MARK: - CapturedNotationStrokeGeometry
+
+/// Pure, Foundation-only geometry helper for the captured record-movement notation lane.
+///
+/// Extracted from `ScratchPhraseChartView` so that the travel-fraction derivation
+/// can be tested without a SwiftUI canvas or `GraphicsContext`. All methods and
+/// constants are `Double`-based so tests need only `@testable import ScratchLab`
+/// with no `CoreGraphics` or `SwiftUI` import.
+///
+/// `travelFraction` is computed from the normalized position delta already stored
+/// in `DetectedNotationRecordMovementEvent.startPosition` / `.endPosition`.
+/// Camera-tracked hand positions are normalised to 0…1 at the point of capture
+/// (`normalizedPosition = min(max(point.x, 0), 1)`), so their delta is
+/// already in 0…1 and needs only a `min/max` clamp. The value drives the
+/// stroke's visual height: short scratches render short, full scratches reach
+/// the peak of the notation band.
+enum CapturedNotationStrokeGeometry {
+    /// Fraction of the chart height at which the notation baseline sits.
+    /// Strokes grow upward from this y-coordinate.
+    static let baselineFraction: Double = 0.85
+    /// Maximum band height above the baseline, as a fraction of the chart height.
+    /// A stroke with `travelFraction == 1.0` peaks at `baseline − maxBand`.
+    static let maxBandFraction: Double = 0.78
+
+    /// Normalised travel fraction (0…1) for a captured record-movement event.
+    ///
+    /// Computed from `abs(endPosition − startPosition)`, clamped to `0…1`.
+    /// Returns `0.0` when both positions are identical (idle / zero travel),
+    /// which the renderer uses as the guard to suppress phantom notation strokes.
+    static func travelFraction(for event: CaptureCore.DetectedNotationRecordMovementEvent) -> Double {
+        let delta = abs(event.endPosition - event.startPosition)
+        return min(1.0, max(0.0, delta))
     }
 }
 
