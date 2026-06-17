@@ -346,6 +346,152 @@ final class TimecodeValidationTests: XCTestCase {
         XCTAssertTrue(text.contains("NOT sent to notation"), "debugText must state not sent to notation")
         XCTAssertTrue(text.contains("usable"), "debugText must reflect signal health")
     }
+    // MARK: - Deterministic pipeline validation (Batch 11)
+
+    /// Full pipeline validation using synthetic 1 kHz stereo quadrature.
+    ///
+    /// Generates the same signal as `scratchlab_quadrature_1khz_60s.wav` in
+    /// memory (left = sine, right = sine + 90°), feeds it through the
+    /// `TimecodeControlPipeline` in `.controlPrototype` mode, and asserts
+    /// every metric that appears in the Copy Debug snapshot.
+    ///
+    /// This gives a repeatable, hardware-free regression gate for the
+    /// prototype quadrature decode chain. No Loopback, VLC, or manual
+    /// Copy Debug needed.
+    ///
+    /// **Batch 11:** Deterministic timecode validation automation.
+    /// ScratchLab prototype quadrature only — not a Serato/SDJ claim.
+    func testSyntheticQuadratureFullPipelineValidation() {
+        let sampleRate: Double = 44100
+        let carrierFrequency: Float = 1000
+        let framesPerBuffer = 1024
+        let amplitude: Float = 0.42
+        let bufferCount = 220  // ~5.1 s of audio
+
+        let pipeline = TimecodeControlPipeline(sampleRate: sampleRate, channelCount: 2)
+        pipeline.mode = .controlPrototype
+
+        // Generate and push continuous quadrature buffers.
+        // Left = sine(carrier), Right = sine(carrier + 90°).
+        // Phase-continuous across buffer boundaries.
+        for bufferIndex in 0..<bufferCount {
+            let startFrame = bufferIndex * framesPerBuffer
+            var left = [Float](repeating: 0, count: framesPerBuffer)
+            var right = [Float](repeating: 0, count: framesPerBuffer)
+
+            for frameOffset in 0..<framesPerBuffer {
+                let absoluteFrame = startFrame + frameOffset
+                let phase = 2.0 * Float.pi * carrierFrequency * Float(absoluteFrame) / Float(sampleRate)
+                left[frameOffset] = amplitude * sin(phase)
+                right[frameOffset] = amplitude * sin(phase + Float.pi / 2.0)
+            }
+
+            pipeline.pushStereoBuffer(
+                left: left, right: right,
+                sampleRate: sampleRate,
+                frameCount: framesPerBuffer
+            )
+        }
+
+        // Flush accumulated buffers through the full chain:
+        // decoder → calibration → stability filter → platter adapter.
+        let timeline = pipeline.flushDecode()
+        XCTAssertNotNil(timeline, "Synthetic quadrature must produce a trusted platter timeline")
+
+        let c = pipeline.counters
+
+        // ── Signal health ──
+        XCTAssertEqual(c.signalHealth, SignalHealth.usable.rawValue,
+                       "Signal health must be usable for clean quadrature")
+
+        // ── Drop counters: all zero for clean synthetic quadrature ──
+        XCTAssertEqual(c.droppedSilence, 0,
+                       "droppedSilence must be 0 — clean quadrature is not silent")
+        XCTAssertEqual(c.droppedClipped, 0,
+                       "droppedClipped must be 0 — amplitude \(amplitude) is below 0.999")
+        XCTAssertEqual(c.droppedChannelFault, 0,
+                       "droppedChannelFault must be 0 — L/R channels are balanced")
+        XCTAssertEqual(c.droppedWeakSignal, 0,
+                       "droppedWeakSignal must be 0 — phase lock is strong")
+        XCTAssertEqual(c.droppedLowConfidence, 0,
+                       "droppedLowConfidence must be 0 — confidence exceeds adapter threshold")
+
+        // ── Accepted samples ──
+        XCTAssertGreaterThan(c.acceptedMotionSamples, 0,
+                             "Must have accepted motion samples for clean quadrature")
+
+        // ── Confidence ──
+        XCTAssertGreaterThan(c.averageConfidence, 0.3,
+                             "Average confidence must exceed 0.3, got \(c.averageConfidence)")
+
+        // ── Rate: near zero for constant quadrature ──
+        // Same tolerance the decoder uses internally for stationary detection.
+        let rateEpsilon: Double = 0.05
+        XCTAssertLessThan(abs(c.currentRate), rateEpsilon,
+                          "Raw rate \(c.currentRate) must be near zero for stationary signal")
+        XCTAssertLessThan(abs(c.smoothedRate), rateEpsilon,
+                          "Smoothed rate \(c.smoothedRate) must be near zero")
+        XCTAssertLessThan(c.maxAbsRate, rateEpsilon,
+                          "maxAbsRate \(c.maxAbsRate) must be near zero")
+        XCTAssertLessThan(c.maxAbsSmoothedRate, rateEpsilon,
+                          "maxAbsSmoothedRate \(c.maxAbsSmoothedRate) must be near zero")
+
+        // ── Stability ──
+        XCTAssertEqual(c.rejectedSpikeCount, 0,
+                       "rejectedSpikeCount must be 0 — no rate spikes in stationary signal")
+        XCTAssertEqual(c.heldDropoutCount, 0,
+                       "heldDropoutCount must be 0 — no consecutive empty flushes")
+        XCTAssertEqual(c.longDropoutCount, 0,
+                       "longDropoutCount must be 0 — no long dropout windows")
+        XCTAssertEqual(c.lastDropoutDuration, 0,
+                       "lastDropoutDuration must be 0 — no dropout window opened")
+
+        // ── Direction: unknown for stationary constant quadrature ──
+        XCTAssertEqual(c.directionChanges, 0,
+                       "directionChanges must be 0 — no direction flips")
+        XCTAssertEqual(c.currentDirection, TimecodeDirection.unknown.rawValue,
+                       "Direction must be unknown for stationary signal, got \(c.currentDirection)")
+
+        // ── Drop/spike reasons: empty ──
+        XCTAssertTrue(c.lastDropReason.isEmpty,
+                      "lastDropReason must be empty, got '\(c.lastDropReason)'")
+        XCTAssertTrue(c.lastSpikeReason.isEmpty,
+                      "lastSpikeReason must be empty, got '\(c.lastSpikeReason)'")
+
+        // ── Validation snapshot ──
+        let snap = pipeline.makeValidationSnapshot()
+
+        XCTAssertEqual(snap.validationStatus, .usablePrototypeControl,
+                       "Status must be usablePrototypeControl, got \(snap.validationStatus.rawValue)")
+        XCTAssertEqual(snap.signalHealth, .usable)
+        XCTAssertTrue(snap.hasRecentBuffer,
+                      "Snapshot must report a recent buffer (diagnostics ran on first push)")
+
+        // L/R RMS present and balanced
+        XCTAssertGreaterThan(snap.leftRMS, 0, "Left RMS must be > 0")
+        XCTAssertGreaterThan(snap.rightRMS, 0, "Right RMS must be > 0")
+        let rmsRatio = Double(snap.leftRMS) / Double(max(snap.rightRMS, 0.0001))
+        XCTAssertGreaterThan(rmsRatio, 0.85, "L/R RMS ratio \(rmsRatio) must be near 1.0")
+        XCTAssertLessThan(rmsRatio, 1.15, "L/R RMS ratio \(rmsRatio) must be near 1.0")
+
+        // Snapshot direction / rate mirror pipeline counters
+        XCTAssertEqual(snap.decodedDirection, TimecodeDirection.unknown.rawValue)
+        XCTAssertEqual(snap.directionChanges, 0)
+        XCTAssertLessThan(abs(snap.decodedRate), rateEpsilon)
+
+        // Debug text sanity
+        let debugText = snap.debugText
+        XCTAssertTrue(debugText.contains("prototype"),
+                      "debugText must carry prototype disclaimer")
+        XCTAssertTrue(debugText.contains("NOT sent to notation"),
+                      "debugText must state not sent to notation")
+        XCTAssertTrue(debugText.contains("usablePrototypeControl"),
+                      "debugText must include validation status")
+
+        // Source label
+        XCTAssertEqual(snap.sourceLabel, "timecode_live",
+                       "Source label must be timecode_live")
+    }
 }
 
 #endif // DEBUG
