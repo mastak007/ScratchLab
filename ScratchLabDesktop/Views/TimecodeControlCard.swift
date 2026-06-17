@@ -583,6 +583,26 @@ struct TimecodeControlCard: View {
             }
             .padding(.vertical, 4)
 
+            // Actions — placed above conditional content so the buttons
+            // stay fixed even when dropout duration / spike reason / etc.
+            // appear or disappear below.
+            HStack(spacing: 8) {
+                Button("Reset Counters") {
+                    pipeline.resetCounters()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.secondary)
+
+                Button("Copy Debug") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(snap.debugText, forType: .string)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.secondary)
+            }
+
             // Checklist
             VStack(alignment: .leading, spacing: 3) {
                 let totalDrop = snap.droppedSilence + snap.droppedClipped
@@ -717,23 +737,6 @@ struct TimecodeControlCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Actions
-            HStack(spacing: 8) {
-                Button("Reset Counters") {
-                    pipeline.resetCounters()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.secondary)
-
-                Button("Copy Debug") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(snap.debugText, forType: .string)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.secondary)
-            }
         }
     }
 
@@ -781,6 +784,7 @@ struct TimecodeControlCard: View {
                 .foregroundStyle(.secondary)
             Text("\(count)")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
                 .foregroundStyle(count > 0 ? color : .secondary)
         }
     }

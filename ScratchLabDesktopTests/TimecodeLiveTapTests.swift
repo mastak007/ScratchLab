@@ -46,6 +46,26 @@ final class TimecodeLiveTapTests: XCTestCase {
         }
     }
 
+    private func continuousQuadratureBuffer(
+        startFrame: Int,
+        frameCount: Int,
+        amplitude: Float = 0.42
+    ) -> (left: [Float], right: [Float]) {
+        var left: [Float] = []
+        var right: [Float] = []
+        left.reserveCapacity(frameCount)
+        right.reserveCapacity(frameCount)
+
+        for frameOffset in 0..<frameCount {
+            let absoluteFrame = startFrame + frameOffset
+            let phase = 2.0 * Float.pi * carrierFrequency * Float(absoluteFrame) / Float(sampleRate)
+            left.append(amplitude * sin(phase))
+            right.append(amplitude * sin(phase + Float.pi / 2.0))
+        }
+
+        return (left, right)
+    }
+
     private func feedPhaseProgression(
         into pipeline: TimecodeControlPipeline,
         bufferCount: Int,
@@ -390,6 +410,47 @@ final class TimecodeLiveTapTests: XCTestCase {
         XCTAssertEqual(pipeline.counters.sourceLabel, "timecode_live")
         XCTAssertGreaterThan(pipeline.counters.acceptedMotionSamples, 0,
                              "counters must track accepted motion samples")
+    }
+
+    func testControlPrototypeConstantQuadratureProducesNearZeroRateWithDeterministicAudioTime() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
+        let localFramesPerBuffer = 1024
+
+        for bufferIndex in 0..<220 {
+            let startFrame = bufferIndex * localFramesPerBuffer
+            let buffer = continuousQuadratureBuffer(
+                startFrame: startFrame,
+                frameCount: localFramesPerBuffer
+            )
+            pipeline.pushStereoBuffer(
+                left: buffer.left,
+                right: buffer.right,
+                sampleRate: sampleRate,
+                frameCount: localFramesPerBuffer
+            )
+        }
+
+        let timeline = pipeline.flushDecode()
+        let snapshot = pipeline.makeValidationSnapshot()
+
+        XCTAssertNotNil(timeline)
+        XCTAssertEqual(snapshot.signalHealth, .usable)
+        XCTAssertGreaterThan(snapshot.decoderConfidence, 0.3)
+        XCTAssertGreaterThan(snapshot.acceptedMotionSamples, 0)
+        XCTAssertEqual(snapshot.droppedClipped, 0)
+        XCTAssertEqual(snapshot.droppedChannelFault, 0)
+        XCTAssertEqual(snapshot.droppedWeakSignal, 0)
+        XCTAssertEqual(snapshot.droppedLowConfidence, 0)
+        XCTAssertLessThanOrEqual(snapshot.rejectedSpikeCount, 1)
+        XCTAssertLessThan(snapshot.directionChanges, 2)
+        XCTAssertLessThan(abs(snapshot.decodedRate), 0.05)
+        XCTAssertLessThan(snapshot.maxAbsRate, 0.05)
+        XCTAssertLessThan(snapshot.maxAbsSmoothedRate, 0.05)
+        XCTAssertTrue(
+            snapshot.decodedDirection == TimecodeDirection.unknown.rawValue,
+            "Constant quadrature should stay idle/unknown, got \(snapshot.decodedDirection)"
+        )
     }
 
     // MARK: - Test: signal health fail-closed

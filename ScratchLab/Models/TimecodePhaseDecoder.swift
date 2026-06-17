@@ -33,6 +33,14 @@ import Foundation
 /// **Batch 2:** Prototype / fixture-driven only. Live audio tap integration
 /// is reserved for Batch 3.
 public struct TimecodePhaseDecoder: Sendable {
+    /// Residual phase-velocity below this value is treated as stationary.
+    ///
+    /// The prototype decoder analyzes short, live-sized buffers. Even for a
+    /// mathematically constant quadrature signal, floating-point fitting over
+    /// non-integer carrier windows can leave tiny signed velocity residuals.
+    /// This is a decoder numerical noise floor, not a user-facing control
+    /// threshold.
+    private static let stationaryVelocityEpsilon: Double = 0.05
 
     // MARK: - StereoInput
 
@@ -148,7 +156,8 @@ public struct TimecodePhaseDecoder: Sendable {
                 left: input.left,
                 right: input.right,
                 frequency: carrierFrequency,
-                sampleRate: input.sampleRate
+                sampleRate: input.sampleRate,
+                relativeTime: input.relativeTime
             )
 
             // --- Phase-lock check ---
@@ -215,7 +224,9 @@ public struct TimecodePhaseDecoder: Sendable {
         // --- Build frames ---
         for i in 0..<smoothedDeltas.count {
             let inputIndex = i + 1  // first delta is between input[0] and input[1]
-            let velocity = smoothedDeltas[i]
+            let rawVelocity = smoothedDeltas[i]
+            let absRawVelocity = abs(rawVelocity)
+            let velocity = absRawVelocity <= Self.stationaryVelocityEpsilon ? 0 : rawVelocity
             let absVelocity = abs(velocity)
 
             // Direction
@@ -297,7 +308,8 @@ public struct TimecodePhaseDecoder: Sendable {
         left: [Float],
         right: [Float],
         frequency: Float,
-        sampleRate: Double
+        sampleRate: Double,
+        relativeTime: TimeInterval
     ) -> (phaseDelta: Double, correlationMagnitude: Double) {
         let N = min(left.count, right.count)
         guard N > 0 else { return (0, 0) }
@@ -307,44 +319,62 @@ public struct TimecodePhaseDecoder: Sendable {
         var refCos = [Double](repeating: 0, count: N)
         let omega = 2 * Double.pi * Double(frequency) / sampleRate
         for i in 0..<N {
-            let angle = omega * Double(i)
+            let angle = omega * (relativeTime * sampleRate + Double(i))
             refSin[i] = sin(angle)
             refCos[i] = cos(angle)
         }
 
-        // Correlate left channel — use raw sum (do NOT average) so that
-        // the magnitude scales with N. A unit-amplitude sine produces a
-        // correlation magnitude of N/2, so normalising by N/2 gives the
-        // signal amplitude directly.
-        var leftSin = 0.0, leftCos = 0.0
+        var sinSin = 0.0
+        var sinCos = 0.0
+        var cosCos = 0.0
+        for i in 0..<N {
+            sinSin += refSin[i] * refSin[i]
+            sinCos += refSin[i] * refCos[i]
+            cosCos += refCos[i] * refCos[i]
+        }
+        let determinant = sinSin * cosCos - sinCos * sinCos
+        guard abs(determinant) > 1e-12 else { return (0, 0) }
+
+        // Fit each channel to `a * sin(wt) + b * cos(wt)` by solving the
+        // 2x2 normal equation. Plain quadrature dot products assume the
+        // sine/cosine basis is orthogonal; that is only true for integer-cycle
+        // windows. Live AVCapture buffers are commonly 1024 frames, which is
+        // not an integer number of 1 kHz cycles at 44.1 kHz, so least-squares
+        // fitting avoids a deterministic phase wobble from the analysis
+        // window itself.
+        var leftSinProjection = 0.0
+        var leftCosProjection = 0.0
         for i in 0..<N {
             let v = Double(left[i])
-            leftSin += v * refSin[i]
-            leftCos += v * refCos[i]
+            leftSinProjection += v * refSin[i]
+            leftCosProjection += v * refCos[i]
         }
-        let leftPhase = atan2(leftCos, leftSin)
-        let leftMag = sqrt(leftSin * leftSin + leftCos * leftCos)
+        let leftSinCoefficient = (leftSinProjection * cosCos - leftCosProjection * sinCos) / determinant
+        let leftCosCoefficient = (leftCosProjection * sinSin - leftSinProjection * sinCos) / determinant
+        let leftPhase = atan2(leftCosCoefficient, leftSinCoefficient)
+        let leftMag = sqrt(leftSinCoefficient * leftSinCoefficient + leftCosCoefficient * leftCosCoefficient)
 
-        // Correlate right channel
-        var rightSin = 0.0, rightCos = 0.0
+        // Fit right channel.
+        var rightSinProjection = 0.0
+        var rightCosProjection = 0.0
         for i in 0..<N {
             let v = Double(right[i])
-            rightSin += v * refSin[i]
-            rightCos += v * refCos[i]
+            rightSinProjection += v * refSin[i]
+            rightCosProjection += v * refCos[i]
         }
-        let rightPhase = atan2(rightCos, rightSin)
-        let rightMag = sqrt(rightSin * rightSin + rightCos * rightCos)
+        let rightSinCoefficient = (rightSinProjection * cosCos - rightCosProjection * sinCos) / determinant
+        let rightCosCoefficient = (rightCosProjection * sinSin - rightSinProjection * sinCos) / determinant
+        let rightPhase = atan2(rightCosCoefficient, rightSinCoefficient)
+        let rightMag = sqrt(rightSinCoefficient * rightSinCoefficient + rightCosCoefficient * rightCosCoefficient)
 
         // Phase delta (right - left), wrapped to [-π, π]
         var delta = rightPhase - leftPhase
         delta = unwrapPhaseDelta(delta)
 
-        // Correlation magnitude: normalise by N/2 (a unit-amplitude sine
-        // produces N/2 correlation magnitude). Use geometric mean so one
-        // dead channel pulls the confidence down.
-        let norm = Double(N) / 2.0
-        let leftNorm = norm > 0 ? leftMag / norm : 0
-        let rightNorm = norm > 0 ? rightMag / norm : 0
+        // Fitted coefficient magnitude is the channel carrier amplitude.
+        // Use geometric mean so one dead channel pulls confidence down.
+        let leftNorm = leftMag
+        let rightNorm = rightMag
         let corrMag = sqrt(leftNorm * rightNorm)  // geometric mean, clamped to [0,1] below
 
         return (delta, min(corrMag, 1.0))

@@ -1523,12 +1523,42 @@ struct MacAnalyzerView: View {
             }
 #if ENABLE_TIMECODE_LIVE_TAP
             .onAppear {
+                let pendingLock = NSLock()
+                var pendingBuffers: [(left: [Float], right: [Float], sampleRate: Double, hostTime: UInt64?)] = []
+                var drainScheduled = false
                 captureEngine.timecodeAudioCallback = { [weak timecodePipeline] left, right, sampleRate, hostTime in
                     guard let pipeline = timecodePipeline,
                           pipeline.liveTapEnabled,
                           pipeline.mode != .disabled else { return }
-                    pipeline.pushStereoBuffer(left: left, right: right,
-                                              sampleRate: sampleRate, hostTime: hostTime)
+                    pendingLock.lock()
+                    pendingBuffers.append((left, right, sampleRate, hostTime))
+                    guard !drainScheduled else {
+                        pendingLock.unlock()
+                        return
+                    }
+                    drainScheduled = true
+                    pendingLock.unlock()
+
+                    // Drain on main because the pipeline publishes observable
+                    // state read by SwiftUI. Coalescing keeps AVCapture from
+                    // posting one main-queue job per audio callback.
+                    DispatchQueue.main.async {
+                        pendingLock.lock()
+                        let buffers = pendingBuffers
+                        pendingBuffers.removeAll(keepingCapacity: true)
+                        drainScheduled = false
+                        pendingLock.unlock()
+
+                        for buffer in buffers {
+                            guard pipeline.liveTapEnabled,
+                                  pipeline.mode != .disabled else { break }
+                            pipeline.pushStereoBuffer(left: buffer.left,
+                                                      right: buffer.right,
+                                                      sampleRate: buffer.sampleRate,
+                                                      hostTime: buffer.hostTime,
+                                                      frameCount: min(buffer.left.count, buffer.right.count))
+                        }
+                    }
                 }
             }
             .onDisappear {
@@ -3901,6 +3931,25 @@ struct MacAnalyzerView: View {
                 .font(.headline)
 
             LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
+#if DEBUG
+                // DEBUG: live-signal-aware coloring so the operator can
+                // confirm whether audio is actually arriving through the
+                // selected input device.  Production builds keep the
+                // device-connection-only check (Audio Ready / green).
+                // Detail line (selectedAudioDeviceStatusLine) already
+                // carries the signal-status text regardless of build.
+                captureInputStatusTile(
+                    title: "Audio",
+                    value: selectedAudioDevice == nil
+                        ? captureEngine.audioReadinessText
+                        : captureEngine.audioSignalStatusText,
+                    detail: captureEngine.selectedAudioDeviceStatusLine,
+                    systemImage: selectedAudioDevice == nil ? "circle.dashed" : "waveform",
+                    color: selectedAudioDevice == nil
+                        ? .secondary
+                        : captureEngine.audioMeterColor
+                )
+#else
                 captureInputStatusTile(
                     title: "Audio",
                     value: captureEngine.audioReadinessText,
@@ -3908,6 +3957,7 @@ struct MacAnalyzerView: View {
                     systemImage: selectedAudioDevice == nil ? "circle.dashed" : "waveform",
                     color: selectedAudioDevice == nil ? .secondary : .green
                 )
+#endif
                 captureInputStatusTile(
                     title: "Camera",
                     value: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "Missing" : "Camera Ready",

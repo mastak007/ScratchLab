@@ -88,6 +88,36 @@ final class TimecodeDecoderTests: XCTestCase {
         }
     }
 
+    /// Create a sequence of continuous 1 kHz quadrature buffers matching
+    /// `scratchlab_quadrature_1khz_60s.wav`: left sine, right sine +90 degrees.
+    private func makeContinuousQuadratureInputs(
+        bufferCount: Int,
+        framesPerBuffer: Int = 1024,
+        amplitude: Float = 0.42
+    ) -> [TimecodePhaseDecoder.StereoInput] {
+        (0..<bufferCount).map { bufferIndex in
+            let startFrame = bufferIndex * framesPerBuffer
+            var left: [Float] = []
+            var right: [Float] = []
+            left.reserveCapacity(framesPerBuffer)
+            right.reserveCapacity(framesPerBuffer)
+
+            for frameOffset in 0..<framesPerBuffer {
+                let absoluteFrame = startFrame + frameOffset
+                let phase = 2.0 * Float.pi * carrierFrequency * Float(absoluteFrame) / Float(sampleRate)
+                left.append(amplitude * sin(phase))
+                right.append(amplitude * sin(phase + Float.pi / 2.0))
+            }
+
+            return TimecodePhaseDecoder.StereoInput(
+                left: left,
+                right: right,
+                sampleRate: sampleRate,
+                relativeTime: Double(startFrame) / sampleRate
+            )
+        }
+    }
+
     /// Create a silent stereo input (all zeros).
     private func makeSilentInput(relativeTime: TimeInterval = 0) -> TimecodePhaseDecoder.StereoInput {
         let zeros = [Float](repeating: 0, count: framesPerBuffer)
@@ -206,6 +236,27 @@ final class TimecodeDecoderTests: XCTestCase {
         }
 
         XCTAssertGreaterThan(result.averageConfidence, 0.49, "Clean signal should have high confidence")
+    }
+
+    func testTimecodeDecoderConstantQuadratureProducesNearZeroRate() {
+        let decoder = makeDecoder()
+        let inputs = makeContinuousQuadratureInputs(bufferCount: 220)
+
+        let result = decoder.decode(inputs)
+
+        XCTAssertGreaterThan(result.frames.count, 0)
+        XCTAssertGreaterThan(result.averageConfidence, 0.3)
+        XCTAssertEqual(result.counters.droppedSilence, 0)
+        XCTAssertEqual(result.counters.droppedClipped, 0)
+        XCTAssertEqual(result.counters.droppedLowConfidence, 0)
+        XCTAssertLessThan(result.counters.directionChanges, 2)
+
+        let maxAbsRate = result.frames.map { abs($0.velocity) }.max() ?? .infinity
+        XCTAssertLessThan(maxAbsRate, 0.05, "Constant R-L phase delta should decode as near-zero rate, got \(maxAbsRate)")
+        XCTAssertTrue(
+            result.frames.allSatisfy { $0.direction == .unknown },
+            "Constant quadrature should not rapidly flip direction"
+        )
     }
 
     // MARK: - 5. Velocity scales with phase rate

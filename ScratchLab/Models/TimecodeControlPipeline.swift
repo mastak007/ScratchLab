@@ -228,9 +228,13 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     private let lock = NSLock()
     private var accumulatedStereoInputs: [TimecodePhaseDecoder.StereoInput] = []
     private var decodeSessionStartDate: Date = Date()
+    private var accumulatedAudioFrameCount: Int64 = 0
+    private var pendingDiagnosticsBufferCount = 0
+    private var lastDiagnosticsPublishAudioTime: TimeInterval = -.infinity
     private let diagnosticsEngine = TimecodeSignalDiagnostics()
     private let stabilityFilter = TimecodeMotionStabilityFilter()
     private var stabilityFilterState = TimecodeStabilityFilterState()
+    private let liveDiagnosticsPublishInterval: TimeInterval = 0.1
 
     /// Internal decoder instance. Recreated when calibration changes
     /// affect decoder configuration.
@@ -280,7 +284,8 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         left: [Float],
         right: [Float],
         sampleRate: Double = 44100,
-        hostTime: UInt64? = nil
+        hostTime: UInt64? = nil,
+        frameCount: Int? = nil
     ) {
         switch mode {
         case .disabled:
@@ -289,13 +294,40 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
 
         case .diagnosticsOnly:
             lastBufferReceivedAt = Date()
-            runDiagnostics(left: left, right: right, sampleRate: sampleRate, hostTime: hostTime)
+            runDiagnostics(
+                left: left,
+                right: right,
+                sampleRate: sampleRate,
+                hostTime: hostTime,
+                frameCount: frameCount,
+                bufferIncrement: 1
+            )
             // Do NOT accumulate or decode.
 
         case .controlPrototype:
+            let relativeTime = accumulateStereoInput(
+                left: left,
+                right: right,
+                sampleRate: sampleRate,
+                hostTime: hostTime,
+                frameCount: frameCount
+            )
+            pendingDiagnosticsBufferCount += 1
+
+            guard relativeTime - lastDiagnosticsPublishAudioTime >= liveDiagnosticsPublishInterval else {
+                return
+            }
+            lastDiagnosticsPublishAudioTime = relativeTime
             lastBufferReceivedAt = Date()
-            runDiagnostics(left: left, right: right, sampleRate: sampleRate, hostTime: hostTime)
-            accumulateStereoInput(left: left, right: right, sampleRate: sampleRate, hostTime: hostTime)
+            runDiagnostics(
+                left: left,
+                right: right,
+                sampleRate: sampleRate,
+                hostTime: hostTime,
+                frameCount: frameCount,
+                bufferIncrement: pendingDiagnosticsBufferCount
+            )
+            pendingDiagnosticsBufferCount = 0
         }
     }
 
@@ -317,6 +349,8 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         guard mode == .controlPrototype else {
             return nil
         }
+
+        publishPendingDiagnosticsBufferCount()
 
         // When no buffers arrived this window the decoder is skipped, but the
         // stability filter must still run so the dropout clock advances.
@@ -555,6 +589,9 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         lock.unlock()
         diagnosticsTap.reset()
         decodeSessionStartDate = Date()
+        accumulatedAudioFrameCount = 0
+        pendingDiagnosticsBufferCount = 0
+        lastDiagnosticsPublishAudioTime = -.infinity
         latestPlatterTimeline = nil
         latestDecodeResult = nil
         latestDiagnosis = nil
@@ -579,13 +616,16 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         left: [Float],
         right: [Float],
         sampleRate: Double,
-        hostTime: UInt64?
+        hostTime: UInt64?,
+        frameCount: Int?,
+        bufferIncrement: Int
     ) {
         // Feed internal tap for diagnostics display
         diagnosticsTap.push(
             samplesLeft: left,
             samplesRight: right,
-            hostTime: hostTime
+            hostTime: hostTime,
+            frameCount: frameCount ?? 0
         )
         _ = diagnosticsTap.drain()
         let diagnosis = diagnosticsTap.diagnose(with: diagnosticsEngine)
@@ -593,7 +633,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         signalHealth = diagnosis.health
 
         var c = counters
-        c.totalBuffersReceived += 1
+        c.totalBuffersReceived += bufferIncrement
         c.signalHealth = diagnosis.health.rawValue
 
         // Track drops based on diagnostics
@@ -613,21 +653,32 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         counters = c
     }
 
+    private func publishPendingDiagnosticsBufferCount() {
+        guard pendingDiagnosticsBufferCount > 0 else { return }
+        var c = counters
+        c.totalBuffersReceived += pendingDiagnosticsBufferCount
+        counters = c
+        pendingDiagnosticsBufferCount = 0
+    }
+
     private func accumulateStereoInput(
         left: [Float],
         right: [Float],
         sampleRate: Double,
-        hostTime: UInt64?
-    ) {
-        let now = Date()
-        let relativeTime = now.timeIntervalSince(decodeSessionStartDate)
+        hostTime: UInt64?,
+        frameCount: Int?
+    ) -> TimeInterval {
+        let safeSampleRate = sampleRate > 0 ? sampleRate : diagnosticsTap.sampleRate
+        let frames = max(0, frameCount ?? min(left.count, right.count))
+        let relativeTime = Double(accumulatedAudioFrameCount) / safeSampleRate
+        accumulatedAudioFrameCount += Int64(frames)
 
         let (effectiveLeft, effectiveRight) = applyChannelSelection(left: left, right: right)
 
         let input = TimecodePhaseDecoder.StereoInput(
             left: effectiveLeft,
             right: effectiveRight,
-            sampleRate: sampleRate,
+            sampleRate: safeSampleRate,
             hostTime: hostTime,
             relativeTime: relativeTime
         )
@@ -635,6 +686,8 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         lock.lock()
         accumulatedStereoInputs.append(input)
         lock.unlock()
+
+        return relativeTime
     }
 
     private func applyChannelSelection(left: [Float], right: [Float]) -> ([Float], [Float]) {
