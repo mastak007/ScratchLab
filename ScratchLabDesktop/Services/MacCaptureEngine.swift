@@ -3271,13 +3271,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         platterRecordingStartTime = 0
         platterRecorderLock.unlock()
         let normalizeID = ScratchLabPerformanceSignpost.begin("MovementNormalize")
+#if DEBUG
+        let fusingDebugSession = activeRoutineMovementDebugSession
+#else
+        let fusingDebugSession: RoutineMovementDebugSession? = nil
+#endif
         let notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: motionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
             labelConfidence: lastScratchDetection?.confidence,
-            debugSession: activeRoutineMovementDebugSession
+            debugSession: fusingDebugSession
         ).withMixerMidiEvents(capturedMidi)
         ScratchLabPerformanceSignpost.end("MovementNormalize", normalizeID)
         ScratchLabPerformanceSignpost.eventNotationSnapshot(
@@ -5397,7 +5402,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     #endif
 }
 
-#if DEBUG
 private extension HandDirectionTracker.Direction {
     var debugName: String {
         switch self {
@@ -5427,7 +5431,6 @@ private extension MacCaptureEngine.HandMotionState {
         }
     }
 }
-#endif
 
 extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
