@@ -1,4 +1,4 @@
-#if ENABLE_TIMECODE_LIVE_TAP
+#if DEBUG && ENABLE_TIMECODE_LIVE_TAP
 
 import AVFoundation
 import CoreMedia
@@ -164,4 +164,4 @@ struct TimecodeCMSampleBufferAdapter {
     }
 }
 
-#endif // ENABLE_TIMECODE_LIVE_TAP
+#endif // DEBUG && ENABLE_TIMECODE_LIVE_TAP
