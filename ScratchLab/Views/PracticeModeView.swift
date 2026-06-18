@@ -4,6 +4,7 @@
 
 import SwiftUI
 import AVFoundation
+import UIKit
 
 private enum PracticeBeatUIContract {
     static let sectionAccessibilityID = "practice-beat-controls"
@@ -1608,34 +1609,97 @@ struct PracticeModeView: View {
 
 // MARK: - Camera Preview
 
-struct CameraPreviewView: UIViewRepresentable {
+struct CameraPreviewView: View {
+    @State private var authorizationStatus: AVAuthorizationStatus = .notDetermined
+
+    var body: some View {
+        ZStack {
+            switch authorizationStatus {
+            case .authorized:
+                CameraPreviewLayer()
+            case .denied, .restricted:
+                deniedOverlay
+            case .notDetermined:
+                Color.black
+                    .onAppear { requestAccess() }
+            @unknown default:
+                Color.black
+            }
+        }
+        .onAppear {
+            let status = AVCaptureDevice.authorizationStatus(for: .video)
+            authorizationStatus = status
+        }
+    }
+
+    private var deniedOverlay: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "video.slash")
+                    .font(.system(size: 40))
+                    .foregroundColor(.white.opacity(0.5))
+                Text("Camera access is turned off")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text("Grant camera permission in Settings so ScratchLab can show the camera feed during practice.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    Button {
+                        UIApplication.shared.open(url)
+                    } label: {
+                        Text("Open Settings")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private func requestAccess() {
+        AVCaptureDevice.requestAccess(for: .video) { granted in
+            DispatchQueue.main.async {
+                authorizationStatus = granted ? .authorized : .denied
+            }
+        }
+    }
+}
+
+// MARK: - Camera Preview Layer (UIViewRepresentable)
+
+private struct CameraPreviewLayer: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
-        
+        view.backgroundColor = .black
+
         let captureSession = AVCaptureSession()
         captureSession.sessionPreset = .high
-        
+
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: camera) else {
             return view
         }
-        
+
         if captureSession.canAddInput(input) {
             captureSession.addInput(input)
         }
-        
+
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer.videoGravity = .resizeAspectFill
         previewLayer.frame = UIScreen.main.bounds
         view.layer.addSublayer(previewLayer)
-        
+
         DispatchQueue.global(qos: .userInitiated).async {
             captureSession.startRunning()
         }
-        
+
         return view
     }
-    
+
     func updateUIView(_ uiView: UIView, context: Context) {}
 }
 

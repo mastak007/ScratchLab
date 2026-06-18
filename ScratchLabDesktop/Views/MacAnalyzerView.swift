@@ -3423,6 +3423,19 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(captureEngine.statusColor)
 
+            if !captureEngine.isCameraActive {
+                Button {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Text("Open System Settings")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+            }
+
             Label(performerBroadcaster.connectionStatus, systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(performerBroadcaster.connectedPeerNames.isEmpty ? Color.secondary : Color.green)
