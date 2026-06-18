@@ -29,9 +29,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_scrcamfeed._tcp</string>
-		<string>_scrcamfeed._tcp.</string>
 		<string>_scrmonfeed._tcp</string>
-		<string>_scrmonfeed._tcp.</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>ScratchLab uses the camera to frame the deck view, align deck calibration, and record routine captures.</string>
