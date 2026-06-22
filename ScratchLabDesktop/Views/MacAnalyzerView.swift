@@ -5357,6 +5357,12 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color(nsColor: .systemGreen))
                 .fixedSize(horizontal: false, vertical: true)
+
+                if let snapshot = currentRoutineNotationSnapshot,
+                   !snapshot.recordMovementEvents.isEmpty {
+                    LiveNotationOverlayPlayable(snapshot: snapshot)
+                        .id(snapshot.capturedAt)
+                }
             } else {
                 Text("No saved runs yet. Finish a practice run to start tracking.")
                     .font(.system(size: 12, weight: .medium))
