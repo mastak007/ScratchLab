@@ -583,6 +583,8 @@ struct TimecodeControlCard: View {
             }
             .padding(.vertical, 4)
 
+            signalPathValidationNoteView(snap: snap)
+
             // Actions — placed above conditional content so the buttons
             // stay fixed even when dropout duration / spike reason / etc.
             // appear or disappear below.
@@ -750,6 +752,50 @@ struct TimecodeControlCard: View {
         case .channelFault:           return Color(nsColor: .systemRed)
         case .usablePrototypeControl:    return Color(nsColor: .systemGreen)
         case .diagnosticsOnlyReceiving:  return Color(nsColor: .systemBlue)
+        }
+    }
+
+    // MARK: - Signal path validation note
+
+    @ViewBuilder
+    private func signalPathValidationNoteView(snap: TimecodeValidationSnapshot) -> some View {
+        let mode = pipeline.mode
+        let isRelevantMode = mode == .diagnosticsOnly || mode == .controlPrototype
+        let isSignalUsable = snap.signalHealth == .usable
+            && snap.hasRecentBuffer
+            && snap.liveTapEnabled
+
+        if isRelevantMode && isSignalUsable {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                    Text("Signal path validated")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                }
+
+                Text("Live audio is reaching ScratchLab and can be classified/accepted by the prototype. A Serato/control WAV played at normal speed validates routing and signal shape, but does not prove platter-motion tracking. Stable motion requires real phase progression, speed variation, or a supported moving-control source.")
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if mode == .controlPrototype
+                    && snap.decoderConfidence >= pipeline.minConfidence
+                    && snap.decoderConfidence > 0
+                    && (abs(snap.decodedRate) < 0.5 || snap.directionChanges > 5) {
+                    Text("If direction/rate flickers near zero while confidence is healthy, the source is likely near the prototype's stationary threshold rather than producing usable platter motion.")
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(8)
+            .background(
+                Color(nsColor: .systemBlue).opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
         }
     }
 
