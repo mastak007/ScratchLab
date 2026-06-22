@@ -26,6 +26,7 @@ final class TimecodeValidationTests: XCTestCase {
     // MARK: - Helpers: snapshot factory
 
     private func makeSnapshot(
+        mode: TimecodeControlMode = .disabled,
         hasRecentBuffer: Bool = false,
         lastBufferAge: TimeInterval? = nil,
         signalHealth: SignalHealth = .noSignal,
@@ -49,7 +50,7 @@ final class TimecodeValidationTests: XCTestCase {
             droppedLowConfidence: droppedLowConfidence
         )
         return TimecodeValidationSnapshot(
-            mode: TimecodeControlMode.disabled.rawValue,
+            mode: mode.rawValue,
             liveTapEnabled: false,
             hasRecentBuffer: hasRecentBuffer,
             lastBufferAge: lastBufferAge,
@@ -333,6 +334,7 @@ final class TimecodeValidationTests: XCTestCase {
 
     func testTimecodeValidationDebugTextContainsRequiredFields() {
         let snap = makeSnapshot(
+            mode: .controlPrototype,
             hasRecentBuffer: true,
             lastBufferAge: 1.23,
             signalHealth: .usable,
@@ -343,9 +345,43 @@ final class TimecodeValidationTests: XCTestCase {
         let text = snap.debugText
         XCTAssertTrue(text.contains("timecode_live"), "debugText must contain source label")
         XCTAssertTrue(text.contains("prototype"), "debugText must carry prototype disclaimer")
-        XCTAssertTrue(text.contains("NOT sent to notation"), "debugText must state not sent to notation")
+        XCTAssertTrue(text.contains("not routed to notation"), "debugText must clarify notation routing for controlPrototype with accepted samples")
         XCTAssertTrue(text.contains("usable"), "debugText must reflect signal health")
     }
+
+    // MARK: - debugText notation-output wording per mode
+
+    func testDebugTextNotationLine_diagnosticsOnly() {
+        let snap = makeSnapshot(mode: .diagnosticsOnly)
+        XCTAssertTrue(snap.debugText.contains("Not sent to notation — diagnostics only"),
+                      "diagnosticsOnly must produce exact diagnostics-only notation line")
+    }
+
+    func testDebugTextNotationLine_controlPrototype_noSamples() {
+        let snap = makeSnapshot(mode: .controlPrototype, acceptedMotionSamples: 0)
+        XCTAssertTrue(snap.debugText.contains("Not sent to notation — no prototype motion samples yet"),
+                      "controlPrototype with 0 accepted samples must say no prototype motion samples yet")
+    }
+
+    func testDebugTextNotationLine_controlPrototype_withSamples() {
+        let snap = makeSnapshot(mode: .controlPrototype, acceptedMotionSamples: 3)
+        XCTAssertTrue(snap.debugText.contains("Notation output: prototype motion is decoded but not routed to notation here"),
+                      "controlPrototype with accepted samples must produce decoded-but-not-routed notation line")
+    }
+
+    func testDebugTextNotationLine_disabled_fallback() {
+        let snap = makeSnapshot(mode: .disabled)
+        let text = snap.debugText
+        XCTAssertTrue(text.contains("Not sent to notation"),
+                      "disabled mode must include not-sent-to-notation line")
+        XCTAssertFalse(text.contains("diagnostics only"),
+                       "disabled mode must not include diagnostics-only wording")
+        XCTAssertFalse(text.contains("no prototype motion samples yet"),
+                       "disabled mode must not include prototype-samples wording")
+        XCTAssertFalse(text.contains("not routed to notation"),
+                       "disabled mode must not include not-routed-to-notation wording")
+    }
+
     // MARK: - Deterministic pipeline validation (Batch 11)
 
     /// Full pipeline validation using synthetic 1 kHz stereo quadrature.
@@ -483,8 +519,8 @@ final class TimecodeValidationTests: XCTestCase {
         let debugText = snap.debugText
         XCTAssertTrue(debugText.contains("prototype"),
                       "debugText must carry prototype disclaimer")
-        XCTAssertTrue(debugText.contains("NOT sent to notation"),
-                      "debugText must state not sent to notation")
+        XCTAssertTrue(debugText.contains("not routed to notation"),
+                      "debugText must clarify notation routing for controlPrototype with accepted samples")
         XCTAssertTrue(debugText.contains("usablePrototypeControl"),
                       "debugText must include validation status")
 

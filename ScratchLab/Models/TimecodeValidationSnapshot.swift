@@ -394,6 +394,17 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// Does not spam the console — intended for explicit copy action only.
     public var debugText: String {
         let ageStr = lastBufferAge.map { String(format: "%.2fs", $0) } ?? "never"
+        let notationLine: String
+        switch mode {
+        case TimecodeControlMode.diagnosticsOnly.rawValue:
+            notationLine = "Not sent to notation — diagnostics only"
+        case TimecodeControlMode.controlPrototype.rawValue:
+            notationLine = acceptedMotionSamples > 0
+                ? "Notation output: prototype motion is decoded but not routed to notation here"
+                : "Not sent to notation — no prototype motion samples yet"
+        default:
+            notationLine = "Not sent to notation"
+        }
         return """
         --- Timecode Validation Snapshot ---
         Mode:            \(mode)
@@ -435,7 +446,7 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         Phase offset:    \(estimatedPhaseOffset.map { String(format: "%.0f°", $0) } ?? "n/a")
         ZCR L/R:         \(String(format: "%.0f / %.0f", zeroCrossingRateLeft, zeroCrossingRateRight))
         Rejection note:  \(decoderRejectionNote.isEmpty ? "(none)" : decoderRejectionNote)
-        NOT sent to notation (prototype only)
+        \(notationLine)
         """
     }
 }
