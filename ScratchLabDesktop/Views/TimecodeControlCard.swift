@@ -748,7 +748,8 @@ struct TimecodeControlCard: View {
         case .decodingButDropping:    return Color(nsColor: .systemOrange)
         case .clipped:                return Color(nsColor: .systemRed)
         case .channelFault:           return Color(nsColor: .systemRed)
-        case .usablePrototypeControl: return Color(nsColor: .systemGreen)
+        case .usablePrototypeControl:    return Color(nsColor: .systemGreen)
+        case .diagnosticsOnlyReceiving:  return Color(nsColor: .systemBlue)
         }
     }
 

@@ -35,6 +35,10 @@ public enum TimecodeValidationStatus: String, Equatable, Sendable, CaseIterable 
     /// Prototype decode chain is active.
     case usablePrototypeControl
 
+    /// Signal is being received in diagnostics-only mode; decode is
+    /// intentionally disabled by the current pipeline mode.
+    case diagnosticsOnlyReceiving
+
     public var label: String {
         switch self {
         case .noSignal:               return "No Signal"
@@ -44,6 +48,7 @@ public enum TimecodeValidationStatus: String, Equatable, Sendable, CaseIterable 
         case .clipped:                return "Clipped"
         case .channelFault:           return "Channel Fault"
         case .usablePrototypeControl: return "Prototype Control Active"
+        case .diagnosticsOnlyReceiving: return "Receiving – Decode Disabled (Diagnostics Only)"
         }
     }
 }
@@ -195,6 +200,45 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// (Batch 12).  Empty when not yet configured.
     public var captureDeviceDebugInfo: String
 
+    // MARK: - Signal classification (Batch 13)
+
+    /// Prototype signal modulation classification.
+    public var signalClass: String
+
+    /// Pearson correlation coefficient between L and R channels.
+    public var channelCorrelation: Float?
+
+    /// ZCR-derived frequency estimate, left channel (Hz).
+    /// Computed as zeroCrossingRateLeft / 2 — valid only for near-pure tones.
+    public var zcrFrequencyEstimateLeft: Float?
+
+    /// ZCR-derived frequency estimate, right channel (Hz).
+    /// Computed as zeroCrossingRateRight / 2 — valid only for near-pure tones.
+    public var zcrFrequencyEstimateRight: Float?
+
+    /// Zero-crossing rate, left channel (crossings/sec).
+    public var zeroCrossingRateLeft: Float
+
+    /// Zero-crossing rate, right channel (crossings/sec).
+    public var zeroCrossingRateRight: Float
+
+    /// Rough phase offset between L/R at the ZCR frequency estimate (degrees).
+    public var estimatedPhaseOffset: Float?
+
+    /// True when stereo resembles a 90° quadrature pair.
+    public var isQuadratureLike: Bool
+
+    /// True when L/R ZCR frequency estimates differ enough to be considered
+    /// frequency-disparate.  Does NOT imply FSK detection.
+    public var isFrequencyDisparate: Bool
+
+    /// Human-readable note explaining why the prototype decoder rejected
+    /// this signal (if applicable).  Empty when not applicable.
+    public var decoderRejectionNote: String
+
+    /// Sample rate used for classification (Hz).
+    public var classificationSampleRate: Double
+
     // MARK: - Classification
 
     /// High-level validation status derived from the other fields.
@@ -237,6 +281,17 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         maxAbsSmoothedRate: Double = 0,
         adapterDiagnostic: String = "",
         captureDeviceDebugInfo: String = "",
+        signalClass: String = SignalClass.unknown.rawValue,
+        channelCorrelation: Float? = nil,
+        zcrFrequencyEstimateLeft: Float? = nil,
+        zcrFrequencyEstimateRight: Float? = nil,
+        zeroCrossingRateLeft: Float = 0,
+        zeroCrossingRateRight: Float = 0,
+        estimatedPhaseOffset: Float? = nil,
+        isQuadratureLike: Bool = false,
+        isFrequencyDisparate: Bool = false,
+        decoderRejectionNote: String = "",
+        classificationSampleRate: Double = 0,
         validationStatus: TimecodeValidationStatus
     ) {
         self.mode = mode
@@ -273,6 +328,17 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         self.maxAbsSmoothedRate = maxAbsSmoothedRate
         self.adapterDiagnostic = adapterDiagnostic
         self.captureDeviceDebugInfo = captureDeviceDebugInfo
+        self.signalClass = signalClass
+        self.channelCorrelation = channelCorrelation
+        self.zcrFrequencyEstimateLeft = zcrFrequencyEstimateLeft
+        self.zcrFrequencyEstimateRight = zcrFrequencyEstimateRight
+        self.zeroCrossingRateLeft = zeroCrossingRateLeft
+        self.zeroCrossingRateRight = zeroCrossingRateRight
+        self.estimatedPhaseOffset = estimatedPhaseOffset
+        self.isQuadratureLike = isQuadratureLike
+        self.isFrequencyDisparate = isFrequencyDisparate
+        self.decoderRejectionNote = decoderRejectionNote
+        self.classificationSampleRate = classificationSampleRate
         self.validationStatus = validationStatus
     }
 
@@ -362,6 +428,13 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         Status:          \(validationStatus.rawValue)
         Adapter diag:    \(adapterDiagnostic.isEmpty ? "(none)" : adapterDiagnostic)
         Capture device:  \(captureDeviceDebugInfo.isEmpty ? "(unknown)" : captureDeviceDebugInfo)
+        Signal class:    \(signalClass)\(isQuadratureLike ? " (quad-like)" : "")\(isFrequencyDisparate ? " (freq-disparate)" : "")
+        ZCR freq est L:  \(zcrFrequencyEstimateLeft.map { String(format: "%.0f Hz", $0) } ?? "n/a")
+        ZCR freq est R:  \(zcrFrequencyEstimateRight.map { String(format: "%.0f Hz", $0) } ?? "n/a")
+        Correlation:     \(channelCorrelation.map { String(format: "%.4f", $0) } ?? "n/a")
+        Phase offset:    \(estimatedPhaseOffset.map { String(format: "%.0f°", $0) } ?? "n/a")
+        ZCR L/R:         \(String(format: "%.0f / %.0f", zeroCrossingRateLeft, zeroCrossingRateRight))
+        Rejection note:  \(decoderRejectionNote.isEmpty ? "(none)" : decoderRejectionNote)
         NOT sent to notation (prototype only)
         """
     }

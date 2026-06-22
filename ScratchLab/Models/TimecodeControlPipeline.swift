@@ -198,6 +198,9 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     /// The most recent signal diagnosis.
     @Published public private(set) var latestDiagnosis: TimecodeSignalDiagnostics.Diagnosis?
 
+    /// The most recent signal modulation classification (Batch 13).
+    @Published public private(set) var latestClassification: TimecodeSignalDiagnostics.Diagnosis?
+
     /// Aggregate debug counters.
     @Published public private(set) var counters: TimecodeControlCounters = .init()
 
@@ -543,6 +546,17 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         let recordedSamples = 0
 #endif
 
+        let cls = latestClassification
+
+        // In diagnosticsOnly mode the decoder is never called by design.
+        // Only override .receivingButNoDecode — the status that means "healthy
+        // signal, nothing decoded."  Unhealthy statuses (noSignal, clipped,
+        // channelFault) must pass through so the UI reflects actual signal
+        // quality rather than masking faults as "receiving."
+        let finalStatus: TimecodeValidationStatus = (mode == .diagnosticsOnly && status == .receivingButNoDecode)
+            ? .diagnosticsOnlyReceiving
+            : status
+
         return TimecodeValidationSnapshot(
             mode: mode.rawValue,
             liveTapEnabled: liveTapEnabled,
@@ -578,7 +592,18 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             maxAbsSmoothedRate: counters.maxAbsSmoothedRate,
             adapterDiagnostic: TimecodeCMSampleBufferAdapter.lastDiagnostic,
             captureDeviceDebugInfo: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
-            validationStatus: status
+            signalClass: cls?.signalClass.rawValue ?? SignalClass.unknown.rawValue,
+            channelCorrelation: cls?.channelCorrelation,
+            zcrFrequencyEstimateLeft: cls?.zcrFrequencyEstimateLeft,
+            zcrFrequencyEstimateRight: cls?.zcrFrequencyEstimateRight,
+            zeroCrossingRateLeft: cls?.zeroCrossingRateLeft ?? 0,
+            zeroCrossingRateRight: cls?.zeroCrossingRateRight ?? 0,
+            estimatedPhaseOffset: cls?.estimatedPhaseOffset,
+            isQuadratureLike: cls?.isQuadratureLike ?? false,
+            isFrequencyDisparate: cls?.isFrequencyDisparate ?? false,
+            decoderRejectionNote: cls?.decoderRejectionNote ?? "",
+            classificationSampleRate: cls?.classificationSampleRate ?? 0,
+            validationStatus: finalStatus
         )
     }
 
@@ -597,6 +622,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         latestPlatterTimeline = nil
         latestDecodeResult = nil
         latestDiagnosis = nil
+        latestClassification = nil
         counters = TimecodeControlCounters()
         currentDirection = .unknown
         currentRate = 0
@@ -634,22 +660,36 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         latestDiagnosis = diagnosis
         signalHealth = diagnosis.health
 
+        // Batch 13: classify signal modulation from raw samples
+        let classification = diagnosticsEngine.classifySignal(
+            left: left,
+            right: right,
+            sampleRate: sampleRate,
+            health: diagnosis.health,
+            isStereo: diagnosis.isStereo
+        )
+        latestClassification = classification
+
         var c = counters
         c.totalBuffersReceived += bufferIncrement
         c.signalHealth = diagnosis.health.rawValue
 
-        // Track drops based on diagnostics
-        if diagnosis.isSilent {
-            c.droppedSilence += 1
-            c.lastDropReason = TimecodeDropoutReason.silence.rawValue
-        }
-        if diagnosis.isClipping {
-            c.droppedClipped += 1
-            c.lastDropReason = TimecodeDropoutReason.clipped.rawValue
-        }
-        if diagnosis.isChannelImbalanced || diagnosis.isMonoSuspect {
-            c.droppedChannelFault += 1
-            c.lastDropReason = TimecodeDropoutReason.channelFault.rawValue
+        // Drop counters represent decoder-derived drops and must only increment
+        // when the decoder actually ran.  In diagnosticsOnly mode no decoder
+        // runs, so incrementing would fabricate phantom drop evidence.
+        if mode == .controlPrototype {
+            if diagnosis.isSilent {
+                c.droppedSilence += 1
+                c.lastDropReason = TimecodeDropoutReason.silence.rawValue
+            }
+            if diagnosis.isClipping {
+                c.droppedClipped += 1
+                c.lastDropReason = TimecodeDropoutReason.clipped.rawValue
+            }
+            if diagnosis.isChannelImbalanced || diagnosis.isMonoSuspect {
+                c.droppedChannelFault += 1
+                c.lastDropReason = TimecodeDropoutReason.channelFault.rawValue
+            }
         }
 
         counters = c
