@@ -510,4 +510,150 @@ final class LiveNotationOverlayTests: XCTestCase {
         XCTAssertGreaterThan(model.duration, 40.0, "Full-demo overlay model duration should cover the whole demo")
         XCTAssertEqual(model.events.count, notation.strokes.count)
     }
+
+    // MARK: - replayNotation factory
+
+    func testReplayNotationModelIsNotEmpty() throws {
+        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let model = LiveNotationOverlayModel.replayNotation(from: notation)
+        XCTAssertFalse(model.isEmpty)
+        XCTAssertEqual(model.mode, .captured)
+        XCTAssertGreaterThan(model.duration, 40.0)
+        XCTAssertEqual(model.events.count, 47)
+    }
+
+    func testReplayNotationEventsHaveVaryingAmplitude() throws {
+        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let model = LiveNotationOverlayModel.replayNotation(from: notation)
+        let fractions = model.events.map {
+            CapturedNotationStrokeGeometry.travelFraction(for: $0)
+        }
+        let uniqueFractions = Set(fractions.map { Int(($0 * 100).rounded()) })
+        XCTAssertGreaterThan(uniqueFractions.count, 1,
+                             "Replay notation strokes must have varying amplitudes, got \(uniqueFractions.count) unique values")
+        XCTAssertGreaterThan(fractions.max() ?? 0, 0.8,
+                             "Longest stroke should reach near full amplitude")
+        XCTAssertLessThan(fractions.min() ?? 1, 0.5,
+                          "Shortest stroke should be visibly smaller than medium reference (0.5)")
+    }
+
+    func testReplayNotationHidesFutureStrokes() throws {
+        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let model = LiveNotationOverlayModel.replayNotation(from: notation)
+        // At time 0, only the first stroke has started (startTime ≈ 0.27).
+        let atStart = model.visibleEvents(at: 0.0)
+        XCTAssertEqual(atStart.count, 0, "No strokes should be visible before the first stroke starts")
+        // At time 1.0, several early strokes should be visible.
+        let atOneSecond = model.visibleEvents(at: 1.0)
+        XCTAssertGreaterThan(atOneSecond.count, 0, "Some strokes should be visible at 1.0s")
+        XCTAssertLessThan(atOneSecond.count, 10,
+                          "Only early strokes should be visible at 1.0s, not all 47")
+        // All strokes visible at end.
+        let atEnd = model.visibleEvents(at: model.duration)
+        XCTAssertEqual(atEnd.count, 47, "All 47 strokes must be visible at the end")
+    }
+
+    func testReplayNotationShortestStrokeHasAtLeastFloorAmplitude() throws {
+        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let model = LiveNotationOverlayModel.replayNotation(from: notation)
+        for event in model.events {
+            let fraction = CapturedNotationStrokeGeometry.travelFraction(for: event)
+            XCTAssertGreaterThanOrEqual(fraction, 0.14,
+                                        "Every replay stroke must have at least floor amplitude (~0.15)")
+        }
+    }
+
+    func testTargetNotationBackwardCompatible() throws {
+        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let targetModel = LiveNotationOverlayModel.targetNotation(from: notation)
+        XCTAssertEqual(targetModel.mode, .target)
+        // targetNotation should still use fixed 0.5 amplitude.
+        let fractions = targetModel.events.map {
+            CapturedNotationStrokeGeometry.travelFraction(for: $0)
+        }
+        let uniqueFractions = Set(fractions)
+        XCTAssertEqual(uniqueFractions.count, 1, "All target strokes must have identical amplitude")
+        XCTAssertEqual(uniqueFractions.first ?? 0, 0.5, accuracy: 0.01,
+                       "Target notation must still use fixed 0.5 travel fraction")
+    }
+
+    // MARK: - babyScratchFull76 resource
+
+    func testBabyScratchFull76ResourceLoads() throws {
+        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        XCTAssertEqual(notation.scratchID, "baby")
+        XCTAssertEqual(notation.strokes.count, 76)
+    }
+
+    func testBabyScratchFull76StrokeCounts() throws {
+        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        // Partition strokes into phrases by timing
+        let strokes = notation.strokes
+        var p1=0; var p2=0; var p3=0; var p4=0
+        for s in strokes {
+            if s.startTime < 6.0          { p1 += 1 }
+            else if s.startTime < 20.0    { p2 += 1 }
+            else if s.startTime < 32.0    { p3 += 1 }
+            else                           { p4 += 1 }
+        }
+        XCTAssertEqual(p1, 19); XCTAssertEqual(p2, 19)
+        XCTAssertEqual(p3, 13); XCTAssertEqual(p4, 25)
+    }
+
+    func testBabyScratchFull76Directions() throws {
+        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        let strokes = notation.strokes
+
+        // Partition into phrases, roughly
+        var phrases: [[ScratchNotation.Stroke]] = [[],[],[],[]]
+        for s in strokes {
+            if s.startTime < 6.0          { phrases[0].append(s) }
+            else if s.startTime < 20.0    { phrases[1].append(s) }
+            else if s.startTime < 32.0    { phrases[2].append(s) }
+            else                           { phrases[3].append(s) }
+        }
+
+        for ph in phrases {
+            XCTAssertFalse(ph.isEmpty)
+            // Odd strokes = forward, even = backward, final = forward
+            for (i, s) in ph.enumerated() {
+                let expected: ScratchNotationDirection = (i % 2 == 0) ? .forward : .backward
+                XCTAssertEqual(s.direction, expected,
+                               "Phrase stroke \(i+1) expected \(expected), got \(s.direction)")
+            }
+            // Final stroke must be forward let-go
+            XCTAssertEqual(ph.last!.direction, .forward)
+        }
+    }
+
+    func testBabyScratchFull76StrokeTimingsValid() throws {
+        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        for s in notation.strokes {
+            XCTAssertGreaterThan(s.endTime, s.startTime,
+                                 "Every stroke must have positive duration")
+        }
+        // Monotonic within each rough phrase
+        var lastEnd = -1.0; var currentPh = 1
+        for s in notation.strokes {
+            let ph = s.startTime < 6.0 ? 1 : (s.startTime < 20.0 ? 2 : (s.startTime < 32.0 ? 3 : 4))
+            if ph != currentPh { lastEnd = -1.0; currentPh = ph }
+            XCTAssertGreaterThan(s.startTime, lastEnd - 0.001,
+                                 "Strokes must be monotonic within each phrase")
+            lastEnd = s.endTime
+        }
+    }
+
+    func testBabyScratchFull76FaderState() throws {
+        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        for s in notation.strokes {
+            XCTAssertEqual(s.faderState, .open, "Baby Scratch is always fader-open")
+        }
+    }
+
+    func testBabyScratchFull76SpeedClassificationsRecognized() throws {
+        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        let speeds = Set(notation.strokes.map(\.speedClassification))
+        XCTAssertTrue(speeds.isSubset(of: [.fast, .medium, .slow]),
+                      "All speed classifications must be recognized")
+    }
 }

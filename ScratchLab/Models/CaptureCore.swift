@@ -2162,6 +2162,35 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
     /// slice and sign-off.
     static let babyScratchDemo: ScratchNotation? = babyScratchDemoFromExtractedStrokes()
 
+    /// 76-stroke four-phrase Baby Scratch target notation built from
+    /// audio-unit semantic analysis of the bundled demo WAV.
+    ///
+    /// Each audible baby-scratch unit is an F/B pair (2 strokes);
+    /// the final release is a single forward let-go.
+    ///
+    /// Phrase counts: 19 + 19 + 13 + 25 = 76.
+    /// Silence/instruction gaps between phrases are not represented
+    /// as strokes — only waveform-active regions carry notation.
+    static let babyScratchFull76: ScratchNotation? = loadBabyScratchFull76FromBundle()
+
+    static func loadBabyScratchFull76FromBundle(_ bundle: Bundle = .main) -> ScratchNotation? {
+        guard let url = bundle.url(
+            forResource: "baby_scratch_full_76",
+            withExtension: "json",
+            subdirectory: "Notation"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(ScratchNotation.self, from: data)
+        } catch {
+            Logger(subsystem: "com.scratchlab.capture", category: "ScratchNotation")
+                .warning("Failed to load 76-stroke Baby Scratch notation: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     static func loadBabyScratchFromBundle(_ bundle: Bundle = .main) -> ScratchNotation? {
         guard let url = bundle.url(
             forResource: "baby_scratch",
