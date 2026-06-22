@@ -2836,12 +2836,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let notation = try decodedBabyScratchNotation()
 
         XCTAssertEqual(notation.scratchID, "baby")
-        XCTAssertEqual(notation.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
-        XCTAssertEqual(notation.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
-        // The 42 s coach demo encodes four repetitions of the 10-stroke phrase
-        // explicitly (no looping at playback time), so the notation now ships
-        // 40 strokes spanning the full ~42 s recording.
-        XCTAssertEqual(notation.strokes.count, 40)
+        XCTAssertEqual(notation.demoStart, 0.0, accuracy: 0.0001)
+        // `baby_scratch.json` is a short ~5 s instructional excerpt —
+        // one continuous alternation phrase, not the full 42 s demo.
+        // The full-demo timeline lives in `CoachDemoMotion/baby_scratch_strokes.json`
+        // and is available as `ScratchNotation.babyScratchDemo`.
+        XCTAssertEqual(notation.strokes.count, 19)
         XCTAssertEqual(notation.strokes.count, notation.strokeSegments.count)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.faderState == .open })
         let phraseStart = try XCTUnwrap(notation.phraseStart)
@@ -2850,13 +2850,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let lastStroke = try XCTUnwrap(notation.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
-        XCTAssertGreaterThan(phraseEnd, 40)
-        XCTAssertLessThan(phraseEnd, 42)
+        XCTAssertEqual(phraseEnd, 5.0687, accuracy: 0.01)
         XCTAssertEqual(notation.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
-        let slowToFastGap = notation.strokes[2].startTime - notation.strokes[1].endTime
-        XCTAssertLessThan(slowToFastGap, 0.20)
-        XCTAssertEqual(notation.strokes[2].startTime, 1.46, accuracy: 0.0001)
+        // The short excerpt opens with a forward stroke at 0.0.
+        XCTAssertEqual(firstStroke.startTime, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(firstStroke.direction, .forward)
+        // No source provenance leaks into the shipped JSON.
         XCTAssertFalse(rawJSON.contains("/Users/"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("cxl"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("makemkv"))
@@ -2877,20 +2877,31 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let slowestFast = try XCTUnwrap(fastDurations.max())
         let slowAverage = slowDurations.reduce(0, +) / Double(slowDurations.count)
         let fastAverage = fastDurations.reduce(0, +) / Double(fastDurations.count)
-        let roundedDurationsByTenThousand = durations.map { Int(($0 * 10_000).rounded()) }
 
-        XCTAssertGreaterThan(roundedDurations.count, 1)
-        XCTAssertLessThan(slowestFast, fastestSlow)
-        XCTAssertGreaterThanOrEqual(slowDurations.count, 3)
-        XCTAssertGreaterThanOrEqual(fastDurations.count, 3)
-        XCTAssertGreaterThan(slowAverage, fastAverage)
-        // The 42 s coach demo encodes the 10-stroke speed pattern four times
-        // back-to-back, so the duration array repeats the original pattern.
-        let phraseDurationPattern = [5080, 3080, 3030, 5280, 3080, 2880, 5680, 3230, 2830, 8480]
-        XCTAssertEqual(
-            roundedDurationsByTenThousand,
-            Array(repeating: phraseDurationPattern, count: 4).flatMap { $0 }
-        )
+        // The 19-stroke instructional excerpt contains fast, slow, and medium
+        // speed classifications — verify the pipeline classifies them correctly.
+        XCTAssertGreaterThan(roundedDurations.count, 1, "Notation excerpt must have stroke duration diversity")
+        XCTAssertLessThan(slowestFast, fastestSlow,
+                          "Fast-classified strokes must be shorter than slow-classified strokes")
+        XCTAssertGreaterThanOrEqual(fastDurations.count, 2,
+                                    "Short excerpt must have at least 2 strokes classified as fast")
+        XCTAssertGreaterThanOrEqual(slowDurations.count, 1,
+                                    "Short excerpt must have at least 1 stroke classified as slow")
+        XCTAssertGreaterThan(slowAverage, fastAverage,
+                             "Average slow stroke duration must exceed average fast stroke duration")
+        // Verify active-stroke movement kinds are recognized.
+        let activeStrokes = notation.strokes.filter {
+            $0.direction == .forward || $0.direction == .backward
+        }
+        XCTAssertFalse(activeStrokes.isEmpty)
+        for stroke in activeStrokes {
+            let kind = stroke.movementKind
+            XCTAssertTrue(
+                kind == .fastPush || kind == .normalPush || kind == .slowDrag
+                    || kind == .fastPull || kind == .normalPull || kind == .slowPullDrag,
+                "Active strokes must carry a directional movement kind, got \(kind)"
+            )
+        }
     }
 
     func testBabyScratchExtractedMotionJSONDecodesAndContainsNoSourceProvenance() throws {

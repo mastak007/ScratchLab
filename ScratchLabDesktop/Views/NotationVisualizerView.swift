@@ -82,7 +82,7 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     init(demo: BabyScratchDemoPlaybackCoordinator) {
         self.demo = demo
-        notation = ScratchNotation.loadBabyScratchFromBundle()
+        notation = ScratchNotation.babyScratchDemo
     }
 
     // MARK: Playback control

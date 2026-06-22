@@ -394,4 +394,120 @@ final class LiveNotationOverlayTests: XCTestCase {
         XCTAssertTrue(thirdStrokes.isEmpty,
                       "Future strokes must not leak into early visible set")
     }
+
+    // MARK: - babyScratchDemo factory
+
+    /// The test bundle is not the main app bundle, so `Bundle.main` (the
+    /// default for the `static let`) won't find the resource. Tests call
+    /// `babyScratchDemoFromExtractedStrokes(appBundle)` with the actual
+    /// app bundle to exercise the factory logic against the shipped data.
+    private var appBundle: Bundle {
+        // The macOS test host layout:
+        //   ScratchLab.app/Contents/PlugIns/ScratchLabDesktopTests.xctest
+        // Walk up 3 components to reach ScratchLab.app.
+        let testBundleURL = Bundle(for: type(of: self)).bundleURL
+        let appURL = testBundleURL
+            .deletingLastPathComponent()  // PlugIns
+            .deletingLastPathComponent()  // Contents
+            .deletingLastPathComponent()  // ScratchLab.app
+        return Bundle(url: appURL) ?? Bundle(for: type(of: self))
+    }
+
+    func testBabyScratchDemoFactoryProducesNonNilNotation() {
+        let demo = ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle)
+        XCTAssertNotNil(demo, "babyScratchDemo factory must produce non-nil notation from the app bundle")
+    }
+
+    func testBabyScratchDemoHasExactly47Strokes() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        XCTAssertEqual(demo.strokes.count, 47,
+                       "Full-demo extracted stroke resource must have 47 strokes")
+        XCTAssertEqual(demo.strokes.count, demo.strokeSegments.count)
+    }
+
+    func testBabyScratchDemoHasMoreStrokesThanShortPhrase() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let short = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
+        XCTAssertGreaterThan(demo.strokes.count, short.strokes.count,
+                             "Full-demo notation (\(demo.strokes.count) strokes) must exceed short excerpt (\(short.strokes.count) strokes)")
+        XCTAssertEqual(short.strokes.count, 19,
+                       "Short instructional excerpt must have 19 strokes")
+    }
+
+    func testBabyScratchDemoTimelineDurationIsAbout42Seconds() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        XCTAssertEqual(demo.timelineDuration, 42.4, accuracy: 0.1,
+                       "Full-demo timeline duration must be ~42.4 s, got \(demo.timelineDuration)")
+        let phraseEnd = try XCTUnwrap(demo.phraseEnd)
+        XCTAssertEqual(demo.timelineDuration, phraseEnd, accuracy: 0.1,
+                       "timelineDuration must match phraseEnd")
+    }
+
+    func testBabyScratchDemoMetadataPreserved() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        XCTAssertEqual(demo.scratchID, "baby")
+        XCTAssertEqual(demo.demoStart, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(demo.demoEnd, 42.866625, accuracy: 0.1)
+        let phraseStart = try XCTUnwrap(demo.phraseStart)
+        XCTAssertEqual(phraseStart, 0.27, accuracy: 0.01)
+        XCTAssertEqual(demo.timingBasis, "extracted_strokes_full_demo")
+    }
+
+    func testBabyScratchDemoStrokesSpanFullDemoRange() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let first = try XCTUnwrap(demo.strokes.first)
+        let last = try XCTUnwrap(demo.strokes.last)
+        XCTAssertGreaterThanOrEqual(first.startTime, 0.0)
+        XCTAssertEqual(first.startTime, 0.27, accuracy: 0.01,
+                       "First extracted stroke should start at ~0.27 s")
+        XCTAssertLessThanOrEqual(first.endTime, 2.0,
+                                 "First stroke should end early in the demo")
+        XCTAssertGreaterThan(last.endTime, 40.0,
+                             "Last stroke should end near full demo duration")
+        XCTAssertEqual(last.endTime, 42.4, accuracy: 0.1,
+                       "Last stroke end time must match phraseEnd")
+        XCTAssertLessThanOrEqual(last.endTime, demo.timelineDuration + 0.01)
+    }
+
+    func testBabyScratchDemoStrokesAllHaveMediumSpeedAndOpenFader() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        for stroke in demo.strokes {
+            XCTAssertEqual(stroke.speedClassification, .medium,
+                           "All extracted demo strokes must default to .medium speed")
+            XCTAssertEqual(stroke.faderState, .open,
+                           "All Baby Scratch strokes must be fader-open")
+        }
+    }
+
+    func testBabyScratchDemoContainsBothDirections() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let directions = Set(demo.strokes.map(\.direction))
+        XCTAssertTrue(directions.contains(.forward),
+                      "Full-demo strokes must include at least one forward stroke")
+        XCTAssertTrue(directions.contains(.backward),
+                      "Full-demo strokes must include at least one backward stroke")
+        XCTAssertEqual(directions.count, 2,
+                       "Full-demo strokes must have exactly two distinct directions")
+    }
+
+    func testBabyScratchDemoStrokesHaveValidDirections() throws {
+        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        for stroke in demo.strokes {
+            XCTAssertTrue(
+                stroke.direction == .forward || stroke.direction == .backward,
+                "Every demo stroke must have a valid direction, got \(stroke.direction)"
+            )
+            XCTAssertGreaterThan(stroke.endTime, stroke.startTime,
+                                 "Every demo stroke must have positive duration")
+        }
+    }
+
+    func testBabyScratchDemoTargetNotationModelIsNotEmpty() throws {
+        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let model = LiveNotationOverlayModel.targetNotation(from: notation)
+        XCTAssertFalse(model.isEmpty)
+        XCTAssertEqual(model.mode, .target)
+        XCTAssertGreaterThan(model.duration, 40.0, "Full-demo overlay model duration should cover the whole demo")
+        XCTAssertEqual(model.events.count, notation.strokes.count)
+    }
 }

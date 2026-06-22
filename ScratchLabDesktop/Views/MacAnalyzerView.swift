@@ -5237,7 +5237,7 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            let referenceModel = LiveNotationOverlayModel.targetNotation(from: ScratchNotation.babyScratch)
+            let referenceModel = LiveNotationOverlayModel.targetNotation(from: ScratchNotation.babyScratchDemo)
             if !referenceModel.isEmpty {
                 TimelineView(.animation(paused: !demoModeController.demoPlayer.isPlaying)) { _ in
                     let phraseTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(

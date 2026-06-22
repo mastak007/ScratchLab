@@ -2143,6 +2143,25 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
 
     static let babyScratch: ScratchNotation? = loadBabyScratchFromBundle()
 
+    /// Full-demo notation constructed from the extracted stroke resource
+    /// (`CoachDemoMotion/baby_scratch_strokes.json`). Covers all four
+    /// demonstration phrases across the full ~42.4 s timeline, so the
+    /// Practice Coach cursor and the Advanced template canvas display
+    /// strokes for the entire demo audio instead of freezing after the
+    /// first ~5 s excerpt.
+    ///
+    /// Falls back to `nil` when the extracted stroke resource is missing
+    /// from the bundle — callers should treat `nil` as the empty state
+    /// (same pattern as `babyScratch`).
+    ///
+    /// **Follow-up:** The Review tab (`reviewTargetNotationStageCard`)
+    /// still uses `ScratchNotation.babyScratch` (the short ~5 s excerpt)
+    /// because Review is a static chart with its own renderer and
+    /// windowing. Expanding Review to the full-demo source is a separate
+    /// product decision — do not drive-by wire it without a dedicated
+    /// slice and sign-off.
+    static let babyScratchDemo: ScratchNotation? = babyScratchDemoFromExtractedStrokes()
+
     static func loadBabyScratchFromBundle(_ bundle: Bundle = .main) -> ScratchNotation? {
         guard let url = bundle.url(
             forResource: "baby_scratch",
@@ -2160,6 +2179,58 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
                 .warning("Failed to load Baby Scratch notation JSON: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    /// Constructs a full-length `ScratchNotation` from the existing
+    /// `BabyScratchExtractedStrokeResource` (the same full extracted
+    /// stroke timeline the 3D Coach animation rig already consumes).
+    ///
+    /// Each extracted stroke is mapped with:
+    /// - Direction preserved (`"forward"` → `.forward`, `"backward"` →
+    ///   `.backward`). Unknown direction strings fail the factory
+    ///   (return `nil`) rather than silently defaulting.
+    /// - Speed defaulted to `.medium` (the extracted resource does not
+    ///   carry an explicit speed classification)
+    /// - Fader defaulted to `.open` (Baby Scratch is always fader-open)
+    ///
+    /// The factory creates no new bundled data files — it reuses the
+    /// existing `CoachDemoMotion/baby_scratch_strokes.json` already
+    /// shipped in the app.
+    static func babyScratchDemoFromExtractedStrokes(_ bundle: Bundle = .main) -> ScratchNotation? {
+        guard let resource = BabyScratchExtractedStrokeResource.loadFromBundle(bundle) else {
+            return nil
+        }
+        var strokes: [Stroke] = []
+        strokes.reserveCapacity(resource.strokes.count)
+        for extracted in resource.strokes {
+            let direction: ScratchNotationDirection
+            switch extracted.direction {
+            case "forward":  direction = .forward
+            case "backward": direction = .backward
+            default:
+                Logger(subsystem: "com.scratchlab.capture", category: "ScratchNotation")
+                    .warning("Baby Scratch extracted stroke has unknown direction '\(extracted.direction, privacy: .public)' — refusing to construct full-demo notation")
+                return nil
+            }
+            strokes.append(Stroke(
+                startTime: extracted.startTime,
+                endTime: extracted.endTime,
+                direction: direction,
+                speedClassification: .medium,
+                faderState: .open
+            ))
+        }
+        guard !strokes.isEmpty else { return nil }
+        return ScratchNotation(
+            version: 1,
+            scratchID: resource.scratchID,
+            demoStart: resource.demoStart,
+            demoEnd: resource.demoEnd,
+            phraseStart: resource.phraseStart,
+            phraseEnd: resource.phraseEnd,
+            timingBasis: "extracted_strokes_full_demo",
+            strokes: strokes
+        )
     }
 }
 
