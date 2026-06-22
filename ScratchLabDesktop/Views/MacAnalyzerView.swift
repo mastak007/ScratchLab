@@ -5236,6 +5236,18 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            let referenceModel = LiveNotationOverlayModel.targetNotation(from: ScratchNotation.babyScratch)
+            if !referenceModel.isEmpty {
+                TimelineView(.animation(paused: !demoModeController.demoPlayer.isPlaying)) { _ in
+                    let phraseTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
+                        for: demoModeController.demoPlayer.currentPlaybackTime
+                    )
+                    LiveNotationOverlayView(model: referenceModel, currentTime: phraseTime)
+                        .frame(height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
