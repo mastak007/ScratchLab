@@ -405,6 +405,40 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
                        "TimecodeControlMode.default must be .disabled")
     }
 
+    // MARK: - 16. Direction stability for steady forward motion
+
+    func testControlPrototypeSteadyForwardMotionIsDirectionallyStable() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        // 20 buffers: decoded velocity ≈ 0.3 / (441 / 44100) = 30 rad/s,
+        // far above stationaryVelocityEpsilon (0.05), so no frame should straddle
+        // the stationary boundary.  On the live Serato WAV this counter reaches
+        // ~1658 per 4840 accepted samples because raw velocity (~0.06 rad/s)
+        // alternates around epsilon, producing noise-floor sign flips.
+        feedPhaseProgression(into: pipeline, bufferCount: 20, phaseStep: 0.3)
+        pipeline.flushDecode()
+
+        let snapshot = pipeline.makeValidationSnapshot()
+
+        XCTAssertGreaterThan(snapshot.acceptedMotionSamples, 0,
+                             "Forward phase progression must produce accepted motion samples")
+
+        XCTAssertLessThan(snapshot.directionChanges, 3,
+                          "Steady forward signal must not produce rapid direction changes; got \(snapshot.directionChanges)")
+
+        XCTAssertEqual(snapshot.decodedDirection, TimecodeDirection.forward.rawValue,
+                       "Last accepted frame must be forward for positive phaseStep; got '\(snapshot.decodedDirection)'")
+
+        XCTAssertGreaterThan(snapshot.decodedRate, 0,
+                             "Decoded rate must be positive for forward input; got \(snapshot.decodedRate)")
+
+        XCTAssertGreaterThan(snapshot.smoothedRate, 0,
+                             "Smoothed rate must be positive for steady forward input; got \(snapshot.smoothedRate)")
+
+        XCTAssertEqual(snapshot.validationStatus, .usablePrototypeControl,
+                       "Steady forward input must produce usablePrototypeControl status")
+    }
+
     // MARK: - 15. Does not affect replay trust gates
 
     func testDoesNotAffectReplayTrustGates() {
