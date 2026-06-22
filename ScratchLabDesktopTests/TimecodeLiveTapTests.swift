@@ -505,7 +505,10 @@ final class TimecodeLiveTapTests: XCTestCase {
         let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer)
         XCTAssertNotNil(result, "adapter must produce result for valid stereo Float32 buffer")
 
-        let stereo = result!
+        guard let stereo = result else {
+            XCTFail("adapter returned nil")
+            return
+        }
         XCTAssertEqual(stereo.frameCount, frameCount)
         // Verify channel separation (L ≠ R)
         XCTAssertEqual(stereo.left[frameCount / 2], left[frameCount / 2], accuracy: 0.01)
@@ -527,7 +530,10 @@ final class TimecodeLiveTapTests: XCTestCase {
         let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer)
         XCTAssertNotNil(result, "adapter must handle mono input")
 
-        let stereo = result!
+        guard let stereo = result else {
+            XCTFail("adapter returned nil")
+            return
+        }
         XCTAssertEqual(stereo.frameCount, frameCount)
         // Mono → both channels identical
         XCTAssertEqual(stereo.left, stereo.right, "mono channels must be identical")
@@ -559,7 +565,10 @@ final class TimecodeLiveTapTests: XCTestCase {
         let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer)
         XCTAssertNotNil(result)
 
-        let stereo = result!
+        guard let stereo = result else {
+            XCTFail("adapter returned nil")
+            return
+        }
         XCTAssertEqual(stereo.sampleRate, testSampleRate, accuracy: 0.1,
                        "sampleRate must be preserved")
         XCTAssertEqual(stereo.frameCount, frameCount,
@@ -581,7 +590,10 @@ final class TimecodeLiveTapTests: XCTestCase {
         let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer)
         XCTAssertNotNil(result, "adapter must handle Int16 format")
 
-        let stereo = result!
+        guard let stereo = result else {
+            XCTFail("adapter returned nil")
+            return
+        }
         XCTAssertEqual(stereo.frameCount, frameCount)
         // Values should be normalised to [-1, +1]
         XCTAssertLessThanOrEqual(abs(stereo.left[0]), 1.0,
@@ -601,6 +613,99 @@ final class TimecodeLiveTapTests: XCTestCase {
         // and the Int16 path (test 14) as coverage for format variety.
         // The adapter's guard chains protect against all error paths.
         XCTAssertTrue(true, "format-safety guard chains are verified by other tests")
+    }
+
+    // MARK: - Batch 12: Stereo buffer extraction regression (Loopback evidence)
+
+    /// Regression: stereo Float32 buffer extracted with non-zero L/R samples.
+    ///
+    /// The Batch 4 adapter stack-allocated a single-element AudioBufferList
+    /// without initialising mNumberBuffers, which caused heap-allocated
+    /// memory to carry a garbage capacity hint.  CoreMedia either rejected
+    /// the buffer or silently truncated it, producing zero-valued L/R.
+    ///
+    /// Batch 12 fixes the sizing and properly initialises mNumberBuffers
+    /// so all channels are visible, regardless of interleaved or
+    /// non-interleaved layout.
+    func testLiveAdapterReadsLoopbackStyleStereoBuffer() {
+        let frameCount = 256
+        // Distinct waveforms so we can verify channel separation.
+        let left: [Float] = (0..<frameCount).map { sin(2 * .pi * 1000 * Float($0) / 44100) }
+        let right: [Float] = (0..<frameCount).map { sin(2 * .pi * 1000 * Float($0) / 44100 + .pi / 2) }
+
+        guard let sampleBuffer = makeStereoSampleBuffer(
+            left: left, right: right, sampleRate: 44100
+        ) else {
+            XCTFail("Failed to create stereo CMSampleBuffer")
+            return
+        }
+
+        let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer)
+        XCTAssertNotNil(result, "adapter must produce result for stereo Float32 buffer")
+
+        guard let stereo = result else {
+            XCTFail("adapter returned nil")
+            return
+        }
+        XCTAssertEqual(stereo.frameCount, frameCount)
+
+        // Verify non-zero samples on both channels.
+        let leftRMS = sqrt(stereo.left.reduce(0) { $0 + $1 * $1 } / Float(frameCount))
+        let rightRMS = sqrt(stereo.right.reduce(0) { $0 + $1 * $1 } / Float(frameCount))
+        XCTAssertGreaterThan(leftRMS, 0.1, "left channel RMS must be non-zero for active stereo buffer")
+        XCTAssertGreaterThan(rightRMS, 0.1, "right channel RMS must be non-zero for active stereo buffer")
+
+        // Verify channel separation — the channels must NOT be identical (mono-duplication bug).
+        XCTAssertNotEqual(stereo.left, stereo.right,
+                          "stereo channels must contain different data, not be duplicated")
+    }
+
+    /// Regression: stereo buffer is NOT treated as silence by the
+    /// diagnostics pipeline.
+    func testLiveTapDiagnosticsReportsNonZeroLevelsForLoopbackStyleBuffer() {
+        let frameCount = 512
+        let left: [Float] = (0..<frameCount).map { 0.5 * sin(2 * .pi * 1000 * Float($0) / 44100) }
+        let right: [Float] = (0..<frameCount).map { 0.5 * sin(2 * .pi * 1000 * Float($0) / 44100 + .pi / 2) }
+
+        guard let sampleBuffer = makeStereoSampleBuffer(
+            left: left, right: right, sampleRate: 44100
+        ) else {
+            XCTFail("Failed to create stereo CMSampleBuffer")
+            return
+        }
+
+        let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer)
+        XCTAssertNotNil(result, "adapter must produce result")
+
+        guard let stereo = result else {
+            XCTFail("adapter returned nil")
+            return
+        }
+        // Feed into pipeline in diagnosticsOnly mode.
+        let pipeline = makePipeline(mode: .diagnosticsOnly)
+        pipeline.pushStereoBuffer(
+            left: stereo.left,
+            right: stereo.right,
+            sampleRate: stereo.sampleRate,
+            frameCount: stereo.frameCount
+        )
+
+        let snapshot = pipeline.makeValidationSnapshot()
+        XCTAssertGreaterThan(snapshot.leftRMS, 0.01,
+                             "left RMS must be non-zero for active stereo buffer")
+        XCTAssertGreaterThan(snapshot.rightRMS, 0.01,
+                             "right RMS must be non-zero for active stereo buffer")
+        XCTAssertGreaterThan(snapshot.leftPeak, 0.01,
+                             "left peak must be non-zero for active stereo buffer")
+        XCTAssertGreaterThan(snapshot.rightPeak, 0.01,
+                             "right peak must be non-zero for active stereo buffer")
+        XCTAssertNotEqual(snapshot.signalHealth, .noSignal,
+                          "active stereo buffer must not be classified as noSignal")
+        XCTAssertEqual(snapshot.droppedSilence, 0,
+                       "active stereo buffer must not be dropped as silence")
+        // diagnosticsOnly must still emit no motion.
+        XCTAssertEqual(snapshot.acceptedMotionSamples, 0,
+                       "diagnosticsOnly must not produce motion")
     }
 #endif
 

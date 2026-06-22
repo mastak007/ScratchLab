@@ -576,6 +576,8 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             lastSpikeReason: counters.lastSpikeReason,
             lastDropoutDuration: counters.lastDropoutDuration,
             maxAbsSmoothedRate: counters.maxAbsSmoothedRate,
+            adapterDiagnostic: TimecodeCMSampleBufferAdapter.lastDiagnostic,
+            captureDeviceDebugInfo: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
             validationStatus: status
         )
     }

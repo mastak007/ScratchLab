@@ -2850,12 +2850,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let explicitSelectionID = (hasExplicitUserAudioSelection && !currentSelection.isEmpty)
             ? currentSelection
             : nil
-        let decision = Self.preferredCaptureAudioDevice(
+        let decision: AudioSelectionDecision
+#if DEBUG
+        // Batch 12: in Debug builds, prefer the system default audio
+        // input over Serato-like virtual devices.  This lets the
+        // prototype timecode live tap capture from Loopback Audio
+        // (or whatever the user has selected as macOS default input)
+        // instead of silently grabbing Serato Virtual Audio.
+        decision = Self.preferredCaptureAudioDevice(
+            from: availableChoices,
+            explicitSelectionUniqueID: explicitSelectionID,
+            previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
+            systemDefaultUniqueID: defaultSystemAudioInputUniqueID(),
+            skipSeratoPriority: true
+        )
+#else
+        decision = Self.preferredCaptureAudioDevice(
             from: availableChoices,
             explicitSelectionUniqueID: explicitSelectionID,
             previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
             systemDefaultUniqueID: defaultSystemAudioInputUniqueID()
         )
+#endif
 
         guard forceReselect || currentSelection != decision.device?.uniqueID else {
             if decision.device == nil, !currentSelection.isEmpty {
@@ -2977,7 +2993,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         from devices: [AudioInputDeviceChoice],
         explicitSelectionUniqueID: String?,
         previousSelectionUniqueID: String?,
-        systemDefaultUniqueID: String?
+        systemDefaultUniqueID: String?,
+        skipSeratoPriority: Bool = false
     ) -> AudioSelectionDecision {
         guard !devices.isEmpty else {
             return AudioSelectionDecision(device: nil, priority: .noneAvailable)
@@ -2990,20 +3007,35 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return AudioSelectionDecision(device: explicitDevice, priority: .explicitUserSelection)
         }
 
-        let exactSerato = devices.first(where: { isExactSeratoVirtualAudioDeviceName($0.name) })
-        if let exactSerato {
-            return AudioSelectionDecision(device: exactSerato, priority: .exactSeratoVirtualAudio)
+        // Batch 12: when skipSeratoPriority is true (DEBUG timecode
+        // prototype path), system default beats Serato-like virtual
+        // audio.  Serato Virtual Audio is silent when Serato isn't
+        // running, and the user's OS-level default input (e.g. Loopback
+        // Audio) carries the real timecode signal.
+        if !skipSeratoPriority {
+            let exactSerato = devices.first(where: { isExactSeratoVirtualAudioDeviceName($0.name) })
+            if let exactSerato {
+                return AudioSelectionDecision(device: exactSerato, priority: .exactSeratoVirtualAudio)
+            }
+
+            let seratoLike = devices.first(where: { isSeratoLikeDeviceName($0.name) })
+            if let seratoLike {
+                return AudioSelectionDecision(device: seratoLike, priority: .seratoLike)
+            }
         }
 
-        let seratoLike = devices.first(where: { isSeratoLikeDeviceName($0.name) })
-        if let seratoLike {
-            return AudioSelectionDecision(device: seratoLike, priority: .seratoLike)
-        }
-
+        // When skipSeratoPriority is true, the previous-session choice is
+        // only reused if it is NOT a Serato-like virtual device.
+        // Otherwise the stale VirtualAudio_UID from a prior session
+        // silently captures silence ahead of the system default.
         let normalizedPreviousID = previousSelectionUniqueID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalizedPreviousID,
-           !normalizedPreviousID.isEmpty,
-           let previousDevice = devices.first(where: { $0.uniqueID == normalizedPreviousID }) {
+        let previousDevice: AudioInputDeviceChoice? = {
+            guard let id = normalizedPreviousID, !id.isEmpty,
+                  let device = devices.first(where: { $0.uniqueID == id }) else { return nil }
+            if skipSeratoPriority, isSeratoLikeDeviceName(device.name) { return nil }
+            return device
+        }()
+        if let previousDevice {
             return AudioSelectionDecision(device: previousDevice, priority: .previousSelection)
         }
 
@@ -3014,7 +3046,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return AudioSelectionDecision(device: defaultDevice, priority: .systemDefault)
         }
 
-        return AudioSelectionDecision(device: devices.first, priority: .firstAvailable)
+        // When skipSeratoPriority is true, prefer the first non-Serato
+        // device as last resort so the timecode prototype path doesn't
+        // silently lock onto a silent virtual device.
+        let fallback = skipSeratoPriority
+            ? (devices.first(where: { !isSeratoLikeDeviceName($0.name) }) ?? devices.first)
+            : devices.first
+        return AudioSelectionDecision(device: fallback, priority: .firstAvailable)
     }
 
     private func syncDirectCaptureStatus(using audioDevices: [AVCaptureDevice]) {
@@ -3146,6 +3184,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         Task { @MainActor in
             self.isCameraActive = self.captureSession.isRunning
             self.activeCaptureAudioDeviceUniqueID = attachedAudioUniqueID
+
+            // Batch 12: diagnostic — which device is the capture session
+            // actually using?  Shows the device name + uniqueID for Copy Debug.
+            let inputs = self.captureSession.inputs.compactMap { input -> String? in
+                guard let deviceInput = input as? AVCaptureDeviceInput,
+                      deviceInput.device.hasMediaType(.audio) else { return nil }
+                let d = deviceInput.device
+                return "\(d.localizedName) [\(d.uniqueID)]"
+            }
+            let inputsSummary = inputs.isEmpty ? "none" : inputs.joined(separator: "; ")
+            TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo =
+                "device=\(self.selectedAudioDeviceName) uid=\(attachedAudioUniqueID.isEmpty ? "(empty)" : attachedAudioUniqueID) inputs=[\(inputsSummary)]"
         }
     }
 

@@ -181,6 +181,20 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// Maximum absolute smoothed rate observed this session.
     public var maxAbsSmoothedRate: Double
 
+    // MARK: - Adapter diagnostic (Batch 12)
+
+    /// Raw adapter diagnostic from the most recent CMSampleBuffer extraction.
+    /// Captures ASBD format flags, per-buffer mDataByteSize, first 8 raw
+    /// sample values, and maxAbs.  Empty string when no buffer has been
+    /// processed.
+    ///
+    /// **DEBUG/prototype only.** Never populated in Release.
+    public var adapterDiagnostic: String
+
+    /// Capture device name + uniqueID from the active AVCaptureSession
+    /// (Batch 12).  Empty when not yet configured.
+    public var captureDeviceDebugInfo: String
+
     // MARK: - Classification
 
     /// High-level validation status derived from the other fields.
@@ -221,6 +235,8 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         lastSpikeReason: String = "",
         lastDropoutDuration: Double = 0,
         maxAbsSmoothedRate: Double = 0,
+        adapterDiagnostic: String = "",
+        captureDeviceDebugInfo: String = "",
         validationStatus: TimecodeValidationStatus
     ) {
         self.mode = mode
@@ -255,6 +271,8 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         self.lastSpikeReason = lastSpikeReason
         self.lastDropoutDuration = lastDropoutDuration
         self.maxAbsSmoothedRate = maxAbsSmoothedRate
+        self.adapterDiagnostic = adapterDiagnostic
+        self.captureDeviceDebugInfo = captureDeviceDebugInfo
         self.validationStatus = validationStatus
     }
 
@@ -342,6 +360,8 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         Last spike:      \(lastSpikeReason.isEmpty ? "(none)" : lastSpikeReason)
         Source:          \(sourceLabel)
         Status:          \(validationStatus.rawValue)
+        Adapter diag:    \(adapterDiagnostic.isEmpty ? "(none)" : adapterDiagnostic)
+        Capture device:  \(captureDeviceDebugInfo.isEmpty ? "(unknown)" : captureDeviceDebugInfo)
         NOT sent to notation (prototype only)
         """
     }

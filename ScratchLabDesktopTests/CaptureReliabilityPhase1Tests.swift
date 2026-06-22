@@ -1939,6 +1939,111 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(decision.priority, .firstAvailable)
     }
 
+    // MARK: - Batch 12: skipSeratoPriority (DEBUG timecode prototype path)
+
+    func testSkipSeratoPriorityPrefersSystemDefaultOverSeratoVirtualAudio() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "loopback", name: "Loopback Audio")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "loopback",
+            skipSeratoPriority: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "loopback",
+                       "skipSeratoPriority must prefer system default (Loopback) over Serato")
+        XCTAssertEqual(decision.priority, .systemDefault)
+    }
+
+    func testSkipSeratoPriorityIgnoresStaleSeratoPreviousSelection() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "loopback", name: "Loopback Audio")
+        ]
+
+        // Simulates: previous session had Serato, user hasn't explicitly
+        // selected anything, macOS default is now Loopback.
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "serato",
+            systemDefaultUniqueID: "loopback",
+            skipSeratoPriority: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "loopback",
+                       "skipSeratoPriority must ignore stale Serato previous selection and prefer system default")
+        XCTAssertEqual(decision.priority, .systemDefault)
+    }
+
+    func testSkipSeratoPriorityPreservesExplicitUserSelection() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "loopback", name: "Loopback Audio")
+        ]
+
+        // Explicit user selection always wins, even with skipSeratoPriority.
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: "serato",
+            previousSelectionUniqueID: "serato",
+            systemDefaultUniqueID: "loopback",
+            skipSeratoPriority: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "serato",
+                       "explicit user selection must always win, even with skipSeratoPriority")
+        XCTAssertEqual(decision.priority, .explicitUserSelection)
+    }
+
+    func testSkipSeratoPriorityFallsBackWhenSystemDefaultIsMissing() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone")
+        ]
+
+        // System default doesn't match any device → previous selection is
+        // Serato (skipped) → first available non-Serato.
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "serato",
+            systemDefaultUniqueID: "missing",
+            skipSeratoPriority: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "mic",
+                       "skipSeratoPriority must fall back to first available non-Serato when system default is absent")
+        XCTAssertEqual(decision.priority, .firstAvailable)
+    }
+
+    func testSkipSeratoPriorityFalsePreservesOriginalSeratoPreference() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "loopback", name: "Loopback Audio")
+        ]
+
+        // Release path: skipSeratoPriority is false (default).
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "loopback",
+            skipSeratoPriority: false
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "serato",
+                       "skipSeratoPriority=false must preserve original Serato preference")
+        XCTAssertEqual(decision.priority, .exactSeratoVirtualAudio)
+    }
+
     func testCaptureInputStatusUsesSelectedAudioDeviceStatusLine() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
