@@ -79,6 +79,7 @@ struct PracticeModeView: View {
     // Session state
     @State private var isSessionActive = false
     @State private var isPaused = false
+    @State private var isCameraPreviewVisible = false
     @State private var showingCaptureHelp = false
     @State private var showingQuickStartAgain = false
     @State private var showingResults = false
@@ -372,9 +373,11 @@ struct PracticeModeView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Camera feed background
-                CameraPreviewView()
-                    .ignoresSafeArea()
+                // Camera feed background — only when a live session is active
+                if isCameraPreviewVisible {
+                    CameraPreviewView()
+                        .ignoresSafeArea()
+                }
                 
                 // Dark overlay for readability
                 Color.black.opacity(0.3)
@@ -1157,11 +1160,12 @@ struct PracticeModeView: View {
 
         // Demo mode is a non-scored reference playback: play the bundled demo
         // audio and skip live scratch analysis. Every other mode runs scored
-        // mic analysis.
+        // mic analysis. Camera is not needed for demo/coach playback.
         if practiceAssistMode == .demo {
             configureDemoPlayback()
             demoPlayer.play()
         } else {
+            isCameraPreviewVisible = true
             audioEngine.startAnalyzing(for: activeScratch)
         }
 
@@ -1226,7 +1230,8 @@ struct PracticeModeView: View {
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
         demoPlayer.stop()
-        
+
+        isCameraPreviewVisible = false
         isSessionActive = false
 
         // Demo mode is a non-scored reference playback — no results screen and
@@ -1271,6 +1276,7 @@ struct PracticeModeView: View {
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
         demoPlayer.stop()
+        isCameraPreviewVisible = false
         demoReel = nil
         drillElapsedSeconds = 0
         drillLoopCount = 0
@@ -1672,6 +1678,12 @@ struct CameraPreviewView: View {
 // MARK: - Camera Preview Layer (UIViewRepresentable)
 
 private struct CameraPreviewLayer: UIViewRepresentable {
+    final class Coordinator: NSObject {
+        var captureSession: AVCaptureSession?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
@@ -1680,13 +1692,13 @@ private struct CameraPreviewLayer: UIViewRepresentable {
         captureSession.sessionPreset = .high
 
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-              let input = try? AVCaptureDeviceInput(device: camera) else {
+              let input = try? AVCaptureDeviceInput(device: camera),
+              captureSession.canAddInput(input) else {
             return view
         }
 
-        if captureSession.canAddInput(input) {
-            captureSession.addInput(input)
-        }
+        captureSession.addInput(input)
+        context.coordinator.captureSession = captureSession
 
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer.videoGravity = .resizeAspectFill
@@ -1701,6 +1713,11 @@ private struct CameraPreviewLayer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.captureSession?.stopRunning()
+        coordinator.captureSession = nil
+    }
 }
 
 // MARK: - Audio Level Indicator
