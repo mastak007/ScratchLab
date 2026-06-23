@@ -19,6 +19,10 @@ enum MacWorkspaceRouting {
 }
 
 struct MacAnalyzerView: View {
+    private static let babyScratchReplayModel = LiveNotationOverlayModel.replayNotation(
+        from: ScratchNotation.babyScratchFull76BeatQuantized
+    )
+
     private static let practiceBeatModeColumns = [
         GridItem(.flexible(), spacing: 10),
         GridItem(.flexible(), spacing: 10)
@@ -634,9 +638,7 @@ struct MacAnalyzerView: View {
     ///   Practice with Beat → wall-clock from practiceBeatStartUptime
     ///   Listen (scratch only) → demoModeController.demoPlayer.currentPlaybackTime
     private var practiceNotationStrip: some View {
-        let replayModel = LiveNotationOverlayModel.replayNotation(
-            from: ScratchNotation.babyScratchFull76BeatQuantized
-        )
+        let replayModel = Self.babyScratchReplayModel
         return Group {
             if !replayModel.isEmpty {
                 TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
@@ -5431,7 +5433,6 @@ struct MacAnalyzerView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .tint(isDemoWithBeatMode ? nil : nil)  // default tint in Listen mode
 
                     Button {
                         if isDemoWithBeatMode {

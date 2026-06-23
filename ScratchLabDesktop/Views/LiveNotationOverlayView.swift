@@ -300,7 +300,6 @@ struct LiveNotationOverlayView: View {
     // MARK: - Accessibility
 
     private var accessibilityValue: String {
-        let visible = model.visibleEvents(at: currentTime)
-        return String(format: "Cursor %.1fs, %d/%d strokes", currentTime, visible.count, model.events.count)
+        String(format: "Cursor %.1fs, %d strokes", currentTime, model.events.count)
     }
 }

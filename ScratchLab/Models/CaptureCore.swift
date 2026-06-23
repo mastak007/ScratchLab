@@ -3869,6 +3869,19 @@ final class ScratchLabDemoModeController: ObservableObject {
         inputLevel = 0
         motionDirection = .neutral
         motionFeedback = nil
+        isReady = false
+    }
+
+    private func demoDidFinishNaturally() {
+        analysisTimer?.invalidate()
+        analysisTimer = nil
+        demoPlayer.stop()
+        analyzer?.reset()
+        inputLevel = 0
+        motionDirection = .neutral
+        motionFeedback = nil
+        statusMessage = "Demo finished. Tap Restart to play again."
+        // isReady intentionally preserved so Restart remains enabled.
     }
 
     func replayDemo() {
@@ -3962,7 +3975,8 @@ final class ScratchLabDemoModeController: ObservableObject {
         }
 
         if !demoPlayer.isActivelyPlayingAudio {
-            demoPlayer.replay()
+            demoDidFinishNaturally()
+            return
         }
 
         let frame = analyzer.processFrame(
@@ -3973,9 +3987,6 @@ final class ScratchLabDemoModeController: ObservableObject {
         motionDirection = frame.direction
         if let feedback = frame.feedback {
             motionFeedback = feedback
-        }
-        if frame.didLoop, demoPlayer.playbackState == .playing {
-            demoPlayer.replay()
         }
     }
 }
