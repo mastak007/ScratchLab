@@ -8994,15 +8994,37 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        // The Upload Session card in SessionCompleteView must be inside #if DEBUG.
-        let uploadSlice = try sourceSlice(
-            in: source,
-            from: "#if DEBUG",
-            through: "#endif"
+        // Locate the showsUploadSection guard in the view body, then find the nearest
+        // preceding #if DEBUG — that is the specific upload gate, not the first DEBUG
+        // block in the file (which is unrelated to upload UI).
+        let usageToken = "if showsUploadSection {"
+        let usageRange = try XCTUnwrap(
+            source.range(of: usageToken),
+            "showsUploadSection guard not found in CompanionCameraView"
         )
+        let prefix = String(source[source.startIndex..<usageRange.lowerBound])
+        let debugGate = try XCTUnwrap(
+            prefix.range(of: "#if DEBUG", options: .backwards),
+            "No #if DEBUG gate found before showsUploadSection usage"
+        )
+        let gateOffset = prefix.distance(from: prefix.startIndex, to: debugGate.lowerBound)
+        let fromGate = String(source[source.index(source.startIndex, offsetBy: gateOffset)...])
+        let uploadSlice = try sourceSlice(in: fromGate, from: "#if DEBUG", through: "#endif")
+
         XCTAssertTrue(
             uploadSlice.contains("showsUploadSection"),
             "iOS Upload Session UI must be inside a #if DEBUG block"
+        )
+        XCTAssertTrue(
+            uploadSlice.contains("Upload Session"),
+            "Upload Session text must be inside the #if DEBUG block"
+        )
+
+        // Upload Session must not appear before any #if DEBUG gate (i.e. ungated in Release).
+        let beforeAllDebugGates = source.components(separatedBy: "#if DEBUG").first ?? ""
+        XCTAssertFalse(
+            beforeAllDebugGates.contains("Upload Session"),
+            "Upload Session UI must not be ungated (Release-visible) in CompanionCameraView"
         )
     }
 
