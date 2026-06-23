@@ -24,6 +24,14 @@
 		219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* CoachDemoMotion */; };
 		219D8D63A93840FC9A724C11 /* Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Notation */; };
 		219D8D64A93840FC9A724C11 /* PracticeReelAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000043 /* PracticeReelAudio */; };
+		SSSAHIOS /* ahhh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAHFREF /* ahhh.wav */; };
+		SSSAHMAC /* ahhh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAHFREF /* ahhh.wav */; };
+		SSSFRIOS /* fresh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSFRFREF /* fresh.wav */; };
+		SSSFRMAC /* fresh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSFRFREF /* fresh.wav */; };
+		SSSAYIOS /* ah_yeah.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAYFREF /* ah_yeah.wav */; };
+		SSSAYMAC /* ah_yeah.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAYFREF /* ah_yeah.wav */; };
+		SSSCIOIOS /* check_it_out.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSCIOFREF /* check_it_out.wav */; };
+		SSSCIOMAC /* check_it_out.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSCIOFREF /* check_it_out.wav */; };
 		283607B7B4D70607A9ECD49F /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
 		286B96641152894682458B21 /* TimecodeInputTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */; };
 		2C4B2B2BD4F9BA27F7911B8D /* TimecodeInputStatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207BAC452827202EE87BABD7 /* TimecodeInputStatusCard.swift */; };
@@ -574,6 +582,10 @@
 		A2000035 /* CoachDemoMotion */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/CoachDemoMotion; sourceTree = "<group>"; };
 		A2000036 /* Notation */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Notation; sourceTree = "<group>"; };
 		A2000043 /* PracticeReelAudio */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/PracticeReelAudio; sourceTree = "<group>"; };
+		SSSAHFREF /* ahhh.wav */ = {isa = PBXFileReference; lastKnownFileType = file; path = ahhh.wav; sourceTree = "<group>"; };
+		SSSFRFREF /* fresh.wav */ = {isa = PBXFileReference; lastKnownFileType = file; path = fresh.wav; sourceTree = "<group>"; };
+		SSSAYFREF /* ah_yeah.wav */ = {isa = PBXFileReference; lastKnownFileType = file; path = ah_yeah.wav; sourceTree = "<group>"; };
+		SSSCIOFREF /* check_it_out.wav */ = {isa = PBXFileReference; lastKnownFileType = file; path = check_it_out.wav; sourceTree = "<group>"; };
 		A2000040 /* reference_beginner */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_beginner; sourceTree = "<group>"; };
 		A2000041 /* reference_champ */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_champ; sourceTree = "<group>"; };
 		A2000042 /* reference_pro */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/reference_pro; sourceTree = "<group>"; };
@@ -1090,6 +1102,7 @@
 				A2000035 /* CoachDemoMotion */,
 				A2000036 /* Notation */,
 				A2000043 /* PracticeReelAudio */,
+				SSSGRP0001 /* ScratchSamples */,
 				VPRES001VPRES001VPRES001 /* VirtualPlatter */,
 				A2000040 /* reference_beginner */,
 				A2000041 /* reference_champ */,
@@ -1453,6 +1466,17 @@
 			path = ScratchLabCoreBridge;
 			sourceTree = "<group>";
 		};
+		SSSGRP0001 /* ScratchSamples */ = {
+			isa = PBXGroup;
+			children = (
+				SSSAHFREF /* ahhh.wav */,
+				SSSFRFREF /* fresh.wav */,
+				SSSAYFREF /* ah_yeah.wav */,
+				SSSCIOFREF /* check_it_out.wav */,
+			);
+			path = Resources/ScratchSamples;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1597,6 +1621,10 @@
 				B9AF9ED7370241CF8BEFDB7C /* CoachDemoMotion in Resources */,
 				B9AF9ED8370241CF8BEFDB7C /* Notation in Resources */,
 				B9AF9EDA370241CF8BEFDB7C /* PracticeReelAudio in Resources */,
+				SSSAHMAC /* ahhh.wav in Resources */,
+				SSSFRMAC /* fresh.wav in Resources */,
+				SSSAYMAC /* ah_yeah.wav in Resources */,
+				SSSCIOMAC /* check_it_out.wav in Resources */,
 				772CD229A4D0AF1143EA8F9A /* AppIcon.icns in Resources */,
 				AA200002 /* PrivacyInfo.xcprivacy in Resources */,
 			);
@@ -1610,6 +1638,10 @@
 				219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */,
 				219D8D63A93840FC9A724C11 /* Notation in Resources */,
 				219D8D64A93840FC9A724C11 /* PracticeReelAudio in Resources */,
+				SSSAHIOS /* ahhh.wav in Resources */,
+				SSSFRIOS /* fresh.wav in Resources */,
+				SSSAYIOS /* ah_yeah.wav in Resources */,
+				SSSCIOIOS /* check_it_out.wav in Resources */,
 				VPRESB01VPRESB01VPRESB01 /* VirtualPlatter in Resources */,
 				A1000012 /* Assets.xcassets in Resources */,
 				AA100002 /* PrivacyInfo.xcprivacy in Resources */,
