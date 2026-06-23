@@ -12,6 +12,7 @@ enum ControllerMappingStatus: String, Codable, CaseIterable, Equatable {
 
 enum ControllerSourceConfidence: String, Codable, CaseIterable, Equatable {
     case highOfficial
+    case highThirdPartyMapping
     case mediumOpenSource
     case lowCommunity
     case liveCaptureOnly
@@ -240,8 +241,13 @@ struct ControllerProfile: Identifiable, Equatable {
     // MARK: Computed helpers
 
     var isFullySourced: Bool {
-        sourceConfidence == .highOfficial || sourceConfidence == .mediumOpenSource
+        sourceConfidence == .highOfficial
+            || sourceConfidence == .highThirdPartyMapping
+            || sourceConfidence == .mediumOpenSource
     }
+
+    /// False until live verification has been completed. When true the profile may feed scoring.
+    var canFeedScoringBeforeVerification: Bool { !verificationRequired }
 
     /// True only when the profile has non-diagnostic bindings and is verified by a user session.
     var canFeedScoringAfterVerification: Bool {

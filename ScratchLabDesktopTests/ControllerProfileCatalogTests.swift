@@ -13,8 +13,9 @@ final class ControllerProfileCatalogTests: XCTestCase {
     }
 
     func testPartialProfilesListIsPresent() {
-        // Partial list may be empty at this point; just confirm it exists.
-        XCTAssertNotNil(catalog.partialProfiles)
+        XCTAssertFalse(catalog.partialProfiles.isEmpty,
+            "At least one partial profile (Rane ONE MKII) must be present")
+        XCTAssertTrue(catalog.partialProfiles.contains { $0.id == "rane.one-mkii" })
     }
 
     func testDetectionOnlyProfilesLoad() {
@@ -106,14 +107,23 @@ final class ControllerProfileCatalogTests: XCTestCase {
 
     // MARK: - Rane ONE / MKII cross-reference
 
-    func testRaneOneMKIIStubReferencesRegistry() {
-        guard let stub = catalog.detectionOnlyProfiles.first(where: { $0.id == "rane.one-mkii" }) else {
-            XCTFail("Rane ONE MKII stub not found in catalog")
+    func testRaneOneMKIIPartialProfileInPartialList() {
+        guard let stub = catalog.partialProfiles.first(where: { $0.id == "rane.one-mkii" }) else {
+            XCTFail("Rane ONE MKII partial profile not found in partialProfiles")
             return
         }
-        XCTAssertEqual(stub.sourceConfidence, .highOfficial)
+        XCTAssertEqual(stub.sourceConfidence, .highThirdPartyMapping)
+        XCTAssertEqual(stub.mappingStatus, .partial)
         XCTAssertTrue(stub.assumptions.contains { $0.contains("MIDIHardwareRegistry") },
-            "Stub must reference MIDIHardwareRegistry as the binding-list source")
+            "Profile must reference MIDIHardwareRegistry as the platter binding source")
+        XCTAssertTrue(stub.sourceNotes.contains("uploadedDjayMapping"),
+            "sourceNotes must record the djay mapping source type")
+    }
+
+    func testRaneOneMKIINotInDetectionOnlyList() {
+        let detectionIDs = catalog.detectionOnlyProfiles.map(\.id)
+        XCTAssertFalse(detectionIDs.contains("rane.one-mkii"),
+            "rane.one-mkii is now partial; it must not appear in detectionOnlyProfiles")
     }
 
     // MARK: - Generic unknown device

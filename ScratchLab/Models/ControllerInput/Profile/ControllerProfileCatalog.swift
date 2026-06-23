@@ -105,7 +105,8 @@ struct ControllerProfileCatalog {
             completeProfiles: [
                 .ddj_flx10
             ],
-            partialProfiles: [],
+            partialProfiles:
+                RaneControllerProfiles.partialProfiles,
             detectionOnlyProfiles:
                 AlphaThetaProfiles.detectionStubs
                 + RaneControllerProfiles.stubs

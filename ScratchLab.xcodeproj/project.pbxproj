@@ -236,6 +236,7 @@
 		MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0006 /* ParsedMIDIMessage.swift */; };
 		MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */; };
 		MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */; };
+		RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */; };
 		CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */; };
 		CXL0000100010001CXL00001 /* CXLNotationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00001 /* CXLNotationCapture.swift */; };
 		CXL0000100010001CXL00002 /* CXLNotationCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */; };
@@ -622,6 +623,7 @@
 		MIDREG0FREF0006 /* ParsedMIDIMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParsedMIDIMessage.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistryTests.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerificationModelTests.swift; sourceTree = "<group>"; };
+		RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2ProfileTests.swift; sourceTree = "<group>"; };
 		CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventSummaryTests.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
@@ -897,6 +899,7 @@
 				CTLPRF0TREF0001 /* ControllerProfileCatalogTests.swift */,
 				CTLPRF0TREF0002 /* DDJFlx10ProfileTests.swift */,
 				CTLPRF0TREF0003 /* ControllerAutoDetectorTests.swift */,
+				RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1989,6 +1992,7 @@
 				CTLPRF0TBF0001 /* ControllerProfileCatalogTests.swift in Sources */,
 				CTLPRF0TBF0002 /* DDJFlx10ProfileTests.swift in Sources */,
 				CTLPRF0TBF0003 /* ControllerAutoDetectorTests.swift in Sources */,
+				RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
