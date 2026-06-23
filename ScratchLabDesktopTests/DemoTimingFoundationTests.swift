@@ -209,21 +209,21 @@ struct PracticeReelTimelineTests {
     func bundledBabyReelIsValid() throws {
         let root = reelTestsRepoRoot()
         let manifestURL = root.appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
 
         #expect(reel.isValid, "baby_reel.json must validate clean: \(reel.validationErrors)")
         #expect(reel.scratchID == "baby")
-        #expect(reel.audioFile == "baby_noBeat.wav")
-        #expect(reel.segments.count == 7)
+        #expect(reel.audioFile == "baby_reel_callresponse.wav")
+        #expect(reel.segments.count == 8)
         #expect(reel.demoSegments.count == 4)
-        #expect(reel.copySegments.count == 3)
-        #expect(reel.strokes.count == 40)
+        #expect(reel.copySegments.count == 4)
+        #expect(reel.strokes.count == 75)
         #expect(reel.segments.first?.kind == .demo)
 
         // The declared audioDuration must match the real bundled audio file.
         let audioURL = root.appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
+            "ScratchLab/Resources/PracticeReelAudio/baby_reel_callresponse.wav")
         let audioFile = try AVAudioFile(forReading: audioURL)
         let measured = Double(audioFile.length) / audioFile.processingFormat.sampleRate
         #expect(reel.audioDurationIssue(actualDuration: measured) == nil,
@@ -415,11 +415,11 @@ struct CopyGhostStrokeTests {
     @Test("The bundled Baby reel derives ghosts for all three copy windows")
     func bundledBabyReelGhosts() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let ghosts = reel.derivedCopyGhostStrokes()
-        // Each of the 3 copy windows answers a 10-stroke demo segment.
-        #expect(ghosts.count == 30)
+        // Each of the 4 copy windows echoes its nearest preceding demo's strokes.
+        #expect(ghosts.count == 75)
         #expect(ghosts.allSatisfy { reel.segment(at: $0.startTime)?.kind == .copy })
         #expect(ghosts.allSatisfy { $0.endTime <= reel.audioDuration })
     }
@@ -495,9 +495,9 @@ struct LaneWiringTests {
     @Test("One lane renderer, its axis chosen by orientation")
     func bothOrientationsUseOneLane() throws {
         let source = try practiceSource()
-        // A single notationLanePanel call; the axis is derived from orientation.
+        // A single notationLanePanel call; axis is set explicitly in centerFeedbackArea.
         #expect(source.contains("notationLanePanel(axis: axis)"))
-        #expect(source.contains("verticalSizeClass == .compact ? .horizontal : .vertical"))
+        #expect(source.contains("let axis: LaneAxis = .horizontal"))
         #expect(source.contains("ScratchMotionLane(content:"))
     }
 
@@ -547,7 +547,7 @@ struct LaneWiringTests {
             from: "private var activeLane",
             to: "private func notationLanePanel")
         #expect(lane.contains("LaneContent(reel: reel)"))
-        #expect(lane.contains("LaneContent(notation: notation)"))
+        #expect(lane.contains("LaneContent(notation: notation"))
         #expect(lane.contains(".audioTime { demoPlayer.sampledPlaybackTime() }"))
         #expect(lane.contains(".looping(start: notationClockStartDate"))
         #expect(lane.contains(".fixed(0)"))
@@ -635,7 +635,7 @@ struct LaneContentTests {
     @Test("A Demo reel adapts to non-looping content with demo/copy bands")
     func reelAdapter() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let content = LaneContent(reel: reel)
 
@@ -794,7 +794,7 @@ struct MotionPathTests {
     @Test("Normalization keeps the whole path within 0...1 and fills the band")
     func normalizationBounds() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let path = ScratchStrokeGeometry.motionPath(for: LaneContent(reel: reel))
 
@@ -921,7 +921,7 @@ struct MotionPathTests {
     @Test("Demo (non-looping) content opens at the centre rest position")
     func demoStartsAtCentreRestState() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
-            "ScratchLab/Resources/CoachDemoAudio/baby_reel.json")
+            "ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
         let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let demoContent = LaneContent(reel: reel)
         #expect(!demoContent.loops)
@@ -1199,7 +1199,7 @@ struct CrossPlatformNotationParityTests {
     @Test("iOS practice lane uses the same shared renderer + geometry")
     func iOSLaneUsesSharedRenderer() throws {
         let source = try motionLaneSource()
-        #expect(source.contains("ScratchMotionRenderer.draw("))
+        #expect(source.contains("ScratchMotionRenderer.drawActionNotationTrace("))
         #expect(source.contains("ScratchStrokeGeometry.motionPath("))
     }
 

@@ -170,11 +170,11 @@ extension PracticeReelTimeline {
         try JSONDecoder().decode(PracticeReelTimeline.self, from: data)
     }
 
-    /// Resolves a bundled manifest JSON URL. Searches the `CoachDemoAudio`
-    /// resource folder (where the paired audio lives), then the bundle root.
+    /// Resolves a bundled manifest JSON URL. Searches the `PracticeReelAudio`
+    /// resource folder (where the paired reel audio lives), then the bundle root.
     static func bundledManifestURL(named name: String, in bundle: Bundle = .main) -> URL? {
         let base = (name as NSString).deletingPathExtension
-        return bundle.url(forResource: base, withExtension: "json", subdirectory: "CoachDemoAudio")
+        return bundle.url(forResource: base, withExtension: "json", subdirectory: "PracticeReelAudio")
             ?? bundle.url(forResource: base, withExtension: "json")
     }
 

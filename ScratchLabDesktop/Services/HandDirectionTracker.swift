@@ -27,7 +27,7 @@ final class HandDirectionTracker {
     /// Minimum net displacement across the window to reject micro-jitter.
     static let displacementThreshold: CGFloat = 0.010
     /// Consecutive agreeing frames before committing a new active direction.
-    static let commitFrames = 1
+    static let commitFrames = 2
     /// Missed frames before dropping the held direction to `.idle`.
     static let holdFrames = 3
     /// Missed frames before resetting fully to `.searching`.

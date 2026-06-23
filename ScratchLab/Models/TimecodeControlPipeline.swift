@@ -557,6 +557,14 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             ? .diagnosticsOnlyReceiving
             : status
 
+#if ENABLE_TIMECODE_LIVE_TAP
+        let adapterDiagnostic = TimecodeCMSampleBufferAdapter.lastDiagnostic
+        let captureDeviceDebugInfo = TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo
+#else
+        let adapterDiagnostic = ""
+        let captureDeviceDebugInfo = ""
+#endif
+
         return TimecodeValidationSnapshot(
             mode: mode.rawValue,
             liveTapEnabled: liveTapEnabled,
@@ -590,8 +598,8 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             lastSpikeReason: counters.lastSpikeReason,
             lastDropoutDuration: counters.lastDropoutDuration,
             maxAbsSmoothedRate: counters.maxAbsSmoothedRate,
-            adapterDiagnostic: TimecodeCMSampleBufferAdapter.lastDiagnostic,
-            captureDeviceDebugInfo: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
+            adapterDiagnostic: adapterDiagnostic,
+            captureDeviceDebugInfo: captureDeviceDebugInfo,
             signalClass: cls?.signalClass.rawValue ?? SignalClass.unknown.rawValue,
             channelCorrelation: cls?.channelCorrelation,
             zcrFrequencyEstimateLeft: cls?.zcrFrequencyEstimateLeft,

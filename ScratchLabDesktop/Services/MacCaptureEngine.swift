@@ -751,7 +751,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
             let duration = endTime - activeMovement.startTime
-            guard duration >= 0.045 else {
+            guard duration >= 0.020 else {
                 #if DEBUG
                 debugSession?.recordRawDrop(.durationTooShort)
                 #endif
@@ -813,7 +813,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     struct RoutineNotationEventNormalizer {
-        static let minStrokeDuration: TimeInterval = 0.055
+        static let minStrokeDuration: TimeInterval = 0.030
         static let minPositionDelta: Double = 0.015
         static let minSpeedForStroke: Double = 0.14
         static let maxMergeGap: TimeInterval = 0.08
@@ -1130,7 +1130,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     // Deterministic reconstruction from a recorded
                     // platter timeline.  Live confidence and fusion
                     // provenance are not required; the builder already
-                    // enforced minimum duration (0.045s) and delta
+                    // enforced minimum duration (0.020s) and delta
                     // (0.01).  Accept the event as trusted.
                     #if DEBUG
                     debugSession?.recordReplaySourceTrusted()

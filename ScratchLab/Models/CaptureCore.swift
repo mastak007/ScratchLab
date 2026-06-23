@@ -1842,7 +1842,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         named audioName: String,
         in bundle: Bundle = .main
     ) -> URL? {
-        let searchDirectories: [String?] = ["CoachDemoAudio", nil]
+        let searchDirectories: [String?] = ["CoachDemoAudio", "PracticeReelAudio", nil]
         let trimmedName = audioName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return nil }
 

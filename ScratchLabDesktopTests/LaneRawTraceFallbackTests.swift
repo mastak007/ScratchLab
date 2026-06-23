@@ -32,7 +32,11 @@ final class LaneRawTraceFallbackTests: XCTestCase {
     /// Test #2 — `LaneContent(reel:)` yields no raw timeline and no fader
     /// events. Locks the Demo path's pre-Phase-2 behaviour.
     func testReelLaneContentHasNoPhase2Channels() throws {
-        let reel = try XCTUnwrap(PracticeReelTimeline.loadBundled(named: "baby_reel"))
+        let manifestURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
+        let reel = try PracticeReelTimeline.decoded(from: Data(contentsOf: manifestURL))
         let content = LaneContent(reel: reel)
         XCTAssertNil(content.platterTimeline)
         XCTAssertTrue(content.faderEvents.isEmpty)
