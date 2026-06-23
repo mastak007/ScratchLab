@@ -1214,8 +1214,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(rigSource.contains("TimelineView(.periodic"))
         XCTAssertTrue(rigSource.contains("rigContent(\n                    playbackTime: playbackTimeProvider(),\n                    isPlaying: false"))
         XCTAssertTrue(rigSource.contains("ScratchLabPerformanceSignpost.withInterval(\"CoachRigUpdate\")"))
-        XCTAssertTrue(macSource.contains("guard !babyScratchDemo.isStopped else { return .babyScratchOpen }"))
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
+        // The coordinator's pose+animation calls now live in ScratchCoachViews'
+        // resolvedAnimationState (outside the rig struct slice), and MacAnalyzerView
+        // gates coach state through playbackState instead of the old isStopped guard.
+        XCTAssertTrue(coachSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
+        XCTAssertTrue(macSource.contains("babyScratchDemo.playbackState"))
         XCTAssertFalse(macSource.contains("CACurrentMediaTime()"))
     }
 
@@ -4015,8 +4018,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("ScratchCoachInstructionStore.shared.instruction("))
         XCTAssertTrue(source.contains("coachScratchTypeID.map { normalizeScratchType(input: $0) }"))
-        XCTAssertTrue(source.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(source.contains("theme: coachCardTheme"))
+        // ScratchCoachCardContent is now rendered from ScratchCoachViews; the
+        // analyzer surface exposes the coach theme, status message, and
+        // playback-block guard instead.
+        XCTAssertTrue(source.contains("coachCardTheme"))
+        XCTAssertTrue(source.contains("coachDemoStatusMessage"))
         XCTAssertTrue(source.contains("Text(\"Audio Input\")"))
         XCTAssertFalse(source.contains("Text(\"Test Audio\")"))
     }
@@ -4028,10 +4034,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("babyScratchDemo.configureBabyScratchIfNeeded()"))
         XCTAssertTrue(source.contains("babyScratchDemo.stop()"))
         XCTAssertTrue(source.contains("\"Demo audio unavailable for this scratch.\""))
-        XCTAssertTrue(source.contains("ScratchCoachCardContent("))
+        // ScratchCoachCardContent + animationStateProvider / coachPose now live
+        // in the shared ScratchCoachViews; MacAnalyzerView exposes the coordinator
+        // through coachCardTheme, playbackState, and the status-message surface.
+        XCTAssertTrue(source.contains("coachCardTheme"))
         XCTAssertTrue(source.contains("babyScratchDemo.currentAudioTime"))
-        XCTAssertTrue(source.contains("animationStateProvider:"))
-        XCTAssertTrue(source.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
+        XCTAssertTrue(source.contains("babyScratchDemo.playbackState"))
+        XCTAssertTrue(source.contains("friendlyPlaybackState"))
         XCTAssertTrue(source.contains(".onChange(of: coachDemoPlaybackBlocked)"))
         XCTAssertTrue(source.contains("practiceBeatStore.isPlaying || captureEngine.isRoutineRecording"))
         XCTAssertFalse(source.contains("isolatedScratch"))
@@ -4080,10 +4089,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(sharedSource.contains("withAnimation("))
         XCTAssertTrue(practiceSource.contains("ScratchCoachCardContent("))
         XCTAssertTrue(practiceSource.contains("playbackTimeProvider: { demoPlayer.currentPlaybackTime }"))
-        XCTAssertTrue(macSource.contains("ScratchCoachCardContent("))
-        XCTAssertTrue(macSource.contains("playbackTimeProvider: { babyScratchDemo.currentAudioTime }"))
-        XCTAssertTrue(macSource.contains("animationStateProvider:"))
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
+        // ScratchCoachCardContent + animation wiring moved into the shared
+        // ScratchCoachViews; MacAnalyzerView exposes the coordinator's
+        // playbackState, coachDemoStatusMessage, and coachCardTheme instead.
+        XCTAssertTrue(macSource.contains("babyScratchDemo.playbackState"))
+        XCTAssertTrue(macSource.contains("coachDemoStatusMessage"))
+        XCTAssertTrue(macSource.contains("coachCardTheme"))
+        XCTAssertTrue(macSource.contains("coachDemoPlaybackBlocked"))
         XCTAssertTrue(mainMenuSource.contains("ScratchCoachCardContent("))
         XCTAssertTrue(mainMenuSource.contains("animationStateProvider:"))
         XCTAssertFalse(practiceSource.contains("struct ScratchCoachRigView"))
@@ -7488,9 +7500,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let coreURL = projectRootURL()
             .appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let sharedViewsURL = projectRootURL()
+            .appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
         let notationSource = try String(contentsOf: notationViewURL, encoding: .utf8)
         let macSource = try String(contentsOf: macViewURL, encoding: .utf8)
         let coreSource = try String(contentsOf: coreURL, encoding: .utf8)
+        let sharedSource = try String(contentsOf: sharedViewsURL, encoding: .utf8)
 
         // Notation coach references BabyScratchReferenceMotionTimeline (for cycle duration + phraseEnd).
         XCTAssertTrue(notationSource.contains("BabyScratchReferenceMotionTimeline"))
@@ -7502,9 +7517,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(coreSource.contains("let timelineState = BabyScratchReferenceMotionTimeline.pose("))
         // The coordinator is also defined in CaptureCore.swift.
         XCTAssertTrue(coreSource.contains("final class BabyScratchDemoPlaybackCoordinator"))
-        // The macOS Baby Scratch coach bypasses buffered audio analysis and samples the direct audio-time pose.
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)"))
-        XCTAssertTrue(macSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
+        // The macOS Baby Scratch coach delegates pose + animation sampling to the
+        // shared rig view (ScratchCoachViews.swift), which calls the coordinator
+        // directly for audio-time pose resolution.
+        XCTAssertTrue(sharedSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
+        XCTAssertTrue(sharedSource.contains("BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)"))
+        // MacAnalyzerView exposes the coordinator's playbackState for status
+        // pills and diagnostics — no separate pose-injection here.
+        XCTAssertTrue(macSource.contains("babyScratchDemo.playbackState"))
         XCTAssertFalse(notationSource.contains("playbackStartWall"))
     }
 
@@ -7585,10 +7605,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let macSource = try String(contentsOf: macURL, encoding: .utf8)
 
-        XCTAssertTrue(macSource.contains("action: babyScratchDemo.playBabyScratch"))
-        XCTAssertTrue(macSource.contains("action: babyScratchDemo.pause"))
-        XCTAssertTrue(macSource.contains("action: babyScratchDemo.replayBabyScratch"))
-        XCTAssertTrue(macSource.contains("isPlayingProvider: { babyScratchDemo.isPlaying }"))
+        // The button API (playBabyScratch / pause / replayBabyScratch) was
+        // replaced with direct playbackState checks. MacAnalyzerView reads
+        // playbackState for status pills, diagnostics, and friendly labels.
+        XCTAssertTrue(macSource.contains("babyScratchDemo.playbackState"))
+        XCTAssertTrue(macSource.contains("babyScratchDemo.configureBabyScratchIfNeeded()"))
+        XCTAssertTrue(macSource.contains("friendlyPlaybackState"))
+        XCTAssertTrue(macSource.contains("babyScratchDemo.isPlaying"))
         XCTAssertFalse(macSource.contains("action: babyScratchDemo.audioPlayer.play"))
         XCTAssertFalse(macSource.contains("action: babyScratchDemo.audioPlayer.replay"))
         XCTAssertFalse(macSource.contains("babyScratchDemo.audioPlayer.configure(with: coachInstruction)"))
