@@ -656,4 +656,66 @@ final class LiveNotationOverlayTests: XCTestCase {
         XCTAssertTrue(speeds.isSubset(of: [.fast, .medium, .slow]),
                       "All speed classifications must be recognized")
     }
+
+    // MARK: - babyScratchFull76BeatQuantized resource
+
+    func testBeatQuantizedResourceLoads() throws {
+        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
+        XCTAssertEqual(n.scratchID, "baby")
+        XCTAssertEqual(n.strokes.count, 76)
+    }
+
+    func testBeatQuantizedPhraseCounts() throws {
+        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
+        var counts = [0,0,0,0]
+        for s in n.strokes {
+            if s.startTime < 6.0          { counts[0] += 1 }
+            else if s.startTime < 20.0    { counts[1] += 1 }
+            else if s.startTime < 32.0    { counts[2] += 1 }
+            else                           { counts[3] += 1 }
+        }
+        XCTAssertEqual(counts, [19, 19, 13, 25])
+    }
+
+    func testBeatQuantizedDirections() throws {
+        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
+        let phrases = partitionStrokes(n.strokes)
+        for ph in phrases {
+            for (i, s) in ph.enumerated() {
+                let expected: ScratchNotationDirection = (i % 2 == 0) ? .forward : .backward
+                XCTAssertEqual(s.direction, expected)
+            }
+            XCTAssertEqual(ph.last!.direction, .forward)
+        }
+    }
+
+    func testBeatQuantizedNoOverlaps() throws {
+        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
+        let phrases = partitionStrokes(n.strokes)
+        for ph in phrases {
+            for i in 0..<(ph.count - 1) {
+                XCTAssertLessThanOrEqual(ph[i].endTime, ph[i+1].startTime + 0.001,
+                                         "Strokes must not overlap in phrase")
+            }
+        }
+    }
+
+    func testBeatQuantizedFaderState() throws {
+        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
+        for s in n.strokes {
+            XCTAssertEqual(s.faderState, .open)
+        }
+    }
+
+    /// Partition strokes into per-phrase arrays by timing.
+    private func partitionStrokes(_ strokes: [ScratchNotation.Stroke]) -> [[ScratchNotation.Stroke]] {
+        var p1:[ScratchNotation.Stroke]=[]; var p2=p1; var p3=p1; var p4=p1
+        for s in strokes {
+            if s.startTime < 6.0          { p1.append(s) }
+            else if s.startTime < 20.0    { p2.append(s) }
+            else if s.startTime < 32.0    { p3.append(s) }
+            else                           { p4.append(s) }
+        }
+        return [p1, p2, p3, p4]
+    }
 }

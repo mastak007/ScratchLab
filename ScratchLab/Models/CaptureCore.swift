@@ -262,7 +262,7 @@ enum CaptureSessionScratchType: String, CaseIterable, Codable, Sendable {
         case .comboL1, .comboL2, .comboL3, .comboL4, .comboL5:
             return [70, 80, 95, 105, 125]
         case .unknown, .babyScratch, .forwardScratch, .backwardScratch, .releaseScratch, .chirp, .scribble:
-            return [70, 90, 110]
+            return [70, 79, 90, 110]
         }
     }
 
@@ -2191,6 +2191,29 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
         }
     }
 
+    /// Beat-quantized 76-stroke Baby Scratch notation for teaching/practice.
+    /// 19 + 19 + 13 + 25 strokes, BPM 79, 4/4, 6-beat body per phrase.
+    /// F1 and final let-go are beat-anchored.  F/B pairs share amplitude.
+    static let babyScratchFull76BeatQuantized: ScratchNotation? = loadBabyScratchFull76BeatQuantizedFromBundle()
+
+    static func loadBabyScratchFull76BeatQuantizedFromBundle(_ bundle: Bundle = .main) -> ScratchNotation? {
+        guard let url = bundle.url(
+            forResource: "baby_scratch_full_76_beat_quantized",
+            withExtension: "json",
+            subdirectory: "Notation"
+        ) else {
+            return nil
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(ScratchNotation.self, from: data)
+        } catch {
+            Logger(subsystem: "com.scratchlab.capture", category: "ScratchNotation")
+                .warning("Failed to load beat-quantized Baby Scratch notation: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     static func loadBabyScratchFromBundle(_ bundle: Bundle = .main) -> ScratchNotation? {
         guard let url = bundle.url(
             forResource: "baby_scratch",
@@ -3865,6 +3888,47 @@ final class ScratchLabDemoModeController: ObservableObject {
         analysisTimer?.invalidate()
         analysisTimer = nil
         statusMessage = "Demo paused."
+    }
+
+    func resumeDemo() {
+        guard demoPlayer.playbackState == .paused else { return }
+        demoPlayer.play()
+        if analysisTimer == nil {
+            startAnalysisTimer()
+        }
+        statusMessage = "Demo resumed."
+    }
+
+    /// Loads audio and analyzer without starting playback.
+    /// Used by Demo with Beat so the scratch audio can be scheduled
+    /// to start aligned with the beat engine's reported start time.
+    func prepareDemoForBeatAlignment() {
+        stopDemo()
+        guard let audioURL = audioURLProvider(audioFileName) else {
+            statusMessage = "Bundled demo audio is unavailable."
+            isReady = false
+            return
+        }
+        do {
+            analyzer = ScratchLabDemoModeAnalyzer(
+                sampleBuffer: try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+            )
+            demoPlayer.configure(with: instruction)
+            isReady = true
+            statusMessage = "Demo ready — waiting for beat."
+        } catch {
+            statusMessage = "ScratchLab could not load the bundled demo."
+            isReady = false
+        }
+    }
+
+    /// Starts audio playback after the beat-alignment delay fires.
+    /// Must be called after `prepareDemoForBeatAlignment()`.
+    func startAlignedPlayback() {
+        guard isReady else { return }
+        demoPlayer.replay()
+        startAnalysisTimer()
+        statusMessage = "Demo playing with beat."
     }
 
     func coachAnimationState(

@@ -1,0 +1,558 @@
+{
+  "version": 1,
+  "scratchID": "baby",
+  "demoStart": 0.277,
+  "demoEnd": 41.501,
+  "phraseStart": 0.277,
+  "phraseEnd": 41.501,
+  "timingBasis": "beat_quantized_BPM79_body6beats_v4",
+  "strokes": [
+    {
+      "startTime": 0.336,
+      "endTime": 0.643,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 0.643,
+      "endTime": 1.077,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.077,
+      "endTime": 1.219,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.219,
+      "endTime": 1.361,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.361,
+      "endTime": 1.641,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.641,
+      "endTime": 1.794,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 1.794,
+      "endTime": 2.086,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.086,
+      "endTime": 2.414,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.414,
+      "endTime": 2.611,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.611,
+      "endTime": 2.94,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 2.94,
+      "endTime": 3.127,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.127,
+      "endTime": 3.323,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.323,
+      "endTime": 3.654,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.654,
+      "endTime": 3.949,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 3.949,
+      "endTime": 4.139,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.139,
+      "endTime": 4.442,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.442,
+      "endTime": 4.669,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.669,
+      "endTime": 4.893,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 4.893,
+      "endTime": 5.735,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.2639,
+      "endTime": 12.512,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.512,
+      "endTime": 12.822,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 12.822,
+      "endTime": 13.091,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.091,
+      "endTime": 13.329,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.329,
+      "endTime": 13.492,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.492,
+      "endTime": 13.811,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 13.811,
+      "endTime": 14.016,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.016,
+      "endTime": 14.223,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.223,
+      "endTime": 14.569,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.569,
+      "endTime": 14.839,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.839,
+      "endTime": 14.999,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 14.999,
+      "endTime": 15.32,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 15.32,
+      "endTime": 15.528,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 15.528,
+      "endTime": 15.824,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 15.824,
+      "endTime": 16.075,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 16.075,
+      "endTime": 16.338,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 16.338,
+      "endTime": 16.575,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 16.575,
+      "endTime": 16.8209,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 16.8209,
+      "endTime": 17.622,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 24.0783,
+      "endTime": 24.493,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 24.493,
+      "endTime": 24.79,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 24.79,
+      "endTime": 25.234,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 25.234,
+      "endTime": 25.54,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 25.54,
+      "endTime": 25.987,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 25.987,
+      "endTime": 26.297,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 26.297,
+      "endTime": 26.735,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 26.735,
+      "endTime": 27.048,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 27.048,
+      "endTime": 27.417,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 27.417,
+      "endTime": 27.763,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 27.763,
+      "endTime": 28.209,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 28.209,
+      "endTime": 28.6353,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 28.6353,
+      "endTime": 29.439,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.18,
+      "endTime": 36.22,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.22,
+      "endTime": 36.319,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.319,
+      "endTime": 36.495,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.495,
+      "endTime": 36.694,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.694,
+      "endTime": 36.846,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 36.846,
+      "endTime": 37.034,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 37.034,
+      "endTime": 37.226,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 37.226,
+      "endTime": 37.517,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 37.517,
+      "endTime": 37.612,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 37.612,
+      "endTime": 37.905,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 37.905,
+      "endTime": 38.088,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 38.088,
+      "endTime": 38.283,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 38.283,
+      "endTime": 38.473,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 38.473,
+      "endTime": 38.65,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 38.65,
+      "endTime": 38.851,
+      "direction": "forward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 38.851,
+      "endTime": 39.03,
+      "direction": "backward",
+      "speedClassification": "medium",
+      "faderState": "open"
+    },
+    {
+      "startTime": 39.03,
+      "endTime": 39.213,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 39.213,
+      "endTime": 39.415,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 39.415,
+      "endTime": 39.574,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 39.574,
+      "endTime": 39.757,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 39.757,
+      "endTime": 39.915,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 39.915,
+      "endTime": 40.108,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 40.108,
+      "endTime": 40.288,
+      "direction": "forward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 40.288,
+      "endTime": 40.5082,
+      "direction": "backward",
+      "speedClassification": "fast",
+      "faderState": "open"
+    },
+    {
+      "startTime": 40.5082,
+      "endTime": 41.501,
+      "direction": "forward",
+      "speedClassification": "slow",
+      "faderState": "open"
+    }
+  ],
+  "_meta": {
+    "draft": true,
+    "beat_quantized": true,
+    "BPM": 79,
+    "beatsPerBar": 4,
+    "bodyBeats": 6,
+    "phrases": [
+      19,
+      19,
+      13,
+      25
+    ],
+    "method": "per-phrase beat anchors, F1 on beat 0, final let-go on beat 6, shared F/B pair amplitudes",
+    "source": "baby_noBeat.wav"
+  }
+}

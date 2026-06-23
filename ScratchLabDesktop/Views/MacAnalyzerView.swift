@@ -324,6 +324,9 @@ struct MacAnalyzerView: View {
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
     @StateObject private var demoModeController = ScratchLabDemoModeController()
+    /// Dedicated beat engine for Demo with Beat mode. Isolated from the
+    /// practice-beat engine so mode switches don't stomp each other.
+    @StateObject private var demoWithBeatEngine = ScratchLabBeatEngine()
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
     // REMOVED: @ObservedObject private var runtimeDiagnostics — see Fix 1.
     // ScratchLabRuntimeDiagnostics.shared is read directly in leaf computed
@@ -347,6 +350,11 @@ struct MacAnalyzerView: View {
     @State private var practiceLastSavedDuration: TimeInterval = 0
     @State private var practiceTimer: Timer?
     @State private var routineCountInBeat: Int?
+    // Demo with Beat transport state
+    @State private var isDemoWithBeatMode = false
+    @State private var demoWithBeatStartUptime: TimeInterval? = nil
+    // Practice with Beat notation clock anchor (systemUptime when beat started)
+    @State private var practiceBeatStartUptime: TimeInterval? = nil
     @State private var isShowingAllRoutineSessions = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
@@ -500,6 +508,9 @@ struct MacAnalyzerView: View {
             beatEngine.stop()
             babyScratchDemo.stop()
             demoModeController.stopDemo()
+            demoWithBeatEngine.stop()
+            isDemoWithBeatMode = false
+            demoWithBeatStartUptime = nil
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             captureEngine.setPerformerMonitorStreamingEnabled(false)
@@ -520,6 +531,9 @@ struct MacAnalyzerView: View {
             guard resolvedTab != .practice else { return }
             babyScratchDemo.stop()
             demoModeController.stopDemo()
+            demoWithBeatEngine.stop()
+            isDemoWithBeatMode = false
+            demoWithBeatStartUptime = nil
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
         }
@@ -532,6 +546,9 @@ struct MacAnalyzerView: View {
             guard newPhase != .active else { return }
             babyScratchDemo.stop()
             demoModeController.stopDemo()
+            demoWithBeatEngine.stop()
+            isDemoWithBeatMode = false
+            demoWithBeatStartUptime = nil
             practiceBeatStore.handleAppDidBecomeInactive()
         }
         .onChange(of: practiceDurationRaw) { _, _ in
@@ -544,6 +561,16 @@ struct MacAnalyzerView: View {
         .onChange(of: coachDemoPlaybackBlocked) { _, isBlocked in
             guard isBlocked else { return }
             babyScratchDemo.stop()
+        }
+        .onChange(of: practiceBeatStore.isPlaying) { _, isPlaying in
+            // Track the beat start wall-clock time so the notation strip can
+            // follow beat time during Practice with Beat (no scratch audio).
+            // Uses ~120 ms offset to match ScratchLabBeatEngine preRollLeadInSeconds.
+            if isPlaying {
+                practiceBeatStartUptime = ProcessInfo.processInfo.systemUptime + 0.12
+            } else {
+                practiceBeatStartUptime = nil
+            }
         }
         .onReceive(captureEngine.$availableVideoDevices) { _ in
             guard liveInputEnabled, stageLayout == .desktopDeck else { return }
@@ -590,10 +617,70 @@ struct MacAnalyzerView: View {
             VStack(spacing: 18) {
                 practiceStageHeader
                 practiceCameraStage
+                practiceNotationStrip
             }
             .padding(18)
             .background(Color.black)
         }
+    }
+
+    /// Live notation strip below the camera/demo stage.
+    ///
+    /// Uses the beat-quantized teaching source with motion-style
+    /// rendering and a BPM 79 beat grid behind the notation.
+    ///
+    /// Time source selection:
+    ///   Demo with Beat → beat-engine wall-clock from demoWithBeatStartUptime
+    ///   Practice with Beat → wall-clock from practiceBeatStartUptime
+    ///   Listen (scratch only) → demoModeController.demoPlayer.currentPlaybackTime
+    private var practiceNotationStrip: some View {
+        let replayModel = LiveNotationOverlayModel.replayNotation(
+            from: ScratchNotation.babyScratchFull76BeatQuantized
+        )
+        return Group {
+            if !replayModel.isEmpty {
+                TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
+                    LiveNotationOverlayView(
+                        model: replayModel,
+                        currentTime: practiceNotationCurrentTime,
+                        background: .translucent,
+                        drawMode: .replayReveal,
+                        viewportSeconds: 3.2,
+                        beatGridBPM: 79,
+                        beatGridFirstBeatTime: 0.336,
+                        beatsPerBar: 4
+                    )
+                    .frame(height: 80)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private var practiceNotationShouldAnimate: Bool {
+        demoModeController.demoPlayer.isPlaying
+            || (isDemoWithBeatMode && demoWithBeatStartUptime != nil)
+            || (practiceBeatStore.isPlaying && practiceBeatStartUptime != nil)
+    }
+
+    private var practiceNotationCurrentTime: TimeInterval {
+        // Demo with Beat: use beat-engine wall-clock anchor for phase alignment.
+        // The notation stays locked to the 79 BPM grid rather than following
+        // the raw AVAudioPlayer time, which can have startup jitter.
+        if isDemoWithBeatMode, let anchor = demoWithBeatStartUptime {
+            let elapsed = max(0, ProcessInfo.processInfo.systemUptime - anchor)
+            return BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: elapsed)
+        }
+        // Practice with Beat: follow beat clock so notation moves even though
+        // the scratch demo audio is not playing.
+        if practiceBeatStore.isPlaying, let anchor = practiceBeatStartUptime {
+            let elapsed = max(0, ProcessInfo.processInfo.systemUptime - anchor)
+            return BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: elapsed)
+        }
+        // Listen (scratch only): follow the actual audio playback time.
+        return BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
+            for: demoModeController.demoPlayer.currentPlaybackTime
+        )
     }
 
     private var captureWorkspace: some View {
@@ -720,23 +807,61 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 10) {
-                Button {
-                    startMacDemo()
-                } label: {
-                    Label(demoModeController.isReady ? "Replay" : "Listen", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    // Play / Pause / Resume (Listen mode)
+                    let playbackState = demoModeController.demoPlayer.playbackState
+                    let primaryLabel: String = {
+                        guard !isDemoWithBeatMode else { return "Listen" }
+                        switch playbackState {
+                        case .playing: return "Pause"
+                        case .paused:  return "Resume"
+                        default:       return "Listen"
+                        }
+                    }()
+                    let primaryIcon: String = (!isDemoWithBeatMode && playbackState == .playing) ? "pause.fill" : "headphones"
 
-                Button {
-                    demoModeController.pauseDemo()
-                } label: {
-                    Label("Pause", systemImage: "pause.fill")
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        if isDemoWithBeatMode {
+                            stopDemoWithBeat()
+                            startMacDemo()
+                        } else if playbackState == .paused {
+                            demoModeController.resumeDemo()
+                        } else if playbackState == .playing {
+                            demoModeController.pauseDemo()
+                        } else {
+                            startMacDemo()
+                        }
+                    } label: {
+                        Label(primaryLabel, systemImage: primaryIcon)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        if isDemoWithBeatMode { startDemoWithBeat() } else { demoModeController.replayDemo() }
+                    } label: {
+                        Label("Restart", systemImage: "arrow.counterclockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!demoModeController.isReady && demoWithBeatStartUptime == nil)
                 }
-                .buttonStyle(.bordered)
-                .disabled(!demoModeController.demoPlayer.isPlaying)
+
+                if isDemoWithBeatMode {
+                    Button { stopDemoWithBeat() } label: {
+                        Label("Stop Demo with Beat", systemImage: "stop.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(nsColor: .systemOrange))
+                } else {
+                    Button { startDemoWithBeat() } label: {
+                        Label("Demo with Beat", systemImage: "metronome")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
 
             Button {
@@ -3168,11 +3293,74 @@ struct MacAnalyzerView: View {
     }
 
     private func startMacDemo() {
+        isDemoWithBeatMode = false
         if demoModeController.isReady {
             demoModeController.replayDemo()
         } else {
             demoModeController.startDemo()
         }
+    }
+
+    /// Starts scratch audio and a beat engine at 79 BPM together.
+    ///
+    /// Transport alignment: the beat engine reports a future `clickStartHostTime`
+    /// (~120 ms from now). `AVAudioTime.seconds(forHostTime:)` converts that mach
+    /// time to seconds-since-boot, matching `ProcessInfo.systemUptime`.
+    /// `DispatchQueue.main.asyncAfter` fires the `AVAudioPlayer` play call at that
+    /// moment — typically within 1–5 ms of the beat's first audio buffer.
+    ///
+    /// This is a v1 teaching approximation, not sample-accurate sync. The two
+    /// streams may drift by < 20 ms over a 2-minute session, which is
+    /// imperceptible in a beginner teaching context.
+    private func startDemoWithBeat() {
+        // Stop any running listen-mode demo and practice beat
+        demoModeController.stopDemo()
+        practiceBeatStore.stopPlayback()
+        practiceBeatStartUptime = nil
+
+        isDemoWithBeatMode = true
+        demoWithBeatStartUptime = nil
+
+        // Prepare audio without playing — configure the player so it is
+        // ready to replay() the instant the asyncAfter fires.
+        demoModeController.prepareDemoForBeatAlignment()
+        guard demoModeController.isReady else {
+            isDemoWithBeatMode = false
+            return
+        }
+
+        do {
+            // Call the full start signature to obtain BeatEngineStartMetadata,
+            // which carries clickStartHostTime — the mach-absolute-time anchor
+            // we need for aligned asyncAfter scheduling.
+            let metadata = try demoWithBeatEngine.start(
+                mode: .boomBapTrainer,
+                bpm: 79,
+                onCountInBeat: nil,
+                onRecordingStart: nil
+            )
+            // Convert the beat engine's future host-time start to wall-clock
+            // seconds-since-boot (same epoch as ProcessInfo.systemUptime).
+            let clickUptimeAnchor = AVAudioTime.seconds(forHostTime: metadata.clickStartHostTime)
+            demoWithBeatStartUptime = clickUptimeAnchor
+
+            let delay = max(0, clickUptimeAnchor - ProcessInfo.processInfo.systemUptime)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak demoModeController] in
+                demoModeController?.startAlignedPlayback()
+            }
+        } catch {
+            isDemoWithBeatMode = false
+            demoWithBeatStartUptime = nil
+            demoModeController.stopDemo()
+        }
+    }
+
+    /// Stops both the Demo with Beat scratch audio and the beat engine.
+    private func stopDemoWithBeat() {
+        demoWithBeatEngine.stop()
+        demoModeController.stopDemo()
+        isDemoWithBeatMode = false
+        demoWithBeatStartUptime = nil
     }
 
     private func exportMacDemoSession() {
@@ -5211,25 +5399,72 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    startMacDemo()
-                } label: {
-                    Label(demoModeController.isReady ? "Replay" : "Listen", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            VStack(spacing: 10) {
+                // Row 1 — Listen (scratch only) with Pause / Resume / Restart
+                HStack(spacing: 10) {
+                    let listenPlayState = demoModeController.demoPlayer.playbackState
+                    let listenLabel: String = {
+                        guard !isDemoWithBeatMode else { return "Listen" }
+                        switch listenPlayState {
+                        case .playing: return "Pause"
+                        case .paused:  return "Resume"
+                        default:       return "Listen"
+                        }
+                    }()
+                    let listenIcon: String = (!isDemoWithBeatMode && listenPlayState == .playing) ? "pause.fill" : "headphones"
 
-                Button {
-                    demoModeController.pauseDemo()
-                } label: {
-                    Label("Pause", systemImage: "pause.fill")
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        if isDemoWithBeatMode {
+                            // Switch from Demo with Beat → Listen mode
+                            stopDemoWithBeat()
+                            startMacDemo()
+                        } else {
+                            switch listenPlayState {
+                            case .paused:  demoModeController.resumeDemo()
+                            case .playing: demoModeController.pauseDemo()
+                            default:       startMacDemo()
+                            }
+                        }
+                    } label: {
+                        Label(listenLabel, systemImage: listenIcon)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(isDemoWithBeatMode ? nil : nil)  // default tint in Listen mode
+
+                    Button {
+                        if isDemoWithBeatMode {
+                            startDemoWithBeat()
+                        } else {
+                            demoModeController.replayDemo()
+                        }
+                    } label: {
+                        Label("Restart", systemImage: "arrow.counterclockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(!demoModeController.isReady && demoWithBeatStartUptime == nil)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!demoModeController.demoPlayer.isPlaying)
+
+                // Row 2 — Demo with Beat (scratch + beat aligned at 79 BPM)
+                if isDemoWithBeatMode {
+                    Button { stopDemoWithBeat() } label: {
+                        Label("Stop Demo with Beat", systemImage: "stop.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(Color(nsColor: .systemOrange))
+                } else {
+                    Button { startDemoWithBeat() } label: {
+                        Label("Demo with Beat", systemImage: "metronome")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                }
             }
 
             Text(demoModeController.statusMessage)
@@ -5237,17 +5472,10 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            let referenceModel = LiveNotationOverlayModel.targetNotation(from: ScratchNotation.babyScratchDemo)
-            if !referenceModel.isEmpty {
-                TimelineView(.animation(paused: !demoModeController.demoPlayer.isPlaying)) { _ in
-                    let phraseTime = BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
-                        for: demoModeController.demoPlayer.currentPlaybackTime
-                    )
-                    LiveNotationOverlayView(model: referenceModel, currentTime: phraseTime)
-                        .frame(height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-            }
+            // Notation is now shown on the Practice stage strip below the camera
+            // card — a larger, zoomed scrolling view with replayReveal. The tiny
+            // sidebar version is removed to avoid clutter while the main strip is
+            // being tested.
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
@@ -5378,8 +5606,13 @@ struct MacAnalyzerView: View {
     private var practiceBeatTrainerCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Beat trainer")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Beat trainer")
+                        .font(.headline)
+                    Text("Beat only — plays timing guide without the scratch reference.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
 
@@ -5429,7 +5662,7 @@ struct MacAnalyzerView: View {
                     }
                 }
             } else {
-                Text("Beat off. Practise from live scratch audio only until you want timing guidance.")
+                Text("Beat off. Use Listen or Demo with Beat in the Coach card to hear the scratch reference.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -6546,41 +6779,9 @@ struct MacAnalyzerView: View {
 
             Divider()
 
-            ScratchCoachCardContent(
-                instruction: coachInstruction,
-                demoStatusMessage: coachDemoStatusMessage,
-                playbackTimeProvider: { babyScratchDemo.currentAudioTime },
-                isPlayingProvider: { babyScratchDemo.isPlaying },
-                animationStateProvider: { audioTime, _ in
-                    let pose = BabyScratchDemoPlaybackCoordinator.coachPose(for: audioTime)
-                    guard !babyScratchDemo.isStopped else { return .babyScratchOpen }
-                    return BabyScratchDemoPlaybackCoordinator.coachAnimationState(for: pose)
-                },
-                theme: coachCardTheme
-            ) {
-                HStack(spacing: 10) {
-                    coachDemoButton(
-                        title: "Listen",
-                        systemImage: "play.fill",
-                        enabled: babyScratchDemo.isAudioAvailable && !coachDemoPlaybackBlocked,
-                        action: babyScratchDemo.playBabyScratch
-                    )
-
-                    coachDemoButton(
-                        title: "Pause",
-                        systemImage: "pause.fill",
-                        enabled: babyScratchDemo.isPlaying && !coachDemoPlaybackBlocked,
-                        action: babyScratchDemo.pause
-                    )
-
-                    coachDemoButton(
-                        title: "Replay",
-                        systemImage: "gobackward",
-                        enabled: babyScratchDemo.isAudioAvailable && !coachDemoPlaybackBlocked,
-                        action: babyScratchDemo.replayBabyScratch
-                    )
-                }
-            }
+            Text("2D coach visual removed — use the main stage notation strip and camera view for practice.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
