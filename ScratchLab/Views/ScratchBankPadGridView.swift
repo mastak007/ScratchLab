@@ -62,13 +62,13 @@ struct ScratchBankPadGridView: View {
                 }
             }
 
-            // Footer: Rane pads pending verification
+            // Footer: pad verification status
             VStack(alignment: .leading, spacing: 4) {
-                Text("Rane pads pending verification")
+                Text("Rane pads pending hardware verification")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(Color(hex: "FFD700").opacity(0.8))
 
-                Text("MIDI not wired yet")
+                Text("CC addresses sourced from djay Pro mapping — confirm on real hardware")
                     .font(.system(size: 10, weight: .regular))
                     .foregroundColor(.white.opacity(0.35))
             }

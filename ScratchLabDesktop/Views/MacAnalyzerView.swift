@@ -4328,6 +4328,15 @@ struct MacAnalyzerView: View {
                         .foregroundStyle(captureEngine.isScratchBankMIDIPreviewEnabled ? .green : .orange)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pad bindings from djay Pro mapping")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("Hardware verification pending")
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(.orange)
+            }
 #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)

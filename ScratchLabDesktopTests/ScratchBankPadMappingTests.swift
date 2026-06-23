@@ -149,4 +149,19 @@ final class ScratchBankPadMappingTests: XCTestCase {
                 "Pad \(mapping.padIndex) deck \(mapping.deck as Any) must reference 'rane.one-mkii'")
         }
     }
+
+    // MARK: - 13. Verification display helpers
+
+    func testVerificationDisplayStatusWhenRequired() {
+        let mapping = ScratchBankPadMappingCatalog.raneOneMKII[0]
+        XCTAssertTrue(mapping.verificationRequired)
+        XCTAssertEqual(mapping.verificationDisplayStatus, "Pending hardware verification")
+    }
+
+    func testProvenanceDisplayNoteIsNonEmpty() {
+        let mapping = ScratchBankPadMappingCatalog.raneOneMKII[0]
+        XCTAssertTrue(mapping.provenanceDisplayNote.contains("djay Pro"))
+        XCTAssertTrue(mapping.provenanceDisplayNote.contains("real hardware"))
+        XCTAssertFalse(mapping.provenanceDisplayNote.isEmpty)
+    }
 }

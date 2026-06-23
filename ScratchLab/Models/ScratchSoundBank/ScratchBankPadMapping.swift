@@ -54,6 +54,18 @@ struct ScratchBankPadMapping: Equatable {
     // Always false at the model layer.
     // Scoring integration is gated on live hardware verification and Slice 5 approval.
     var canFeedScoring: Bool { false }
+
+    /// Display-friendly verification status for UI surfaces.
+    /// "Pending hardware verification" when `verificationRequired`, empty otherwise.
+    var verificationDisplayStatus: String {
+        verificationRequired ? "Pending hardware verification" : ""
+    }
+
+    /// Concise provenance note for UI surfaces.
+    /// Describes where the CC addresses came from and what remains to confirm.
+    var provenanceDisplayNote: String {
+        "CC addresses sourced from djay Pro mapping — confirm on real hardware"
+    }
 }
 
 // MARK: - Rane ONE MK2 Default Pad Mapping Catalog
