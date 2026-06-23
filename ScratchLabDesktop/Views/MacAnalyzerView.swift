@@ -4302,6 +4302,22 @@ struct MacAnalyzerView: View {
             }
 
             midiLearnRow
+
+#if DEBUG
+            Divider()
+
+            Toggle(isOn: $captureEngine.isScratchBankMIDIPreviewEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Scratch Bank MIDI Preview")
+                        .font(.system(size: 12, weight: .semibold))
+
+                    Text("Plays bundled scratch-bank samples from mapped MIDI pads. Debug preview only.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+#endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
