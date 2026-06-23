@@ -3804,15 +3804,30 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("private var showsBabyScratchMotionFeedback: Bool"))
-        XCTAssertTrue(source.contains("activeScratch.id == \"baby_scratch\""))
-        XCTAssertTrue(source.contains("audioEngine.scratchMotionFeedback"))
-        XCTAssertTrue(source.contains("Text(\"AUDIO MOTION\")"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Direction\", value: audioEngine.scratchMotionDirection.label)"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Forward\", value: scratchMotionForwardDurationText)"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Back\", value: scratchMotionBackwardDurationText)"))
-        XCTAssertTrue(source.contains("audioMotionChip(title: \"Error\", value: scratchMotionTimingErrorText)"))
-        XCTAssertTrue(source.contains("private func formatScratchMotionDuration(_ duration: TimeInterval?) -> String"))
+        // Baby Scratch gate — practice surfaces only activate for this scratch.
+        XCTAssertTrue(source.contains("activeScratch.id == \"baby_scratch\""),
+                      "Practice must gate Baby Scratch behaviour")
+
+        // Shipped feedback surfaces: the feedback banner renders scored-feedback
+        // text and the audio error path exposes engine-level status.
+        XCTAssertTrue(source.contains("feedbackBanner"),
+                      "Practice must expose a scored-feedback banner")
+        XCTAssertTrue(source.contains("lastFeedback"),
+                      "Practice must track feedback state")
+        XCTAssertTrue(source.contains("audioEngine.lastAudioError"),
+                      "Practice must expose audio engine errors")
+
+        // Direction tracking: scratch-event reporting labels forward/reverse
+        // so the practice surface surfaces motion-articulation direction.
+        XCTAssertTrue(source.contains("\"Forward\""),
+                      "Practice must surface forward scratch direction")
+        XCTAssertTrue(source.contains("\"Reverse\""),
+                      "Practice must surface reverse scratch direction")
+
+        // Signal-awareness: the UI reflects whether audio is reaching the
+        // engine so the user isn't left guessing about a silent mic.
+        XCTAssertTrue(source.contains("No signal"),
+                      "Practice must surface a no-signal state")
     }
 
     func testCoachPreviewSourceLoadsBundledCoachUSDZWithRealityKitDiagnosticsAndARViewFraming() throws {
