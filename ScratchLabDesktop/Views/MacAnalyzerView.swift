@@ -7378,6 +7378,7 @@ struct MacAnalyzerView: View {
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
+    #endif
 
     private func captureInputStatusTile(title: String, value: String, detail: String? = nil, systemImage: String, color: Color) -> some View {
         // Same TITLE · STATE deduplication rule as headerStatusPill.
@@ -7421,7 +7422,6 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
-    #endif
 
     private var miniNotationTimeline: some View {
         let notation = currentRoutineNotationPreview

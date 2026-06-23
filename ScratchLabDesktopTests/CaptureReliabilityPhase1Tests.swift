@@ -10478,6 +10478,21 @@ extension CaptureRecoveryPhase2CoreTests {
         )
         return videoURL
     }
+
+    func projectRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    func sourceSlice(in source: String, from startToken: String, through endToken: String) throws -> String {
+        let start = try XCTUnwrap(source.range(of: startToken), "Missing start token \(startToken)")
+        let end = try XCTUnwrap(
+            source[start.lowerBound...].range(of: endToken),
+            "Missing end token \(endToken)"
+        )
+        return String(source[start.lowerBound..<end.upperBound])
+    }
 }
 
 private struct StagingOperationsHarness {

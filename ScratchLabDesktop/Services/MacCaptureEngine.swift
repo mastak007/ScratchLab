@@ -3185,8 +3185,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.isCameraActive = self.captureSession.isRunning
             self.activeCaptureAudioDeviceUniqueID = attachedAudioUniqueID
 
-            // Batch 12: diagnostic — which device is the capture session
-            // actually using?  Shows the device name + uniqueID for Copy Debug.
+#if DEBUG && ENABLE_TIMECODE_LIVE_TAP
             let inputs = self.captureSession.inputs.compactMap { input -> String? in
                 guard let deviceInput = input as? AVCaptureDeviceInput,
                       deviceInput.device.hasMediaType(.audio) else { return nil }
@@ -3196,6 +3195,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let inputsSummary = inputs.isEmpty ? "none" : inputs.joined(separator: "; ")
             TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo =
                 "device=\(self.selectedAudioDeviceName) uid=\(attachedAudioUniqueID.isEmpty ? "(empty)" : attachedAudioUniqueID) inputs=[\(inputsSummary)]"
+#endif
         }
     }
 
