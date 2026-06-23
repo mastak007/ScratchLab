@@ -241,21 +241,35 @@ struct ScratchPhraseChartView: View {
         let barTop = strokeRegionTop + inset
         let barHeight = max(0, laneHeight - inset * 2)
 
-        // Each stroke contributes a colored bar over its time interval.
-        // Color reflects the crossfader state on that stroke (open vs. closed).
-        // Strokes fully outside the render-time window are skipped; partially
-        // overlapping strokes are clipped to the window edges.
-        for stroke in notation.strokes {
-            guard stroke.endTime > windowStart, stroke.startTime < windowEnd else { continue }
+        // Merge adjacent same-fader-state intervals so the crossfader
+        // lane reads as continuous bars instead of per-stroke blocks.
+        // A small merge gap (150 ms) ensures that close-together strokes
+        // with identical fader state (e.g. every Baby Scratch stroke) form
+        // one smooth bar rather than separate rounded rects.
+        let mergeGap: Double = 0.150
+        typealias FaderInterval = (start: Double, end: Double, isOpen: Bool)
+        var merged: [FaderInterval] = []
+        for stroke in notation.strokes.sorted(by: { $0.startTime < $1.startTime }) {
+            guard stroke.endTime > windowStart, stroke.startTime < windowEnd,
+                  stroke.endTime > stroke.startTime else { continue }
             let clampedStart = max(stroke.startTime, windowStart)
             let clampedEnd = min(stroke.endTime, windowEnd)
-            let x1 = CGFloat(clampedStart - windowStart) * pps
-            let x2 = CGFloat(clampedEnd - windowStart) * pps
-            guard x2 > x1, barHeight > 0 else { continue }
-
-            let rect = CGRect(x: x1, y: barTop, width: x2 - x1, height: barHeight)
             let isOpen = stroke.faderState == .open
-            let fill = isOpen ? faderOpenCol : faderClosedCol
+
+            if let last = merged.last, last.isOpen == isOpen,
+               clampedStart - last.end <= mergeGap {
+                merged[merged.count - 1].end = max(last.end, clampedEnd)
+            } else {
+                merged.append((clampedStart, clampedEnd, isOpen))
+            }
+        }
+
+        for interval in merged {
+            let x1 = CGFloat(interval.start - windowStart) * pps
+            let x2 = CGFloat(interval.end - windowStart) * pps
+            guard x2 > x1, barHeight > 0 else { continue }
+            let rect = CGRect(x: x1, y: barTop, width: x2 - x1, height: barHeight)
+            let fill = interval.isOpen ? faderOpenCol : faderClosedCol
             ctx.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(fill))
         }
 

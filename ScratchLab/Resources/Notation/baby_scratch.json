@@ -1,144 +1,95 @@
 {
-  "demoEnd": 5.0687,
-  "demoStart": 0,
-  "phraseEnd": 5.0687,
-  "phraseStart": 0,
+  "version": 1,
   "scratchID": "baby",
+  "demoStart": 0.0,
+  "demoEnd": 4.700,
+  "phraseStart": 0.0,
+  "phraseEnd": 4.700,
+  "timingBasis": "authored_deterministic_v1",
   "strokes": [
     {
-      "startTime": 0.0,
-      "endTime": 0.1858,
+      "startTime": 0.000,
+      "endTime": 0.300,
       "direction": "forward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 0.1858,
-      "endTime": 0.5573,
+      "startTime": 0.400,
+      "endTime": 0.700,
       "direction": "backward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 0.5573,
-      "endTime": 0.7663,
+      "startTime": 0.800,
+      "endTime": 1.100,
       "direction": "forward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 0.7663,
-      "endTime": 1.1378,
+      "startTime": 1.200,
+      "endTime": 1.500,
       "direction": "backward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 1.1378,
-      "endTime": 1.3003,
+      "startTime": 1.600,
+      "endTime": 1.900,
       "direction": "forward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 1.3003,
-      "endTime": 1.4861,
+      "startTime": 2.000,
+      "endTime": 2.300,
       "direction": "backward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 1.4861,
-      "endTime": 1.6951,
+      "startTime": 2.400,
+      "endTime": 2.700,
       "direction": "forward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 1.6951,
-      "endTime": 2.0434,
+      "startTime": 2.800,
+      "endTime": 3.100,
       "direction": "backward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 2.0434,
-      "endTime": 2.2523,
+      "startTime": 3.200,
+      "endTime": 3.500,
       "direction": "forward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 2.2523,
-      "endTime": 2.6471,
+      "startTime": 3.600,
+      "endTime": 3.900,
       "direction": "backward",
       "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 2.6471,
-      "endTime": 2.7864,
+      "startTime": 4.000,
+      "endTime": 4.300,
       "direction": "forward",
-      "speedClassification": "fast",
+      "speedClassification": "medium",
       "faderState": "open"
     },
     {
-      "startTime": 2.7864,
-      "endTime": 2.9954,
+      "startTime": 4.400,
+      "endTime": 4.700,
       "direction": "backward",
       "speedClassification": "medium",
-      "faderState": "open"
-    },
-    {
-      "startTime": 2.9954,
-      "endTime": 3.1811,
-      "direction": "forward",
-      "speedClassification": "medium",
-      "faderState": "open"
-    },
-    {
-      "startTime": 3.1811,
-      "endTime": 3.5527,
-      "direction": "backward",
-      "speedClassification": "medium",
-      "faderState": "open"
-    },
-    {
-      "startTime": 3.5527,
-      "endTime": 3.7616,
-      "direction": "forward",
-      "speedClassification": "medium",
-      "faderState": "open"
-    },
-    {
-      "startTime": 3.7616,
-      "endTime": 4.1099,
-      "direction": "backward",
-      "speedClassification": "medium",
-      "faderState": "open"
-    },
-    {
-      "startTime": 4.1099,
-      "endTime": 4.2493,
-      "direction": "forward",
-      "speedClassification": "fast",
-      "faderState": "open"
-    },
-    {
-      "startTime": 4.2493,
-      "endTime": 4.4582,
-      "direction": "backward",
-      "speedClassification": "medium",
-      "faderState": "open"
-    },
-    {
-      "startTime": 4.4582,
-      "endTime": 5.0687,
-      "direction": "forward",
-      "speedClassification": "slow",
       "faderState": "open"
     }
-  ],
-  "timingBasis": "audio_peak_detect_baby2_v1",
-  "version": 1
+  ]
 }

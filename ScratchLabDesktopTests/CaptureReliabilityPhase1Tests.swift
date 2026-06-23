@@ -2853,7 +2853,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         // one continuous alternation phrase, not the full 42 s demo.
         // The full-demo timeline lives in `CoachDemoMotion/baby_scratch_strokes.json`
         // and is available as `ScratchNotation.babyScratchDemo`.
-        XCTAssertEqual(notation.strokes.count, 19)
+        XCTAssertEqual(notation.strokes.count, 12)
         XCTAssertEqual(notation.strokes.count, notation.strokeSegments.count)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.faderState == .open })
         let phraseStart = try XCTUnwrap(notation.phraseStart)
@@ -2862,7 +2862,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let lastStroke = try XCTUnwrap(notation.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
-        XCTAssertEqual(phraseEnd, 5.0687, accuracy: 0.01)
+        XCTAssertEqual(phraseEnd, 4.700, accuracy: 0.01)
         XCTAssertEqual(notation.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(notation.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
         // The short excerpt opens with a forward stroke at 0.0.
@@ -2875,45 +2875,143 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("qbert"))
     }
 
-    func testBabyScratchNotationClassifiesNonUniformStrokeSpeeds() throws {
+    func testBabyScratchNotationUsesDeterministicAuthoredTemplate() throws {
         let notation = try decodedBabyScratchNotation()
-        let durations = notation.strokes.map(\.duration)
-        let roundedDurations = Set(durations.map { Int(($0 * 1_000).rounded()) })
-        let fastDurations = notation.strokes
-            .filter { $0.speedClassification == .fast }
-            .map(\.duration)
-        let slowDurations = notation.strokes
-            .filter { $0.speedClassification == .slow }
-            .map(\.duration)
-        let fastestSlow = try XCTUnwrap(slowDurations.min())
-        let slowestFast = try XCTUnwrap(fastDurations.max())
-        let slowAverage = slowDurations.reduce(0, +) / Double(slowDurations.count)
-        let fastAverage = fastDurations.reduce(0, +) / Double(fastDurations.count)
 
-        // The 19-stroke instructional excerpt contains fast, slow, and medium
-        // speed classifications — verify the pipeline classifies them correctly.
-        XCTAssertGreaterThan(roundedDurations.count, 1, "Notation excerpt must have stroke duration diversity")
-        XCTAssertLessThan(slowestFast, fastestSlow,
-                          "Fast-classified strokes must be shorter than slow-classified strokes")
-        XCTAssertGreaterThanOrEqual(fastDurations.count, 2,
-                                    "Short excerpt must have at least 2 strokes classified as fast")
-        XCTAssertGreaterThanOrEqual(slowDurations.count, 1,
-                                    "Short excerpt must have at least 1 stroke classified as slow")
-        XCTAssertGreaterThan(slowAverage, fastAverage,
-                             "Average slow stroke duration must exceed average fast stroke duration")
-        // Verify active-stroke movement kinds are recognized.
-        let activeStrokes = notation.strokes.filter {
-            $0.direction == .forward || $0.direction == .backward
+        // Verify deterministic authored basis — not audio peak detection.
+        XCTAssertEqual(notation.timingBasis, "authored_deterministic_v1",
+                       "Baby Scratch target must use a deterministic authored template, not audio peak detection")
+
+        // All strokes must be uniform medium speed (no audio-derived fast/slow variance).
+        let speeds = Set(notation.strokes.map(\.speedClassification))
+        XCTAssertEqual(speeds, [.medium],
+                       "All Baby Scratch target strokes must be uniform medium speed")
+
+        // All strokes must be fader-open (Baby Scratch never cuts the crossfader).
+        XCTAssertTrue(notation.strokes.allSatisfy { $0.faderState == .open },
+                      "All Baby Scratch strokes must have fader open")
+
+        // Strokes must cleanly alternate forward → backward → forward → …
+        for (i, stroke) in notation.strokes.enumerated() {
+            if i.isMultiple(of: 2) {
+                XCTAssertEqual(stroke.direction, .forward,
+                               "Stroke \(i) must be forward (even index → forward)")
+            } else {
+                XCTAssertEqual(stroke.direction, .backward,
+                               "Stroke \(i) must be backward (odd index → backward)")
+            }
         }
-        XCTAssertFalse(activeStrokes.isEmpty)
-        for stroke in activeStrokes {
+
+        // Forward/backward count must be balanced (within 1 for even count).
+        let forwardCount = notation.strokes.filter { $0.direction == .forward }.count
+        let backwardCount = notation.strokes.filter { $0.direction == .backward }.count
+        XCTAssertEqual(forwardCount, backwardCount,
+                       "Baby Scratch target must have equal forward and backward strokes")
+
+        // Verify movement kinds resolve correctly.
+        for stroke in notation.strokes {
             let kind = stroke.movementKind
-            XCTAssertTrue(
-                kind == .fastPush || kind == .normalPush || kind == .slowDrag
-                    || kind == .fastPull || kind == .normalPull || kind == .slowPullDrag,
-                "Active strokes must carry a directional movement kind, got \(kind)"
-            )
+            XCTAssertTrue(kind == .normalPush || kind == .normalPull,
+                          "Medium Baby Scratch strokes must resolve to normal push/pull, got \(kind)")
         }
+    }
+
+    func testBabyScratchNotationHasNoAudioPeakDetectionBasis() throws {
+        // Verify that `audio_peak_detect_baby2_v1` no longer appears anywhere
+        // in the shipped notation resources — the Baby Scratch target must be
+        // a deterministic authored template.
+        let notationDir = projectRootURL()
+            .appendingPathComponent("ScratchLab/Resources/Notation")
+        let files = try FileManager.default.contentsOfDirectory(at: notationDir,
+                                                                includingPropertiesForKeys: nil)
+        for url in files where url.pathExtension == "json" {
+            let data = try Data(contentsOf: url)
+            let content = String(decoding: data, as: UTF8.self)
+            XCTAssertFalse(content.contains("audio_peak_detect_baby2_v1"),
+                           "\(url.lastPathComponent) must not reference audio_peak_detect_baby2_v1")
+        }
+    }
+
+    func testBabyScratchNotationHasNoClosedFaderEvents() throws {
+        let notation = try decodedBabyScratchNotation()
+        let closedCount = notation.strokes.filter { $0.faderState == .closed }.count
+        XCTAssertEqual(closedCount, 0,
+                       "Baby Scratch target must have zero closed/cut crossfader events")
+        let nonOpenCount = notation.strokes.filter { $0.faderState != .open }.count
+        XCTAssertEqual(nonOpenCount, 0,
+                       "All Baby Scratch target strokes must be fader-open")
+    }
+
+    func testBabyScratchNotationCleanAlternation() throws {
+        // Every forward stroke must be followed by a backward stroke (or end).
+        let notation = try decodedBabyScratchNotation()
+        for i in 0..<(notation.strokes.count - 1) {
+            let current = notation.strokes[i]
+            let next = notation.strokes[i + 1]
+            XCTAssertNotEqual(current.direction, next.direction,
+                              "Adjacent strokes \(i) and \(i+1) must alternate direction, but both are \(current.direction)")
+        }
+    }
+
+    func testReviewOverlayBuildsTargetFromDeterministicNotation() throws {
+        let notation = try decodedBabyScratchNotation()
+        let emptySnapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "unavailable", notationConfidence: nil,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            detectionSources: [],
+            recordMovementEvents: [], audioEvents: [], faderEvents: [],
+            mixerMidiEvents: [], capturedAt: Date()
+        )
+        let overlay = ReviewOverlayTimeline.build(
+            targetNotation: notation,
+            capturedSnapshot: emptySnapshot,
+            capturedDuration: 0
+        )
+        // Target lane must contain all notation strokes.
+        XCTAssertEqual(overlay.target.events.count, notation.strokes.count,
+                       "Review target must map every notation stroke")
+        // Captured lane must be empty (no take recorded yet).
+        XCTAssertTrue(overlay.captured.events.isEmpty,
+                      "Review captured lane must be empty with no captured data")
+        // Display duration must equal the target notation timeline.
+        XCTAssertEqual(overlay.displayDurationSeconds, notation.timelineDuration,
+                       accuracy: 0.001)
+        // All target events must be recordMovement with forward/backward tags.
+        for event in overlay.target.events {
+            XCTAssertEqual(event.kind, .recordMovement,
+                           "Target events must be recordMovement kind")
+            XCTAssertTrue(event.tag == "forward" || event.tag == "backward",
+                          "Target event tag must be forward or backward, got \(String(describing: event.tag))")
+        }
+        // Overlay must not be empty.
+        XCTAssertFalse(overlay.isEmpty)
+    }
+
+    func testReviewOverlayEmptyCapturedOnly() throws {
+        // Review surface must be able to render target notation even when no
+        // captured evidence exists (fresh state / no take recorded).
+        let notation = try decodedBabyScratchNotation()
+        let emptySnapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "unavailable", notationConfidence: nil,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            detectionSources: [],
+            recordMovementEvents: [], audioEvents: [], faderEvents: [],
+            mixerMidiEvents: [], capturedAt: Date()
+        )
+        let overlay = ReviewOverlayTimeline.build(
+            targetNotation: notation,
+            capturedSnapshot: emptySnapshot,
+            capturedDuration: 0
+        )
+        // Target lane renders all strokes as ghost marks.
+        let targetEvents = overlay.target.events.filter { $0.kind == .recordMovement }
+        XCTAssertEqual(targetEvents.count, notation.strokes.count)
+        // Captured lane is empty.
+        XCTAssertTrue(overlay.captured.events.isEmpty)
+        // Clamp is safe.
+        XCTAssertEqual(overlay.clamp(time: 0), 0)
+        XCTAssertEqual(overlay.clamp(time: notation.timelineDuration), notation.timelineDuration)
+        XCTAssertEqual(overlay.clamp(time: notation.timelineDuration + 100), notation.timelineDuration)
     }
 
     func testBabyScratchExtractedMotionJSONDecodesAndContainsNoSourceProvenance() throws {

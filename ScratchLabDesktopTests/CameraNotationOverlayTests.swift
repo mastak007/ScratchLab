@@ -1044,7 +1044,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         let visible = model.visibleEvents(at: coachCtrl.currentTime)
         XCTAssertFalse(visible.isEmpty,
                        "Coach mode must show target strokes at time 0")
-        // All target events (19 for baby_scratch) must be visible.
+        // All target events (12 for baby_scratch) must be visible.
         XCTAssertEqual(visible.count, targetModel.events.count,
                        "All target strokes must be visible in Coach mode at time 0")
     }
