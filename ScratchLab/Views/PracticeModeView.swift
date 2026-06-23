@@ -38,10 +38,10 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
 
     var explainer: String {
         switch self {
-        case .autoCut: return "Animates the target pattern as a looping visual preview. App audio is coming later — for now, no playback."
+        case .autoCut: return "Visual target preview. App playback is off for this mode."
         case .demo:    return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
         case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
-        case .coached: return "Target pattern loops in time. Mic listens for your scratches; in-session comparison is coming."
+        case .coached: return "Target pattern loops in time. Mic listens for your scratches and gives a practice estimate."
         case .open:    return "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on."
         }
     }

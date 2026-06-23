@@ -507,7 +507,7 @@ struct LevelDetailView: View {
                         
                         // Scratches grid
                         VStack(spacing: 16) {
-                            Text("SCRATCHES TO MASTER")
+                            Text("PRACTICE TARGETS")
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundColor(.white.opacity(0.5))
                                 .frame(maxWidth: .infinity, alignment: .leading)
