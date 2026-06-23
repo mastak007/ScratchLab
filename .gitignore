@@ -84,3 +84,8 @@ reference_frames/
 reference_videos/
 context.txt
 debug_captures/
+
+# AI workflow and research artefacts — local only
+AI_HANDOFF/
+analysis/
+deep-research-skills/
