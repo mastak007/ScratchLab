@@ -17,9 +17,10 @@ final class NotationVisualizerViewModel: ObservableObject {
     // MARK: Notation data (loaded once)
 
     let notation: ScratchNotation?
-    // Display duration: the notation phrase window. Audio cycles are longer;
-    // timing within each cycle is mapped via BabyScratchReferenceMotionTimeline.
-    var loopDuration: TimeInterval { BabyScratchReferenceMotionTimeline.phraseEnd }
+    // Display duration derived from the loaded notation's actual phrase end.
+    // For the 76-stroke beat-quantized coach demo this is ~41.5s;
+    // for the short deterministic template (12-stroke) it would be 4.700s.
+    var loopDuration: TimeInterval { notation?.timelineDuration ?? BabyScratchReferenceMotionTimeline.phraseEnd }
 
     // MARK: Shared coordinator — master clock for all timing
 
@@ -57,6 +58,7 @@ final class NotationVisualizerViewModel: ObservableObject {
     @Published private(set) var lateCount = 0
     @Published private(set) var wrongCount = 0
     @Published private(set) var missedCount = 0
+    @Published private(set) var hasWrapped = false
 
     // MARK: Playback internals
 
@@ -82,8 +84,21 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     init(demo: BabyScratchDemoPlaybackCoordinator) {
         self.demo = demo
-        notation = ScratchNotation.babyScratchDemo
+        // Use the 76-stroke beat-quantized notation (same source as Practice)
+        // which spans ~41.5s with varied speed classifications, so stroke
+        // heights are differentiated and timing matches the coach demo audio.
+        notation = ScratchNotation.babyScratchFull76BeatQuantized
+        overlayModel = Self.makeOverlayModel(for: notation)
     }
+
+    /// Builds the notation overlay model from the coach-demo notation source.
+    /// Uses `replayNotation` to get duration-derived amplitude (varied heights)
+    /// rather than `targetNotation` (uniform 0.5 amplitude).
+    private static func makeOverlayModel(for notation: ScratchNotation?) -> LiveNotationOverlayModel {
+        LiveNotationOverlayModel.replayNotation(from: notation)
+    }
+
+    private(set) var overlayModel: LiveNotationOverlayModel
 
     // MARK: Playback control
 
@@ -121,6 +136,7 @@ final class NotationVisualizerViewModel: ObservableObject {
         lateCount = 0
         wrongCount = 0
         missedCount = 0
+        hasWrapped = false
     }
 
     // MARK: Per-frame tick (called by the view's timer)
@@ -160,7 +176,8 @@ final class NotationVisualizerViewModel: ObservableObject {
             }
         }
 
-        // Audio player time is the master clock. Map it to notation phrase time.
+        // Audio player time is the master clock. Map it to notation phrase time
+        // using the full demo audio cycle (42.866s) — same as Practice.
         let audioTime = demo.currentAudioTime
         ScratchLabPerformanceSignpost.event("CoachPlaybackTick", time: audioTime)
         let cycleDur = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
@@ -180,6 +197,9 @@ final class NotationVisualizerViewModel: ObservableObject {
 
         // A "loop" increments when we enter a new audio phrase cycle.
         let didWrap = currentCycleIndex > lastCycleIndex
+        if didWrap, !hasWrapped {
+            hasWrapped = true
+        }
         if didWrap {
             loopIndex += 1
             firedStrokeIndicesThisLoop = []
@@ -214,6 +234,16 @@ final class NotationVisualizerViewModel: ObservableObject {
     }
 
     // MARK: Private helpers
+
+    /// Wraps audio time into phrase-local time that continuously cycles at the
+    /// notation's phrase duration. No clamping — the wrap is seamless so the
+    /// notation loops continuously as the audio advances.
+    ///
+    /// Uses `ScratchNotationViewportMapper.phraseTime(forAudioTime:phraseDuration:)`
+    /// which returns a value in `[0, phraseDuration)` via `truncatingRemainder`.
+    private static func notationPhraseTime(for audioTime: TimeInterval, phraseDuration: TimeInterval) -> TimeInterval {
+        ScratchNotationViewportMapper.phraseTime(forAudioTime: audioTime, phraseDuration: phraseDuration)
+    }
 
     private func fireTargetStrokes(
         at newTime: TimeInterval,
@@ -321,8 +351,9 @@ struct NotationVisualizerView: View {
 
     let capturedSnapshot: CaptureCore.DetectedNotationSnapshot?
     /// True only when user has explicitly picked Template Demo while a snapshot exists.
-    /// Starts false so any arriving snapshot immediately shows as Captured Take.
-    @State private var showTemplateOverride = false
+    /// Starts true so the Notation Lab always opens in Template Demo mode
+    /// — the scrolling playhead view the user is here to practise with.
+    @State private var showTemplateOverride = true
 
     private let ticker = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
@@ -356,13 +387,18 @@ struct NotationVisualizerView: View {
                     noCapturedTakePane
                 }
             } else {
-                ScratchNotationCanvasView(
-                    notation: vm.notation,
-                    playbackTime: vm.playbackTime,
-                    loopDuration: vm.loopDuration
+                // Practice-style compact notation strip — the same visual
+                // language as the Practice view bottom notation lane.
+                LiveNotationOverlayView(
+                    model: vm.overlayModel,
+                    currentTime: vm.playbackTime,
+                    background: .solid,
+                    drawMode: .replayReveal,
+                    viewportSeconds: 3.2,
+                    maximumAmplitude: 0.35
                 )
                 .frame(maxWidth: .infinity)
-                .frame(minHeight: 220, maxHeight: 480)
+                .frame(minHeight: 120, maxHeight: 200)
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
                 notationMotionLane
@@ -388,8 +424,9 @@ struct NotationVisualizerView: View {
         }
         .onChange(of: capturedSnapshot == nil) { _, isNil in
             if !isNil {
-                // A snapshot just arrived — reset override so Captured Take is shown.
-                showTemplateOverride = false
+                // A snapshot just arrived — keep Template Demo visible.
+                // The user can switch to Captured Take via the picker.
+                showTemplateOverride = true
             }
         }
         .onChange(of: showTemplateOverride) { _, prefersTemplate in
@@ -468,11 +505,11 @@ struct NotationVisualizerView: View {
                 }
             } else {
                 labelChip(
-                    "Baby Scratch Template",
+                    "Baby Scratch Demo",
                     color: Color(red: 0.55, green: 0.75, blue: 1.0).opacity(0.75)
                 )
                 labelChip(
-                    "Phrase \(String(format: "%.3f", vm.loopDuration))s",
+                    "Notation \(String(format: "%.1f", vm.loopDuration))s",
                     color: Color(white: 0.45)
                 )
                 labelChip(

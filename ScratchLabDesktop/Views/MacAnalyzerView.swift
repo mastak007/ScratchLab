@@ -650,7 +650,8 @@ struct MacAnalyzerView: View {
                         viewportSeconds: 3.2,
                         beatGridBPM: 79,
                         beatGridFirstBeatTime: 0.336,
-                        beatsPerBar: 4
+                        beatsPerBar: 4,
+                        maximumAmplitude: 0.35
                     )
                     .frame(height: 80)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

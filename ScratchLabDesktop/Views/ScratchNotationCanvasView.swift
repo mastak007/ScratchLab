@@ -30,6 +30,11 @@ struct ScratchNotationCanvasView: View {
     // shared renderer; kept for API stability with existing call sites).
     var selectedStrokeIndex: Int? = nil
 
+    /// Whether playback has wrapped through the loop at least once. When
+    /// `false`, adjacent loop tiles (-4.7, +4.7) are suppressed so the
+    /// initial view shows only the current phrase with empty lead-in/tail.
+    var hasWrapped: Bool = false
+
     // Layout fractions (record lane : fader lane)
     private let recordLaneFraction: CGFloat = 0.72
     private let faderLaneFraction:  CGFloat = 0.18
@@ -91,15 +96,40 @@ struct ScratchNotationCanvasView: View {
                     actionLineFraction: playheadFraction,
                     secondsAhead: visibleSeconds * (1 - playheadFraction))
                 let content = LaneContent(notation: notation, beatsPerMinute: nil)
-                let motionPath = ScratchStrokeGeometry.motionPath(for: content)
-                for loopOffset in [-loop, 0, loop] {
-                    ScratchMotionRenderer.draw(
-                        motionPath.shifted(by: loopOffset),
-                        in: ctx, viewport: viewport, style: .target)
+
+                // Dynamic loop tiling: when the viewport hasn't wrapped
+                // through the loop yet, only the current (0-offset) tile
+                // is drawn so the visible window shows the notation's
+                // phrase with empty lead-in before `phraseStart` and empty
+                // tail after `phraseEnd`. Once playback has wrapped
+                // (`hasWrapped == true`), all overlapping tiles are drawn
+                // for continuous seamless looping.
+                let tileOffsets: [Double] = {
+                    if hasWrapped {
+                        let visibleStart = now - Double(phX) / Double(pps)
+                        let visibleEnd   = visibleStart + visibleSeconds
+                        let kMin = Int((visibleStart / loop).rounded(.down))
+                        let kMax = Int((visibleEnd   / loop).rounded(.up))
+                        return (kMin...kMax).map { Double($0) * loop }
+                    } else {
+                        return [0]
+                    }
+                }()
+
+                // Draw each stroke as a single diagonal slash — the same
+                // action-notation trace the iOS Practice target lane uses.
+                // Forward strokes rise (`/`), backward strokes fall (`\`).
+                // No V-shaped out-and-return tents, no junction nodes.
+                for loopOffset in tileOffsets {
+                    let shifted = loopOffset == 0
+                        ? content.strokes
+                        : content.strokes.map { $0.shifted(by: loopOffset) }
+                    ScratchMotionRenderer.drawActionNotationTrace(
+                        shifted, in: ctx, viewport: viewport, style: .target)
                 }
 
                 // Crossfader sub-lane (macOS affordance, kept).
-                for loopOffset in [-loop, 0, loop] {
+                for loopOffset in tileOffsets {
                     for stroke in notation.strokes {
                         drawFaderMarker(ctx: ctx, stroke: stroke,
                                         loopOffset: loopOffset, now: now,

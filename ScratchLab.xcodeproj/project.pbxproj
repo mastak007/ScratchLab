@@ -402,6 +402,8 @@
 		SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SML0000000SML001SML00001 /* ScratchMotionLane.swift */; };
 		SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
 		SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
+		NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVM0000000NVM001NVM00001 /* ScratchNotationViewportMapper.swift */; };
+		NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVM0000000NVM001NVM00001 /* ScratchNotationViewportMapper.swift */; };
 		SNA1001000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
 		SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
 		SNA2011000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */; };
@@ -778,6 +780,7 @@
 		SLD0000001SLD001SLD00001 /* ScratchLabDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignTokens.swift; sourceTree = "<group>"; };
 		SML0000000SML001SML00001 /* ScratchMotionLane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionLane.swift; sourceTree = "<group>"; };
 		SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchMotionRenderer.swift; sourceTree = "<group>"; };
+		NVM0000000NVM001NVM00001 /* ScratchNotationViewportMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationViewportMapper.swift; sourceTree = "<group>"; };
 		SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/ScratchNotationPresentationAdapter.swift; sourceTree = "<group>"; };
 		SNA2010000SNA002SNA00001 /* ScratchNotationPresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPresentationAdapterTests.swift; sourceTree = "<group>"; };
 		SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationCanvasView.swift; sourceTree = "<group>"; };
@@ -1110,6 +1113,7 @@
 				TML0000000TML001TML00001 /* TimingLane.swift */,
 				SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */,
 				SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */,
+				NVM0000000NVM001NVM00001 /* ScratchNotationViewportMapper.swift */,
 				PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */,
 				NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */,
 				NGP2000000NGP002NGP00001 /* GrammarParameters.swift */,
@@ -1627,6 +1631,7 @@
 				TML0001000TML001TML00001 /* TimingLane.swift in Sources */,
 				SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */,
 				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,
+				NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
 				NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */,
 				NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */,
@@ -1800,6 +1805,7 @@
 				TML0001000TML001TML00002 /* TimingLane.swift in Sources */,
 				SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
+				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
 				NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */,
 				NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */,

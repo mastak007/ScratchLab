@@ -32,6 +32,9 @@ struct LiveNotationOverlayView: View {
     var beatGridBPM: Double? = nil
     var beatGridFirstBeatTime: Double = 0
     var beatsPerBar: Int = 4
+    /// Caps the effective stroke travel fraction. Default `1.0` (no cap).
+    /// Set to `0.35` for Baby Scratch to produce compact centre-band strokes.
+    var maximumAmplitude: Double = 1.0
 
     // Palette
     private let bgColor       = Color(white: 0.10)
@@ -47,13 +50,17 @@ struct LiveNotationOverlayView: View {
 
     // MARK: - Viewport
 
+    /// Returns the visible time window so that `currentTime` always maps
+    /// to the fixed playhead position (`playheadFraction` from the left edge).
+    ///
+    /// There is **no clamping** — `tMin` is allowed to be negative (empty
+    /// lead-in before the phrase) and `tMax` may extend past `model.duration`
+    /// (empty tail-out after the phrase). This ensures the playhead is always
+    /// at `currentTime` and strokes scroll continuously through it.
     private func canvasTimeRange(size: CGSize) -> (tMin: TimeInterval, tMax: TimeInterval) {
         if let vp = viewportSeconds, vp > 0 {
-            let dur = max(model.duration, 0.01)
-            var tMin = currentTime - vp * playheadFraction
-            var tMax = tMin + vp
-            if tMin < 0 { tMin = 0; tMax = min(dur, vp) }
-            else if tMax > dur { tMax = dur; tMin = max(0, dur - vp) }
+            let tMin = currentTime - vp * playheadFraction
+            let tMax = tMin + vp
             return (tMin, tMax)
         }
         return (0, max(model.duration, 0.01))
@@ -150,6 +157,13 @@ struct LiveNotationOverlayView: View {
         guard !viewportEvents.isEmpty else { return }
         let baseline = size.height * CGFloat(CapturedNotationStrokeGeometry.baselineFraction)
         let maxBand  = size.height * CGFloat(CapturedNotationStrokeGeometry.maxBandFraction)
+        let cap = CGFloat(maximumAmplitude)
+
+        /// Capped travel fraction — limits stroke height to `maximumAmplitude`
+        /// so Baby Scratch reads as a compact centre-band rather than full-height.
+        func travelFor(_ event: CaptureCore.DetectedNotationRecordMovementEvent) -> CGFloat {
+            min(cap, CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: event)))
+        }
 
         // Process events in F/B pairs
         var i = 0
@@ -168,7 +182,7 @@ struct LiveNotationOverlayView: View {
                 // baseline toward the peak — a single forward gesture, not
                 // a pair, with no downward return.
                 let ts = e0.startTime; let te = e0.endTime; guard te > ts else { i += 1; continue }
-                let travel = CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: e0))
+                let travel = travelFor(e0)
                 let peak = baseline - travel * maxBand
                 let x1 = xForTime(ts, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
                 let x2 = xForTime(te, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
@@ -204,7 +218,7 @@ struct LiveNotationOverlayView: View {
                 let turnPoint = b.startTime // F ends here, B starts here
                 guard b_te > f_ts, turnPoint > f_ts, b_te > turnPoint else { i += 2; continue }
 
-                let travel = CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: f))
+                let travel = travelFor(f)
                 let peak = baseline - travel * maxBand
 
                 let x_fs = xForTime(f_ts, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
@@ -258,7 +272,7 @@ struct LiveNotationOverlayView: View {
             } else {
                 // Standalone backward or unpaired — draw as simple diagonal
                 let ts = e0.startTime; let te = e0.endTime; guard te > ts else { i += 1; continue }
-                let travel = CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: e0))
+                let travel = travelFor(e0)
                 let peak = baseline - travel * maxBand
                 let x1 = xForTime(ts, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
                 let x2 = xForTime(te, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
