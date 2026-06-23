@@ -221,7 +221,6 @@ public struct TimecodeFixtureLoader: Sendable {
         inputs: [TimecodePhaseDecoder.StereoInput],
         channelCount: Int = 2
     ) -> TimecodeFixtureValidationReport {
-        let frameLength = inputs.reduce(0) { $0 + $1.left.count }
         let duration = inputs.last?.relativeTime ?? 0
 
         // Compute overall signal metrics from all inputs
@@ -405,7 +404,7 @@ public struct TimecodeFixtureLoader: Sendable {
 
         // --- Stability filter pass ---
         let filter = TimecodeMotionStabilityFilter(config: stabilityConfig)
-        var filterState = TimecodeStabilityFilterState()
+        let filterState = TimecodeStabilityFilterState()
         let flushTime = inputs.last?.relativeTime ?? duration
         let filterResult = filter.filter(
             frames: decodeResult.frames,
