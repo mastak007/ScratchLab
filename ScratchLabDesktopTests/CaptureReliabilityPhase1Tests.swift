@@ -11446,29 +11446,36 @@ final class AutoCutVisualPlaybackTests: XCTestCase {
     func testAutoCutVisualPlaybackIsGatedToAutoCutMode() throws {
         let view = try source("ScratchLab/Views/PracticeModeView.swift")
 
-        // The animated-chart view exists and enables the playhead.
-        XCTAssertTrue(view.contains("struct AutoCutTargetChart"),
-                      "PracticeModeView must declare the AutoCutTargetChart view")
-        XCTAssertTrue(view.contains("showPlayhead: true"),
-                      "Auto-cut chart must enable the ScratchPhraseChartView playhead")
+        // The AutoCutTargetChart struct was deferred in favour of the unified
+        // notation lane. AutoCut surfaces are gated through the assist-mode
+        // enum, the looping-lane clock, and honest product-truth copy.
+        XCTAssertTrue(view.contains("case autoCut"),
+                      "PracticeAssistMode must declare the autoCut case")
+        // The shared notation lane uses a looping clock for autoCut, guided,
+        // and coached modes — the lane scrolls under the action line.
+        XCTAssertTrue(view.contains(".looping(start: notationClockStartDate"),
+                      "Auto-cut must loop the target notation under the action line")
 
-        // The animated chart is gated to Auto-cut assist mode only.
-        XCTAssertTrue(view.contains("practiceAssistMode == .autoCut"),
-                      "Auto-cut visual playback must render only in Auto-cut mode")
-        XCTAssertTrue(view.contains("AutoCutTargetChart(notation:"),
-                      "Auto-cut chart must be instantiated at the gated render site")
+        // Auto-cut is gated through the activeLane switch (not a standalone
+        // guard), which selects .looping for autoCut/guided/coached.
+        XCTAssertTrue(view.contains("case .autoCut, .guided, .coached:"),
+                      "Auto-cut visual playback must share the looping-lane path")
 
-        // Deterministic, view-local clock — reuses the GuidedCutCueLayer pattern.
+        // The status chip names the runtime state honestly.
+        XCTAssertTrue(view.contains("\"Preview playing\""),
+                      "Auto-cut status must read Preview playing")
+
+        // A TimelineView drives the lane clock — reused across modes.
         XCTAssertTrue(view.contains("TimelineView(.periodic"),
-                      "Auto-cut playback must use a view-local TimelineView clock")
+                      "Auto-cut mode must use a TimelineView clock")
 
         // Reuses the existing bundled target notation — no new data source.
         XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
-                      "Auto-cut chart must reuse the existing bundled target notation")
+                      "Auto-cut mode must reuse the existing bundled target notation")
 
-        // Honest copy — visual preview, explicitly not audio playback.
-        XCTAssertTrue(view.contains("visual preview — no audio playback yet"),
-                      "Auto-cut explainer copy must stay honest: visual preview, no audio")
+        // Honest copy — visual preview only, no audio playback.
+        XCTAssertTrue(view.contains("Animates the target pattern as a looping visual preview. App audio is coming later — for now, no playback."),
+                      "Auto-cut explainer must stay honest: visual preview, no audio playback")
     }
 
     func testAutoCutVisualPlaybackIsNotCoupledToEngineLayers() throws {
