@@ -4840,8 +4840,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let effectiveMappedControl = mappedControl
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
         let normalizedValue = Double(value) / 127.0
-        let summary = "Received CC\(controller) Ch\(channel + 1) Value\(value)"
-        let ccMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
+        // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
+        let padLabel = RaneOneMK2PadCandidateLabeler.label(channel: channel, cc: controller, value: value)
+        let summary: String
+        let ccMessage: String
+        if let padLabel {
+            summary = padLabel
+            ccMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
+        } else {
+            summary = "Received CC\(controller) Ch\(channel + 1) Value\(value)"
+            ccMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
+        }
         let isMidiLearn = midiLearnState == .listening
 
         // Throttle @Published UI-monitor updates to ~4 Hz.

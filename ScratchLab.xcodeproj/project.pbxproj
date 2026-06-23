@@ -314,6 +314,9 @@
 		SBPM0001MAC00001 /* ScratchBankPadMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPM0000FREF0001 /* ScratchBankPadMapping.swift */; };
 		SBPGM0IOS00002 /* ScratchBankPadGridModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPGM0FREF0001 /* ScratchBankPadGridModel.swift */; };
 		SBPGM0MAC00002 /* ScratchBankPadGridModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPGM0FREF0001 /* ScratchBankPadGridModel.swift */; };
+		RMKPLS0001IOS /* RaneOneMK2PadCandidateLabeler.swift in Sources */ = {isa = PBXBuildFile; fileRef = RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */; };
+		RMKPLS0001MAC /* RaneOneMK2PadCandidateLabeler.swift in Sources */ = {isa = PBXBuildFile; fileRef = RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */; };
+		RMKPLS0001TST /* RaneOneMK2PadCandidateLabelerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RMKPLS0002FREF /* RaneOneMK2PadCandidateLabelerTests.swift */; };
 		SBPM0002TST00001 /* ScratchBankPadMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPM0002FREF0001 /* ScratchBankPadMappingTests.swift */; };
 		SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPG2FREF0001 /* ScratchBankPadGridView.swift */; };
 		SBPG2TST00001 /* ScratchBankPadGridViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPG2FREF0002 /* ScratchBankPadGridViewTests.swift */; };
@@ -710,6 +713,8 @@
 		SBPM0000FREF0001 /* ScratchBankPadMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMapping.swift; sourceTree = "<group>"; };
 		SBPM0002FREF0001 /* ScratchBankPadMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMappingTests.swift; sourceTree = "<group>"; };
 		SBPGM0FREF0001 /* ScratchBankPadGridModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadGridModel.swift; sourceTree = "<group>"; };
+		RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2PadCandidateLabeler.swift; sourceTree = "<group>"; };
+		RMKPLS0002FREF /* RaneOneMK2PadCandidateLabelerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2PadCandidateLabelerTests.swift; sourceTree = "<group>"; };
 		SBPG2FREF0001 /* ScratchBankPadGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadGridView.swift; sourceTree = "<group>"; };
 		SBPG2FREF0002 /* ScratchBankPadGridViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadGridViewTests.swift; sourceTree = "<group>"; };
 		NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPresentationModelTests.swift; sourceTree = "<group>"; };
@@ -919,6 +924,7 @@
 				RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */,
 				SBPM0002FREF0001 /* ScratchBankPadMappingTests.swift */,
 				SBPG2FREF0002 /* ScratchBankPadGridViewTests.swift */,
+				RMKPLS0002FREF /* RaneOneMK2PadCandidateLabelerTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1205,6 +1211,7 @@
 			children = (
 				SBPM0000FREF0001 /* ScratchBankPadMapping.swift */,
 				SBPGM0FREF0001 /* ScratchBankPadGridModel.swift */,
+				RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */,
 			);
 			path = ScratchSoundBank;
 			sourceTree = "<group>";
@@ -1668,8 +1675,8 @@
 				NFS1001000NFS001NFS00001 /* NotationFeedbackState.swift in Sources */,
 				SBPM0001MAC00001 /* ScratchBankPadMapping.swift in Sources */,
 				SBPGM0MAC00002 /* ScratchBankPadGridModel.swift in Sources */,
-				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,
-				NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */,
+				RMKPLS0001MAC /* RaneOneMK2PadCandidateLabeler.swift in Sources */,
+				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,				NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
 				NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */,
 				NGP2001000NGP002NGP00001 /* GrammarParameters.swift in Sources */,
@@ -1845,6 +1852,7 @@
 				NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */,
 				SBPM0001IOS00001 /* ScratchBankPadMapping.swift in Sources */,
 				SBPGM0IOS00002 /* ScratchBankPadGridModel.swift in Sources */,
+				RMKPLS0001IOS /* RaneOneMK2PadCandidateLabeler.swift in Sources */,
 				SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
@@ -2034,6 +2042,7 @@
 				RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */,
 				SBPM0002TST00001 /* ScratchBankPadMappingTests.swift in Sources */,
 				SBPG2TST00001 /* ScratchBankPadGridViewTests.swift in Sources */,
+				RMKPLS0001TST /* RaneOneMK2PadCandidateLabelerTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
