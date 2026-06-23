@@ -2066,9 +2066,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("captureEngine.autoSelectCaptureAudioDeviceIfNeeded()"))
-        XCTAssertTrue(source.contains("WorkspaceTab.resolved(from: newValue) == .capture"))
-        XCTAssertTrue(source.contains("captureEngine.refreshDevices()"))
+        // Auto-select audio when the resolved tab is the capture tab.
+        XCTAssertTrue(source.contains("captureEngine.autoSelectCaptureAudioDeviceIfNeeded()"),
+                      "capture tab must auto-select an audio device")
+        XCTAssertTrue(source.contains("if resolvedTab == .capture"),
+                      "auto-select must be gated on the capture tab resolution")
+        XCTAssertTrue(source.contains("captureEngine.refreshDevices()"),
+                      "capture tab entry must refresh available devices")
+
+        // The tab-resolution guard still exists; the resolvedTab local variable
+        // replaced the inline expression without changing behaviour.
+        XCTAssertTrue(source.contains("WorkspaceTab.resolved(from: newValue)"),
+                      "workspace tab must be resolved before gating")
     }
 
     @MainActor
