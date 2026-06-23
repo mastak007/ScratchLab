@@ -9121,6 +9121,150 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
             "Review footer must not label the metric as plain 'Confidence'"
         )
     }
+
+    // MARK: - Blocker 5: Permission rationale gates
+
+    func testCameraPreviewRationaleReplacesAutoRequest() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // The .notDetermined case must NOT fire requestAccess() automatically on appear.
+        XCTAssertFalse(
+            source.contains(".onAppear { requestAccess() }"),
+            "CameraPreviewView must not auto-request camera access on appear — user must initiate via rationale card"
+        )
+        // The rationale card must exist.
+        XCTAssertTrue(
+            source.contains("cameraRationaleCard"),
+            "CameraPreviewView must show cameraRationaleCard for the .notDetermined state"
+        )
+        // The rationale copy must be present.
+        XCTAssertTrue(
+            source.contains("Camera practice uses your device camera"),
+            "CameraPreviewView rationale must include product-aligned copy"
+        )
+        // The Enable Camera button must call requestAccess.
+        XCTAssertTrue(
+            source.contains("Enable Camera"),
+            "Camera rationale card must have an 'Enable Camera' action button"
+        )
+    }
+
+    func testMicrophoneRationaleGatesAudioEngineStart() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // setupAudioEngine must check mic permission before calling audioEngine.start().
+        let setupSlice = try sourceSlice(in: source, from: "private func setupAudioEngine()", through: "private func startSession()")
+        XCTAssertTrue(
+            setupSlice.contains("isMicUndetermined"),
+            "setupAudioEngine must check mic permission status before starting audio engine"
+        )
+        XCTAssertFalse(
+            setupSlice.hasPrefix("private func setupAudioEngine() {\n        practiceBeatStore") &&
+            setupSlice.contains("audioEngine.start()") &&
+            !setupSlice.contains("isMicUndetermined"),
+            "audioEngine.start() must be conditional on mic permission, not unconditional"
+        )
+        // The rationale overlay must exist.
+        XCTAssertTrue(
+            source.contains("microphoneRationaleOverlay"),
+            "PracticeModeView must have a microphoneRationaleOverlay for the undetermined mic state"
+        )
+        // Rationale copy must be present.
+        XCTAssertTrue(
+            source.contains("ScratchLab uses the microphone to analyse timing"),
+            "Microphone rationale must include product-aligned copy"
+        )
+        // Start Practice button must call audioEngine.start().
+        XCTAssertTrue(
+            source.contains("Start Practice"),
+            "Microphone rationale overlay must have a 'Start Practice' action button"
+        )
+    }
+
+    func testLocalNetworkAdvertisingGatedBehindRationale() throws {
+        let appSourceURL = projectRootURL().appendingPathComponent("ScratchLab/ScratchLabApp.swift")
+        let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
+
+        // configureWatchRelay must gate startRelayAdvertisingIfNeeded behind the acceptance flag.
+        let relaySlice = try sourceSlice(in: appSource, from: "private func configureWatchRelay()", through: "private func refreshWatchCapturePipeline")
+        XCTAssertTrue(
+            relaySlice.contains("localNetworkRationaleAccepted"),
+            "configureWatchRelay must gate startRelayAdvertisingIfNeeded behind localNetworkRationaleAccepted"
+        )
+        XCTAssertFalse(
+            relaySlice.components(separatedBy: "localNetworkRationaleAccepted").first?.contains("startRelayAdvertisingIfNeeded") == true,
+            "startRelayAdvertisingIfNeeded must not appear before the localNetworkRationaleAccepted check"
+        )
+
+        // AdvancedHubView must have the rationale card with the acceptance button.
+        let menuSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let menuSource = try String(contentsOf: menuSourceURL, encoding: .utf8)
+        XCTAssertTrue(
+            menuSource.contains("localNetworkRationaleCard"),
+            "AdvancedHubView must present a localNetworkRationaleCard before starting local network discovery"
+        )
+        XCTAssertTrue(
+            menuSource.contains("Local network access lets ScratchLab find your Mac"),
+            "Local network rationale must include product-aligned copy"
+        )
+        XCTAssertTrue(
+            menuSource.contains("Connect to Mac"),
+            "Local network rationale card must have a 'Connect to Mac' action button"
+        )
+    }
+
+    func testInfoPlistUsageStringsExistAndMatchProductTruth() throws {
+        let plistURL = projectRootURL().appendingPathComponent("ScratchLab/Info.plist")
+        let plistSource = try String(contentsOf: plistURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            plistSource.contains("NSCameraUsageDescription"),
+            "iOS Info.plist must declare NSCameraUsageDescription"
+        )
+        XCTAssertTrue(
+            plistSource.contains("NSMicrophoneUsageDescription"),
+            "iOS Info.plist must declare NSMicrophoneUsageDescription"
+        )
+        XCTAssertTrue(
+            plistSource.contains("NSLocalNetworkUsageDescription"),
+            "iOS Info.plist must declare NSLocalNetworkUsageDescription"
+        )
+        XCTAssertFalse(
+            plistSource.contains("upload") || plistSource.contains("cloud") || plistSource.contains("server"),
+            "iOS Info.plist usage strings must not mention upload, cloud, or server"
+        )
+        XCTAssertTrue(
+            plistSource.contains("analyse timing") || plistSource.contains("analyze timing"),
+            "NSMicrophoneUsageDescription must describe timing analysis, not just recording"
+        )
+    }
+
+    func testExistingReleaseGatesFromPreviousSliceRemainIntact() throws {
+        // Spot-check that e6c544b gates were not accidentally removed.
+        let uploadSource = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLab/Services/SessionUploadManager.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            uploadSource.contains("#if !DEBUG"),
+            "SessionUploadManager Release gate must still be present"
+        )
+
+        let macSource = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            macSource.contains("No usable movement strokes found"),
+            "MacAnalyzerView estimate copy must still be present"
+        )
+        XCTAssertFalse(
+            macSource.contains("No scratch strokes recognized"),
+            "MacAnalyzerView must not have reverted to old 'recognized' copy"
+        )
+    }
 }
 
 extension CaptureReliabilityPhase1CoreTests {

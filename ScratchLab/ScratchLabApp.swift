@@ -36,6 +36,7 @@ private struct RootContainerView: View {
     @StateObject private var companionRelayBroadcaster = CompanionCameraBroadcaster()
     @StateObject private var watchMotionCaptureStore = WatchMotionCaptureStore()
     @StateObject private var sessionUploadManager = SessionUploadManager()
+    @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
 
     var body: some View {
         ContentView()
@@ -74,7 +75,9 @@ private struct RootContainerView: View {
     }
 
     private func configureWatchRelay() {
-        companionRelayBroadcaster.startRelayAdvertisingIfNeeded()
+        if localNetworkRationaleAccepted {
+            companionRelayBroadcaster.startRelayAdvertisingIfNeeded()
+        }
         watchMotionCaptureStore.onImportedCapture = { importedCapture in
             companionRelayBroadcaster.sendWatchCaptureSession(
                 importedCapture.session,

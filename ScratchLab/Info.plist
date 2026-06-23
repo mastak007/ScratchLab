@@ -65,7 +65,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>ScratchLab uses your local network to discover the ScratchLab camera companion and Mac performer monitor on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ScratchLab uses the microphone or selected audio input to record scratch audio and analyze takes.</string>
+	<string>ScratchLab uses the microphone to analyse timing from your scratch audio. Audio stays on this device unless you export it yourself.</string>
 	<key>UIAppFonts</key>
 	<array/>
 	<key>UIBackgroundModes</key>

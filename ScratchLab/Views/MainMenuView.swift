@@ -371,6 +371,7 @@ private struct ReviewPlaceholderView: View {
 private struct AdvancedHubView: View {
     @EnvironmentObject private var companionRelayBroadcaster: CompanionCameraBroadcaster
     @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
+    @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
 
     @State private var showingDemoMode = false
     @State private var showingCompanionCam = false
@@ -432,6 +433,49 @@ private struct AdvancedHubView: View {
     }
 
     private var relayStatusCard: some View {
+        Group {
+            if localNetworkRationaleAccepted {
+                relayActiveCard
+            } else {
+                localNetworkRationaleCard
+            }
+        }
+    }
+
+    private var localNetworkRationaleCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("MAC & COMPANION CONNECTION")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color(hex: "A78BFA"))
+
+            Text("Local network access lets ScratchLab find your Mac or companion device on your Wi-Fi. Nothing is uploaded.")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white.opacity(0.86))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                localNetworkRationaleAccepted = true
+                companionRelayBroadcaster.startRelayAdvertisingIfNeeded()
+            } label: {
+                Text("Connect to Mac")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.black)
+                    .frame(height: 36)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(hex: "A78BFA"))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color(hex: "A78BFA").opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private var relayActiveCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("WATCH RELAY")
                 .font(.system(size: 11, weight: .semibold))
@@ -1481,6 +1525,10 @@ private struct IPadPerformerMonitorView: View {
             Text("Use this when you want ScratchLab feedback off the Serato screen.")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundColor(.white.opacity(0.82))
+
+            Text("Local network access lets ScratchLab find your Mac on your Wi-Fi. Nothing is uploaded.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.55))
 
             Label(receiver.connectionStatus, systemImage: receiver.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right")
                 .font(.system(size: 13, weight: .bold))

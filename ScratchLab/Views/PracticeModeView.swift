@@ -82,6 +82,7 @@ struct PracticeModeView: View {
     @State private var isCameraPreviewVisible = false
     @State private var showingCaptureHelp = false
     @State private var showingQuickStartAgain = false
+    @State private var showMicRationale = false
     @State private var showingResults = false
     @AppStorage(QuickStartSettings.hasSeenKey) private var hasSeenQuickStart = false
     @AppStorage(QuickStartSettings.versionKey) private var quickStartVersion = 0
@@ -472,6 +473,11 @@ struct PracticeModeView: View {
         .onDisappear {
             cleanupSession()
             practiceBeatStore.handleLeavingPractice()
+        }
+        .overlay {
+            if showMicRationale {
+                microphoneRationaleOverlay
+            }
         }
         .sheet(isPresented: $showingCaptureHelp) {
             CaptureHelpView {
@@ -1101,6 +1107,40 @@ struct PracticeModeView: View {
     }
 
 
+    // MARK: - Microphone Rationale
+
+    private var microphoneRationaleOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.92).ignoresSafeArea()
+            VStack(spacing: 22) {
+                Image(systemName: "microphone.fill")
+                    .font(.system(size: 44))
+                    .foregroundColor(Color(hex: "00D4FF"))
+                Text("Microphone access")
+                    .font(.title2.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("ScratchLab uses the microphone to analyse timing from your scratch audio. Audio stays on this device unless you export it yourself.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                Button {
+                    showMicRationale = false
+                    audioEngine.start()
+                } label: {
+                    Text("Start Practice")
+                        .font(.headline)
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(Color(hex: "00D4FF"))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .padding(.horizontal, 32)
+            }
+        }
+    }
+
     // MARK: - Session Management
     
     private func setupAudioEngine() {
@@ -1108,9 +1148,21 @@ struct PracticeModeView: View {
             scratchID: activeScratch.id,
             preferredBPM: isGuidedDrillMode ? Int(drillBPM.rounded()) : nil
         )
-        audioEngine.start()
         audioEngine.onScratchDetected = { [self] result in
             handleScratchDetected(result)
+        }
+
+        let isMicUndetermined: Bool
+        if #available(iOS 17.0, *) {
+            isMicUndetermined = AVAudioApplication.shared.recordPermission == .undetermined
+        } else {
+            isMicUndetermined = AVAudioSession.sharedInstance().recordPermission == .undetermined
+        }
+
+        if isMicUndetermined {
+            showMicRationale = true
+        } else {
+            audioEngine.start()
         }
     }
     
@@ -1580,8 +1632,7 @@ struct CameraPreviewView: View {
             case .denied, .restricted:
                 deniedOverlay
             case .notDetermined:
-                Color.black
-                    .onAppear { requestAccess() }
+                cameraRationaleCard
             @unknown default:
                 Color.black
             }
@@ -1589,6 +1640,37 @@ struct CameraPreviewView: View {
         .onAppear {
             let status = AVCaptureDevice.authorizationStatus(for: .video)
             authorizationStatus = status
+        }
+    }
+
+    private var cameraRationaleCard: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 40))
+                    .foregroundColor(.white.opacity(0.7))
+                Text("Camera practice")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text("Camera practice uses your device camera to preview movement while you practise. Camera access is only used when you enable this mode.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                Button {
+                    requestAccess()
+                } label: {
+                    Text("Enable Camera")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: 220)
+                        .frame(height: 44)
+                        .background(Color.white.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+            .padding(24)
         }
     }
 
