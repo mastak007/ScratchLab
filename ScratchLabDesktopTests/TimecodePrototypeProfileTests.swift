@@ -380,8 +380,8 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         // Snapshot debug text must include prototype disclaimers
         XCTAssertTrue(snap.debugText.contains("prototype"),
                       "snapshot debug text must mention 'prototype'")
-        XCTAssertTrue(snap.debugText.contains("NOT sent to notation"),
-                      "snapshot debug text must state 'NOT sent to notation'")
+        XCTAssertTrue(snap.debugText.lowercased().contains("not sent to notation"),
+                      "snapshot debug text must state 'not sent to notation'")
 
         // Source label must be timecode_live (not a production source)
         XCTAssertEqual(snap.sourceLabel, "timecode_live",

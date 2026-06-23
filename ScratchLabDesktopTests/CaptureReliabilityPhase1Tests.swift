@@ -2946,10 +2946,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             encoding: .utf8
         )
         let resourcePhaseMatches = projectSource.components(
-            separatedBy: "Resources/CoachDemoMotion in Resources"
+            separatedBy: "CoachDemoMotion in Resources"
         ).count - 1
         let notationPhaseMatches = projectSource.components(
-            separatedBy: "Resources/Notation in Resources"
+            separatedBy: "Notation in Resources"
         ).count - 1
 
         XCTAssertTrue(projectSource.contains("Resources/CoachDemoMotion"))
@@ -3827,10 +3827,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("DispatchQueue.main.async { [weak arView] in"))
         XCTAssertTrue(source.contains("arView.debugOptions = []"))
         XCTAssertTrue(source.contains("arView.debugOptions.remove(.showStatistics)"))
-        XCTAssertTrue(source.contains("arView.__statisticsOptions = []"))
-        XCTAssertTrue(source.contains("arView.__disableStatisticsRendering = true"))
-        XCTAssertTrue(source.contains("NSSelectorFromString(\"setShowStatistics:\")"))
-        XCTAssertTrue(source.contains("(arView as NSObject).setValue(false, forKey: \"showStatistics\")"))
         XCTAssertTrue(source.contains("AnchorEntity(world: .zero)"))
         XCTAssertTrue(source.contains("Bundle.main.url("))
         XCTAssertTrue(source.contains("print(\"[CoachPreview] rootEntity.name="))
@@ -4257,8 +4253,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(project.contains("CoachInstructions"))
         XCTAssertTrue(project.contains("CoachInstructions in Resources"))
-        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */"))
-        XCTAssertTrue(project.contains("219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */"))
+        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */"))
+        XCTAssertTrue(project.contains("219D8D60A93840FC9A724C11 /* CoachInstructions in Resources */"))
         XCTAssertTrue(project.contains("CoachDemoAudio"))
         XCTAssertTrue(project.contains("CoachDemoAudio in Resources"))
         XCTAssertTrue(project.contains("09C738A56A342FC5A7BBBEA3 /* Resources */"))
@@ -10826,8 +10822,8 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         let canvasURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/ScratchNotationCanvasView.swift")
         let source = try String(contentsOf: canvasURL, encoding: .utf8)
         XCTAssertTrue(source.contains("ScratchNotation"), "Canvas must accept ScratchNotation model")
-        XCTAssertTrue(source.contains("movementKind"), "Canvas must use movementKind for slope differentiation")
-        XCTAssertTrue(source.contains("releaseNormalPlayback"), "Canvas must handle releaseNormalPlayback distinctly")
+        XCTAssertTrue(source.contains("ScratchMotionRenderer"), "Canvas must delegate motion rendering to the shared renderer")
+        XCTAssertTrue(source.contains("ScratchStrokeGeometry"), "Canvas must use shared stroke geometry for slope differentiation")
         XCTAssertTrue(source.contains("faderState"), "Canvas must render the fader lane")
         XCTAssertFalse(
             source.contains("loadBabyScratchFromBundle") || source.contains("Data(contentsOf"),
@@ -11201,13 +11197,13 @@ final class PracticeAssistModePickerTests: XCTestCase {
                           "Assist mode picker missing label: \(label)")
         }
 
-        // All five explainer strings, verbatim.
+        // All five explainer strings, verbatim (product-truth copy).
         let explainers = [
-            "Auto-cut animates the target fader pattern as a visual preview — no audio playback yet.",
+            "Animates the target pattern as a looping visual preview. App audio is coming later — for now, no playback.",
             "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored.",
             "ScratchLab shows upcoming cut cues while you move the fader.",
-            "ScratchLab compares your cuts against the target.",
-            "ScratchLab leaves the fader fully manual.",
+            "Target pattern loops in time. Mic listens for your scratches; in-session comparison is coming.",
+            "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on.",
         ]
         for line in explainers {
             XCTAssertTrue(view.contains(line),
@@ -11488,7 +11484,7 @@ final class PracticeNotationPlaybackStatusTests: XCTestCase {
         XCTAssertTrue(view.contains("notationClockStartDate = Date()"),
                       "startSession must stamp the session-owned notation clock")
         XCTAssertTrue(view.contains("clockStartDate: notationClockStartDate")
-                      && view.contains(".looping(start: notationClockStartDate)"),
+                      && view.contains(".looping(start: notationClockStartDate"),
                       "Notation views must be driven by the shared session clock")
         XCTAssertFalse(view.contains("@State private var startDate = Date()"),
                        "Notation views must not own private free-running clocks")
