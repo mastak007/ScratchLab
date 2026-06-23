@@ -2621,7 +2621,7 @@ struct ResultsOverlayView: View {
                 
                 // Result text
                 VStack(spacing: 8) {
-                    Text(headline ?? (accuracy >= 90 ? "MASTERY!" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
+                    Text(headline ?? (accuracy >= 90 ? "Practice goal cleared" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
                     

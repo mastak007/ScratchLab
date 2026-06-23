@@ -1004,7 +1004,7 @@ struct CapturedNotationDisplayView: View {
             if isDetected            { return "Detected notation" }
             if isAudioOnlyPartial {
                 return mixedStateHint
-                    ? "Motion captured · no strokes recognized"
+                    ? "Motion captured · no usable movement strokes found"
                     : "Audio-only take"
             }
             if isPartial             { return "Partial notation" }
@@ -1046,7 +1046,7 @@ struct CapturedNotationDisplayView: View {
             if isAudioOnlyPartial {
                 VStack(alignment: .leading, spacing: 5) {
                     if mixedStateHint {
-                        Text("Motion was captured, but no scratch strokes were recognized for this take.")
+                        Text("Motion was captured, but no usable movement strokes were found for this take.")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
                         Text("Notation preview isn't available.")
@@ -1288,7 +1288,7 @@ struct CapturedNotationDisplayView: View {
                     Text("Motion captured")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("No scratch strokes recognized for this take.")
+                    Text("No usable movement strokes found for this take.")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(audioColor)
                     Text("Notation preview isn't available.")

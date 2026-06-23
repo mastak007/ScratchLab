@@ -1098,7 +1098,7 @@ struct ProfileView: View {
                     // Stats
                     HStack(spacing: 40) {
                         ProfileStat(value: "\(progressManager.playerProfile?.level ?? 1)", label: "Level")
-                        ProfileStat(value: "\(progressManager.playerProfile?.totalScore ?? 0)", label: "Score")
+                        ProfileStat(value: "\(progressManager.playerProfile?.totalScore ?? 0)", label: "Practice estimate")
                     }
                     
                     Spacer()

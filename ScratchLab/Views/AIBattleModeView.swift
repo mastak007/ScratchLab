@@ -507,7 +507,7 @@ struct AIBattleView: View {
                     Text("\(Int(playerAccuracy))%")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(.white)
-                    Text("Accuracy")
+                    Text("Match estimate")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                 }

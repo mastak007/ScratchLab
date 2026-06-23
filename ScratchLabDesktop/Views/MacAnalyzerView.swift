@@ -5812,7 +5812,7 @@ struct MacAnalyzerView: View {
                 color: (progressManager.babyScratchProgress?.averageAccuracy ?? 0) == 0 ? .secondary : .green
             )
             testLabMetricBadge(
-                title: "Mastery",
+                title: "Practice progress",
                 value: progressManager.isScratchMastered("baby_scratch")
                     ? "Mastered"
                     : "\(Int((progressManager.babyScratchProgress?.progressToMastery ?? 0).rounded()))%",
@@ -6775,7 +6775,7 @@ struct MacAnalyzerView: View {
                     Text("Latest estimate: \(detection.scratchName)")
                         .font(.system(size: 12, weight: .semibold))
 
-                    Text("Estimated accuracy \(Int(detection.accuracy))%  |  Estimated confidence \(Int(detection.confidence))%")
+                    Text("estimated accuracy \(Int(detection.accuracy))%  |  estimated confidence \(Int(detection.confidence))%")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
 

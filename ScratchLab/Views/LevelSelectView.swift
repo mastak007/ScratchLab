@@ -285,7 +285,7 @@ struct LevelSelectView: View {
                     StatItem(
                         icon: "star.fill",
                         value: "\(Int(progressManager.babyScratchProgress?.bestAccuracy ?? 0))%",
-                        label: "Best Accuracy",
+                        label: "Best estimate",
                         color: Color(hex: "FFD700")
                     )
 
