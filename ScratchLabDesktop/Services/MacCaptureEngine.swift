@@ -1403,6 +1403,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     // Caller injects a sample-preview callback; on macOS the callback is nil
     // until a desktop sample player is available.
     @Published var isScratchBankMIDIPreviewEnabled: Bool = false
+    @Published private(set) var lastScratchBankPadLabel: String = ""
     var scratchBankPadPreviewCallback: ((String) -> Void)?
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
@@ -4876,6 +4877,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             scratchBankPadPreviewCallback?(sampleID)
         }
 
+        // Scratch bank pad monitor label — diagnostic only; no scoring, no routing.
+        // Updated on every recognised pad CC (press or release) at full fidelity.
+        // The monitor UI reads this @Published property independently of the
+        // throttled summary/counter path.
+        if let compactLabel = Self.compactScratchBankPadLabel(
+            channel: channel, cc: controller, value: value,
+            isPreviewEnabled: isScratchBankMIDIPreviewEnabled
+        ) {
+            lastScratchBankPadLabel = compactLabel
+        }
+
         // Throttle @Published UI-monitor updates to ~4 Hz.
         // Full-fidelity MIDI capture (capturedMidiCCEvents + debug counters)
         // is never throttled — only the SwiftUI-facing string/counter
@@ -4953,6 +4965,44 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return availableSources.first?.id ?? ""
     }
 
+    // MARK: - Scratch Bank Pad Monitor Label
+
+    /// Builds a compact human-readable label for a scratch bank pad CC event.
+    ///
+    /// - Returns: A label like `"Deck 1 Pad 1 → ahhh · played"`,
+    ///   `"Deck 1 Pad 1 → ahhh · gated"`, or `"Deck 1 Pad 1 · (no sample)"`,
+    ///   or `nil` if the (channel, cc) pair is not a recognised Rane pad CC.
+    ///
+    /// Pad mapping (Rane ONE MK2 large pads, hot-cue mode):
+    /// - Deck 1: ch4 CC20–27  → pads 1–8
+    /// - Deck 2: ch5 CC20–27  → pads 1–8
+    static func compactScratchBankPadLabel(
+        channel: Int, cc: Int, value: Int,
+        isPreviewEnabled: Bool
+    ) -> String? {
+        // Only channel 4 or 5.
+        guard channel == 4 || channel == 5 else { return nil }
+        // Only large-pad CC range 20–27.
+        guard cc >= 20, cc <= 27 else { return nil }
+        // Ignore release (value 0).
+        guard value > 0 else { return nil }
+
+        let deck = channel - 3  // ch4 → 1, ch5 → 2
+        let pad = cc - 20 + 1   // CC20 → pad 1, CC27 → pad 8
+
+        let sampleID = ScratchBankPadEventRouter.sampleID(
+            channel: channel, cc: cc, value: value,
+            isEnabled: true // resolve mapping regardless of gate for monitor display
+        )
+
+        if let sampleID {
+            let status = isPreviewEnabled ? "played" : "gated"
+            return "Deck \(deck) Pad \(pad) → \(sampleID) · \(status)"
+        } else {
+            return "Deck \(deck) Pad \(pad) · (no sample)"
+        }
+    }
+
     private func reconnectSelectedMIDIInput() {
         guard midiInputPort != 0 else { return }
         closeMIDIInput()
@@ -4984,6 +5034,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         lastMIDIEventSummary = "No MIDI received yet"
         lastMIDICCMessage = "CC -- Ch -- Value --"
         midiLearnFeedback = ""
+        lastScratchBankPadLabel = ""
     }
 
     private struct MIDISourceEndpoint {

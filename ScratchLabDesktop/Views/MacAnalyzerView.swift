@@ -4317,6 +4317,17 @@ struct MacAnalyzerView: View {
                 }
             }
             .toggleStyle(.switch)
+
+            if !captureEngine.lastScratchBankPadLabel.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Last scratch bank pad")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(captureEngine.lastScratchBankPadLabel)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(captureEngine.isScratchBankMIDIPreviewEnabled ? .green : .orange)
+                }
+            }
 #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)

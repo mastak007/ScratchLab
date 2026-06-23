@@ -175,6 +175,7 @@
 		SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */; };
 		SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */; };
 		SBMPG0001TST /* ScratchBankMIDIPreviewGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */; };
+		SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */; };
 		SDTR0001TST /* ScratchLabDesktopTestResourceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */; };
 		B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000005 /* MacCaptureEngine.swift */; };
 		B5AA0001A1B2C3D4E5F60709 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
@@ -617,6 +618,7 @@
 		SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayer.swift; sourceTree = "<group>"; };
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankMIDIPreviewGateTests.swift; sourceTree = "<group>"; };
+		SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMonitorTests.swift; sourceTree = "<group>"; };
 		SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesktopTestResourceResolver.swift; sourceTree = "<group>"; };
 		B2000006 /* MacScratchDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacScratchDetector.swift; sourceTree = "<group>"; };
 		B2000007 /* CompanionCameraReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraReceiver.swift; sourceTree = "<group>"; };
@@ -954,6 +956,7 @@
 				SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */,
 				SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */,
 				SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */,
+				SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -2101,6 +2104,7 @@
 				SDTR0001TST /* ScratchLabDesktopTestResourceResolver.swift in Sources */,
 				SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */,
 				SBMPG0001TST /* ScratchBankMIDIPreviewGateTests.swift in Sources */,
+				SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
