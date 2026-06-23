@@ -310,6 +310,9 @@
 		NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
 		NFS1001000NFS001NFS00001 /* NotationFeedbackState.swift in Sources */ = {isa = PBXBuildFile; fileRef = NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */; };
 		NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */ = {isa = PBXBuildFile; fileRef = NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */; };
+		SBPM0001IOS00001 /* ScratchBankPadMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPM0000FREF0001 /* ScratchBankPadMapping.swift */; };
+		SBPM0001MAC00001 /* ScratchBankPadMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPM0000FREF0001 /* ScratchBankPadMapping.swift */; };
+		SBPM0002TST00001 /* ScratchBankPadMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPM0002FREF0001 /* ScratchBankPadMappingTests.swift */; };
 		NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */; };
 		NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
 		NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
@@ -700,6 +703,8 @@
 		NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPlayheadGeometryTests.swift; sourceTree = "<group>"; };
 		NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPresentationModel.swift; sourceTree = "<group>"; };
 		NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationFeedbackState.swift; sourceTree = "<group>"; };
+		SBPM0000FREF0001 /* ScratchBankPadMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMapping.swift; sourceTree = "<group>"; };
+		SBPM0002FREF0001 /* ScratchBankPadMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMappingTests.swift; sourceTree = "<group>"; };
 		NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPresentationModelTests.swift; sourceTree = "<group>"; };
 		NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationReplayModel.swift; sourceTree = "<group>"; };
 		NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationReplayModelTests.swift; sourceTree = "<group>"; };
@@ -905,6 +910,7 @@
 				CTLPRF0TREF0002 /* DDJFlx10ProfileTests.swift */,
 				CTLPRF0TREF0003 /* ControllerAutoDetectorTests.swift */,
 				RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */,
+				SBPM0002FREF0001 /* ScratchBankPadMappingTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1179,9 +1185,18 @@
 				TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */,
 				TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */,
 			TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */,
+			SBPMGRP00001000 /* ScratchSoundBank */,
 			CI00GRP00001 /* ControllerInput */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		SBPMGRP00001000 /* ScratchSoundBank */ = {
+			isa = PBXGroup;
+			children = (
+				SBPM0000FREF0001 /* ScratchBankPadMapping.swift */,
+			);
+			path = ScratchSoundBank;
 			sourceTree = "<group>";
 		};
 		A5000006 /* Audio */ = {
@@ -1641,6 +1656,7 @@
 				TML0001000TML001TML00001 /* TimingLane.swift in Sources */,
 				SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */,
 				NFS1001000NFS001NFS00001 /* NotationFeedbackState.swift in Sources */,
+				SBPM0001MAC00001 /* ScratchBankPadMapping.swift in Sources */,
 				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
@@ -1816,6 +1832,7 @@
 				TML0001000TML001TML00002 /* TimingLane.swift in Sources */,
 				SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */,
 				NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */,
+				SBPM0001IOS00001 /* ScratchBankPadMapping.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
@@ -2002,6 +2019,7 @@
 				CTLPRF0TBF0002 /* DDJFlx10ProfileTests.swift in Sources */,
 				CTLPRF0TBF0003 /* ControllerAutoDetectorTests.swift in Sources */,
 				RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */,
+				SBPM0002TST00001 /* ScratchBankPadMappingTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
