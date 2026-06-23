@@ -585,4 +585,133 @@ struct NotationSheetTests {
         #expect(heightFrac(.normalPush) > heightFrac(.slowDrag))
         #expect(heightFrac(.slowDrag) > heightFrac(.releaseNormalPlayback))
     }
+
+    // MARK: Review notation honesty — audio-only takes must not
+    // expose captured-notation UI surfaces. Target notation stays
+    // visible as the reference pattern regardless.
+
+    @Test("hasCapturedMotionNotation computed property exists and reads recordMovementEvents")
+    func hasCapturedMotionNotationPropertyExists() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.contains("private var hasCapturedMotionNotation: Bool"))
+        #expect(source.contains("!snapshot.recordMovementEvents.isEmpty"))
+    }
+
+    @Test("View captured notation button is gated on hasCapturedMotionNotation, not snapshot != nil")
+    func viewCapturedNotationButtonGatedOnMotion() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // The button must be inside an `if hasCapturedMotionNotation` block.
+        #expect(source.contains("if hasCapturedMotionNotation {"))
+        // The old un-gated pattern must not appear near "View captured notation".
+        #expect(!source.contains("if currentRoutineNotationSnapshot != nil {"))
+    }
+
+    @Test("Notation Overlay and Camera Overlay buttons gated on hasCapturedMotionNotation")
+    func overlayButtonsGatedOnMotion() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // The Notation Overlay and Camera Overlay buttons must be inside
+        // the `if hasCapturedMotionNotation` block in the captured evidence card.
+        #expect(source.contains("if hasCapturedMotionNotation {"))
+        #expect(source.contains("showNotationOverlay.toggle()"))
+        #expect(source.contains("showCameraPassthrough.toggle()"))
+    }
+
+    @Test("Captured notation canvas gated on hasCapturedMotionNotation, not hasDetectedEvents")
+    func capturedNotationCanvasGatedOnMotion() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // The CapturedNotationDisplayView render gate in reviewCapturedNotationStageCard
+        // must use hasCapturedMotionNotation, not snapshot.hasDetectedEvents.
+        #expect(source.contains("hasCapturedMotionNotation {"))
+        // The old pattern must not remain in the captured evidence card.
+        #expect(!source.contains("snapshot.hasDetectedEvents {\n                CapturedNotationDisplayView("))
+    }
+
+    @Test("Audio-only copy includes explicit 'captured notation is unavailable' message")
+    func audioOnlyCopyIncludesUnavailableMessage() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.contains("Audio-only take"))
+        #expect(source.contains("Hand motion wasn't detected — review timing only."))
+        #expect(source.contains("No record movement detected."))
+        #expect(source.contains("Captured notation is unavailable because no record movement was detected."))
+    }
+
+    @Test("Target notation reference card stays visible with reference-pattern copy")
+    func targetNotationReferenceCardStaysVisible() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        // Target notation card renders Baby Scratch reference pattern and
+        // explicitly states it stays visible even when no captured notation exists.
+        #expect(source.contains("Reference pattern. Stays visible even when no captured notation is available."))
+        #expect(source.contains("reviewTargetNotationStageCard"))
+        #expect(source.contains("ScratchNotation.babyScratch"))
+    }
+
+    @Test("hasCapturedMotionNotation is true when record movement events exist")
+    func hasCapturedMotionNotationTrueWithMovement() {
+        let snap = makeSnapshot(
+            source: "detected",
+            movements: [makeMovementEvent(start: 0.0, end: 0.3)]
+        )
+        // hasCapturedMotionNotation mirrors hasDetectedMovementEvents
+        #expect(snap.hasDetectedMovementEvents)
+        #expect(!snap.recordMovementEvents.isEmpty)
+    }
+
+    @Test("hasCapturedMotionNotation is false for audio-only snapshot")
+    func hasCapturedMotionNotationFalseForAudioOnly() {
+        let snap = makeSnapshot(
+            source: "partial",
+            audio: [makeAudioEvent(start: 0.1, end: 0.4)]
+        )
+        #expect(snap.recordMovementEvents.isEmpty)
+        // hasDetectedEvents is still true (audio counts), but
+        // hasDetectedMovementEvents is false — and hasCapturedMotionNotation
+        // reads recordMovementEvents, so it's false too.
+        #expect(snap.hasDetectedEvents)
+        #expect(!snap.hasDetectedMovementEvents)
+    }
+
+    @Test("hasCapturedMotionNotation is false for empty/unavailable snapshot")
+    func hasCapturedMotionNotationFalseForEmpty() {
+        let snap = makeSnapshot(source: "unavailable")
+        #expect(snap.recordMovementEvents.isEmpty)
+        #expect(!snap.hasDetectedEvents)
+        #expect(!snap.hasDetectedMovementEvents)
+    }
+
+    @Test("hasDetectedEvents remains true for audio-only — used outside Review captured-evidence gate")
+    func hasDetectedEventsPreservedForAudioOnly() {
+        // hasDetectedEvents must NOT change — it is used by the Advanced tab
+        // and other surfaces that legitimately show audio-only evidence.
+        // Only the Review captured-evidence card gates on hasCapturedMotionNotation.
+        let snap = makeSnapshot(
+            source: "partial",
+            audio: [makeAudioEvent(start: 0.0, end: 0.5)]
+        )
+        #expect(snap.hasDetectedEvents)
+        #expect(!snap.hasDetectedMovementEvents)
+    }
 }

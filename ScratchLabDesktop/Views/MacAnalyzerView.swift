@@ -2085,6 +2085,15 @@ struct MacAnalyzerView: View {
         currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false
     }
 
+    /// True only when the current take has captured record/platter movement
+    /// events. Audio-only takes and empty takes return false. This is the
+    /// single gate for captured-notation UI surfaces — when false, notation
+    /// overlay, camera overlay, and captured notation canvas must not render.
+    private var hasCapturedMotionNotation: Bool {
+        guard let snapshot = currentRoutineNotationSnapshot else { return false }
+        return !snapshot.recordMovementEvents.isEmpty
+    }
+
     private var hasPartialReviewNotation: Bool {
         currentRoutineNotationSnapshot?.audioEvents.isEmpty == false && !hasReviewNotationPreview
     }
@@ -2667,7 +2676,7 @@ struct MacAnalyzerView: View {
             if hasRawMotionWithoutClassifiedStrokes {
                 return "Motion was captured, but no scratch strokes were recognized for this take. Notation preview isn't available."
             }
-            return "Audio-only take. Hand motion wasn't detected — review timing only."
+            return "Audio-only take. Hand motion wasn't detected — review timing only. Captured notation is unavailable because no record movement was detected."
         }
         return "Notation unavailable for this take. ScratchLab will only show a preview when real captured movement events were saved."
     }
@@ -4487,7 +4496,7 @@ struct MacAnalyzerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if currentRoutineNotationSnapshot != nil {
+                if hasCapturedMotionNotation {
                     Button {
                         capturedNotationSnapshot = currentRoutineNotationSnapshot
                         workspaceTab = .advanced
@@ -4983,52 +4992,54 @@ struct MacAnalyzerView: View {
                     .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
                 #endif
                 Spacer(minLength: 0)
-                Button {
-                    showNotationOverlay.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "waveform.path")
-                            .font(.system(size: 10, weight: .semibold))
-                            .accessibilityHidden(true)
-                        Text("Notation Overlay")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                if hasCapturedMotionNotation {
+                    Button {
+                        showNotationOverlay.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "waveform.path")
+                                .font(.system(size: 10, weight: .semibold))
+                                .accessibilityHidden(true)
+                            Text("Notation Overlay")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        }
+                        .foregroundStyle(
+                            showNotationOverlay ? Color.white : Color.white.opacity(0.55)
+                        )
                     }
-                    .foregroundStyle(
-                        showNotationOverlay ? Color.white : Color.white.opacity(0.55)
+                    .buttonStyle(.borderless)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        showNotationOverlay
+                            ? Color.white.opacity(0.15)
+                            : Color.white.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+                    Button {
+                        showCameraPassthrough.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "camera.viewfinder")
+                                .font(.system(size: 10, weight: .semibold))
+                                .accessibilityHidden(true)
+                            Text("Camera Overlay")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        }
+                        .foregroundStyle(
+                            showCameraPassthrough ? Color.white : Color.white.opacity(0.55)
+                        )
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        showCameraPassthrough
+                            ? Color.white.opacity(0.15)
+                            : Color.white.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 4)
                     )
                 }
-                .buttonStyle(.borderless)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    showNotationOverlay
-                        ? Color.white.opacity(0.15)
-                        : Color.white.opacity(0.07),
-                    in: RoundedRectangle(cornerRadius: 4)
-                )
-                Button {
-                    showCameraPassthrough.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "camera.viewfinder")
-                            .font(.system(size: 10, weight: .semibold))
-                            .accessibilityHidden(true)
-                        Text("Camera Overlay")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    }
-                    .foregroundStyle(
-                        showCameraPassthrough ? Color.white : Color.white.opacity(0.55)
-                    )
-                }
-                .buttonStyle(.borderless)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    showCameraPassthrough
-                        ? Color.white.opacity(0.15)
-                        : Color.white.opacity(0.07),
-                    in: RoundedRectangle(cornerRadius: 4)
-                )
                 HStack(spacing: 4) {
                     Image(systemName: capturedSource.systemImage)
                         .font(.system(size: 11, weight: .semibold))
@@ -5040,7 +5051,7 @@ struct MacAnalyzerView: View {
                 }
             }
             if let snapshot = currentRoutineNotationSnapshot,
-               snapshot.hasDetectedEvents {
+               hasCapturedMotionNotation {
                 CapturedNotationDisplayView(
                     snapshot: snapshot,
                     mixedStateHint: hasRawMotionWithoutClassifiedStrokes
@@ -7448,6 +7459,9 @@ struct MacAnalyzerView: View {
                             Text("Hand motion wasn't detected — review timing only.")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
+                            Text("Captured notation is unavailable because no record movement was detected.")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
                         }
                     } else {
                         Text("Notation unavailable for this take.")
