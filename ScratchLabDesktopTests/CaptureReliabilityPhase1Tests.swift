@@ -11284,15 +11284,18 @@ final class PracticeTargetNotationChartTests: XCTestCase {
 
         XCTAssertTrue(view.contains("\"TARGET PATTERN\""),
                       "Practice must show a 'TARGET PATTERN' heading")
-        XCTAssertTrue(view.contains("ScratchPhraseChartView(source: .target("),
-                      "Practice must render the existing ScratchPhraseChartView with a target notation")
+        // The shared motion-lane renderer replaced ScratchPhraseChartView.
+        // LaneContent wraps the notation; ScratchMotionLane renders it under
+        // a LaneViewport via ScratchStrokeGeometry + ScratchMotionRenderer.
+        XCTAssertTrue(view.contains("LaneContent(notation:"),
+                      "Practice must build a LaneContent from the target notation")
         XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
                       "Target chart must read the existing bundled Baby Scratch notation")
 
-        // The non-Auto-cut chart render stays static (no playhead). Auto-cut
-        // adds an animated playhead — see AutoCutVisualPlaybackTests.
-        XCTAssertTrue(view.contains("ScratchPhraseChartView(source: .target(notation))"),
-                      "A static (no-playhead) target chart render must remain for non-Auto-cut modes")
+        // Open mode stays parked (static, no playhead). Auto-cut / Guided /
+        // Coached loop the notation under the action line.
+        XCTAssertTrue(view.contains(".fixed(0)"),
+                      "A static (no-playhead) target chart must remain for Open mode")
     }
 
     func testScratchPhraseChartViewIsOniOSTarget() throws {
