@@ -418,7 +418,7 @@ struct PracticeModeView: View {
                         headline: isComboChallengeMode ? comboResultHeadline : nil,
                         score: currentScore,
                         accuracy: displayedAccuracy,
-                        primaryMetricLabel: isComboChallengeMode ? "Phrase Lock" : "Accuracy",
+                        primaryMetricLabel: isComboChallengeMode ? "Phrase Lock" : "Match estimate",
                         attempts: attemptCount,
                         bestStreak: bestStreak,
                         detailNote: comboResultDetail,
@@ -709,13 +709,13 @@ struct PracticeModeView: View {
             .padding(.vertical, 5)
             .background(Color.black.opacity(0.5), in: Capsule())
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(leadingStat.label) \(leadingStat.value), Score \(currentScore)")
+            .accessibilityLabel("\(leadingStat.label) \(leadingStat.value), Practice estimate \(currentScore)")
         } else {
             HStack(spacing: 12) {
                 StatDisplay(icon: leadingStat.icon, value: leadingStat.value,
                             label: leadingStat.label, color: leadingStat.color)
                 StatDisplay(icon: "star.fill", value: "\(currentScore)",
-                            label: "Score", color: Color(hex: "FFD700"))
+                            label: "Practice estimate", color: Color(hex: "FFD700"))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
@@ -2551,7 +2551,7 @@ struct ResultsOverlayView: View {
                 // Stats grid
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
                     ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
-                    ResultStat(value: "\(score)", label: "Score", icon: "star.fill")
+                    ResultStat(value: "\(score)", label: "Practice estimate", icon: "star.fill")
                     ResultStat(value: "\(attempts)", label: "Attempts", icon: "number")
                     ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
                 }
@@ -2574,7 +2574,7 @@ struct ResultsOverlayView: View {
                 let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
                 if accuracy < progressGoal {
                     VStack(spacing: 8) {
-                        Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Progress to Mastery")
+                        Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Practice progress estimate")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.white.opacity(0.5))
                         
@@ -2584,7 +2584,7 @@ struct ResultsOverlayView: View {
                         
                         Text(primaryMetricLabel == "Phrase Lock"
                             ? "\(Int(progressGoal - accuracy))% more to clear the phrase"
-                            : "\(Int(progressGoal - accuracy))% more to master")
+                            : "\(Int(progressGoal - accuracy))% more to reach the practice goal")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.white.opacity(0.4))
                     }

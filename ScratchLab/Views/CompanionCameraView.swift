@@ -2864,6 +2864,7 @@ private struct SessionCompleteView: View {
                 }
             }
 
+            #if DEBUG
             if showsUploadSection {
                 CaptureCard {
                     VStack(alignment: .leading, spacing: 12) {
@@ -2920,6 +2921,7 @@ private struct SessionCompleteView: View {
                     }
                 }
             }
+            #endif
 
             CaptureCard {
                 VStack(alignment: .leading, spacing: 12) {

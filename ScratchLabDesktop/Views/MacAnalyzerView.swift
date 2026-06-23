@@ -262,8 +262,8 @@ struct MacAnalyzerView: View {
         case cameraDeck
         case midiFader
         case monitor
-        case captureDetails
 #if DEBUG
+        case captureDetails
         case timecodeInput
 #endif
 
@@ -276,8 +276,8 @@ struct MacAnalyzerView: View {
             case .cameraDeck:     return "Camera & deck"
             case .midiFader:      return "MIDI & fader"
             case .monitor:        return "Monitor / Connection"
-            case .captureDetails: return "Capture details"
 #if DEBUG
+            case .captureDetails: return "Capture details"
             case .timecodeInput:  return "Timecode Input"
 #endif
             }
@@ -290,8 +290,8 @@ struct MacAnalyzerView: View {
             case .cameraDeck:     return "video"
             case .midiFader:      return "slider.horizontal.3"
             case .monitor:        return "dot.radiowaves.left.and.right"
-            case .captureDetails: return "doc.text.magnifyingglass"
 #if DEBUG
+            case .captureDetails: return "doc.text.magnifyingglass"
             case .timecodeInput:  return "waveform.badge.magnifyingglass"
 #endif
             }
@@ -1636,6 +1636,7 @@ struct MacAnalyzerView: View {
                 companionCard
                     .disabled(captureEngine.isRoutineRecording)
             }
+#if DEBUG
         case .captureDetails:
             VStack(alignment: .leading, spacing: 22) {
                 if selectedRoutineSession != nil {
@@ -1643,7 +1644,6 @@ struct MacAnalyzerView: View {
                 }
                 cxlCaptureCard
             }
-#if DEBUG
         case .timecodeInput:
             VStack(alignment: .leading, spacing: 22) {
                 TimecodeControlCard(pipeline: timecodePipeline, bridge: timecodeBridge)
@@ -2355,11 +2355,11 @@ struct MacAnalyzerView: View {
         }
         if hasPartialReviewNotation {
             if hasRawMotionWithoutClassifiedStrokes {
-                return "Motion captured · No scratch strokes recognized"
+                return "Motion captured · No usable movement strokes found"
             }
             return "Audio-only take · No record movement detected."
         }
-        return "Detected: \(reviewDetectedScratchLabel) · Confidence: \(reviewConfidenceLabel)"
+        return "Detected signal: \(reviewDetectedScratchLabel) · Signal confidence: \(reviewConfidenceLabel)"
     }
 
     private var currentRoutineArtifactStatus: TakeArtifactStatusSnapshot? {
@@ -2674,7 +2674,7 @@ struct MacAnalyzerView: View {
     private var reviewNotationAvailabilityMessage: String {
         if hasPartialReviewNotation {
             if hasRawMotionWithoutClassifiedStrokes {
-                return "Motion was captured, but no scratch strokes were recognized for this take. Notation preview isn't available."
+                return "Motion was captured, but no usable movement strokes were found for this take. Notation preview isn't available."
             }
             return "Audio-only take. Hand motion wasn't detected — review timing only. Captured notation is unavailable because no record movement was detected."
         }
@@ -4315,7 +4315,7 @@ struct MacAnalyzerView: View {
             HStack(spacing: 8) {
                 testLabMetricBadge(title: "Takes", value: "\(visibleTakeCount)", color: visibleTakeCount == 0 ? .secondary : .green)
                 testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
-                testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
+                testLabMetricBadge(title: "Signal confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
             }
 
             HStack(spacing: 8) {
@@ -4464,7 +4464,7 @@ struct MacAnalyzerView: View {
 
                 HStack(spacing: 8) {
                     testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: reviewDetectedStyle.color)
-                    testLabMetricBadge(title: "Confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
+                    testLabMetricBadge(title: "Signal confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
                 }
 
                 // Zero-counter grid was reading like a debug dashboard.
@@ -5256,7 +5256,7 @@ struct MacAnalyzerView: View {
         return HStack(alignment: .top, spacing: 12) {
             reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: .white)
             reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: reviewDetectedStyle.systemImage, color: reviewDetectedStyle.color)
-            reviewFooterMetric(title: "Confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
+            reviewFooterMetric(title: "Signal confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
             reviewFooterMetric(title: "Source", value: capturedSource.label, systemImage: capturedSource.systemImage, color: capturedSource.color)
             reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? .green : .secondary)
         }
@@ -5535,7 +5535,7 @@ struct MacAnalyzerView: View {
                     color: isPracticeSessionActive ? .white : .secondary
                 )
                 testLabMetricBadge(
-                    title: "Score",
+                    title: "Practice estimate",
                     value: "\(practiceScore)",
                     color: practiceScore == 0 ? .secondary : .green
                 )
@@ -5562,7 +5562,7 @@ struct MacAnalyzerView: View {
             if isPracticeSessionActive, let detection = captureEngine.lastScratchDetection {
                 Text(
                     detection.feedback.first
-                        ?? "Latest match: \(Int(detection.accuracy))% accuracy at \(Int(detection.confidence))% confidence."
+                        ?? "Latest estimate: \(Int(detection.accuracy))% match estimate at \(Int(detection.confidence))% signal confidence."
                 )
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -6151,6 +6151,7 @@ struct MacAnalyzerView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
+                #if DEBUG
                 if sessionUploadManager.isUploadAvailable || currentRoutineUploadJob != nil {
                     Divider()
 
@@ -6209,6 +6210,7 @@ struct MacAnalyzerView: View {
                         }
                     }
                 }
+                #endif
 
                 Button(sessionExportCoordinator.isPreparing ? "Saving..." : "Save ZIP...") {
                     saveLastRoutineSessionArchive()
@@ -6770,7 +6772,7 @@ struct MacAnalyzerView: View {
 
             if let detection = captureEngine.lastScratchDetection {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Last match: \(detection.scratchName)")
+                    Text("Latest estimate: \(detection.scratchName)")
                         .font(.system(size: 12, weight: .semibold))
 
                     Text("Estimated accuracy \(Int(detection.accuracy))%  |  Estimated confidence \(Int(detection.confidence))%")
@@ -7287,6 +7289,7 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    #if DEBUG
     private var cxlCaptureCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -7418,6 +7421,7 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+    #endif
 
     private var miniNotationTimeline: some View {
         let notation = currentRoutineNotationPreview
@@ -7443,7 +7447,7 @@ struct MacAnalyzerView: View {
                             Text("Motion captured")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(.primary)
-                            Text("No scratch strokes recognized for this take.")
+                            Text("No usable movement strokes found for this take.")
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(.secondary)
                             Text("Notation preview isn't available.")

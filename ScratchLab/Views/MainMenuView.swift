@@ -229,6 +229,7 @@ struct MainMenuView: View {
                 action: { showingPracticeHub = true }
             )
 
+            #if DEBUG
             MenuButton(
                 title: "Capture",
                 subtitle: "On-device take capture is coming.",
@@ -244,6 +245,7 @@ struct MainMenuView: View {
                 accent: Color(hex: "0EA5E9"),
                 action: { showingReviewPlaceholder = true }
             )
+            #endif
 
             MenuButton(
                 title: "Advanced / Mac Companion",

@@ -14,6 +14,9 @@ struct SessionUploadConfiguration: Sendable {
         defaults: UserDefaults = .standard,
         processInfo: ProcessInfo = .processInfo
     ) -> SessionUploadConfiguration {
+        #if !DEBUG
+        return SessionUploadConfiguration(apiBaseURL: nil, defaultHeaders: [:])
+        #else
         let configuredString = [
             processInfo.environment["SCRATCHLAB_UPLOAD_API_BASE_URL"],
             defaults.string(forKey: baseURLDefaultsKey),
@@ -26,6 +29,7 @@ struct SessionUploadConfiguration: Sendable {
             apiBaseURL: configuredString.flatMap(URL.init(string:)),
             defaultHeaders: [:]
         )
+        #endif
     }
 
     var isConfigured: Bool {

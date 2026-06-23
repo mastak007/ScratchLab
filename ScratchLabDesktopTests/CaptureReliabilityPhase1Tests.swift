@@ -8932,6 +8932,195 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
         XCTAssertEqual(first?.issues, second?.issues)
     }
+
+    // MARK: - Release readiness source-inspection tests
+
+    func testMainMenuViewHidesCapturePlaceholderRouteOutsideDebug() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // Isolate the menuButtons computed property body.
+        let menuButtonsSlice = try sourceSlice(
+            in: source,
+            from: "private var menuButtons: some View {",
+            through: "private var performerMonitorSubtitle"
+        )
+
+        // Within menuButtons, the Capture/Review buttons must be inside a #if DEBUG block.
+        XCTAssertTrue(
+            menuButtonsSlice.contains("#if DEBUG"),
+            "menuButtons must have a #if DEBUG gate"
+        )
+        let debugBlock = try sourceSlice(in: menuButtonsSlice, from: "#if DEBUG", through: "#endif")
+        XCTAssertTrue(
+            debugBlock.contains("showingCapturePlaceholder = true"),
+            "Capture placeholder route must be #if DEBUG gated in menuButtons"
+        )
+        XCTAssertTrue(
+            debugBlock.contains("showingReviewPlaceholder = true"),
+            "Review placeholder route must be #if DEBUG gated in menuButtons"
+        )
+        XCTAssertTrue(
+            debugBlock.contains("On-device take capture is coming."),
+            "Capture coming-soon subtitle must be inside the #if DEBUG block"
+        )
+        XCTAssertTrue(
+            debugBlock.contains("On-device review is coming."),
+            "Review coming-soon subtitle must be inside the #if DEBUG block"
+        )
+    }
+
+    func testSessionUploadConfigurationIsAlwaysUnconfiguredInRelease() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionUploadManager.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // SessionUploadConfiguration.current() must return unconfigured in non-DEBUG.
+        let configSlice = try sourceSlice(
+            in: source,
+            from: "static func current(",
+            through: "var isConfigured: Bool"
+        )
+        XCTAssertTrue(
+            configSlice.contains("#if !DEBUG"),
+            "SessionUploadConfiguration.current() must have a #if !DEBUG early-return gate"
+        )
+        XCTAssertTrue(
+            configSlice.contains("return SessionUploadConfiguration(apiBaseURL: nil, defaultHeaders: [:])"),
+            "Release gate must return an unconfigured configuration with nil apiBaseURL"
+        )
+    }
+
+    func testCompanionCameraViewUploadUIIsDebugGated() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // The Upload Session card in SessionCompleteView must be inside #if DEBUG.
+        let uploadSlice = try sourceSlice(
+            in: source,
+            from: "#if DEBUG",
+            through: "#endif"
+        )
+        XCTAssertTrue(
+            uploadSlice.contains("showsUploadSection"),
+            "iOS Upload Session UI must be inside a #if DEBUG block"
+        )
+    }
+
+    func testMacAnalyzerUploadSessionUIIsDebugGated() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // "Upload Session" UI must only appear after a #if DEBUG gate in the source.
+        // Split on the first #if DEBUG that precedes the upload section and verify
+        // the text doesn't appear before any #if DEBUG gate.
+        let partsAroundDebug = source.components(separatedBy: "#if DEBUG")
+        let beforeAllDebugGates = partsAroundDebug.first ?? ""
+        XCTAssertFalse(
+            beforeAllDebugGates.contains("Upload Session"),
+            "Upload Session UI must not appear before any #if DEBUG gate in MacAnalyzerView"
+        )
+        // Confirm the string exists somewhere in the file (guards against false positives from deletion).
+        XCTAssertTrue(
+            source.contains("Upload Session"),
+            "Upload Session string must still exist (inside #if DEBUG) in MacAnalyzerView"
+        )
+    }
+
+    func testMacAdvancedSectionCaptureDetailsIsDebugGated() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // captureDetails and its dataset capture card must be inside #if DEBUG.
+        let advancedSectionSlice = try sourceSlice(
+            in: source,
+            from: "private enum AdvancedSection",
+            through: "var systemImage: String"
+        )
+        // captureDetails case must appear only inside a #if DEBUG block
+        // by verifying it does not appear before any #if DEBUG in the enum body.
+        let beforeFirstDebugGate = advancedSectionSlice.components(separatedBy: "#if DEBUG").first ?? ""
+        XCTAssertFalse(
+            beforeFirstDebugGate.contains("case captureDetails"),
+            "AdvancedSection.captureDetails must be inside #if DEBUG"
+        )
+        // cxlCaptureCard itself must also be inside #if DEBUG so the string literals
+        // are excluded from the Release binary (not just the call site).
+        let cxlDefinitionSlice = try sourceSlice(
+            in: source,
+            from: "#if DEBUG\n    private var cxlCaptureCard",
+            through: "#endif"
+        )
+        XCTAssertTrue(
+            cxlDefinitionSlice.contains("Advanced Capture Details"),
+            "Advanced Capture Details must exist but only inside the cxlCaptureCard #if DEBUG block"
+        )
+        XCTAssertTrue(
+            cxlDefinitionSlice.contains("Start Dataset Capture"),
+            "Start Dataset Capture must exist but only inside the cxlCaptureCard #if DEBUG block"
+        )
+        // Verify the property definition is not accessible before any #if DEBUG gate.
+        let beforeCxlDebugGate = source.components(separatedBy: "#if DEBUG\n    private var cxlCaptureCard").first ?? ""
+        XCTAssertFalse(
+            beforeCxlDebugGate.contains("cxlCaptureCard: some View"),
+            "cxlCaptureCard property definition must be inside #if DEBUG"
+        )
+    }
+
+    func testPracticeViewReplacesOverconfidentTerminologyWithEstimateLanguage() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("\"Accuracy\""),
+            "Practice view must not expose \"Accuracy\" as a primary metric label — use estimate language"
+        )
+        XCTAssertTrue(
+            source.contains("\"Match estimate\""),
+            "Practice view must use \"Match estimate\" in place of \"Accuracy\""
+        )
+        XCTAssertFalse(
+            source.contains("\"Progress to Mastery\""),
+            "Practice view must not show \"Progress to Mastery\" — use estimate language"
+        )
+        XCTAssertTrue(
+            source.contains("\"Practice progress estimate\""),
+            "Practice view must use \"Practice progress estimate\" in place of \"Progress to Mastery\""
+        )
+        XCTAssertTrue(
+            source.contains("\"Practice estimate\""),
+            "Practice view must label the score field as \"Practice estimate\""
+        )
+    }
+
+    func testMacAnalyzerReplacesOverconfidentRecognitionAndMatchLanguage() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("No scratch strokes recognized"),
+            "Mac analyzer must not claim strokes are recognized — use 'No usable movement strokes found'"
+        )
+        XCTAssertTrue(
+            source.contains("No usable movement strokes found"),
+            "Mac analyzer must use 'No usable movement strokes found' for the empty-notation state"
+        )
+        XCTAssertFalse(
+            source.contains("\"Latest match:"),
+            "Mac analyzer must not use 'Latest match:' — use 'Latest estimate:'"
+        )
+        XCTAssertTrue(
+            source.contains("\"Latest estimate:"),
+            "Mac analyzer must use 'Latest estimate:' in place of 'Latest match:'"
+        )
+        XCTAssertTrue(
+            source.contains("Signal confidence"),
+            "Mac analyzer must use 'Signal confidence' in place of bare 'Confidence' for the review footer metric"
+        )
+        XCTAssertFalse(
+            source.contains("title: \"Confidence\""),
+            "Review footer must not label the metric as plain 'Confidence'"
+        )
+    }
 }
 
 extension CaptureReliabilityPhase1CoreTests {
