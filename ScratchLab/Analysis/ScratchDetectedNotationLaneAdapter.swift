@@ -141,7 +141,6 @@ enum ScratchDetectedNotationLaneAdapter {
         // If it exceeds jitterSteps, confirm the direction change; otherwise merge it.
         var pendingReverseDelta = 0
         var pendingReverseStartTime = 0.0
-        var pendingReversePrevValue = 0
         var inPendingReverse = false
 
         for i in 1..<sorted.count {
@@ -167,7 +166,6 @@ enum ScratchDetectedNotationLaneAdapter {
                     inPendingReverse = true
                     pendingReverseDelta = delta
                     pendingReverseStartTime = prevTime
-                    pendingReversePrevValue = event.value
                 } else {
                     // Continue in the opposite direction.
                     pendingReverseDelta += delta

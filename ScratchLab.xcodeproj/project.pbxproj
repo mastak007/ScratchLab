@@ -279,6 +279,7 @@
 		GAN2011000GAN002GAN00001 /* GridAnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */; };
 		LNO0001000LNO001LNO00001 /* LiveNotationOverlayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */; };
 		LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */; };
+		NFS2011000NFS002NFS00001 /* NotationFeedbackStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NFS2010000NFS002NFS00001 /* NotationFeedbackStateTests.swift */; };
 		LNV0001000LNV001LNV00001 /* LiveNotationOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */; };
 		LRT0011000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */; };
 		NGF1011000NGF001NGF00001 /* NotationGrammarFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */; };
@@ -307,6 +308,8 @@
 		NPH2011000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */; };
 		NPM1001000NPM001NPM00001 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
 		NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
+		NFS1001000NFS001NFS00001 /* NotationFeedbackState.swift in Sources */ = {isa = PBXBuildFile; fileRef = NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */; };
+		NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */ = {isa = PBXBuildFile; fileRef = NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */; };
 		NPM2011000NPM002NPM00001 /* NotationPresentationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */; };
 		NRM1001000NRM001NRM00001 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
 		NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
@@ -677,6 +680,7 @@
 		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
 		LNO0000000LNO001LNO00001 /* LiveNotationOverlayModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayModel.swift; sourceTree = "<group>"; };
 		LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayTests.swift; sourceTree = "<group>"; };
+		NFS2010000NFS002NFS00001 /* NotationFeedbackStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationFeedbackStateTests.swift; sourceTree = "<group>"; };
 		LNV0000000LNV001LNV00001 /* LiveNotationOverlayView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveNotationOverlayView.swift; sourceTree = "<group>"; };
 		LRT0010000LRT001LRT00001 /* LaneRawTraceFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneRawTraceFallbackTests.swift; sourceTree = "<group>"; };
 		NGF1010000NGF001NGF00001 /* NotationGrammarFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationGrammarFixtureTests.swift; sourceTree = "<group>"; };
@@ -695,6 +699,7 @@
 		NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPlayheadGeometry.swift; sourceTree = "<group>"; };
 		NPH2010000NPH002NPH00001 /* NotationPlayheadGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPlayheadGeometryTests.swift; sourceTree = "<group>"; };
 		NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPresentationModel.swift; sourceTree = "<group>"; };
+		NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationFeedbackState.swift; sourceTree = "<group>"; };
 		NPM2010000NPM002NPM00001 /* NotationPresentationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationPresentationModelTests.swift; sourceTree = "<group>"; };
 		NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationReplayModel.swift; sourceTree = "<group>"; };
 		NRM2010000NRM002NRM00001 /* NotationReplayModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationReplayModelTests.swift; sourceTree = "<group>"; };
@@ -925,6 +930,7 @@
 				SRD0000000SRD001SRD00001 /* SessionReplayDocumentTests.swift */,
 				CNT0000000CNT001CNT00001 /* CapturedNotationTravelTests.swift */,
 				LNT0000000LNT001LNT00001 /* LiveNotationOverlayTests.swift */,
+				NFS2010000NFS002NFS00001 /* NotationFeedbackStateTests.swift */,
 				COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */,
 				SLCORE00000000000000FR08 /* ScratchAnalysisBridgeTests.swift */,
 				SLCORE00000000000000FR10 /* ScratchAnalysisFixtureDecodeTests.swift */,
@@ -1140,6 +1146,7 @@
 				PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */,
 				CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */,
 				NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */,
+				NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */,
 				NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */,
 				NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */,
 				NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */,
@@ -1633,6 +1640,7 @@
 				PRT0001000PRT001PRT00001 /* PracticeReelTimeline.swift in Sources */,
 				TML0001000TML001TML00001 /* TimingLane.swift in Sources */,
 				SSG0001000SSG001SSG00001 /* ScratchStrokeGeometry.swift in Sources */,
+				NFS1001000NFS001NFS00001 /* NotationFeedbackState.swift in Sources */,
 				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
@@ -1807,6 +1815,7 @@
 				PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */,
 				TML0001000TML001TML00002 /* TimingLane.swift in Sources */,
 				SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */,
+				NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
@@ -2018,6 +2027,7 @@
 				SRD0001000SRD001SRD00001 /* SessionReplayDocumentTests.swift in Sources */,
 				CNT0001000CNT001CNT00001 /* CapturedNotationTravelTests.swift in Sources */,
 				LNT0001000LNT001LNT00001 /* LiveNotationOverlayTests.swift in Sources */,
+				NFS2011000NFS002NFS00001 /* NotationFeedbackStateTests.swift in Sources */,
 				COT0001000COT001COT00001 /* CameraNotationOverlayTests.swift in Sources */,
 				8D4B3424898BEBDDC8D70A9A /* TimecodeSignalDiagnosticsTests.swift in Sources */,
 				TCT000001TCT001TCT00001 /* TimecodeDecoderTests.swift in Sources */,

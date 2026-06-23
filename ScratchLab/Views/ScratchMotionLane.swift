@@ -38,6 +38,9 @@ struct ScratchMotionLane: View {
     /// User-attempt marks for the overlay. SCAFFOLD: empty on every shipping
     /// path, so the overlay draws nothing and scores nothing.
     var userEvents: [LaneUserEvent] = []
+    /// Live-performance feedback state. Default `.neutral` so existing callsites
+    /// (static template preview, Review, macOS) are unaffected.
+    var feedbackState: NotationFeedbackState = .neutral
 
     /// The integrated platter-position curve, derived once from `content`.
     /// Used by the **classified-stroke fallback** path. When the lane
@@ -53,11 +56,13 @@ struct ScratchMotionLane: View {
     private let crossfaderTimeline: CrossfaderStateTimeline
 
     init(content: LaneContent, clock: LaneClock, axis: LaneAxis,
-         userEvents: [LaneUserEvent] = []) {
+         userEvents: [LaneUserEvent] = [],
+         feedbackState: NotationFeedbackState = .neutral) {
         self.content = content
         self.clock = clock
         self.axis = axis
         self.userEvents = userEvents
+        self.feedbackState = feedbackState
         self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
         // Coverage spans the lane's full timeline. `state(at:)` returns
         // `.closed` for any time outside this — but the lane only ever
@@ -230,6 +235,14 @@ struct ScratchMotionLane: View {
             // opacity. The fade only masks the notation layer, so the
             // chip and segment labels stay crisp on top.
             .mask(pastFadeMask(for: viewport))
+
+            // Feedback overlay: above the notation Canvas, below segment labels,
+            // so labels and the playhead remain readable at all times.
+            NotationFeedbackOverlay(
+                state: feedbackState,
+                axis: viewport.axis,
+                actionLineFraction: actionLineFraction(for: viewport.axis)
+            )
 
             segmentLabelOverlay(viewport)
 
@@ -507,5 +520,169 @@ struct ScratchMotionLane: View {
             return label
         }
         return segment.kind == .copy ? "Your turn" : "Demo"
+    }
+}
+
+// MARK: - Notation Feedback Overlay
+
+/// Lightweight reward/correction overlay rendered at the action line.
+///
+/// States:
+/// - `.correct` / `.excellent`: electric glow stripe + optional pulse ring and spark marks.
+/// - `.close`: soft glow, no animated elements.
+/// - `.early` / `.late`: muted glow + offset correction capsule; no reward spark.
+/// - `.missed` / `.wrongDirection`: dim highlight only.
+/// - `.neutral`: invisible — base notation is unaffected.
+///
+/// Reduce Motion: pulse ring and spark are replaced by a static wider highlight.
+/// Static template preview (default `feedbackState = .neutral`) is never over-animated.
+/// Effects decay in 150–400 ms depending on state.
+struct NotationFeedbackOverlay: View {
+    let state: NotationFeedbackState
+    let axis: LaneAxis
+    let actionLineFraction: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var glowOpacity: Double = 0
+    @State private var pulseScale: CGFloat = 0.5
+    @State private var pulseOpacity: Double = 0
+    @State private var sparkOpacity: Double = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            // Action-line intersection with the cross-axis midpoint —
+            // the visual anchor for pulse and spark effects.
+            let cx: CGFloat = axis == .horizontal
+                ? size.width * actionLineFraction
+                : size.width * 0.5
+            let cy: CGFloat = axis == .vertical
+                ? size.height * actionLineFraction
+                : size.height * 0.5
+
+            let style = NotationFeedbackStyle.style(for: state, reduceMotion: reduceMotion)
+
+            ZStack {
+                // Glow stripe at the action line.
+                if let color = style.glowColor {
+                    glowStripe(size: size, color: color, radius: style.glowRadius)
+                        .opacity(glowOpacity)
+                }
+
+                // Pulse ring (correct/excellent, motion enabled).
+                if !reduceMotion, style.hasPulse, let color = style.glowColor {
+                    Circle()
+                        .stroke(color, lineWidth: 1.5)
+                        .frame(width: 28, height: 28)
+                        .scaleEffect(pulseScale)
+                        .opacity(pulseOpacity)
+                        .position(x: cx, y: cy)
+                }
+
+                // Static wider highlight when motion is reduced for reward states.
+                if reduceMotion, state.isReward, let color = style.glowColor {
+                    glowStripe(size: size, color: color, radius: style.glowRadius * 2)
+                        .opacity(glowOpacity * 0.55)
+                }
+
+                // Spark marks (excellent only, motion enabled).
+                if style.hasSpark, let color = style.glowColor {
+                    Group {
+                        ForEach(0..<4, id: \.self) { i in
+                            let angle = Double(i) * 90.0
+                            let rads = angle * .pi / 180.0
+                            Rectangle()
+                                .fill(color)
+                                .frame(width: 2, height: 9)
+                                .rotationEffect(.degrees(angle))
+                                .position(
+                                    x: cx + cos(rads) * 14,
+                                    y: cy + sin(rads) * 14
+                                )
+                        }
+                    }
+                    .opacity(sparkOpacity)
+                }
+
+                // Timing correction capsule (early/late/wrongDirection).
+                if let markerColor = style.timingMarkerColor {
+                    let offset: CGFloat = state == .early ? -24 : 24
+                    Group {
+                        if axis == .horizontal {
+                            Capsule()
+                                .fill(markerColor.opacity(0.65))
+                                .frame(width: 3, height: 20)
+                                .position(x: cx + offset, y: cy)
+                        } else {
+                            Capsule()
+                                .fill(markerColor.opacity(0.65))
+                                .frame(width: 20, height: 3)
+                                .position(x: cx, y: cy + offset)
+                        }
+                    }
+                    .opacity(glowOpacity)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .onChange(of: state) { _, newState in
+            let s = NotationFeedbackStyle.style(for: newState, reduceMotion: reduceMotion)
+            triggerAnimation(newState: newState, style: s)
+        }
+    }
+
+    // MARK: - Glow stripe
+
+    @ViewBuilder
+    private func glowStripe(size: CGSize, color: Color, radius: CGFloat) -> some View {
+        Canvas { ctx, sz in
+            var path = Path()
+            if axis == .horizontal {
+                let x = sz.width * actionLineFraction
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: sz.height))
+            } else {
+                let y = sz.height * actionLineFraction
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: sz.width, y: y))
+            }
+            ctx.stroke(path, with: .color(color), lineWidth: 3)
+        }
+        .blur(radius: radius)
+        .frame(width: size.width, height: size.height)
+    }
+
+    // MARK: - Animation trigger
+
+    private func triggerAnimation(newState: NotationFeedbackState,
+                                  style: NotationFeedbackStyle) {
+        guard newState != .neutral, style.glowOpacity > 0 else {
+            withAnimation(.easeOut(duration: 0.15)) {
+                glowOpacity = 0
+                pulseOpacity = 0
+                sparkOpacity = 0
+            }
+            pulseScale = 0.5
+            return
+        }
+
+        let decay = max(0.15, style.decayDuration)
+
+        glowOpacity = style.glowOpacity
+        withAnimation(.easeOut(duration: decay)) { glowOpacity = 0 }
+
+        if style.hasPulse {
+            pulseScale = 0.5
+            pulseOpacity = 0.80
+            withAnimation(.easeOut(duration: decay)) {
+                pulseScale = 2.8
+                pulseOpacity = 0
+            }
+        }
+
+        if style.hasSpark {
+            sparkOpacity = 0.90
+            withAnimation(.easeOut(duration: decay * 0.65)) { sparkOpacity = 0 }
+        }
     }
 }

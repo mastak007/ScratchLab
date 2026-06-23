@@ -134,7 +134,9 @@ struct PracticeModeView: View {
     @State private var pulseRing = false
     @State private var showAccuracyBurst = false
     @State private var lastAccuracyValue: Double = 0
-    
+    // Notation feedback overlay state — driven by live scratch detection results.
+    @State private var notationFeedbackState: NotationFeedbackState = .neutral
+
     let durationOptions: [(String, TimeInterval)] = [
         ("5 min", 300),
         ("10 min", 600),
@@ -1001,7 +1003,8 @@ struct PracticeModeView: View {
 
                 notationInstructionalLine(content: lane.content, clock: lane.clock)
 
-                ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis)
+                ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis,
+                                  feedbackState: notationFeedbackState)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
@@ -1407,16 +1410,29 @@ struct PracticeModeView: View {
             feedbackColor = Color(hex: "F44336")
         }
         
+        // Notation feedback overlay — maps the detection result to a visual state
+        // and auto-resets to neutral after the effect decays.
+        let feedbackResult = NotationFeedbackState.from(
+            accuracy: result.accuracy,
+            isOnBeat: result.timing.isOnBeat,
+            beatOffset: result.timing.beatOffset
+        )
+        notationFeedbackState = feedbackResult
+        let resetDelay = feedbackResult.decayDuration + 0.05
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.30, resetDelay)) {
+            notationFeedbackState = .neutral
+        }
+
         // Animate
         withAnimation(.easeOut(duration: 0.3)) {
             showFeedback = true
             showAccuracyBurst = true
         }
-        
+
         withAnimation(.easeOut(duration: 0.5)) {
             pulseRing = true
         }
-        
+
         // Hide feedback after delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation {
