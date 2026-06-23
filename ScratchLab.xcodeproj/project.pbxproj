@@ -205,6 +205,23 @@
 		CPN0001000CPN001CPN00001 /* CameraPassthroughNotationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */; };
 		CSM1001000CSM001CSM00001 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
 		CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
+		CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0001 /* ControllerProfile.swift */; };
+		CTLPRF0MAC0001 /* ControllerProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0001 /* ControllerProfile.swift */; };
+		CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0002 /* ControllerProfileCatalog.swift */; };
+		CTLPRF0MAC0002 /* ControllerProfileCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0002 /* ControllerProfileCatalog.swift */; };
+		CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0003 /* DDJFlx10Profile.swift */; };
+		CTLPRF0MAC0003 /* DDJFlx10Profile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0003 /* DDJFlx10Profile.swift */; };
+		CTLPRF0IOS0004 /* AlphaThetaProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0004 /* AlphaThetaProfiles.swift */; };
+		CTLPRF0MAC0004 /* AlphaThetaProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0004 /* AlphaThetaProfiles.swift */; };
+		CTLPRF0IOS0005 /* RaneControllerProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0005 /* RaneControllerProfiles.swift */; };
+		CTLPRF0MAC0005 /* RaneControllerProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0005 /* RaneControllerProfiles.swift */; };
+		CTLPRF0IOS0006 /* ReloopProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0006 /* ReloopProfiles.swift */; };
+		CTLPRF0MAC0006 /* ReloopProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0006 /* ReloopProfiles.swift */; };
+		CTLPRF0IOS0007 /* OtherDJProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0007 /* OtherDJProfiles.swift */; };
+		CTLPRF0MAC0007 /* OtherDJProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0007 /* OtherDJProfiles.swift */; };
+		CTLPRF0TBF0001 /* ControllerProfileCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0TREF0001 /* ControllerProfileCatalogTests.swift */; };
+		CTLPRF0TBF0002 /* DDJFlx10ProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0TREF0002 /* DDJFlx10ProfileTests.swift */; };
+		CTLPRF0TBF0003 /* ControllerAutoDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0TREF0003 /* ControllerAutoDetectorTests.swift */; };
 		MIDREG0IOS0001 /* MIDIControlRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0001 /* MIDIControlRole.swift */; };
 		MIDREG0MAC0001 /* MIDIControlRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0001 /* MIDIControlRole.swift */; };
 		MIDREG0IOS0002 /* MIDIControlBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0002 /* MIDIControlBinding.swift */; };
@@ -585,6 +602,16 @@
 		COT0000000COT001COT00001 /* CameraNotationOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraNotationOverlayTests.swift; sourceTree = "<group>"; };
 		CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CameraPassthroughNotationView.swift; sourceTree = "<group>"; };
 		CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventSummary.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0001 /* ControllerProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerProfile.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0002 /* ControllerProfileCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerProfileCatalog.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0003 /* DDJFlx10Profile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DDJFlx10Profile.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0004 /* AlphaThetaProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaThetaProfiles.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0005 /* RaneControllerProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneControllerProfiles.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0006 /* ReloopProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReloopProfiles.swift; sourceTree = "<group>"; };
+		CTLPRF0FREF0007 /* OtherDJProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherDJProfiles.swift; sourceTree = "<group>"; };
+		CTLPRF0TREF0001 /* ControllerProfileCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerProfileCatalogTests.swift; sourceTree = "<group>"; };
+		CTLPRF0TREF0002 /* DDJFlx10ProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DDJFlx10ProfileTests.swift; sourceTree = "<group>"; };
+		CTLPRF0TREF0003 /* ControllerAutoDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerAutoDetectorTests.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0001 /* MIDIControlRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlRole.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0002 /* MIDIControlBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlBinding.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0003 /* MIDIControllerProfileV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControllerProfileV2.swift; sourceTree = "<group>"; };
@@ -864,6 +891,9 @@
 				CES2010000CES002CES00001 /* CoachingEventTests.swift */,
 				MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */,
 				MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */,
+				CTLPRF0TREF0001 /* ControllerProfileCatalogTests.swift */,
+				CTLPRF0TREF0002 /* DDJFlx10ProfileTests.swift */,
+				CTLPRF0TREF0003 /* ControllerAutoDetectorTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1277,8 +1307,31 @@
 			isa = PBXGroup;
 			children = (
 				MIDREG0GRP0001 /* Registry */,
+				CTLPRF0GRP0001 /* Profile */,
 			);
 			path = ControllerInput;
+			sourceTree = "<group>";
+		};
+		CTLPRF0GRP0001 /* Profile */ = {
+			isa = PBXGroup;
+			children = (
+				CTLPRF0FREF0001 /* ControllerProfile.swift */,
+				CTLPRF0FREF0002 /* ControllerProfileCatalog.swift */,
+				CTLPRF0GRP0002 /* Definitions */,
+			);
+			path = Profile;
+			sourceTree = "<group>";
+		};
+		CTLPRF0GRP0002 /* Definitions */ = {
+			isa = PBXGroup;
+			children = (
+				CTLPRF0FREF0003 /* DDJFlx10Profile.swift */,
+				CTLPRF0FREF0004 /* AlphaThetaProfiles.swift */,
+				CTLPRF0FREF0005 /* RaneControllerProfiles.swift */,
+				CTLPRF0FREF0006 /* ReloopProfiles.swift */,
+				CTLPRF0FREF0007 /* OtherDJProfiles.swift */,
+			);
+			path = Definitions;
 			sourceTree = "<group>";
 		};
 		MIDREG0GRP0001 /* Registry */ = {
@@ -1619,6 +1672,13 @@
 				MIDREG0MAC0004 /* MIDIHardwareRegistry.swift in Sources */,
 				MIDREG0MAC0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */,
+				CTLPRF0MAC0001 /* ControllerProfile.swift in Sources */,
+				CTLPRF0MAC0002 /* ControllerProfileCatalog.swift in Sources */,
+				CTLPRF0MAC0003 /* DDJFlx10Profile.swift in Sources */,
+				CTLPRF0MAC0004 /* AlphaThetaProfiles.swift in Sources */,
+				CTLPRF0MAC0005 /* RaneControllerProfiles.swift in Sources */,
+				CTLPRF0MAC0006 /* ReloopProfiles.swift in Sources */,
+				CTLPRF0MAC0007 /* OtherDJProfiles.swift in Sources */,
 				B5AA0002A1B2C3D4E5F60709 /* GameState.swift in Sources */,
 				B5AA0003A1B2C3D4E5F60709 /* ProgressManager.swift in Sources */,
 				B5AA0004A1B2C3D4E5F60709 /* ScratchFormulaAST.swift in Sources */,
@@ -1724,6 +1784,13 @@
 				MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */,
 				MIDREG0IOS0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */,
+				CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */,
+				CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */,
+				CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */,
+				CTLPRF0IOS0004 /* AlphaThetaProfiles.swift in Sources */,
+				CTLPRF0IOS0005 /* RaneControllerProfiles.swift in Sources */,
+				CTLPRF0IOS0006 /* ReloopProfiles.swift in Sources */,
+				CTLPRF0IOS0007 /* OtherDJProfiles.swift in Sources */,
 				A1000006 /* GameState.swift in Sources */,
 				D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */,
 				PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */,
@@ -1913,6 +1980,9 @@
 				CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */,
 				MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */,
 				MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */,
+				CTLPRF0TBF0001 /* ControllerProfileCatalogTests.swift in Sources */,
+				CTLPRF0TBF0002 /* DDJFlx10ProfileTests.swift in Sources */,
+				CTLPRF0TBF0003 /* ControllerAutoDetectorTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
