@@ -459,8 +459,8 @@
 		};
 		A6000010 /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolderSpec = 10;
+			dstPath = "Watch";
+			dstSubfolderSpec = 7;
 			files = (
 				1F43B56CDA679F906F8F1F25 /* ScratchLabWatch.app in Embed Watch Content */,
 			);
