@@ -1397,6 +1397,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastMIDIEventSummary: String = "No MIDI received yet"
     @Published private(set) var lastMIDICCMessage: String = "CC -- Ch -- Value --"
     @Published private(set) var midiLearnFeedback: String = ""
+
+    // MARK: - Scratch Bank Pad Preview Gate
+    // Diagnostic-only gate. Default OFF. No scoring. No audio routing.
+    // Caller injects a sample-preview callback; on macOS the callback is nil
+    // until a desktop sample player is available.
+    @Published var isScratchBankMIDIPreviewEnabled: Bool = false
+    var scratchBankPadPreviewCallback: ((String) -> Void)?
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -4852,6 +4859,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             ccMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
         }
         let isMidiLearn = midiLearnState == .listening
+
+        // Gated pad-to-sample preview — diagnostic only; no scoring, no routing.
+        if let sampleID = ScratchBankPadEventRouter.sampleID(
+            channel: channel, cc: controller, value: value,
+            isEnabled: isScratchBankMIDIPreviewEnabled
+        ) {
+            scratchBankPadPreviewCallback?(sampleID)
+        }
 
         // Throttle @Published UI-monitor updates to ~4 Hz.
         // Full-fidelity MIDI capture (capturedMidiCCEvents + debug counters)
