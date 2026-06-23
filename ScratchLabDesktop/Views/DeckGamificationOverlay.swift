@@ -3,6 +3,73 @@ import SwiftUI
 struct CaptureGuideEditModel {
     static let normalizedBounds = CGRect(x: 0.01, y: 0.02, width: 0.98, height: 0.96)
 
+    /// Minimum visible margin (in points) between a draggable overlay edge and
+    /// the canvas edge.  Shared by all three zones (left deck, mixer, right deck).
+    static let canvasInset: CGFloat = 12
+
+    /// Clamp a pixel-space rectangle so every edge stays within `canvasSize`
+    /// with at least `inset` points of visible margin.
+    ///
+    /// When the overlay is larger than the inset-reduced canvas the rectangle
+    /// is centered in the tightest available axis rather than producing NaN or
+    /// inverted ranges.
+    static func clampRect(_ rect: CGRect, to canvasSize: CGSize, inset: CGFloat) -> CGRect {
+        guard canvasSize.width > 0, canvasSize.height > 0, rect.width > 0, rect.height > 0 else {
+            return rect
+        }
+
+        let minX = inset
+        let maxX = canvasSize.width - inset
+        let minY = inset
+        let maxY = canvasSize.height - inset
+
+        let availableWidth = maxX - minX
+        let availableHeight = maxY - minY
+
+        // If the overlay is wider than the available canvas, center it
+        // horizontally so we don't produce an inverted range.
+        let clampedX: CGFloat
+        if rect.width >= availableWidth {
+            clampedX = minX + (availableWidth - rect.width) / 2
+        } else {
+            clampedX = min(max(rect.minX, minX), maxX - rect.width)
+        }
+
+        // Same for height — center if the overlay is taller than the canvas.
+        let clampedY: CGFloat
+        if rect.height >= availableHeight {
+            clampedY = minY + (availableHeight - rect.height) / 2
+        } else {
+            clampedY = min(max(rect.minY, minY), maxY - rect.height)
+        }
+
+        return CGRect(x: clampedX, y: clampedY, width: rect.width, height: rect.height)
+    }
+
+    /// Compute normalized-offset deltas from a pixel-space drag operation.
+    ///
+    /// Takes a pixel-space snapshot rect (the overlay's position at drag-start,
+    /// from `convert(zone.boundingBox)`), the total gesture translation, and
+    /// the canvas size + inset, then returns the (dx, dy) deltas to add to the
+    /// snapshot `ZoneAdjustment.offsetX` / `.offsetY`.
+    ///
+    /// With zero translation this returns (0, 0) — no jump.
+    static func pixelDragDeltas(
+        pixelSnapshot: CGRect,
+        translation: CGSize,
+        canvasSize: CGSize,
+        inset: CGFloat
+    ) -> (dx: Double, dy: Double) {
+        let proposedRect = pixelSnapshot.offsetBy(
+            dx: translation.width,
+            dy: translation.height
+        )
+        let clampedRect = clampRect(proposedRect, to: canvasSize, inset: inset)
+        let dx = Double((clampedRect.midX - pixelSnapshot.midX) / max(canvasSize.width, 1))
+        let dy = Double(-(clampedRect.midY - pixelSnapshot.midY) / max(canvasSize.height, 1))
+        return (dx, dy)
+    }
+
     static func isEditable(
         showRigGuides: Bool,
         calibrationLocked: Bool,
@@ -114,6 +181,7 @@ struct DeckGamificationOverlay: View {
         )
     }
     @State private var zoneMoveSnapshots: [DJRigZone.Role: MacCaptureEngine.ZoneAdjustment] = [:]
+    @State private var zoneMovePixelSnapshots: [DJRigZone.Role: CGRect] = [:]
     @State private var zoneResizeSnapshots: [DJRigZone.Role: ZoneResizeSnapshot] = [:]
     @State private var activeZoneInteraction: ZoneInteraction?
 
@@ -236,6 +304,10 @@ struct DeckGamificationOverlay: View {
         .animation(.spring(response: 0.28, dampingFraction: 0.82), value: detector.sessionStars)
     }
 
+    /// Pure coordinate conversion from normalized Vision space (origin
+    /// bottom-left) to SwiftUI pixel space (origin top-left).  No clamping —
+    /// the clamp is applied inside the drag gesture at the pixel level so the
+    /// rendered rect always matches the underlying data.
     private func convert(_ normalizedRect: CGRect, in size: CGSize) -> CGRect {
         CGRect(
             x: normalizedRect.minX * size.width,
@@ -283,6 +355,7 @@ struct DeckGamificationOverlay: View {
 
     private func interactiveZoneControls(for zone: DJRigZone, rect: CGRect, size: CGSize) -> some View {
         ZStack(alignment: .topLeading) {
+            // Dashed outline
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 1.6, dash: [10, 6]))
                 .background(
@@ -293,9 +366,16 @@ struct DeckGamificationOverlay: View {
                 .position(x: rect.midX, y: rect.midY)
                 .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-            calibrationBadge(title: "Position \(zone.role.title)", systemImage: "move.3d")
+            // Label badge (non-interactive — informational only)
+            calibrationBadge(title: zone.role.title, systemImage: "move.3d")
                 .position(x: rect.midX, y: max(rect.minY - 18, 28))
 
+            // Move handle — visible grab affordance at the top of each overlay.
+            // Only this area + the resize handle are interactive.
+            moveHandlePill(for: zone, rect: rect)
+                .position(x: rect.midX, y: rect.minY + 22)
+
+            // Resize handle (bottom-right corner)
             Circle()
                 .fill(Color.white)
                 .frame(width: 22, height: 22)
@@ -307,6 +387,30 @@ struct DeckGamificationOverlay: View {
                 .shadow(color: Color.black.opacity(0.28), radius: 6, x: 0, y: 3)
                 .position(x: rect.maxX - 10, y: rect.maxY - 10)
         }
+    }
+
+    /// A small pill-shaped handle at the top of each overlay that signals
+    /// "drag here to move."  Uses a contrasting semi-transparent look so it is
+    /// visible over both light and dark camera feeds.
+    private func moveHandlePill(for zone: DJRigZone, rect: CGRect) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                .font(.system(size: 9, weight: .bold))
+            Text("Drag to move")
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.55))
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.5), lineWidth: 0.8)
+                )
+        )
+        .shadow(color: Color.black.opacity(0.35), radius: 4, x: 0, y: 2)
     }
 
     private func interactiveCalibrationGesture(layout: DJRigLayout, size: CGSize) -> some Gesture {
@@ -329,53 +433,94 @@ struct DeckGamificationOverlay: View {
             .onEnded { _ in
                 if let activeZoneInteraction {
                     zoneMoveSnapshots[activeZoneInteraction.role] = nil
+                    zoneMovePixelSnapshots[activeZoneInteraction.role] = nil
                     zoneResizeSnapshots[activeZoneInteraction.role] = nil
                 }
                 activeZoneInteraction = nil
+                // Persist the final position once, after the drag ends.
+                detector.persistCurrentZoneAdjustments()
             }
     }
 
+    /// Determines which zone and interaction kind the given point (in the
+    /// canvas's local pixel coordinate space) maps to.
+    ///
+    /// Priority order:
+    /// 1. Resize handle (bottom-right 36×36 area of each zone)
+    /// 2. Move handle (top-center pill, ~144×36 pt area)
+    ///
+    /// The body of the overlay is intentionally NOT a move target — only the
+    /// dedicated handle areas trigger interactions.
     private func zoneInteraction(at point: CGPoint, layout: DJRigLayout, size: CGSize) -> ZoneInteraction? {
         let zoneRects = layout.zones.map { zone in
             (zone: zone, rect: convert(zone.boundingBox, in: size))
         }
 
         for zoneRect in zoneRects.reversed() {
-            let handleRect = CGRect(
+            // Resize handle: bottom-right corner
+            let resizeHandleRect = CGRect(
                 x: zoneRect.rect.maxX - 28,
                 y: zoneRect.rect.maxY - 28,
                 width: 36,
                 height: 36
             )
-            if handleRect.contains(point) {
+            if resizeHandleRect.contains(point) {
                 return ZoneInteraction(role: zoneRect.zone.role, kind: .resize)
             }
-        }
 
-        if let matchingZone = zoneRects.first(where: { $0.rect.contains(point) }) {
-            return ZoneInteraction(role: matchingZone.zone.role, kind: .move)
+            // Move handle: top-center pill area
+            let moveHandleWidth: CGFloat = min(zoneRect.rect.width * 0.65, 160)
+            let moveHandleHeight: CGFloat = 36
+            let moveHandleRect = CGRect(
+                x: zoneRect.rect.midX - moveHandleWidth / 2,
+                y: zoneRect.rect.minY,
+                width: moveHandleWidth,
+                height: moveHandleHeight
+            )
+            if moveHandleRect.contains(point) {
+                return ZoneInteraction(role: zoneRect.zone.role, kind: .move)
+            }
         }
 
         return nil
     }
 
+    /// Applies a move-drag by operating in pixel space, clamping with the
+    /// shared `clampRect` helper, then converting the clamped delta back to
+    /// a normalized zone-adjustment change.
+    ///
+    /// This avoids the jump that would occur if the rendered pixel rect
+    /// (possibly clamped by different margins) were out of sync with the
+    /// underlying normalized `zone.boundingBox`.
     private func applyZoneMoveDrag(_ value: DragGesture.Value, role: DJRigZone.Role, size: CGSize) {
         guard let zone = detector.rigLayout?.zone(for: role) else { return }
-        let snapshot = zoneMoveSnapshots[role] ?? detector.zoneAdjustment(for: role)
-        zoneMoveSnapshots[role] = snapshot
 
-        detector.updateZoneAdjustment(for: role) { adjustment in
-            adjustment = CaptureGuideEditModel.movedAdjustment(
-                from: snapshot,
-                translation: value.translation,
-                boundingBox: zone.boundingBox,
-                canvasSize: size,
-                offsetRange: detector.calibrationOffsetRange,
-                scaleRange: detector.calibrationScaleRange
-            )
+        // First tick: snapshot the current adjustment AND the current pixel rect.
+        if zoneMoveSnapshots[role] == nil {
+            zoneMoveSnapshots[role] = detector.zoneAdjustment(for: role)
+            zoneMovePixelSnapshots[role] = convert(zone.boundingBox, in: size)
+        }
+
+        guard let adjustmentSnapshot = zoneMoveSnapshots[role],
+              let pixelSnapshot = zoneMovePixelSnapshots[role] else { return }
+
+        let (deltaX, deltaY) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: value.translation,
+            canvasSize: size,
+            inset: CaptureGuideEditModel.canvasInset
+        )
+
+        detector.updateZoneAdjustmentTransient(for: role) { adjustment in
+            adjustment.offsetX = adjustmentSnapshot.offsetX + deltaX
+            adjustment.offsetY = adjustmentSnapshot.offsetY + deltaY
+            adjustment.widthScale = adjustmentSnapshot.widthScale
+            adjustment.heightScale = adjustmentSnapshot.heightScale
         }
     }
 
+    /// Resize drag — unchanged from the original implementation.  The resize
+    /// handle is the dedicated bottom-right corner circle.
     private func applyZoneResizeDrag(_ value: DragGesture.Value, zone: DJRigZone, size: CGSize) {
         let snapshot = zoneResizeSnapshots[zone.role] ?? ZoneResizeSnapshot(
             adjustment: detector.zoneAdjustment(for: zone.role),
@@ -383,7 +528,7 @@ struct DeckGamificationOverlay: View {
         )
         zoneResizeSnapshots[zone.role] = snapshot
 
-        detector.updateZoneAdjustment(for: zone.role) { adjustment in
+        detector.updateZoneAdjustmentTransient(for: zone.role) { adjustment in
             adjustment = CaptureGuideEditModel.resizedAdjustment(
                 from: snapshot,
                 translation: value.translation,

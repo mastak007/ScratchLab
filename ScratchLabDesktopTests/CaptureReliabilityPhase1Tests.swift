@@ -9428,6 +9428,348 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
             "MacAnalyzerView must not have reverted to old 'recognized' copy"
         )
     }
+
+    // MARK: - Deck/Mixer Drag Clamp Helper Tests
+
+    /// Clamp: dragging past the left edge snaps to the minimum visible x.
+    func testClampRectLeftEdgeConstrainsOverlay() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let overlay = CGRect(x: -50, y: 100, width: 200, height: 100)
+
+        let clamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: inset)
+
+        XCTAssertEqual(clamped.minX, inset, accuracy: 0.001,
+                       "Left edge must stop at inset margin")
+        XCTAssertEqual(clamped.width, overlay.width,
+                       "Width must be preserved")
+        XCTAssertEqual(clamped.minY, overlay.minY, accuracy: 0.001,
+                       "Y must be unchanged when only X overflows")
+    }
+
+    /// Clamp: dragging past the right edge snaps to the maximum visible x.
+    func testClampRectRightEdgeConstrainsOverlay() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let overlay = CGRect(x: 750, y: 100, width: 200, height: 100)
+
+        let clamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: inset)
+
+        XCTAssertEqual(clamped.maxX, canvas.width - inset, accuracy: 0.001,
+                       "Right edge must stop at inset margin")
+        XCTAssertEqual(clamped.width, overlay.width,
+                       "Width must be preserved")
+    }
+
+    /// Clamp: dragging above the top snaps to the minimum visible y.
+    func testClampRectTopEdgeConstrainsOverlay() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let overlay = CGRect(x: 100, y: -30, width: 200, height: 100)
+
+        let clamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: inset)
+
+        XCTAssertEqual(clamped.minY, inset, accuracy: 0.001,
+                       "Top edge must stop at inset margin")
+        XCTAssertEqual(clamped.height, overlay.height,
+                       "Height must be preserved")
+    }
+
+    /// Clamp: dragging below the bottom snaps to the maximum visible y.
+    func testClampRectBottomEdgeConstrainsOverlay() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let overlay = CGRect(x: 100, y: 550, width: 200, height: 100)
+
+        let clamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: inset)
+
+        XCTAssertEqual(clamped.maxY, canvas.height - inset, accuracy: 0.001,
+                       "Bottom edge must stop at inset margin")
+        XCTAssertEqual(clamped.height, overlay.height,
+                       "Height must be preserved")
+    }
+
+    /// Clamp: overlay width/height is always preserved.
+    func testClampRectPreservesOverlaySize() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let overlay = CGRect(x: -20, y: -20, width: 300, height: 200)
+
+        let clamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: inset)
+
+        XCTAssertEqual(clamped.width, overlay.width,
+                       "Clamp must preserve overlay width")
+        XCTAssertEqual(clamped.height, overlay.height,
+                       "Clamp must preserve overlay height")
+    }
+
+    /// Clamp: inset margin is respected (not ignored).
+    func testClampRectRespectsInsetMargin() {
+        let canvas = CGSize(width: 800, height: 600)
+        let smallInset: CGFloat = 4
+        let largeInset: CGFloat = 40
+        let overlay = CGRect(x: -50, y: -50, width: 100, height: 100)
+
+        let tightClamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: smallInset)
+        let looseClamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: largeInset)
+
+        XCTAssertEqual(tightClamped.minX, smallInset, accuracy: 0.001)
+        XCTAssertEqual(looseClamped.minX, largeInset, accuracy: 0.001,
+                       "Larger inset must push the clamped origin further inward")
+    }
+
+    /// Clamp: an overlay larger than the canvas is centered safely rather than
+    /// producing NaN or inverted ranges.
+    func testClampRectOverlayLargerThanCanvasCentersSafely() {
+        let canvas = CGSize(width: 200, height: 150)
+        let inset: CGFloat = 8
+        let overlay = CGRect(x: -100, y: -50, width: 400, height: 300)
+
+        let clamped = CaptureGuideEditModel.clampRect(overlay, to: canvas, inset: inset)
+
+        XCTAssertTrue(clamped.minX.isFinite, "minX must be finite")
+        XCTAssertTrue(clamped.minY.isFinite, "minY must be finite")
+        XCTAssertFalse(clamped.minX.isNaN, "minX must not be NaN")
+        XCTAssertEqual(clamped.width, overlay.width,
+                       "Overlay width must be preserved even when larger than canvas")
+    }
+
+    /// No-jump: pixelDragDeltas with zero translation returns (0, 0).
+    func testPixelDragDeltasZeroTranslationNoJump() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        // A typical left-deck overlay in pixel space.
+        let pixelSnapshot = CGRect(x: 80, y: 20, width: 280, height: 560)
+
+        let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: .zero,
+            canvasSize: canvas,
+            inset: inset
+        )
+
+        XCTAssertEqual(dx, 0, accuracy: 0.0001,
+                       "Zero translation must produce zero dx (no jump)")
+        XCTAssertEqual(dy, 0, accuracy: 0.0001,
+                       "Zero translation must produce zero dy (no jump)")
+    }
+
+    /// No-jump: dragging from the left side of a rect with zero translation
+    /// does not snap the rect center to the pointer.
+    func testPixelDragDeltasLeftEdgeNoSnap() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        // Overlay is on the left side, fully within the inset canvas.
+        let pixelSnapshot = CGRect(x: 100, y: 50, width: 250, height: 400)
+
+        let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: .zero,
+            canvasSize: canvas,
+            inset: inset
+        )
+
+        XCTAssertEqual(dx, 0, accuracy: 0.0001,
+                       "Drag start at left side must not snap horizontally")
+        XCTAssertEqual(dy, 0, accuracy: 0.0001,
+                       "Drag start must not snap vertically")
+    }
+
+    /// No-jump: dragging from the right side of a rect with zero translation
+    /// does not snap the rect center to the pointer.
+    func testPixelDragDeltasRightEdgeNoSnap() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        // Overlay is on the right side, fully within the inset canvas.
+        let pixelSnapshot = CGRect(x: 450, y: 50, width: 250, height: 400)
+
+        let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: .zero,
+            canvasSize: canvas,
+            inset: inset
+        )
+
+        XCTAssertEqual(dx, 0, accuracy: 0.0001,
+                       "Drag start at right side must not snap horizontally")
+        XCTAssertEqual(dy, 0, accuracy: 0.0001,
+                       "Drag start must not snap vertically")
+    }
+
+    /// Drag: applying a translation moves by exactly that translation when
+    /// the proposed rect stays in bounds.
+    func testPixelDragDeltasTranslatesByExactAmount() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let pixelSnapshot = CGRect(x: 200, y: 100, width: 200, height: 400)
+
+        let translation = CGSize(width: 80, height: -40)
+        let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: translation,
+            canvasSize: canvas,
+            inset: inset
+        )
+
+        // 80 pt / 800 pt = 0.1 normalized, -40 pt / 600 pt = -0.0667 (but Y is flipped)
+        XCTAssertEqual(dx, 0.1, accuracy: 0.001,
+                       "In-bounds drag must produce exact normalized deltaX")
+        XCTAssertEqual(dy, 0.0667, accuracy: 0.005,
+                       "In-bounds drag must produce exact normalized deltaY (Y flipped)")
+    }
+
+    /// Drag: clamp applies when the proposed rect would go past the inset edge.
+    func testPixelDragDeltasClampsAtEdge() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        // Overlay already at the left edge.
+        let pixelSnapshot = CGRect(x: 12, y: 100, width: 200, height: 400)
+
+        // Try to drag 100pt left (past the inset).
+        let translation = CGSize(width: -100, height: 0)
+        let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: translation,
+            canvasSize: canvas,
+            inset: inset
+        )
+
+        // The rect is already at minX=12 (the inset).  Dragging left is clamped.
+        // clampedRect.minX should stay at 12, so midX shouldn't change.
+        XCTAssertEqual(dx, 0, accuracy: 0.001,
+                       "Dragging past left inset must be clamped to zero delta")
+        XCTAssertEqual(dy, 0, accuracy: 0.0001)
+    }
+
+    /// Drag: clamp applies at the right edge too.
+    func testPixelDragDeltasClampsAtRightEdge() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        let pixelSnapshot = CGRect(x: 588, y: 100, width: 200, height: 400)
+        // maxX = 788, canvas width - inset = 788 → at edge
+
+        let translation = CGSize(width: 100, height: 0)
+        let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+            pixelSnapshot: pixelSnapshot,
+            translation: translation,
+            canvasSize: canvas,
+            inset: inset
+        )
+
+        XCTAssertEqual(dx, 0, accuracy: 0.001,
+                       "Dragging past right inset must be clamped to zero delta")
+        XCTAssertEqual(dy, 0, accuracy: 0.0001)
+    }
+
+    /// Drag: all three zones use the same pixelDragDeltas math.
+    func testPixelDragDeltasWorksForAllZones() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+        // Translation keeps all zones away from the inset edges.
+        let translation = CGSize(width: 80, height: 0)
+        let expectedDx = 0.1     // 80/800
+        let expectedDy = 0.0     // no vertical movement
+
+        // Zones positioned well inside the canvas so the clamp is a no-op.
+        let zones: [(String, CGRect)] = [
+            ("leftDeck",  CGRect(x: 50,  y: 50, width: 200, height: 400)),
+            ("mixer",     CGRect(x: 300, y: 50, width: 150, height: 400)),
+            ("rightDeck", CGRect(x: 500, y: 50, width: 200, height: 400)),
+        ]
+
+        for (label, rect) in zones {
+            let (dx, dy) = CaptureGuideEditModel.pixelDragDeltas(
+                pixelSnapshot: rect,
+                translation: translation,
+                canvasSize: canvas,
+                inset: inset
+            )
+            XCTAssertEqual(dx, expectedDx, accuracy: 0.001,
+                           "\(label): dx must be consistent across zones")
+            XCTAssertEqual(dy, expectedDy, accuracy: 0.001,
+                           "\(label): dy must be consistent across zones")
+            XCTAssertTrue(dx.isFinite && dy.isFinite,
+                          "\(label): deltas must be finite")
+        }
+    }
+
+    /// Clamp: all three zones (left deck, mixer, right deck) can use the
+    /// same `clampRect` helper without any role-specific branching.
+    func testClampRectWorksForAllZoneSizes() {
+        let canvas = CGSize(width: 800, height: 600)
+        let inset: CGFloat = 12
+
+        // Typical sizes: left deck ~35 %W, mixer ~17 %W, right deck ~35 %W.
+        let zones: [(String, CGRect)] = [
+            ("leftDeck",  CGRect(x: -20, y: 20,  width: 280, height: 560)),
+            ("mixer",     CGRect(x: 350, y: 50,  width: 136, height: 500)),
+            ("rightDeck", CGRect(x: 600, y: 20,  width: 280, height: 560)),
+        ]
+
+        for (label, rect) in zones {
+            let clamped = CaptureGuideEditModel.clampRect(rect, to: canvas, inset: inset)
+            XCTAssertGreaterThanOrEqual(clamped.minX, inset,
+                                        "\(label): left edge must be >= inset")
+            XCTAssertLessThanOrEqual(clamped.maxX, canvas.width - inset,
+                                     "\(label): right edge must be <= canvas width - inset")
+            XCTAssertGreaterThanOrEqual(clamped.minY, inset,
+                                        "\(label): top edge must be >= inset")
+            XCTAssertLessThanOrEqual(clamped.maxY, canvas.height - inset,
+                                     "\(label): bottom edge must be <= canvas height - inset")
+            XCTAssertTrue(clamped.minX.isFinite && clamped.minY.isFinite,
+                          "\(label): output must be finite")
+        }
+    }
+
+    /// Clamp: drag gesture-start + translation yields a consistent, finite
+    /// ZoneAdjustment that never double-accumulates.
+    func testMovedAdjustmentFromSnapshotIsDeterministic() {
+        let snapshot = MacCaptureEngine.ZoneAdjustment(
+            offsetX: 0.0, offsetY: 0.0,
+            widthScale: 1.0, heightScale: 1.0
+        )
+        let boundingBox = CGRect(x: 0.05, y: 0.10, width: 0.35, height: 0.80)
+        let canvas = CGSize(width: 800, height: 600)
+        let offsetRange: ClosedRange<Double> = -0.28...0.28
+        let scaleRange: ClosedRange<Double> = 0.65...1.85
+
+        // Simulate three identical drag events from the same snapshot.
+        let translation = CGSize(width: 80, height: -40)
+        let first = CaptureGuideEditModel.movedAdjustment(
+            from: snapshot,
+            translation: translation,
+            boundingBox: boundingBox,
+            canvasSize: canvas,
+            offsetRange: offsetRange,
+            scaleRange: scaleRange
+        )
+        let second = CaptureGuideEditModel.movedAdjustment(
+            from: snapshot,
+            translation: translation,
+            boundingBox: boundingBox,
+            canvasSize: canvas,
+            offsetRange: offsetRange,
+            scaleRange: scaleRange
+        )
+
+        XCTAssertEqual(first.offsetX, second.offsetX, accuracy: 0.0001,
+                       "Same snapshot + same translation must produce same offsetX")
+        XCTAssertEqual(first.offsetY, second.offsetY, accuracy: 0.0001,
+                       "Same snapshot + same translation must produce same offsetY")
+        XCTAssertTrue(first.offsetX.isFinite && first.offsetY.isFinite,
+                      "Output must be finite")
+        XCTAssertTrue(offsetRange.contains(first.offsetX),
+                      "offsetX must stay within calibrationOffsetRange")
+        XCTAssertTrue(offsetRange.contains(first.offsetY),
+                      "offsetY must stay within calibrationOffsetRange")
+    }
+
+    /// Clamp: the canvas inset constant is a reasonable positive value.
+    func testCanvasInsetIsReasonable() {
+        let inset = CaptureGuideEditModel.canvasInset
+        XCTAssertGreaterThan(inset, 0, "Inset must be positive to keep overlays visible")
+        XCTAssertLessThanOrEqual(inset, 40, "Inset must not be absurdly large")
+    }
 }
 
 extension CaptureReliabilityPhase1CoreTests {

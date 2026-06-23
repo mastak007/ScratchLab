@@ -1500,9 +1500,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
     @Published private(set) var zoneAdjustments: [DJRigZone.Role: ZoneAdjustment] = MacCaptureEngine.loadZoneAdjustments() {
         didSet {
+            guard !suppressZoneAdjustmentPersistence else { return }
             Self.persistZoneAdjustments(zoneAdjustments)
         }
     }
+    /// When `true` the `didSet` observer on `zoneAdjustments` skips
+    /// persistence.  Set during a drag gesture so UserDefaults is only
+    /// written once on `.onEnded`, not on every pointer-move tick.
+    var suppressZoneAdjustmentPersistence = false
     @Published private(set) var performerMonitorFrame: PerformerMonitorFrame?
     @Published var statusMessage = "Requesting camera and microphone access"
     @Published private(set) var directCaptureStatus = "Open your DJ app to prepare Direct Capture."
@@ -1879,6 +1884,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         var updated = zoneAdjustment(for: role)
         mutate(&updated)
         setZoneAdjustment(updated, for: role)
+    }
+
+    /// Like `updateZoneAdjustment` but skips the UserDefaults persistence
+    /// that normally fires on every assignment.  Use during drag gestures
+    /// so the disk write only happens once on `.onEnded`.
+    func updateZoneAdjustmentTransient(for role: DJRigZone.Role, mutate: (inout ZoneAdjustment) -> Void) {
+        suppressZoneAdjustmentPersistence = true
+        updateZoneAdjustment(for: role, mutate: mutate)
+        suppressZoneAdjustmentPersistence = false
+    }
+
+    /// Persist the current in-memory zone adjustments to UserDefaults.
+    /// Call this on drag-end to commit the final position.
+    func persistCurrentZoneAdjustments() {
+        Self.persistZoneAdjustments(zoneAdjustments)
     }
 
     func resetZoneAdjustments() {
@@ -4256,8 +4276,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let offsetX = CGFloat(rigHorizontalOffset)
         let offsetY = CGFloat(rigVerticalOffset)
 
-        let scaledWidth = min(max(rect.width * widthScale, 0.08), 0.98)
-        let scaledHeight = min(max(rect.height * heightScale, 0.08), 0.96)
+        let normalized = CaptureGuideEditModel.normalizedBounds
+        let scaledWidth = min(max(rect.width * widthScale, 0.08), normalized.width)
+        let scaledHeight = min(max(rect.height * heightScale, 0.08), normalized.height)
         let centerX = rect.midX + offsetX
         let centerY = rect.midY + offsetY
 
@@ -4268,7 +4289,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             height: scaledHeight
         )
 
-        return proposed.intersection(CGRect(x: 0.01, y: 0.02, width: 0.98, height: 0.96))
+        return proposed.intersection(normalized)
     }
 
     private func adjustedBoundingBox(_ rect: CGRect, using adjustment: ZoneAdjustment) -> CGRect {
@@ -4277,13 +4298,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let offsetX = CGFloat(adjustment.offsetX)
         let offsetY = CGFloat(adjustment.offsetY)
 
-        let scaledWidth = min(max(rect.width * widthScale, 0.05), 0.98)
-        let scaledHeight = min(max(rect.height * heightScale, 0.05), 0.96)
+        let normalized = CaptureGuideEditModel.normalizedBounds
+        let scaledWidth = min(max(rect.width * widthScale, 0.05), normalized.width)
+        let scaledHeight = min(max(rect.height * heightScale, 0.05), normalized.height)
         let centerX = rect.midX + offsetX
         let centerY = rect.midY + offsetY
 
-        let minX = max(0.01, min(centerX - (scaledWidth / 2), 0.99 - scaledWidth))
-        let minY = max(0.02, min(centerY - (scaledHeight / 2), 0.98 - scaledHeight))
+        let minX = max(normalized.minX, min(centerX - (scaledWidth / 2), normalized.maxX - scaledWidth))
+        let minY = max(normalized.minY, min(centerY - (scaledHeight / 2), normalized.maxY - scaledHeight))
 
         return CGRect(x: minX, y: minY, width: scaledWidth, height: scaledHeight)
     }
