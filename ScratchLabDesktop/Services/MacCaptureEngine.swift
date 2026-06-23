@@ -2137,6 +2137,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         movieOutput.movieFragmentInterval = .invalid
         startAudioSignalDecayTimer()
         rescanRoutineCaptures()
+
+        // Scratch bank pad preview player (diagnostic gate; default OFF).
+        let padPlayer = ScratchBankPadAudioPlayer()
+        scratchBankPadPreviewCallback = { [weak self] sampleID in
+            guard let self, self.isScratchBankMIDIPreviewEnabled else { return }
+            padPlayer.play(sampleID: sampleID)
+        }
+
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleWorkspaceApplicationChange(_:)),

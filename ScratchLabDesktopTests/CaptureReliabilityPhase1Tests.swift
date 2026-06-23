@@ -4071,7 +4071,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testHostedDesktopBundleContainsCoachUSDZAsset() throws {
-        let assetURL = try XCTUnwrap(Bundle.main.url(forResource: "Coach", withExtension: "usdz"))
+        let bundle = try XCTUnwrap(ScratchLabDesktopTestResourceResolver.appBundle,
+                                    "App bundle must be resolvable")
+        let assetURL = try XCTUnwrap(bundle.url(forResource: "Coach", withExtension: "usdz"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: assetURL.path))
     }
 
@@ -4449,9 +4451,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testHostedDesktopBundleContainsCoachInstructionResources() throws {
+        let bundle = try XCTUnwrap(ScratchLabDesktopTestResourceResolver.appBundle,
+                                    "App bundle must be resolvable")
         for resourceName in ["baby", "chirpflare"] {
             let fileURL = try XCTUnwrap(
-                Bundle.main.url(
+                bundle.url(
                     forResource: resourceName,
                     withExtension: "json",
                     subdirectory: "CoachInstructions"

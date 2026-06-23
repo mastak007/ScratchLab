@@ -172,6 +172,9 @@
 		B12CAD53EF004A129E9C2684 /* TimecodeAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */; };
 		B177BD601DFAC77063AACF21 /* Archive+Progress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472ED49B7202325C8D3C8887 /* Archive+Progress.swift */; };
 		B3A39D0AA88DA0B892514753 /* ScratchLabDesktopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000001 /* ScratchLabDesktopApp.swift */; };
+		SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */; };
+		SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */; };
+		SDTR0001TST /* ScratchLabDesktopTestResourceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */; };
 		B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000005 /* MacCaptureEngine.swift */; };
 		B5AA0001A1B2C3D4E5F60709 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
 		B5AA0002A1B2C3D4E5F60709 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
@@ -610,6 +613,9 @@
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
+		SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayer.swift; sourceTree = "<group>"; };
+		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
+		SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesktopTestResourceResolver.swift; sourceTree = "<group>"; };
 		B2000006 /* MacScratchDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacScratchDetector.swift; sourceTree = "<group>"; };
 		B2000007 /* CompanionCameraReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraReceiver.swift; sourceTree = "<group>"; };
 		B2000008 /* DJRigLayoutDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJRigLayoutDetector.swift; sourceTree = "<group>"; };
@@ -943,6 +949,8 @@
 				SBPG2FREF0002 /* ScratchBankPadGridViewTests.swift */,
 				RMKPLS0002FREF /* RaneOneMK2PadCandidateLabelerTests.swift */,
 				SBPER0002FREF /* ScratchBankPadEventRouterTests.swift */,
+				SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */,
+				SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1340,6 +1348,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000005 /* MacCaptureEngine.swift */,
+				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
 				B2000006 /* MacScratchDetector.swift */,
 				B2000007 /* CompanionCameraReceiver.swift */,
 				B2000008 /* DJRigLayoutDetector.swift */,
@@ -1689,6 +1698,7 @@
 				DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */,
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
 				B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */,
+				SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */,
 				D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */,
 				309F7737DD8317EA37CCFC73 /* CompanionCameraReceiver.swift in Sources */,
 				10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */,
@@ -2085,6 +2095,8 @@
 				SBPG2TST00001 /* ScratchBankPadGridViewTests.swift in Sources */,
 				RMKPLS0001TST /* RaneOneMK2PadCandidateLabelerTests.swift in Sources */,
 				SBPER0001TST /* ScratchBankPadEventRouterTests.swift in Sources */,
+				SDTR0001TST /* ScratchLabDesktopTestResourceResolver.swift in Sources */,
+				SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
