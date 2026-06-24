@@ -248,60 +248,58 @@ extension MIDIControllerProfile {
                 notes: "Confirmed: Note On/Off ch=1 note=0. Single transport button per deck — no separate CUE."
             ),
 
-            // ── Left deck EQ / gain raw controls ─────────────────────────────────────
-            // ch1 (MIDI Monitor) = ch=0 (0-indexed). Capture order: bass CC25, mid CC24,
-            // highs CC23, gain CC22. Pending one isolated knob turn per control to confirm
-            // exact bass/mid/highs/gain label assignment.
+            // ── Left deck EQ / gain controls ──────────────────────────────────────────
+            // Confirmed via isolated knob turns 2026-06-25. Full 0–127 sweep per knob.
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Bass EQ (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Bass EQ"),
                 signal: .absoluteCC(number: 25),
                 channel: 0,
-                notes: "Capture order position 1 (bass). ch1/ch=0. Pending isolated confirmation."
+                notes: "Confirmed: CC25 ch=0. Full 0–127 sweep verified in isolation."
             ),
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Mid EQ (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Mid EQ"),
                 signal: .absoluteCC(number: 24),
                 channel: 0,
-                notes: "Capture order position 2 (mid). ch1/ch=0. Pending isolated confirmation."
+                notes: "Confirmed: CC24 ch=0. Full 0–127 sweep verified in isolation."
             ),
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Highs EQ (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Highs EQ"),
                 signal: .absoluteCC(number: 23),
                 channel: 0,
-                notes: "Capture order position 3 (highs). ch1/ch=0. Pending isolated confirmation."
+                notes: "Confirmed: CC23 ch=0. Full 0–127 sweep verified in isolation."
             ),
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Gain (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Gain"),
                 signal: .absoluteCC(number: 22),
                 channel: 0,
-                notes: "Capture order position 4 (gain). ch1/ch=0. Pending isolated confirmation."
+                notes: "Confirmed: CC22 ch=0. Full 0–127 sweep verified in isolation."
             ),
 
-            // ── Right deck EQ / gain raw controls ────────────────────────────────────
-            // ch2 (MIDI Monitor) = ch=1 (0-indexed). Same CC addresses as left deck.
+            // ── Right deck EQ / gain controls ─────────────────────────────────────────
+            // Confirmed via isolated knob turns 2026-06-25. Full 0–127 sweep per knob.
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Bass EQ (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Bass EQ"),
                 signal: .absoluteCC(number: 25),
                 channel: 1,
-                notes: "Capture order position 1 (bass). ch2/ch=1. Pending isolated confirmation."
+                notes: "Confirmed: CC25 ch=1. Full 0–127 sweep verified in isolation."
             ),
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Mid EQ (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Mid EQ"),
                 signal: .absoluteCC(number: 24),
                 channel: 1,
-                notes: "Capture order position 2 (mid). ch2/ch=1. Pending isolated confirmation."
+                notes: "Confirmed: CC24 ch=1. Full 0–127 sweep verified in isolation."
             ),
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Highs EQ (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Highs EQ"),
                 signal: .absoluteCC(number: 23),
                 channel: 1,
-                notes: "Capture order position 3 (highs). ch2/ch=1. Pending isolated confirmation."
+                notes: "Confirmed: CC23 ch=1. Full 0–127 sweep verified in isolation."
             ),
             MIDIControlBinding(
-                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Gain (raw)"),
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Gain"),
                 signal: .absoluteCC(number: 22),
                 channel: 1,
-                notes: "Capture order position 4 (gain). ch2/ch=1. Pending isolated confirmation."
+                notes: "Confirmed: CC22 ch=1. Full 0–127 sweep verified in isolation."
             ),
 
             // ── Left deck performance pads 1–8 ───────────────────────────────────────
@@ -414,7 +412,7 @@ extension MIDIControllerProfile {
                "Deck channel pattern (MIDI Monitor 1-indexed): left continuous=ch1, right continuous=ch2, " +
                "left pads=ch5, right pads=ch6, crossfader=ch16. " +
                "Left deck: CC6 platter (ring), CC28 channel fader, CC9+CC41 14-bit pitch, " +
-               "CC22-25 EQ/gain (raw, pending isolated label confirmation). " +
+               "CC22-25 EQ/gain (confirmed via isolated knob turns 2026-06-25: CC25=Bass, CC24=Mid, CC23=Highs, CC22=Gain). " +
                "Right deck: CC6 platter (ring), CC28 channel fader, CC9+CC41 14-bit pitch — verified via re-capture. " +
                "Crossfader: CC8 on ch=15 (ch16 MIDI Monitor) — verified full 0–127 sweep. " +
                "Transport (Start/Stop): left=ch=0 note=0, right=ch=1 note=0 (Note On press, Note Off release); " +
