@@ -414,8 +414,8 @@ final class MIDIHardwareRegistryTests: XCTestCase {
 
     func testLeftBassEQIsCC25AndMatchesCCMessage() {
         let seed = MIDIControllerProfile.raneOneSeed
-        let bassBinding = seed.bindings.first { $0.role.label == "Left Bass EQ (raw)" }
-        XCTAssertNotNil(bassBinding, "Must have Left Bass EQ (raw) binding")
+        let bassBinding = seed.bindings.first { $0.role.label == "Left Bass EQ" }
+        XCTAssertNotNil(bassBinding, "Must have Left Bass EQ binding")
         XCTAssertEqual(bassBinding?.signal, .absoluteCC(number: 25))
         XCTAssertEqual(bassBinding?.channel, 0)
         // Verify it matches a CC25 message on ch=0.
@@ -425,7 +425,7 @@ final class MIDIHardwareRegistryTests: XCTestCase {
 
     func testRightGainIsCC22OnChannel1() {
         let seed = MIDIControllerProfile.raneOneSeed
-        let gainBinding = seed.bindings.first { $0.role.label == "Right Gain (raw)" }
+        let gainBinding = seed.bindings.first { $0.role.label == "Right Gain" }
         XCTAssertNotNil(gainBinding)
         XCTAssertEqual(gainBinding?.signal, .absoluteCC(number: 22))
         XCTAssertEqual(gainBinding?.channel, 1)

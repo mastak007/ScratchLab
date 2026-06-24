@@ -25,10 +25,11 @@ final class MIDIVerificationModelTests: XCTestCase {
 
     func testPlanSkipsDiagnosticBindings() {
         let plan = MIDIVerificationPlan.make(for: .raneOneSeed)
-        // 2 platters + 1 crossfader + 1 left channel fader + 1 left pitch pair
-        // + 4 left EQ/gain + 4 right EQ/gain + 8 left pads + 8 right pads = 29 verifiable.
+        // 2 platters + 1 crossfader + 2 channel faders (L+R) + 2 pitch pairs (L+R)
+        // + 2 transport Start/Stop (L+R) + 1 SYNC + 2 PFL cue (L+R)
+        // + 8 EQ/gain (4 L + 4 R) + 16 pads (8 L + 8 R) = 36 verifiable.
         // The 2 diagnostic pitch-bend streams are excluded.
-        XCTAssertEqual(plan.steps.count, 29)
+        XCTAssertEqual(plan.steps.count, 36)
         XCTAssertEqual(plan.profileIdentifier, "rane-one")
         XCTAssertFalse(plan.steps.contains { $0.binding.isDiagnosticOnly })
         XCTAssertFalse(plan.steps.contains { $0.binding.signal == .pitchBend })
@@ -63,23 +64,25 @@ final class MIDIVerificationModelTests: XCTestCase {
     func testEvaluateReportsPerStepPassAndFail() {
         let plan = MIDIVerificationPlan.make(for: .raneOneSeed)
 
-        // Exercise only the LEFT platter (channel 0) and the crossfader; never the right.
+        // Exercise only the LEFT platter (channel 0) and the crossfader (channel 15);
+        // never the right.
         var messages: [ParsedMIDIMessage] = []
         messages.append(contentsOf: (0..<6).map { _ in cc(6, channel: 0) })  // ≥4 → left platter passes
-        messages.append(contentsOf: (0..<3).map { _ in cc(8, channel: 0) })  // ≥2 → crossfader passes
+        messages.append(contentsOf: (0..<3).map { _ in cc(8, channel: 15) })  // ≥2 → crossfader passes
         // right platter (channel 1, CC6): 0 events → fails
 
         let result = MIDIVerificationResult.evaluate(plan: plan, messages: messages)
 
         XCTAssertFalse(result.allPassed)
         XCTAssertEqual(result.passedCount, 2)
-        // 27 failures: right platter + left channel fader + left pitch pair
-        // + 8 EQ/gain (4 left + 4 right) + 16 pads (8 left + 8 right).
-        XCTAssertEqual(result.failedCount, 27)
-        XCTAssertEqual(result.summary, "2/29 controls verified")
+        // 34 failures: right platter + left channel fader + right channel fader
+        // + 2 pitch pairs (L+R) + 2 transport (L+R) + 1 SYNC + 2 PFL (L+R)
+        // + 8 EQ/gain (4 L + 4 R) + 16 pads (8 L + 8 R).
+        XCTAssertEqual(result.failedCount, 34)
+        XCTAssertEqual(result.summary, "2/36 controls verified")
 
         let failed = result.failedRoles
-        XCTAssertEqual(failed.count, 27)
+        XCTAssertEqual(failed.count, 34)
         // Right platter is the first failure (step 2 in the plan, before other new controls).
         XCTAssertEqual(failed.first?.kind, .platterMovement)
         XCTAssertEqual(failed.first?.deck, 1)
@@ -91,19 +94,31 @@ final class MIDIVerificationModelTests: XCTestCase {
         // Platters: 5 CC6 events each (requires ≥4).
         messages.append(contentsOf: (0..<5).map { _ in cc(6, channel: 0) })
         messages.append(contentsOf: (0..<5).map { _ in cc(6, channel: 1) })
-        // Crossfader: 3 CC8 events (requires ≥2).
-        messages.append(contentsOf: (0..<3).map { _ in cc(8, channel: 0) })
-        // Left channel fader: 2 CC28 events on ch=0 (requires ≥2).
+        // Crossfader: 3 CC8 events on ch=15 (requires ≥2).
+        messages.append(contentsOf: (0..<3).map { _ in cc(8, channel: 15) })
+        // Channel faders: 2 CC28 events each on ch=0 and ch=1 (requires ≥2).
         messages.append(cc(28, channel: 0))
         messages.append(cc(28, channel: 0))
-        // Left pitch pair: 2 CC9 events on ch=0 (high-res pair, requires ≥2).
+        messages.append(cc(28, channel: 1))
+        messages.append(cc(28, channel: 1))
+        // Pitch pairs: 2 CC9 events each on ch=0 and ch=1 (high-res pair, requires ≥2).
         messages.append(cc(9, channel: 0))
         messages.append(cc(9, channel: 0))
+        messages.append(cc(9, channel: 1))
+        messages.append(cc(9, channel: 1))
         // EQ/gain (left ch=0, right ch=1): CC22-25, each 1 event (requires 1 each).
         for cc_num: UInt8 in [22, 23, 24, 25] {
             messages.append(cc(cc_num, channel: 0))
             messages.append(cc(cc_num, channel: 1))
         }
+        // Transport Start/Stop (requires 1 each): left ch=0 note=0, right ch=1 note=0.
+        messages.append(note(0, channel: 0))
+        messages.append(note(0, channel: 1))
+        // SYNC: ch=1 note=2 (requires 1).
+        messages.append(note(2, channel: 1))
+        // PFL cue (requires 1 each): left ch=0 note=27, right ch=1 note=27.
+        messages.append(note(27, channel: 0))
+        messages.append(note(27, channel: 1))
         // Left deck pads (ch=4, notes 20–27): 1 note each.
         for n: UInt8 in 20...27 { messages.append(note(n, channel: 4)) }
         // Right deck pads (ch=5, notes 20–27): 1 note each.
@@ -111,7 +126,7 @@ final class MIDIVerificationModelTests: XCTestCase {
 
         let result = MIDIVerificationResult.evaluate(plan: plan, messages: messages)
         XCTAssertTrue(result.allPassed)
-        XCTAssertEqual(result.passedCount, 29)
+        XCTAssertEqual(result.passedCount, 36)
         XCTAssertTrue(result.failedRoles.isEmpty)
     }
 
@@ -212,20 +227,21 @@ final class MIDIVerificationModelTests: XCTestCase {
     }
 
     func testAppliedOverrideAppendsNewBinding() {
-        // Use .channelFader deck 1 (right channel fader) — not in the seed — to exercise the
-        // append path. applied(to:) matches on kind+deck and appends when no match is found.
+        // Use .deckSelect — not in the seed — to exercise the append path.
+        // .channelFader deck 1 is now in the seed (added via verified re-capture),
+        // so use a role that is genuinely absent.
         let override = MIDIUserOverrideProfile(
             baseProfileIdentifier: "rane-one",
             bindingOverrides: [
                 MIDIControlBinding(
-                    role: MIDIControlRole(kind: .channelFader, deck: 1, label: "Right Channel Fader"),
-                    signal: .absoluteCC(number: 28), channel: 1)
+                    role: MIDIControlRole(kind: .deckSelect, deck: 0, label: "Deck Select Left"),
+                    signal: .note(number: 42), channel: 1)
             ]
         )
         let base = MIDIControllerProfile.raneOneSeed
         let merged = override.applied(to: base)
         XCTAssertEqual(merged.bindings.count, base.bindings.count + 1)
-        XCTAssertNotNil(merged.binding(for: .channelFader, deck: 1))
+        XCTAssertNotNil(merged.binding(for: .deckSelect, deck: 0))
     }
 
     func testEmptyOverrideKeepsConfidence() {
