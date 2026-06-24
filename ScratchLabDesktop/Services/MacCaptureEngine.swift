@@ -4746,11 +4746,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 withUnsafeBytes(of: packetPtr.pointee.data) { rawBytes in
                     var i = 0
                     while i + 2 < length {
-                        let statusByte = rawBytes[i]
+                        let statusByte = Int(rawBytes[i])
+                        let rawChannel = Int(statusByte & 0x0F)
+                        let rawData1 = Int(rawBytes[i + 1])
+                        let rawData2 = Int(rawBytes[i + 2])
+
                         if statusByte & 0xF0 == 0xB0 {
-                            let channel = Int(statusByte & 0x0F)
-                            let controller = Int(rawBytes[i + 1])
-                            let value = Int(rawBytes[i + 2])
+                            let channel = rawChannel
+                            let controller = rawData1
+                            let value = rawData2
 
                             midiCaptureLock.lock()
                             let learning = isMIDILearning
