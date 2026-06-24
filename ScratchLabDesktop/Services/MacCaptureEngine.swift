@@ -1402,7 +1402,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     // Diagnostic-only gate. Default OFF. No scoring. No audio routing.
     // Caller injects a sample-preview callback; on macOS the callback is nil
     // until a desktop sample player is available.
-    @Published var isScratchBankMIDIPreviewEnabled: Bool = false
+    @Published var isScratchBankMIDIPreviewEnabled: Bool = true
     @Published private(set) var lastScratchBankPadLabel: String = ""
 #if DEBUG
     @Published private(set) var lastRawPadDiagnostic: String = ""
@@ -5061,17 +5061,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// Builds a compact label for a confirmed Rane ONE MK2 Note On pad event.
     ///
-    /// Confirmed hardware: ch6 in MIDI Monitor (channel 5, 0-indexed), notes 20–23.
-    /// Label format: `"Rane Pad N → sampleID · played"` / `"· gated"` / `"· (no sample)"`.
+    /// Confirmed hardware: ch5/ch6 in MIDI Monitor (channels 4/5, 0-indexed), notes 20–27.
+    /// Label format: `"Deck N Pad N → sampleID · played"` / `"· gated"` / `"· (no sample)"`.
     /// Returns nil for Note Off (velocity 0), wrong channel, or out-of-range note.
     static func compactScratchBankNotePadLabel(
         channel: Int, noteNumber: Int, velocity: Int,
         isPreviewEnabled: Bool
     ) -> String? {
-        guard channel == 5 else { return nil }
-        guard noteNumber >= 20, noteNumber <= 23 else { return nil }
+        guard channel == 4 || channel == 5 else { return nil }
+        guard noteNumber >= 20, noteNumber <= 27 else { return nil }
         guard velocity > 0 else { return nil }
 
+        let deck = channel - 3  // ch4 → 1, ch5 → 2
         let padNumber = noteNumber - 20 + 1
         let sampleID = ScratchBankPadEventRouter.sampleID(
             channel: channel, noteNumber: noteNumber, velocity: velocity,
@@ -5079,9 +5080,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         if let sampleID {
             let status = isPreviewEnabled ? "played" : "gated"
-            return "Rane Pad \(padNumber) → \(sampleID) · \(status)"
+            return "Deck \(deck) Pad \(padNumber) → \(sampleID) · \(status)"
         } else {
-            return "Rane Pad \(padNumber) · (no sample)"
+            return "Deck \(deck) Pad \(padNumber) · (no sample)"
         }
     }
 

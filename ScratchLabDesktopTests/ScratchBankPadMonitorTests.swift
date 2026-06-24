@@ -163,41 +163,41 @@ final class ScratchBankPadMonitorTests: XCTestCase {
         }
     }
 
-    // MARK: - Note On label tests (confirmed Rane ONE MK2 hardware, ch6 = channel 5)
+    // MARK: - Note On label tests (Rane ONE MK2 hardware, ch=4 left deck, ch=5 right deck)
 
     func testNoteOnPad1EnabledLabel() {
         let label = MacCaptureEngine.compactScratchBankNotePadLabel(
             channel: 5, noteNumber: 20, velocity: 127, isPreviewEnabled: true
         )
-        XCTAssertEqual(label, "Rane Pad 1 → ahhh · played")
+        XCTAssertEqual(label, "Deck 2 Pad 1 → ahhh · played")
     }
 
     func testNoteOnPad1GatedLabel() {
         let label = MacCaptureEngine.compactScratchBankNotePadLabel(
             channel: 5, noteNumber: 20, velocity: 127, isPreviewEnabled: false
         )
-        XCTAssertEqual(label, "Rane Pad 1 → ahhh · gated")
+        XCTAssertEqual(label, "Deck 2 Pad 1 → ahhh · gated")
     }
 
     func testNoteOnPad2EnabledLabel() {
         let label = MacCaptureEngine.compactScratchBankNotePadLabel(
             channel: 5, noteNumber: 21, velocity: 127, isPreviewEnabled: true
         )
-        XCTAssertEqual(label, "Rane Pad 2 → fresh · played")
+        XCTAssertEqual(label, "Deck 2 Pad 2 → fresh · played")
     }
 
     func testNoteOnPad3EnabledLabel() {
         let label = MacCaptureEngine.compactScratchBankNotePadLabel(
             channel: 5, noteNumber: 22, velocity: 127, isPreviewEnabled: true
         )
-        XCTAssertEqual(label, "Rane Pad 3 → ah_yeah · played")
+        XCTAssertEqual(label, "Deck 2 Pad 3 → ah_yeah · played")
     }
 
     func testNoteOnPad4EnabledLabel() {
         let label = MacCaptureEngine.compactScratchBankNotePadLabel(
             channel: 5, noteNumber: 23, velocity: 127, isPreviewEnabled: true
         )
-        XCTAssertEqual(label, "Rane Pad 4 → check_it_out · played")
+        XCTAssertEqual(label, "Deck 2 Pad 4 → check_it_out · played")
     }
 
     func testNoteOffVelocityZeroReturnsNilLabel() {
@@ -208,10 +208,16 @@ final class ScratchBankPadMonitorTests: XCTestCase {
 
     func testNoteOnWrongChannelReturnsNilLabel() {
         XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
-            channel: 4, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+            channel: 0, noteNumber: 20, velocity: 127, isPreviewEnabled: true
         ))
         XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
-            channel: 0, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+            channel: 1, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+        ))
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 3, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+        ))
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 6, noteNumber: 20, velocity: 127, isPreviewEnabled: true
         ))
     }
 
@@ -220,18 +226,50 @@ final class ScratchBankPadMonitorTests: XCTestCase {
             channel: 5, noteNumber: 19, velocity: 127, isPreviewEnabled: true
         ))
         XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
-            channel: 5, noteNumber: 24, velocity: 127, isPreviewEnabled: true
+            channel: 5, noteNumber: 28, velocity: 127, isPreviewEnabled: true
         ))
     }
 
-    func testNoteOnLabelContainsRanePadPrefix() {
+    func testNoteOnLabelContainsDeckPrefix() {
         let label = MacCaptureEngine.compactScratchBankNotePadLabel(
             channel: 5, noteNumber: 22, velocity: 127, isPreviewEnabled: true
         )
         XCTAssertNotNil(label)
-        XCTAssertTrue(label!.hasPrefix("Rane Pad"),
-            "Note On monitor label must start with 'Rane Pad'; got: \(label!)")
+        XCTAssertTrue(label!.hasPrefix("Deck 2 Pad 3"),
+            "Note On monitor label must start with 'Deck N Pad N'; got: \(label!)")
         XCTAssertTrue(label!.contains("ah_yeah"))
         XCTAssertTrue(label!.contains("played"))
+    }
+
+    // MARK: - Note On label: ch=4 left deck
+
+    func testNoteOnCh4Pad1EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 4, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Deck 1 Pad 1 → ahhh · played")
+    }
+
+    func testNoteOnCh4Pad8EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 4, noteNumber: 27, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Deck 1 Pad 8 → check_it_out · played")
+    }
+
+    // MARK: - Note On label: ch=5 pads 5–8
+
+    func testNoteOnCh5Pad5EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 24, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Deck 2 Pad 5 → ahhh · played")
+    }
+
+    func testNoteOnCh5Pad8EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 27, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Deck 2 Pad 8 → check_it_out · played")
     }
 }

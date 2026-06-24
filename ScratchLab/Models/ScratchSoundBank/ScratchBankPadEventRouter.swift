@@ -44,10 +44,24 @@ enum ScratchBankPadEventRouter {
     //   Pad 4: Note On ch6 note23 velocity127 / Note Off ch6 note23 velocity0
     // "ch6" in MIDI Monitor (1-indexed) = channel 5 (0-indexed raw byte).
     private static let notePadSampleTable: [NoteKey: String] = [
+        // Left deck (ch=4): pads 1–8 → notes 20–27, cycling the 4-sample bank
+        NoteKey(channel: 4, noteNumber: 20): "ahhh",
+        NoteKey(channel: 4, noteNumber: 21): "fresh",
+        NoteKey(channel: 4, noteNumber: 22): "ah_yeah",
+        NoteKey(channel: 4, noteNumber: 23): "check_it_out",
+        NoteKey(channel: 4, noteNumber: 24): "ahhh",
+        NoteKey(channel: 4, noteNumber: 25): "fresh",
+        NoteKey(channel: 4, noteNumber: 26): "ah_yeah",
+        NoteKey(channel: 4, noteNumber: 27): "check_it_out",
+        // Right deck (ch=5): pads 1–8 → notes 20–27, cycling the 4-sample bank
         NoteKey(channel: 5, noteNumber: 20): "ahhh",
         NoteKey(channel: 5, noteNumber: 21): "fresh",
         NoteKey(channel: 5, noteNumber: 22): "ah_yeah",
         NoteKey(channel: 5, noteNumber: 23): "check_it_out",
+        NoteKey(channel: 5, noteNumber: 24): "ahhh",
+        NoteKey(channel: 5, noteNumber: 25): "fresh",
+        NoteKey(channel: 5, noteNumber: 26): "ah_yeah",
+        NoteKey(channel: 5, noteNumber: 27): "check_it_out",
     ]
 
     // MARK: - CC API

@@ -215,19 +215,19 @@ final class ScratchBankPadEventRouterTests: XCTestCase {
         ), "Note Off (velocity 0) must return nil")
     }
 
-    func testNoteOnNonChannel5ReturnsNil() {
-        for channel in [0, 1, 3, 4, 6, 15] {
+    func testNoteOnNonPadChannelReturnsNil() {
+        for channel in [0, 1, 3, 6, 15] {
             XCTAssertNil(ScratchBankPadEventRouter.sampleID(
                 channel: channel, noteNumber: 20, velocity: 127, isEnabled: true
-            ), "Channel \(channel) note 20 must return nil — not the confirmed Rane pad channel")
+            ), "Channel \(channel) note 20 must return nil — not a Rane pad channel")
         }
     }
 
     func testNoteOnOutsidePadRangeReturnsNil() {
-        for note in [0, 8, 11, 19, 24, 127] {
+        for note in [0, 8, 11, 19, 28, 127] {
             XCTAssertNil(ScratchBankPadEventRouter.sampleID(
                 channel: 5, noteNumber: note, velocity: 127, isEnabled: true
-            ), "Note \(note) must return nil — not a confirmed Rane pad note")
+            ), "Note \(note) must return nil — not a known Rane pad note (20–27)")
         }
     }
 
@@ -262,5 +262,134 @@ final class ScratchBankPadEventRouterTests: XCTestCase {
             )
         }
         XCTAssertTrue(true, "note sampleID() is pure — no side effects")
+    }
+
+    // MARK: - Extended Note routing: ch=4 (left deck) pads 1–8
+
+    func testNoteOnCh4Note20Vel127ResolvesAhhh() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 4, noteNumber: 20, velocity: 127, isEnabled: true
+        ), "ahhh")
+    }
+
+    func testNoteOnCh4Note23Vel127ResolvesCheckItOut() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 4, noteNumber: 23, velocity: 127, isEnabled: true
+        ), "check_it_out")
+    }
+
+    func testNoteOnCh4Note24Vel127ResolvesAhhh() {
+        // Pad 5 = note 24, cycles back to ahhh
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 4, noteNumber: 24, velocity: 127, isEnabled: true
+        ), "ahhh")
+    }
+
+    func testNoteOnCh4Note27Vel127ResolvesCheckItOut() {
+        // Pad 8 = note 27, cycles to check_it_out
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 4, noteNumber: 27, velocity: 127, isEnabled: true
+        ), "check_it_out")
+    }
+
+    // MARK: - Extended Note routing: ch=5 (right deck) pads 5–8
+
+    func testNoteOnCh5Note24Vel127ResolvesAhhh() {
+        // Pad 5 right deck = note 24 → ahhh
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 24, velocity: 127, isEnabled: true
+        ), "ahhh")
+    }
+
+    func testNoteOnCh5Note25Vel127ResolvesFresh() {
+        // Pad 6 right deck = note 25 → fresh
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 25, velocity: 127, isEnabled: true
+        ), "fresh")
+    }
+
+    func testNoteOnCh5Note26Vel127ResolvesAhYeah() {
+        // Pad 7 right deck = note 26 → ah_yeah
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 26, velocity: 127, isEnabled: true
+        ), "ah_yeah")
+    }
+
+    func testNoteOnCh5Note27Vel127ResolvesCheckItOut() {
+        // Pad 8 right deck = note 27 → check_it_out
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 27, velocity: 127, isEnabled: true
+        ), "check_it_out")
+    }
+
+    // MARK: - PFL note 27 disambiguation: ch=0/ch=1 must NOT route
+
+    func testPFLNote27Ch0DoesNotRoute() {
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 0, noteNumber: 27, velocity: 127, isEnabled: true
+        ), "PFL note 27 on ch=0 must not route to pad preview")
+    }
+
+    func testPFLNote27Ch1DoesNotRoute() {
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 1, noteNumber: 27, velocity: 127, isEnabled: true
+        ), "PFL note 27 on ch=1 must not route to pad preview")
+    }
+
+    // MARK: - Pad 8 note 27 on ch=4/ch=5 DOES route
+
+    func testPad8Note27Ch4DoesRoute() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 4, noteNumber: 27, velocity: 127, isEnabled: true
+        ), "check_it_out", "Pad 8 note 27 on ch=4 (left deck) must route")
+    }
+
+    func testPad8Note27Ch5DoesRoute() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 27, velocity: 127, isEnabled: true
+        ), "check_it_out", "Pad 8 note 27 on ch=5 (right deck) must route")
+    }
+
+    // MARK: - Start/Stop, SYNC still do not route
+
+    func testStartStopNote0Channels0and1DoNotRoute() {
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 0, noteNumber: 0, velocity: 127, isEnabled: true
+        ))
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 1, noteNumber: 0, velocity: 127, isEnabled: true
+        ))
+    }
+
+    func testSyncNote2Ch1DoesNotRoute() {
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 1, noteNumber: 2, velocity: 127, isEnabled: true
+        ))
+    }
+
+    // MARK: - All 8 pads on both decks resolve via Note On
+
+    func testAllEightPadsOnCh4Resolve() {
+        let expected: [Int: String] = [
+            20: "ahhh", 21: "fresh", 22: "ah_yeah", 23: "check_it_out",
+            24: "ahhh", 25: "fresh", 26: "ah_yeah", 27: "check_it_out",
+        ]
+        for (note, sampleID) in expected {
+            XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+                channel: 4, noteNumber: note, velocity: 127, isEnabled: true
+            ), sampleID, "ch=4 note \(note) must resolve to \(sampleID)")
+        }
+    }
+
+    func testAllEightPadsOnCh5Resolve() {
+        let expected: [Int: String] = [
+            20: "ahhh", 21: "fresh", 22: "ah_yeah", 23: "check_it_out",
+            24: "ahhh", 25: "fresh", 26: "ah_yeah", 27: "check_it_out",
+        ]
+        for (note, sampleID) in expected {
+            XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+                channel: 5, noteNumber: note, velocity: 127, isEnabled: true
+            ), sampleID, "ch=5 note \(note) must resolve to \(sampleID)")
+        }
     }
 }

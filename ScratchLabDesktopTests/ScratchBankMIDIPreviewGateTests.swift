@@ -8,12 +8,12 @@ import XCTest
 /// seam (ScratchBankPadEventRouter.sampleID(isEnabled:)).
 final class ScratchBankMIDIPreviewGateTests: XCTestCase {
 
-    // MARK: - 1. Default false
+    // MARK: - 1. Default ON (Debug)
 
-    func testIsScratchBankMIDIPreviewEnabledDefaultsToFalse() {
+    func testIsScratchBankMIDIPreviewEnabledDefaultsToTrue() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        XCTAssertFalse(engine.isScratchBankMIDIPreviewEnabled,
-            "Scratch Bank MIDI preview must default to false (off)")
+        XCTAssertTrue(engine.isScratchBankMIDIPreviewEnabled,
+            "Scratch Bank MIDI preview must default to true (on) so Debug hardware smoke tests produce audible audio")
     }
 
     // MARK: - 2. Enable
@@ -35,23 +35,23 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
             "Setting isScratchBankMIDIPreviewEnabled back to false must take effect immediately")
     }
 
-    // MARK: - 4. Toggle cycle (default → true → false → true → false)
+    // MARK: - 4. Toggle cycle (default true → false → true → false → true)
 
     func testToggleCyclePreservesValue() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        XCTAssertFalse(engine.isScratchBankMIDIPreviewEnabled, "default")
-
-        engine.isScratchBankMIDIPreviewEnabled = true
-        XCTAssertTrue(engine.isScratchBankMIDIPreviewEnabled, "cycle step 1: on")
+        XCTAssertTrue(engine.isScratchBankMIDIPreviewEnabled, "default")
 
         engine.isScratchBankMIDIPreviewEnabled = false
-        XCTAssertFalse(engine.isScratchBankMIDIPreviewEnabled, "cycle step 2: off")
+        XCTAssertFalse(engine.isScratchBankMIDIPreviewEnabled, "cycle step 1: off")
 
         engine.isScratchBankMIDIPreviewEnabled = true
-        XCTAssertTrue(engine.isScratchBankMIDIPreviewEnabled, "cycle step 3: on")
+        XCTAssertTrue(engine.isScratchBankMIDIPreviewEnabled, "cycle step 2: on")
 
         engine.isScratchBankMIDIPreviewEnabled = false
-        XCTAssertFalse(engine.isScratchBankMIDIPreviewEnabled, "cycle step 4: off")
+        XCTAssertFalse(engine.isScratchBankMIDIPreviewEnabled, "cycle step 3: off")
+
+        engine.isScratchBankMIDIPreviewEnabled = true
+        XCTAssertTrue(engine.isScratchBankMIDIPreviewEnabled, "cycle step 4: on")
     }
 
     // MARK: - 5. Router gate: disabled → nil (existing seam confirmed)
@@ -90,11 +90,11 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
         let engine1 = MacCaptureEngine(autoRefreshDevices: false)
         let engine2 = MacCaptureEngine(autoRefreshDevices: false)
 
-        engine1.isScratchBankMIDIPreviewEnabled = true
+        engine1.isScratchBankMIDIPreviewEnabled = false
 
-        XCTAssertTrue(engine1.isScratchBankMIDIPreviewEnabled)
-        XCTAssertFalse(engine2.isScratchBankMIDIPreviewEnabled,
-            "Each engine instance must have independent gate state")
+        XCTAssertFalse(engine1.isScratchBankMIDIPreviewEnabled)
+        XCTAssertTrue(engine2.isScratchBankMIDIPreviewEnabled,
+            "Each engine instance must have independent gate state; default is true")
     }
 
     // MARK: - 8. Note On preview callback seam (confirmed Rane ONE MK2 hardware)
@@ -158,7 +158,7 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
         engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
 
         DispatchQueue.main.async {
-            XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 1 → ahhh · played",
+            XCTAssertEqual(engine.lastScratchBankPadLabel, "Deck 2 Pad 1 → ahhh · played",
                 "lastScratchBankPadLabel must reflect note pad label after Note On")
             expectation.fulfill()
         }
@@ -173,7 +173,7 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
         engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 21, velocity: 127)
 
         DispatchQueue.main.async {
-            XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 2 → fresh · gated",
+            XCTAssertEqual(engine.lastScratchBankPadLabel, "Deck 2 Pad 2 → fresh · gated",
                 "lastScratchBankPadLabel must show 'gated' when preview is disabled")
             expectation.fulfill()
         }
@@ -261,12 +261,16 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
         engine.scratchBankPadPreviewCallback = { _ in callbackFired = true }
 
         // Out-of-range notes on pad channels should not crash.
-        for note in [-1, 0, 19, 24, 128, 500] {
+        for note in [-1, 0, 19, 28, 128, 500] {
             engine.receiveNoteOnPadEvent(channel: 5, noteNumber: note, velocity: 127)
             engine.receiveNoteOnPadEvent(channel: 4, noteNumber: note, velocity: 127)
         }
 
-        XCTAssertFalse(callbackFired,
-            "Out-of-range notes must not fire pad preview callback")
+        // Notes 20–27 are in range now — confirm they DO fire (pad 8 = note 27).
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 24, velocity: 127)
+        engine.receiveNoteOnPadEvent(channel: 4, noteNumber: 27, velocity: 127)
+
+        XCTAssertTrue(callbackFired,
+            "Notes 20–27 are in-range pad notes and must fire the preview callback")
     }
 }
