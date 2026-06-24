@@ -1408,6 +1408,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastRawPadDiagnostic: String = ""
 #endif
     var scratchBankPadPreviewCallback: ((String) -> Void)?
+
+    /// Platter CC6 ring-counter tracker per deck (ch=4 left, ch=5 right).
+    private let platterTracker = ScratchPlatterTracker()
+
+    /// Platter-driven scratch sample playback controller.
+    private let scratchPlaybackController = ScratchSamplePlaybackController()
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -2142,11 +2148,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         startAudioSignalDecayTimer()
         rescanRoutineCaptures()
 
-        // Scratch bank pad preview player (diagnostic gate; default OFF).
-        let padPlayer = ScratchBankPadAudioPlayer()
+        // Scratch bank pad → sample load for platter-driven scratch playback.
+        // Hot cue press loads the sample; platter CC6 movement drives audio.
         scratchBankPadPreviewCallback = { [weak self] sampleID in
             guard let self, self.isScratchBankMIDIPreviewEnabled else { return }
-            padPlayer.play(sampleID: sampleID)
+            self.scratchPlaybackController.load(sampleID: sampleID)
+            print("[ScratchSamplePlaybackController] sample loaded: \(sampleID)")
         }
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -4773,6 +4780,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
                             if mappedControl == "crossfader" {
                                 ScratchLabPerformanceSignpost.event("FaderMap", count: value)
+                            }
+                            // CC6 platter fast path: feed tracker → playback controller.
+                            // Rate-limited inside the controller (~60 Hz); CC6 events
+                            // fire at ~800 Hz so the controller drops excess updates.
+                            if controller == 6, channel == 4 || channel == 5 {
+                                platterTracker.ingest(channel: channel, value: value)
+                                scratchPlaybackController.positionDidChange(
+                                    steps: platterTracker.accumulatedSteps(for: channel),
+                                    direction: platterTracker.recentDirection(for: channel)
+                                )
                             }
                             recordReceivedMIDICCEvent(
                                 sourceName: deviceName,
