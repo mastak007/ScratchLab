@@ -154,20 +154,30 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.isScratchBankMIDIPreviewEnabled = true
 
+        let expectation = XCTestExpectation(description: "lastScratchBankPadLabel dispatched to main")
         engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
 
-        XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 1 → ahhh · played",
-            "lastScratchBankPadLabel must reflect note pad label after Note On")
+        DispatchQueue.main.async {
+            XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 1 → ahhh · played",
+                "lastScratchBankPadLabel must reflect note pad label after Note On")
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2.0)
     }
 
     func testNoteOnGatedLabelWhenPreviewDisabled() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.isScratchBankMIDIPreviewEnabled = false
 
+        let expectation = XCTestExpectation(description: "lastScratchBankPadLabel dispatched to main")
         engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 21, velocity: 127)
 
-        XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 2 → fresh · gated",
-            "lastScratchBankPadLabel must show 'gated' when preview is disabled")
+        DispatchQueue.main.async {
+            XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 2 → fresh · gated",
+                "lastScratchBankPadLabel must show 'gated' when preview is disabled")
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2.0)
     }
 
     func testNoteOffDoesNotUpdateMonitorLabel() {
@@ -178,5 +188,85 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
 
         XCTAssertEqual(engine.lastScratchBankPadLabel, "",
             "Note Off (velocity 0) must not update lastScratchBankPadLabel")
+    }
+
+    // MARK: - Crash prevention: non-pad channels must not enter pad routing
+
+    func testStartStopNote0DoesNotCrashOrSetPadLabel() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var callbackFired = false
+        engine.scratchBankPadPreviewCallback = { _ in callbackFired = true }
+
+        // Left Start/Stop: ch=0 note=0
+        // This must NOT crash and must NOT route to pad preview.
+        engine.receiveNoteOnPadEvent(channel: 0, noteNumber: 0, velocity: 127)
+        // Right Start/Stop: ch=1 note=0
+        engine.receiveNoteOnPadEvent(channel: 1, noteNumber: 0, velocity: 127)
+
+        XCTAssertFalse(callbackFired,
+            "Start/Stop note=0 must not fire pad preview callback")
+    }
+
+    func testPFLCueNote27DoesNotCrashOrFirePadCallback() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var callbackFired = false
+        engine.scratchBankPadPreviewCallback = { _ in callbackFired = true }
+
+        // Left PFL: ch=0 note=27
+        engine.receiveNoteOnPadEvent(channel: 0, noteNumber: 27, velocity: 127)
+        // Right PFL: ch=1 note=27
+        engine.receiveNoteOnPadEvent(channel: 1, noteNumber: 27, velocity: 127)
+
+        XCTAssertFalse(callbackFired,
+            "PFL note=27 must not fire pad preview callback — channel disambiguates from pad 8")
+    }
+
+    func testSyncNote2DoesNotCrashOrSetPadLabel() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var callbackFired = false
+        engine.scratchBankPadPreviewCallback = { _ in callbackFired = true }
+
+        // SYNC: ch=1 note=2
+        engine.receiveNoteOnPadEvent(channel: 1, noteNumber: 2, velocity: 127)
+
+        XCTAssertFalse(callbackFired,
+            "SYNC note=2 must not fire pad preview callback")
+    }
+
+    func testNonPadChannelsDoNotCrash() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var callbackFired = false
+        engine.scratchBankPadPreviewCallback = { _ in callbackFired = true }
+
+        // Exercise all non-pad channels with various notes to confirm no crash.
+        let nonPadChannels = [0, 1, 2, 3, 6, 7, 8, 15]
+        for ch in nonPadChannels {
+            for note in [0, 2, 27, 64, 127] {
+                engine.receiveNoteOnPadEvent(channel: ch, noteNumber: note, velocity: 127)
+            }
+        }
+
+        XCTAssertFalse(callbackFired,
+            "No non-pad channel/note combination must fire the pad preview callback")
+    }
+
+    func testReceiveNoteOnPadEventIsSafeForOutOfRangeNotes() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var callbackFired = false
+        engine.scratchBankPadPreviewCallback = { _ in callbackFired = true }
+
+        // Out-of-range notes on pad channels should not crash.
+        for note in [-1, 0, 19, 24, 128, 500] {
+            engine.receiveNoteOnPadEvent(channel: 5, noteNumber: note, velocity: 127)
+            engine.receiveNoteOnPadEvent(channel: 4, noteNumber: note, velocity: 127)
+        }
+
+        XCTAssertFalse(callbackFired,
+            "Out-of-range notes must not fire pad preview callback")
     }
 }

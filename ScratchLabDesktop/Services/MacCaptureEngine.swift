@@ -4786,10 +4786,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 #if DEBUG
                             // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
                             // CC6 (platter) floods at ~800Hz and must never trigger UI updates.
+                            // Dispatched to main to avoid @Published contention on the MIDI thread.
                             if controller != 6,
                                currentMapping?.controller != controller {
                                 let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
-                                lastRawPadDiagnostic = diag
+                                DispatchQueue.main.async { [weak self] in
+                                    self?.lastRawPadDiagnostic = diag
+                                }
                                 print("[RanePad] \(diag)")
                             }
 #endif
@@ -4797,7 +4800,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                         } else if statusByte >= 0x80 {
                             switch statusByte & 0xF0 {
                             case 0x80, 0x90, 0xA0, 0xE0:
-                                if statusByte & 0xF0 == 0x90 {
+                                // Only route Note On events from known Rane pad channels (ch=4=ch5 MIDI
+                                // Monitor left pads, ch=5=ch6 right pads) to the pad preview path.
+                                // Start/Stop (note=0 ch=0/ch=1), PFL (note=27 ch=0/ch=1), SYNC (note=2
+                                // ch=1), and all PitchBend/PolyAT events must not enter the pad router.
+                                if statusByte & 0xF0 == 0x90,
+                                   (rawChannel == 4 || rawChannel == 5) {
                                     receiveNoteOnPadEvent(
                                         channel: rawChannel,
                                         noteNumber: rawData1,
@@ -4805,18 +4813,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                     )
                                 }
 #if DEBUG
-                                // Note On/Off, PolyAT, Pitch Bend — candidates for pad messages.
-                                let kind: String
-                                switch statusByte & 0xF0 {
-                                case 0x90: kind = "Note On"
-                                case 0x80: kind = "Note Off"
-                                case 0xA0: kind = "PolyAT"
-                                case 0xE0: kind = "PitchBend"
-                                default:   kind = "MIDI"
+                                // Raw diagnostic — only for pad channels to avoid flooding the
+                                // diagnostic label with transport/PFL/PitchBend events.
+                                if rawChannel == 4 || rawChannel == 5 {
+                                    let kind: String
+                                    switch statusByte & 0xF0 {
+                                    case 0x90: kind = "Note On"
+                                    case 0x80: kind = "Note Off"
+                                    case 0xA0: kind = "PolyAT"
+                                    case 0xE0: kind = "PitchBend"
+                                    default:   kind = "MIDI"
+                                    }
+                                    let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
+                                    DispatchQueue.main.async { [weak self] in
+                                        self?.lastRawPadDiagnostic = diag
+                                    }
+                                    print("[RanePad] \(diag)")
                                 }
-                                let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
-                                lastRawPadDiagnostic = diag
-                                print("[RanePad] \(diag)")
 #endif
                                 i += 3
                             case 0xC0, 0xD0: i += 2
@@ -4924,7 +4937,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             channel: channel, cc: controller, value: value,
             isPreviewEnabled: isScratchBankMIDIPreviewEnabled
         ) {
-            lastScratchBankPadLabel = compactLabel
+            DispatchQueue.main.async { [weak self] in
+                self?.lastScratchBankPadLabel = compactLabel
+            }
         }
 
         // Throttle @Published UI-monitor updates to ~4 Hz.
@@ -5087,7 +5102,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             channel: channel, noteNumber: noteNumber, velocity: velocity,
             isPreviewEnabled: isScratchBankMIDIPreviewEnabled
         ) {
-            lastScratchBankPadLabel = label
+            DispatchQueue.main.async { [weak self] in
+                self?.lastScratchBankPadLabel = label
+            }
         }
     }
 
