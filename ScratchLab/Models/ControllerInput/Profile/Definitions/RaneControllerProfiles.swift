@@ -125,60 +125,58 @@ enum RaneControllerProfiles {
         verificationSteps: one_mkii_verificationSteps,
         assumptions: [
             "Motorized platter scratch delta (CC6 ring counter, ~3932 steps/rev) is live-verified in MIDIHardwareRegistry (.raneOneSeed) — not duplicated here.",
-            "Deck channel pattern (MIDI Monitor 1-indexed): left continuous=ch1 (ch=0), right continuous=ch2 (ch=1), left pads=ch5 (ch=4), right pads=ch6 (ch=5).",
-            "Left deck channel fader confirmed: CC28 ch1 (ch=0). 0=closed, 127=open.",
-            "Left deck pitch/tempo confirmed: CC9 (MSB) + CC41 (LSB) on ch1 (ch=0), 14-bit high-res pair. Calibration (direction, travel range) needed before scoring.",
-            "Left deck pads 1–8 confirmed: Note On/Off ch5 (ch=4) notes 20–27. Note On vel127=press; Note Off/vel0=release. NOT CC.",
-            "Right deck pads 1–8 confirmed: Note On/Off ch6 (ch=5) notes 20–27. Pads 1–4 from earlier capture; pads 5–8 from latest capture. NOT CC.",
-            "EQ/gain raw controls confirmed: CC25/24/23/22 on ch1 (left, ch=0) and ch2 (right, ch=1). " +
-                "Capture order: bass=CC25, mid=CC24, highs=CC23, gain=CC22. " +
-                "Labels applied as provisional; pending isolated knob confirmation per control.",
-            "Crossfader: djay mapping ch=15 CC8; live-verified CC8 ch=0. Profile stores ch=0. Channel needs isolated-crossfader capture to confirm definitively.",
-            "Right deck channel fader (CC28 ch=1) retained as unverified candidate — right deck fader not yet captured in isolation.",
-            "Right deck pitch/tempo: CC9 ch=1 retained as unverified djay candidate. Right deck pitch not yet captured.",
-            "djay CC mapping for pads (CC20–27) is entirely superseded by Note On/Off hardware captures. Do not use CC pads.",
-            "Not yet captured: right channel fader, right pitch/tempo fader, play/pause, cue, load, sync, deck select, browser, crossfader full sweep, right platter (isolated), slow/backward platter movement, touch/motor state messages.",
-            "Do not feed scoring until live verification confirms channel, direction, and rate per control.",
+            "Deck channel pattern (MIDI Monitor 1-indexed): left continuous=ch1 (ch=0), right continuous=ch2 (ch=1), left pads=ch5 (ch=4), right pads=ch6 (ch=5), crossfader=ch16 (ch=15 in code).",
+            "All controls listed below have been verified via isolated hardware captures 2026-06-25; no 'not yet captured' claims remain for the controls in this profile.",
+            "Left deck: CC28 channel fader, CC9+CC41 14-bit pitch, CC25/24/23/22 EQ/gain (Bass/Mid/Highs/Gain), Note On/Off ch=0 note=0 Start/Stop, Note On/Off ch=0 note=27 PFL.",
+            "Right deck: CC28 channel fader, CC9+CC41 14-bit pitch, CC25/24/23/22 EQ/gain (Bass/Mid/Highs/Gain), Note On/Off ch=1 note=0 Start/Stop, Note On/Off ch=1 note=27 PFL.",
+            "Crossfader: CC8 on ch=15 (MIDI Monitor ch16). Full 0–127 sweep verified. 0=left, 127=right.",
+            "SYNC: Note On/Off ch=1 note=2 (verified via isolated capture).",
+            "Pads 1–8: left=ch=4 notes 20–27, right=ch=5 notes 20–27. Note On vel127=press; Note Off/vel0=release. NOT CC.",
+            "Pad note 27 disambiguation: pad 8 uses ch=4 (left) / ch=5 (right); PFL cue uses ch=0 (left) / ch=1 (right). Same note number, different channels — no conflict.",
+            "djay CC mapping for pads (CC20–27) is entirely superseded by Note On/Off hardware captures. No CC-based pad bindings exist in this profile.",
+            "Controls intentionally out of current milestone (not captured, not mapped): loop in/out/on/off, FX, browser encoder + load, shift layer, deck select, touch/motor state messages.",
+            "Platter is motorized, not generic touch-jog. CC6 ring counter delivers ±1 ticks; Pitch Bend stream is diagnostic-only (aliases during rotation).",
+            "Pitch/tempo faders use 14-bit high-res CC pairs (CC9 MSB + CC41 LSB); calibration (direction, travel range) is still needed before scoring or tempo display.",
         ],
-        sourceNotes: "Partial profile — combined djay Pro mapping evidence + direct MIDI Monitor hardware captures. " +
+        sourceNotes: "Partial profile — combined djay Pro mapping evidence + direct MIDI Monitor hardware captures, all verified via isolated re-capture 2026-06-25. " +
             "djay source: Midi_Mapping_Controllers.zip / RANE One MK2.djayMidiMapping (2026-06-24); sourceType: uploadedDjayMapping. " +
-            "Hardware captures (MIDI Monitor, decimal format, Rane ONE MKII): " +
-            "2026-06-24 initial capture: right deck pads 1–4 Note On ch6 notes 20–23 (not CC). " +
-            "2026-06-24 extended capture: confirmed deck channel pattern ch1/ch2 continuous, ch5/ch6 pads; " +
-            "left deck pads 1–8 ch5 notes 20–27; right deck pads 5–8 ch6 notes 24–27; " +
-            "left CC28 channel fader; left CC9+CC41 14-bit pitch; left/right CC22-25 EQ/gain (capture order bass/mid/highs/gain).",
+            "Hardware captures (MIDI Monitor, Rane ONE MKII): " +
+            "2026-06-24 initial capture: deck channel pattern, left pads 1–8, left CC28, left CC9+CC41, left/right CC22-25 EQ/gain. " +
+            "2026-06-25 isolated verification: right platter CC6 ch=1, right channel fader CC28 ch=1, right pitch/tempo CC9+CC41 ch=1, " +
+            "crossfader CC8 ch=15 full sweep, Start/Stop note=0 ch=0+ch=1, EQ/gain knob labels (CC25=Bass, CC24=Mid, CC23=Highs, CC22=Gain), " +
+            "SYNC note=2 ch=1, headphone PFL cue note=27 ch=0+ch=1.",
         sourceURLs: [],
-        lastCheckedDate: "2026-06-24"
+        lastCheckedDate: "2026-06-25"
     )
 
     private static let one_mkii_bindings: [ControllerBinding] = [
 
         // ── Crossfader ─────────────────────────────────────────────────────────────
-        // djay mapping: ch=15 CC8. ScratchLab live-verified: CC8 ch=0. Channel
-        // discrepancy needs isolated crossfader capture to confirm.
+        // Confirmed via isolated capture 2026-06-25: CC8 on ch=15 (MIDI Monitor ch16).
+        // Full 0–127 sweep observed. 0=left, 127=right.
         ControllerBinding(roleKey: "crossfader", deck: nil, physicalSide: nil,
-                          primitive: .ccAbsolute7(channel: 0, cc: 8)),
+                          primitive: .ccAbsolute7(channel: 15, cc: 8)),
 
         // ── Left deck channel fader ─────────────────────────────────────────────────
-        // Confirmed: CC28 ch1 (MIDI Monitor) = ch=0 (0-indexed). 0=closed, 127=open.
+        // Confirmed: CC28 ch=0 (MIDI Monitor ch1). 0=closed, 127=open.
         ControllerBinding(roleKey: "channelVolume", deck: 1, physicalSide: "left",
                           primitive: .ccAbsolute7(channel: 0, cc: 28)),
 
-        // Right deck channel fader not yet captured. Right deck channel follows ch2
-        // (ch=1) by channel pattern, but CC address not isolated-confirmed.
-        // Candidate retained from djay mapping pending live verification.
+        // Confirmed via isolated capture 2026-06-25: CC28 ch=1 (MIDI Monitor ch2).
+        // Full 0–127 sweep observed.
         ControllerBinding(roleKey: "channelVolume", deck: 2, physicalSide: "right",
                           primitive: .ccAbsolute7(channel: 1, cc: 28)),
 
         // ── Left deck pitch/tempo fader (14-bit high-res CC pair) ──────────────────
-        // Confirmed: CC9 (MSB) + CC41 (LSB) on ch1 (ch=0). Standard 14-bit pairing.
-        // Calibration (direction, travel range) required before scoring or display.
+        // Confirmed: CC9 (MSB) + CC41 (LSB) on ch=0 (MIDI Monitor ch1).
+        // 14-bit range 0–16383 observed.
         ControllerBinding(roleKey: "pitchRaw14", deck: 1, physicalSide: "left",
                           primitive: .cc14(channel: 0, msbCC: 9, lsbCC: 41)),
 
-        // Right deck pitch/tempo: not yet captured. Candidate from djay mapping.
-        ControllerBinding(roleKey: "speedCandidate", deck: 2, physicalSide: "right",
-                          primitive: .ccAbsolute7(channel: 1, cc: 9)),
+        // Confirmed via isolated capture 2026-06-25: CC9 (MSB) + CC41 (LSB) on ch=1
+        // (MIDI Monitor ch2). 14-bit range 0–16383 observed.
+        ControllerBinding(roleKey: "pitchRaw14", deck: 2, physicalSide: "right",
+                          primitive: .cc14(channel: 1, msbCC: 9, lsbCC: 41)),
 
         // ── Pitch bend buttons (djay mapping; hardware nudge keys, NOT platter) ─────
         ControllerBinding(roleKey: "pitchBendPlus",  deck: 1, physicalSide: "left",
@@ -190,11 +188,9 @@ enum RaneControllerProfiles {
         ControllerBinding(roleKey: "pitchBendMinus", deck: 2, physicalSide: "right",
                           primitive: .ccAbsolute7(channel: 1, cc: 12)),
 
-        // ── Left deck EQ / gain raw controls ───────────────────────────────────────
-        // Confirmed: ch1 (MIDI Monitor) = ch=0 (0-indexed). CC25/24/23/22.
-        // Capture order reported as: bass=CC25, mid=CC24, highs=CC23, gain=CC22.
-        // Applied as provisional labels; pending one isolated knob turn per control
-        // to confirm exact bass/mid/highs/gain assignment before UI is labelled.
+        // ── Left deck EQ / gain controls ────────────────────────────────────────────
+        // Confirmed via isolated knob turns 2026-06-25. Full 0–127 sweep per knob.
+        // CC25=Bass, CC24=Mid, CC23=Highs, CC22=Gain. ch=0 (MIDI Monitor ch1).
         ControllerBinding(roleKey: "eqBassRaw", deck: 1, physicalSide: "left",
                           primitive: .ccAbsolute7(channel: 0, cc: 25)),
         ControllerBinding(roleKey: "eqMidRaw", deck: 1, physicalSide: "left",
@@ -204,8 +200,9 @@ enum RaneControllerProfiles {
         ControllerBinding(roleKey: "gainRaw", deck: 1, physicalSide: "left",
                           primitive: .ccAbsolute7(channel: 0, cc: 22)),
 
-        // ── Right deck EQ / gain raw controls ──────────────────────────────────────
-        // Confirmed: ch2 (MIDI Monitor) = ch=1 (0-indexed). Same CC addresses as left.
+        // ── Right deck EQ / gain controls ───────────────────────────────────────────
+        // Confirmed via isolated knob turns 2026-06-25. Full 0–127 sweep per knob.
+        // CC25=Bass, CC24=Mid, CC23=Highs, CC22=Gain. ch=1 (MIDI Monitor ch2).
         ControllerBinding(roleKey: "eqBassRaw", deck: 2, physicalSide: "right",
                           primitive: .ccAbsolute7(channel: 1, cc: 25)),
         ControllerBinding(roleKey: "eqMidRaw", deck: 2, physicalSide: "right",
@@ -214,6 +211,31 @@ enum RaneControllerProfiles {
                           primitive: .ccAbsolute7(channel: 1, cc: 23)),
         ControllerBinding(roleKey: "gainRaw", deck: 2, physicalSide: "right",
                           primitive: .ccAbsolute7(channel: 1, cc: 22)),
+
+        // ── Transport Start/Stop ──────────────────────────────────────────────────
+        // Confirmed via isolated capture 2026-06-25. Single ▶⏸ button per deck.
+        // Note On note=0 vel=127 = press, Note Off note=0 vel=0 = release.
+        // No separate CUE transport button exists on Rane ONE MKII.
+        ControllerBinding(roleKey: "playPause", deck: 1, physicalSide: "left",
+                          primitive: .noteMomentary(channel: 0, note: 0, onValue: 127, offValue: 0)),
+        ControllerBinding(roleKey: "playPause", deck: 2, physicalSide: "right",
+                          primitive: .noteMomentary(channel: 1, note: 0, onValue: 127, offValue: 0)),
+
+        // ── SYNC ──────────────────────────────────────────────────────────────────
+        // Confirmed via isolated capture 2026-06-25.
+        // Note On note=2 vel=127 = press, Note Off note=2 vel=0 = release on ch=1.
+        ControllerBinding(roleKey: "sync", deck: nil, physicalSide: nil,
+                          primitive: .noteMomentary(channel: 1, note: 2, onValue: 127, offValue: 0)),
+
+        // ── Headphone PFL Cue ─────────────────────────────────────────────────────
+        // Confirmed via isolated capture 2026-06-25.
+        // Note On note=27 vel=127 = press, Note Off note=27 vel=0 = release.
+        // Same note number as pad 8 but on deck continuous channels (ch=0/ch=1),
+        // so channel disambiguates: PFL = ch=0/ch=1, pad 8 = ch=4/ch=5.
+        ControllerBinding(roleKey: "headphoneCue", deck: 1, physicalSide: "left",
+                          primitive: .noteMomentary(channel: 0, note: 27, onValue: 127, offValue: 0)),
+        ControllerBinding(roleKey: "headphoneCue", deck: 2, physicalSide: "right",
+                          primitive: .noteMomentary(channel: 1, note: 27, onValue: 127, offValue: 0)),
 
         // ── Left deck performance pads 1–8 ─────────────────────────────────────────
         // Confirmed: Note On/Off ch5 (MIDI Monitor) = ch=4 (0-indexed).
@@ -259,61 +281,82 @@ enum RaneControllerProfiles {
 
     private static let one_mkii_verificationSteps: [ControllerVerificationStep] = [
         .init(stepID: "xfader_sweep",
-              instruction: "Move the crossfader fully left then fully right — confirm CC8 on ch1 (ch=0).",
+              instruction: "Move the crossfader fully left then fully right — confirm CC8 on ch16 (MIDI Monitor) / ch=15 (code).",
               expectedControl: "crossfader", required: true),
         .init(stepID: "ch_vol_left",
-              instruction: "Move left channel volume fader from bottom to top — expect CC28 ch1.",
-              expectedControl: "channelVolume", required: false),
+              instruction: "Move left channel volume fader from bottom to top — expect CC28 ch=0.",
+              expectedControl: "channelVolume.deck1", required: false),
+        .init(stepID: "ch_vol_right",
+              instruction: "Move right channel volume fader from bottom to top — expect CC28 ch=1.",
+              expectedControl: "channelVolume.deck2", required: false),
         .init(stepID: "platter_fwd_left",
-              instruction: "Rotate the left platter forward — confirm CC6 ring-counter events on ch1.",
+              instruction: "Rotate the left platter forward — confirm CC6 ring-counter events on ch=0.",
               expectedControl: "platterTop.deck1", required: true),
         .init(stepID: "platter_bwd_left",
               instruction: "Rotate the left platter backward — confirm CC6 direction is inverted.",
               expectedControl: "platterTop.deck1", required: true),
         .init(stepID: "platter_fwd_right",
-              instruction: "Rotate the right platter forward — expect CC6 on ch2.",
+              instruction: "Rotate the right platter forward — expect CC6 on ch=1.",
               expectedControl: "platterTop.deck2", required: true),
         .init(stepID: "platter_bwd_right",
               instruction: "Rotate the right platter backward.",
               expectedControl: "platterTop.deck2", required: true),
         .init(stepID: "pitch_left",
-              instruction: "Move the left pitch/tempo fader — expect CC9 + CC41 on ch1.",
-              expectedControl: "pitchRaw14", required: false),
+              instruction: "Move the left pitch/tempo fader — expect CC9 + CC41 14-bit on ch=0.",
+              expectedControl: "pitchRaw14.deck1", required: false),
+        .init(stepID: "pitch_right",
+              instruction: "Move the right pitch/tempo fader — expect CC9 + CC41 14-bit on ch=1.",
+              expectedControl: "pitchRaw14.deck2", required: false),
         .init(stepID: "eq_bass_left",
-              instruction: "Turn left Bass knob — expect CC25 ch1 (capture order position 1).",
+              instruction: "Turn left Bass knob — expect CC25 ch=0.",
               expectedControl: "eqBassRaw.deck1", required: false),
         .init(stepID: "eq_mid_left",
-              instruction: "Turn left Mid knob — expect CC24 ch1.",
+              instruction: "Turn left Mid knob — expect CC24 ch=0.",
               expectedControl: "eqMidRaw.deck1", required: false),
         .init(stepID: "eq_highs_left",
-              instruction: "Turn left Highs knob — expect CC23 ch1.",
+              instruction: "Turn left Highs knob — expect CC23 ch=0.",
               expectedControl: "eqHighsRaw.deck1", required: false),
         .init(stepID: "gain_left",
-              instruction: "Turn left Gain knob — expect CC22 ch1.",
+              instruction: "Turn left Gain knob — expect CC22 ch=0.",
               expectedControl: "gainRaw.deck1", required: false),
         .init(stepID: "eq_bass_right",
-              instruction: "Turn right Bass knob — expect CC25 ch2.",
+              instruction: "Turn right Bass knob — expect CC25 ch=1.",
               expectedControl: "eqBassRaw.deck2", required: false),
         .init(stepID: "eq_mid_right",
-              instruction: "Turn right Mid knob — expect CC24 ch2.",
+              instruction: "Turn right Mid knob — expect CC24 ch=1.",
               expectedControl: "eqMidRaw.deck2", required: false),
         .init(stepID: "eq_highs_right",
-              instruction: "Turn right Highs knob — expect CC23 ch2.",
+              instruction: "Turn right Highs knob — expect CC23 ch=1.",
               expectedControl: "eqHighsRaw.deck2", required: false),
         .init(stepID: "gain_right",
-              instruction: "Turn right Gain knob — expect CC22 ch2.",
+              instruction: "Turn right Gain knob — expect CC22 ch=1.",
               expectedControl: "gainRaw.deck2", required: false),
+        .init(stepID: "start_stop_left",
+              instruction: "Press left Start/Stop (▶⏸) — expect Note On ch=0 note=0 vel127.",
+              expectedControl: "playPause.deck1", required: false),
+        .init(stepID: "start_stop_right",
+              instruction: "Press right Start/Stop (▶⏸) — expect Note On ch=1 note=0 vel127.",
+              expectedControl: "playPause.deck2", required: false),
+        .init(stepID: "sync",
+              instruction: "Press SYNC — expect Note On ch=1 note=2 vel127.",
+              expectedControl: "sync", required: false),
+        .init(stepID: "pfl_left",
+              instruction: "Press left headphone PFL cue — expect Note On ch=0 note=27 vel127 (NOT pad 8).",
+              expectedControl: "headphoneCue.deck1", required: false),
+        .init(stepID: "pfl_right",
+              instruction: "Press right headphone PFL cue — expect Note On ch=1 note=27 vel127 (NOT pad 8).",
+              expectedControl: "headphoneCue.deck2", required: false),
         .init(stepID: "left_pad1",
-              instruction: "Press left deck Pad 1 — expect Note On ch5 note20 vel127.",
+              instruction: "Press left deck Pad 1 — expect Note On ch=4 note20 vel127.",
               expectedControl: "leftDeckPad1", required: false),
         .init(stepID: "left_pad8",
-              instruction: "Press left deck Pad 8 — expect Note On ch5 note27 vel127.",
+              instruction: "Press left deck Pad 8 — expect Note On ch=4 note27 vel127.",
               expectedControl: "leftDeckPad8", required: false),
         .init(stepID: "right_pad1",
-              instruction: "Press right deck Pad 1 — expect Note On ch6 note20 vel127.",
+              instruction: "Press right deck Pad 1 — expect Note On ch=5 note20 vel127.",
               expectedControl: "rightDeckPad1", required: false),
         .init(stepID: "right_pad8",
-              instruction: "Press right deck Pad 8 — expect Note On ch6 note27 vel127.",
+              instruction: "Press right deck Pad 8 — expect Note On ch=5 note27 vel127.",
               expectedControl: "rightDeckPad8", required: false),
     ]
 
