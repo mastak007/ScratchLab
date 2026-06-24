@@ -103,4 +103,82 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let controller = ScratchSamplePlaybackController()
         XCTAssertEqual(controller.statusLabel, "idle")
     }
+
+    // MARK: - Crossfader gate
+
+    /// Helper: set crossfader and wait for the @Published dispatch to main.
+    private func setCrossfaderAndWait(_ controller: ScratchSamplePlaybackController, value: Int) {
+        controller.setCrossfader(value: value)
+        // setCrossfader dispatches @Published updates to main; flush that work.
+        let expectation = XCTestExpectation(description: "crossfader gate dispatched")
+        DispatchQueue.main.async { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1.0)
+    }
+
+    func testCrossfaderGateDefaultsToOpen() {
+        let controller = ScratchSamplePlaybackController()
+        XCTAssertEqual(controller.crossfaderGate, 1.0,
+            "Crossfader gate must default to 1.0 (fully open)")
+    }
+
+    func testCrossfaderValueZeroSetsClosed() {
+        let controller = ScratchSamplePlaybackController()
+        setCrossfaderAndWait(controller, value: 0)
+        XCTAssertEqual(controller.crossfaderGate, 0.0,
+            "CC8 value 0 must produce gate 0.0 (fully closed)")
+    }
+
+    func testCrossfaderValue127SetsOpen() {
+        let controller = ScratchSamplePlaybackController()
+        setCrossfaderAndWait(controller, value: 127)
+        XCTAssertEqual(controller.crossfaderGate, 1.0,
+            "CC8 value 127 must produce gate 1.0 (fully open)")
+    }
+
+    func testCrossfaderValue64MidPosition() {
+        let controller = ScratchSamplePlaybackController()
+        setCrossfaderAndWait(controller, value: 64)
+        let expected = Float(64) / 127.0
+        XCTAssertEqual(controller.crossfaderGate, expected, accuracy: 0.01,
+            "CC8 value 64 must produce gate ~0.5")
+    }
+
+    func testCrossfaderIntermediateValuesStable() {
+        let controller = ScratchSamplePlaybackController()
+        let testValues = [0, 1, 32, 63, 65, 96, 126, 127]
+        for v in testValues {
+            setCrossfaderAndWait(controller, value: v)
+            let expected = Float(v) / 127.0
+            XCTAssertEqual(controller.crossfaderGate, expected, accuracy: 0.01,
+                "CC8 value \(v) must produce gate \(expected)")
+        }
+    }
+
+    func testCrossfaderDoesNotCrashWhenEngineNotLoaded() {
+        let controller = ScratchSamplePlaybackController()
+        // setCrossfader must not crash even if no sample is loaded / engine not started.
+        for v in [0, 64, 127] {
+            controller.setCrossfader(value: v)
+        }
+        XCTAssertTrue(true, "setCrossfader must not crash without a loaded sample")
+    }
+
+    func testCrossfaderResetOnUnload() {
+        let controller = ScratchSamplePlaybackController()
+        controller.load(sampleID: "ahhh")
+        setCrossfaderAndWait(controller, value: 0)
+        XCTAssertEqual(controller.crossfaderGate, 0.0)
+        controller.unload()
+        XCTAssertEqual(controller.crossfaderGate, 1.0,
+            "Unload must reset crossfader gate to 1.0 (open)")
+    }
+
+    func testLastCrossfaderRawValueUpdated() {
+        let controller = ScratchSamplePlaybackController()
+        XCTAssertNil(controller.lastCrossfaderRawValue)
+        setCrossfaderAndWait(controller, value: 64)
+        XCTAssertEqual(controller.lastCrossfaderRawValue, 64)
+        setCrossfaderAndWait(controller, value: 0)
+        XCTAssertEqual(controller.lastCrossfaderRawValue, 0)
+    }
 }

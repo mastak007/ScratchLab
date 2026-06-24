@@ -4791,6 +4791,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                     direction: platterTracker.recentDirection(for: channel)
                                 )
                             }
+                            // CC8 crossfader gate: ch=15 CC8 → sample volume.
+                            // Rane ONE MKII crossfader is a master fader; for this proof
+                            // it gates the scratch playback controller directly.
+                            if controller == 8, channel == 15 {
+                                scratchPlaybackController.setCrossfader(value: value)
+                            }
                             recordReceivedMIDICCEvent(
                                 sourceName: deviceName,
                                 channel: channel,

@@ -63,6 +63,14 @@ final class ScratchSamplePlaybackController {
     /// Diagnostic label for the UI.
     @Published var statusLabel: String = "idle"
 
+    /// Crossfader gate value (0.0 = fully closed/cut, 1.0 = fully open).
+    /// Applied as `playerNode.volume`. Default 1.0 (open) so audio passes
+    /// before the first crossfader event arrives.
+    @Published var crossfaderGate: Float = 1.0
+
+    /// Last raw crossfader CC8 value (0–127), or nil if no event received yet.
+    @Published var lastCrossfaderRawValue: Int? = nil
+
     // MARK: - Lifecycle
 
     init() {
@@ -231,10 +239,35 @@ final class ScratchSamplePlaybackController {
         totalFrames = 0
         lastScheduledSteps = 0
         lastScheduledDirection = nil
+        // Reset crossfader gate to open on unload.
+        crossfaderGate = 1.0
+        lastCrossfaderRawValue = nil
         DispatchQueue.main.async { [weak self] in
             self?.statusLabel = "idle"
         }
         print("[ScratchSamplePlaybackController] unloaded")
+    }
+
+    // MARK: - Crossfader gate
+
+    /// Apply crossfader CC8 value as audio gate.
+    ///
+    /// Rane ONE MKII: ch=15 CC8, range 0–127.
+    ///   - 0   → fully closed (cut, volume 0.0)
+    ///   - 127 → fully open (volume 1.0)
+    ///
+    /// Applied as `playerNode.volume`. Linear for the proof; deck-specific
+    /// cut model can replace this later without changing the call site.
+    ///
+    /// Safe to call from any thread — dispatches audio work synchronously.
+    func setCrossfader(value: Int) {
+        let normalized = Float(value) / 127.0
+        playerNode.volume = normalized
+        let raw = value
+        DispatchQueue.main.async { [weak self] in
+            self?.crossfaderGate = normalized
+            self?.lastCrossfaderRawValue = raw
+        }
     }
 
     // MARK: - Position → frame mapping
