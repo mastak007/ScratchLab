@@ -230,6 +230,24 @@ extension MIDIControllerProfile {
                 notes: "Confirmed: CC9 MSB + CC41 LSB, ch=1 (ch2 MIDI Monitor). Verified via re-capture 2026-06-25."
             ),
 
+            // ── Transport Start/Stop ────────────────────────────────────────────────
+            // The Rane ONE MKII has a single Start/Stop (▶⏸) button per deck — no
+            // separate CUE transport button. Both emit Note On note=0 vel=127 on press,
+            // Note Off note=0 vel=0 on release, on their deck's continuous channel.
+            // Hotcue recall is handled by the performance pads (notes 20–27).
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .transport, deck: 0, label: "Left Start/Stop"),
+                signal: .note(number: 0),
+                channel: 0,
+                notes: "Confirmed: Note On/Off ch=0 note=0. Single transport button per deck — no separate CUE."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .transport, deck: 1, label: "Right Start/Stop"),
+                signal: .note(number: 0),
+                channel: 1,
+                notes: "Confirmed: Note On/Off ch=1 note=0. Single transport button per deck — no separate CUE."
+            ),
+
             // ── Left deck EQ / gain raw controls ─────────────────────────────────────
             // ch1 (MIDI Monitor) = ch=0 (0-indexed). Capture order: bass CC25, mid CC24,
             // highs CC23, gain CC22. Pending one isolated knob turn per control to confirm
@@ -399,8 +417,8 @@ extension MIDIControllerProfile {
                "CC22-25 EQ/gain (raw, pending isolated label confirmation). " +
                "Right deck: CC6 platter (ring), CC28 channel fader, CC9+CC41 14-bit pitch — verified via re-capture. " +
                "Crossfader: CC8 on ch=15 (ch16 MIDI Monitor) — verified full 0–127 sweep. " +
-               "Transport: left=ch=0 note=0, right=ch=1 note=0 (Note On press, Note Off release); " +
-               "CUE vs PLAY differentiation not yet resolved — both emit note=0 on the same deck channel. " +
+               "Transport (Start/Stop): left=ch=0 note=0, right=ch=1 note=0 (Note On press, Note Off release); " +
+               "single ▶⏸ button per deck — no separate CUE transport; hotcue recall is via performance pads. " +
                "Pads 1–8: left=ch5 notes 20–27, right=ch6 notes 20–27; Note On/Off not CC. " +
                "Pitch bend streams are diagnostic-only (alias during rotation; CC6 is the driver)."
     )
