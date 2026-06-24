@@ -248,6 +248,33 @@ extension MIDIControllerProfile {
                 notes: "Confirmed: Note On/Off ch=1 note=0. Single transport button per deck — no separate CUE."
             ),
 
+            // ── SYNC ──────────────────────────────────────────────────────────────────
+            // Confirmed via isolated press 2026-06-25. Note On note=2 vel=127 on press,
+            // Note Off note=2 vel=0 on release, on the right deck's continuous channel.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .button, label: "SYNC"),
+                signal: .note(number: 2),
+                channel: 1,
+                notes: "Confirmed: Note On/Off ch=1 note=2. Verified via isolated capture 2026-06-25."
+            ),
+
+            // ── Headphone PFL Cue ─────────────────────────────────────────────────────
+            // Confirmed via isolated press 2026-06-25. Note On note=27, Note Off note=27.
+            // Same note number as performance pad 8 but on the deck's continuous channel
+            // (ch=0 for left, ch=1 for right), so channel disambiguates.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .button, deck: 0, label: "Left Headphone Cue"),
+                signal: .note(number: 27),
+                channel: 0,
+                notes: "Confirmed: Note On/Off ch=0 note=27. Shares note 27 with pad 8 (ch=4) — channel disambiguates."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .button, deck: 1, label: "Right Headphone Cue"),
+                signal: .note(number: 27),
+                channel: 1,
+                notes: "Confirmed: Note On/Off ch=1 note=27. Shares note 27 with pad 8 (ch=5) — channel disambiguates."
+            ),
+
             // ── Left deck EQ / gain controls ──────────────────────────────────────────
             // Confirmed via isolated knob turns 2026-06-25. Full 0–127 sweep per knob.
             MIDIControlBinding(
@@ -417,6 +444,8 @@ extension MIDIControllerProfile {
                "Crossfader: CC8 on ch=15 (ch16 MIDI Monitor) — verified full 0–127 sweep. " +
                "Transport (Start/Stop): left=ch=0 note=0, right=ch=1 note=0 (Note On press, Note Off release); " +
                "single ▶⏸ button per deck — no separate CUE transport; hotcue recall is via performance pads. " +
+               "SYNC: ch=1 note=2. " +
+               "Headphone PFL cue: left=ch=0 note=27, right=ch=1 note=27 (same note as pad 8, channel disambiguates). " +
                "Pads 1–8: left=ch5 notes 20–27, right=ch6 notes 20–27; Note On/Off not CC. " +
                "Pitch bend streams are diagnostic-only (alias during rotation; CC6 is the driver)."
     )
