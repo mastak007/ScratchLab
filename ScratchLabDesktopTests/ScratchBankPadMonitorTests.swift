@@ -162,4 +162,76 @@ final class ScratchBankPadMonitorTests: XCTestCase {
             XCTAssertNotNil(label, "CC\(cc) on deck 1 must produce a non-nil label")
         }
     }
+
+    // MARK: - Note On label tests (confirmed Rane ONE MK2 hardware, ch6 = channel 5)
+
+    func testNoteOnPad1EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Rane Pad 1 → ahhh · played")
+    }
+
+    func testNoteOnPad1GatedLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 20, velocity: 127, isPreviewEnabled: false
+        )
+        XCTAssertEqual(label, "Rane Pad 1 → ahhh · gated")
+    }
+
+    func testNoteOnPad2EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 21, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Rane Pad 2 → fresh · played")
+    }
+
+    func testNoteOnPad3EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 22, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Rane Pad 3 → ah_yeah · played")
+    }
+
+    func testNoteOnPad4EnabledLabel() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 23, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertEqual(label, "Rane Pad 4 → check_it_out · played")
+    }
+
+    func testNoteOffVelocityZeroReturnsNilLabel() {
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 20, velocity: 0, isPreviewEnabled: true
+        ))
+    }
+
+    func testNoteOnWrongChannelReturnsNilLabel() {
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 4, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+        ))
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 0, noteNumber: 20, velocity: 127, isPreviewEnabled: true
+        ))
+    }
+
+    func testNoteOnOutsidePadRangeReturnsNilLabel() {
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 19, velocity: 127, isPreviewEnabled: true
+        ))
+        XCTAssertNil(MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 24, velocity: 127, isPreviewEnabled: true
+        ))
+    }
+
+    func testNoteOnLabelContainsRanePadPrefix() {
+        let label = MacCaptureEngine.compactScratchBankNotePadLabel(
+            channel: 5, noteNumber: 22, velocity: 127, isPreviewEnabled: true
+        )
+        XCTAssertNotNil(label)
+        XCTAssertTrue(label!.hasPrefix("Rane Pad"),
+            "Note On monitor label must start with 'Rane Pad'; got: \(label!)")
+        XCTAssertTrue(label!.contains("ah_yeah"))
+        XCTAssertTrue(label!.contains("played"))
+    }
 }

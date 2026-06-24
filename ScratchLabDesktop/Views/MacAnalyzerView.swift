@@ -4330,6 +4330,19 @@ struct MacAnalyzerView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
+                Text("Raw pad capture")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Text(captureEngine.lastRawPadDiagnostic.isEmpty
+                     ? "Press a pad to capture raw MIDI"
+                     : captureEngine.lastRawPadDiagnostic)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.yellow)
+                    .textSelection(.enabled)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Pad bindings from djay Pro mapping")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)

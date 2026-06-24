@@ -1404,6 +1404,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     // until a desktop sample player is available.
     @Published var isScratchBankMIDIPreviewEnabled: Bool = false
     @Published private(set) var lastScratchBankPadLabel: String = ""
+#if DEBUG
+    @Published private(set) var lastRawPadDiagnostic: String = ""
+#endif
     var scratchBankPadPreviewCallback: ((String) -> Void)?
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
@@ -4780,10 +4783,42 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                 timestamp: now,
                                 recordingStartTime: startTime
                             )
+#if DEBUG
+                            // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
+                            // CC6 (platter) floods at ~800Hz and must never trigger UI updates.
+                            if controller != 6,
+                               currentMapping?.controller != controller {
+                                let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
+                                lastRawPadDiagnostic = diag
+                                print("[RanePad] \(diag)")
+                            }
+#endif
                             i += 3
                         } else if statusByte >= 0x80 {
                             switch statusByte & 0xF0 {
-                            case 0x80, 0x90, 0xA0, 0xE0: i += 3
+                            case 0x80, 0x90, 0xA0, 0xE0:
+                                if statusByte & 0xF0 == 0x90 {
+                                    receiveNoteOnPadEvent(
+                                        channel: rawChannel,
+                                        noteNumber: rawData1,
+                                        velocity: rawData2
+                                    )
+                                }
+#if DEBUG
+                                // Note On/Off, PolyAT, Pitch Bend — candidates for pad messages.
+                                let kind: String
+                                switch statusByte & 0xF0 {
+                                case 0x90: kind = "Note On"
+                                case 0x80: kind = "Note Off"
+                                case 0xA0: kind = "PolyAT"
+                                case 0xE0: kind = "PitchBend"
+                                default:   kind = "MIDI"
+                                }
+                                let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
+                                lastRawPadDiagnostic = diag
+                                print("[RanePad] \(diag)")
+#endif
+                                i += 3
                             case 0xC0, 0xD0: i += 2
                             default: i += 1
                             }
@@ -5007,6 +5042,55 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Scratch Bank Note Pad Monitor Label
+
+    /// Builds a compact label for a confirmed Rane ONE MK2 Note On pad event.
+    ///
+    /// Confirmed hardware: ch6 in MIDI Monitor (channel 5, 0-indexed), notes 20–23.
+    /// Label format: `"Rane Pad N → sampleID · played"` / `"· gated"` / `"· (no sample)"`.
+    /// Returns nil for Note Off (velocity 0), wrong channel, or out-of-range note.
+    static func compactScratchBankNotePadLabel(
+        channel: Int, noteNumber: Int, velocity: Int,
+        isPreviewEnabled: Bool
+    ) -> String? {
+        guard channel == 5 else { return nil }
+        guard noteNumber >= 20, noteNumber <= 23 else { return nil }
+        guard velocity > 0 else { return nil }
+
+        let padNumber = noteNumber - 20 + 1
+        let sampleID = ScratchBankPadEventRouter.sampleID(
+            channel: channel, noteNumber: noteNumber, velocity: velocity,
+            isEnabled: true
+        )
+        if let sampleID {
+            let status = isPreviewEnabled ? "played" : "gated"
+            return "Rane Pad \(padNumber) → \(sampleID) · \(status)"
+        } else {
+            return "Rane Pad \(padNumber) · (no sample)"
+        }
+    }
+
+    // MARK: - Note On Pad Preview
+
+    /// Routes a Note On event through the Scratch Bank pad preview and monitor label path.
+    /// Called from `receiveMIDIPacketList` for every Note On byte received.
+    /// Also usable as a test seam — callers inject channel/noteNumber/velocity directly.
+    func receiveNoteOnPadEvent(channel: Int, noteNumber: Int, velocity: Int) {
+        guard velocity > 0 else { return }
+        if let sampleID = ScratchBankPadEventRouter.sampleID(
+            channel: channel, noteNumber: noteNumber, velocity: velocity,
+            isEnabled: isScratchBankMIDIPreviewEnabled
+        ) {
+            scratchBankPadPreviewCallback?(sampleID)
+        }
+        if let label = Self.compactScratchBankNotePadLabel(
+            channel: channel, noteNumber: noteNumber, velocity: velocity,
+            isPreviewEnabled: isScratchBankMIDIPreviewEnabled
+        ) {
+            lastScratchBankPadLabel = label
+        }
+    }
+
     private func reconnectSelectedMIDIInput() {
         guard midiInputPort != 0 else { return }
         closeMIDIInput()
@@ -5039,6 +5123,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         lastMIDICCMessage = "CC -- Ch -- Value --"
         midiLearnFeedback = ""
         lastScratchBankPadLabel = ""
+#if DEBUG
+        lastRawPadDiagnostic = ""
+#endif
     }
 
     private struct MIDISourceEndpoint {

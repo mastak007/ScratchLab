@@ -96,4 +96,87 @@ final class ScratchBankMIDIPreviewGateTests: XCTestCase {
         XCTAssertFalse(engine2.isScratchBankMIDIPreviewEnabled,
             "Each engine instance must have independent gate state")
     }
+
+    // MARK: - 8. Note On preview callback seam (confirmed Rane ONE MK2 hardware)
+
+    func testNoteOnCallbackFiresForPad1WhenEnabled() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var received: [String] = []
+        engine.scratchBankPadPreviewCallback = { received.append($0) }
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
+
+        XCTAssertEqual(received, ["ahhh"],
+            "Pad 1 Note On must fire callback with 'ahhh' when preview is enabled")
+    }
+
+    func testNoteOnCallbackDoesNotFireWhenGateIsOff() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = false
+        var received: [String] = []
+        engine.scratchBankPadPreviewCallback = { received.append($0) }
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
+
+        XCTAssertTrue(received.isEmpty,
+            "Note On must not fire callback when preview gate is OFF")
+    }
+
+    func testNoteOffVelocityZeroDoesNotFireCallback() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var received: [String] = []
+        engine.scratchBankPadPreviewCallback = { received.append($0) }
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 0)
+
+        XCTAssertTrue(received.isEmpty,
+            "Velocity 0 (Note Off) must not fire the preview callback")
+    }
+
+    func testNoteOnCallbackFiresForAllFourPadsWhenEnabled() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+        var received: [String] = []
+        engine.scratchBankPadPreviewCallback = { received.append($0) }
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 21, velocity: 127)
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 22, velocity: 127)
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 23, velocity: 127)
+
+        XCTAssertEqual(received, ["ahhh", "fresh", "ah_yeah", "check_it_out"],
+            "All four Rane pads must fire callback with correct sample IDs in order")
+    }
+
+    func testNoteOnMonitorLabelUpdatedByPadEvent() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
+
+        XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 1 → ahhh · played",
+            "lastScratchBankPadLabel must reflect note pad label after Note On")
+    }
+
+    func testNoteOnGatedLabelWhenPreviewDisabled() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = false
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 21, velocity: 127)
+
+        XCTAssertEqual(engine.lastScratchBankPadLabel, "Rane Pad 2 → fresh · gated",
+            "lastScratchBankPadLabel must show 'gated' when preview is disabled")
+    }
+
+    func testNoteOffDoesNotUpdateMonitorLabel() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.isScratchBankMIDIPreviewEnabled = true
+
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 0)
+
+        XCTAssertEqual(engine.lastScratchBankPadLabel, "",
+            "Note Off (velocity 0) must not update lastScratchBankPadLabel")
+    }
 }

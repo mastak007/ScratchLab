@@ -113,8 +113,10 @@ final class RaneOneMK2ProfileTests: XCTestCase {
 
     func testSpeedCandidatesAreMetadataOnly() {
         let speedBindings = profile.bindings.filter { $0.roleKey == "speedCandidate" }
-        XCTAssertGreaterThanOrEqual(speedBindings.count, 2,
-            "Speed candidates must exist for both decks (turntable.speed from djay mapping)")
+        // Left deck pitch has been upgraded to confirmed pitchRaw14 (CC9+CC41 14-bit pair).
+        // Right deck pitch is still an unverified djay candidate → only one speedCandidate expected.
+        XCTAssertGreaterThanOrEqual(speedBindings.count, 1,
+            "Speed candidate must exist for right deck (turntable.speed from djay mapping; left upgraded to pitchRaw14)")
 
         // Must NOT use CC6 — that's the verified platter ring counter in MIDIHardwareRegistry
         for binding in speedBindings {

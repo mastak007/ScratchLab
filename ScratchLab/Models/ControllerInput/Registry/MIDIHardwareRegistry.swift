@@ -145,39 +145,238 @@ extension MIDIControllerProfile {
         ),
         deckCount: 2,
         bindings: [
+
+            // ── Motorized platters ────────────────────────────────────────────────────
+            // Left/right platter: relative CC6 ring counter on ch1/ch2 (MIDI Monitor
+            // 1-indexed) = ch=0/ch=1 (0-indexed raw byte). ~3932 steps/rev measured.
             MIDIControlBinding(
                 role: MIDIControlRole(kind: .platterMovement, deck: 0),
                 signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
                 channel: 0,
                 ringModulus: 128,
-                notes: "±1 per event; ~3932 steps/rev (measured). Playback driver."
+                notes: "Left deck platter: CC6 ch1 (ch=0). ±1/event, ~3932 steps/rev. Motorized, not touch-jog."
             ),
             MIDIControlBinding(
                 role: MIDIControlRole(kind: .platterMovement, deck: 1),
                 signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
                 channel: 1,
                 ringModulus: 128,
-                notes: "±1 per event; ~3932 steps/rev (measured). Playback driver."
+                notes: "Right deck platter: CC6 ch2 (ch=1). Right-deck rotation not yet captured; channel follows deck channel pattern."
             ),
+
+            // ── Crossfader ────────────────────────────────────────────────────────────
             MIDIControlBinding(
                 role: MIDIControlRole(kind: .crossfader),
-                signal: .absoluteCC(number: 8)
+                signal: .absoluteCC(number: 8),
+                notes: "CC8. Live-verified on ch=0 (ch1). Not yet re-captured in isolation to confirm channel."
             ),
+
+            // ── Pitch bend diagnostic (aliasing; not a control signal) ────────────────
             MIDIControlBinding(
                 role: MIDIControlRole(kind: .platterAbsolute, deck: 0),
                 signal: .pitchBend,
                 channel: 0,
                 isDiagnosticOnly: true,
-                notes: "14-bit pitch bend — diagnostic only; aliases. CC6 is the driver."
+                notes: "Pitch Wheel ch=0 — diagnostic only; aliases during platter rotation. CC6 is the driver."
             ),
             MIDIControlBinding(
                 role: MIDIControlRole(kind: .platterAbsolute, deck: 1),
                 signal: .pitchBend,
                 channel: 1,
                 isDiagnosticOnly: true,
-                notes: "14-bit pitch bend — diagnostic only; aliases. CC6 is the driver."
-            )
+                notes: "Pitch Wheel ch=1 — diagnostic only. CC6 is the driver."
+            ),
+
+            // ── Left deck channel fader ───────────────────────────────────────────────
+            // Confirmed: CC28 ch1 (MIDI Monitor) = ch=0 (0-indexed). 0=closed, 127=open.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .channelFader, deck: 0, label: "Left Channel Fader"),
+                signal: .absoluteCC(number: 28),
+                channel: 0,
+                notes: "Confirmed: CC28 ch1 (ch=0). 0=down/closed, 127=up/open."
+            ),
+
+            // ── Left deck pitch/tempo fader (14-bit high-res) ────────────────────────
+            // CC9 (MSB) + CC41 (LSB) on ch1 (ch=0). 14-bit resolution.
+            // Calibration required before this can feed scoring or tempo display.
+            // CC9 + 32 = CC41 is the standard MIDI high-res pairing convention.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .tempo, deck: 0, label: "Left Pitch/Tempo Fader (raw 14-bit)"),
+                signal: .highResCCPair(msb: 9, lsb: 41),
+                channel: 0,
+                notes: "Confirmed: CC9 MSB + CC41 LSB, ch1 (ch=0). Calibration (direction, range) needed."
+            ),
+
+            // ── Left deck EQ / gain raw controls ─────────────────────────────────────
+            // ch1 (MIDI Monitor) = ch=0 (0-indexed). Capture order: bass CC25, mid CC24,
+            // highs CC23, gain CC22. Pending one isolated knob turn per control to confirm
+            // exact bass/mid/highs/gain label assignment.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Bass EQ (raw)"),
+                signal: .absoluteCC(number: 25),
+                channel: 0,
+                notes: "Capture order position 1 (bass). ch1/ch=0. Pending isolated confirmation."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Mid EQ (raw)"),
+                signal: .absoluteCC(number: 24),
+                channel: 0,
+                notes: "Capture order position 2 (mid). ch1/ch=0. Pending isolated confirmation."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Highs EQ (raw)"),
+                signal: .absoluteCC(number: 23),
+                channel: 0,
+                notes: "Capture order position 3 (highs). ch1/ch=0. Pending isolated confirmation."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 0, label: "Left Gain (raw)"),
+                signal: .absoluteCC(number: 22),
+                channel: 0,
+                notes: "Capture order position 4 (gain). ch1/ch=0. Pending isolated confirmation."
+            ),
+
+            // ── Right deck EQ / gain raw controls ────────────────────────────────────
+            // ch2 (MIDI Monitor) = ch=1 (0-indexed). Same CC addresses as left deck.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Bass EQ (raw)"),
+                signal: .absoluteCC(number: 25),
+                channel: 1,
+                notes: "Capture order position 1 (bass). ch2/ch=1. Pending isolated confirmation."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Mid EQ (raw)"),
+                signal: .absoluteCC(number: 24),
+                channel: 1,
+                notes: "Capture order position 2 (mid). ch2/ch=1. Pending isolated confirmation."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Highs EQ (raw)"),
+                signal: .absoluteCC(number: 23),
+                channel: 1,
+                notes: "Capture order position 3 (highs). ch2/ch=1. Pending isolated confirmation."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .unknown, deck: 1, label: "Right Gain (raw)"),
+                signal: .absoluteCC(number: 22),
+                channel: 1,
+                notes: "Capture order position 4 (gain). ch2/ch=1. Pending isolated confirmation."
+            ),
+
+            // ── Left deck performance pads 1–8 ───────────────────────────────────────
+            // Confirmed: Note On/Off ch5 (MIDI Monitor 1-indexed) = ch=4 (0-indexed).
+            // Press: velocity 127. Release: Note Off velocity 0.
+            // Pads 1–8: notes 20–27.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 1"),
+                signal: .note(number: 20),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 (ch=4) note20 vel127=press; Note Off vel0=release."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 2"),
+                signal: .note(number: 21),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note21."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 3"),
+                signal: .note(number: 22),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note22."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 4"),
+                signal: .note(number: 23),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note23."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 5"),
+                signal: .note(number: 24),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note24."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 6"),
+                signal: .note(number: 25),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note25."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 7"),
+                signal: .note(number: 26),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note26."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 0, label: "Left Deck Pad 8"),
+                signal: .note(number: 27),
+                channel: 4,
+                notes: "Confirmed: Note On ch5 note27."
+            ),
+
+            // ── Right deck performance pads 1–8 ──────────────────────────────────────
+            // Confirmed: Note On/Off ch6 (MIDI Monitor 1-indexed) = ch=5 (0-indexed).
+            // Pads 1–4 (notes 20–23) confirmed earlier. Pads 5–8 (notes 24–27) confirmed
+            // in latest capture. Press: velocity 127. Release: Note Off velocity 0.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 1"),
+                signal: .note(number: 20),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 (ch=5) note20 vel127=press; Note Off vel0=release."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 2"),
+                signal: .note(number: 21),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note21."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 3"),
+                signal: .note(number: 22),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note22."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 4"),
+                signal: .note(number: 23),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note23."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 5"),
+                signal: .note(number: 24),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note24."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 6"),
+                signal: .note(number: 25),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note25."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 7"),
+                signal: .note(number: 26),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note26."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .pad, deck: 1, label: "Right Deck Pad 8"),
+                signal: .note(number: 27),
+                channel: 5,
+                notes: "Confirmed: Note On ch6 note27."
+            ),
         ],
-        notes: "Seed entry. Verified RANE facts: CC6 ±1 ring platter, CC8 crossfader, pitch bend diagnostic-only."
+        notes: "Seed entry — verified Rane ONE MKII hardware facts (2026-06-24). " +
+               "Deck channel pattern (MIDI Monitor 1-indexed): left continuous=ch1, right continuous=ch2, " +
+               "left pads=ch5, right pads=ch6. " +
+               "Left deck: CC6 platter (ring), CC8 crossfader, CC28 channel fader, CC9+CC41 14-bit pitch, " +
+               "CC22-25 EQ/gain (raw, pending isolated label confirmation). " +
+               "Pads 1–8: left=ch5 notes 20–27, right=ch6 notes 20–27; Note On/Off not CC. " +
+               "Pitch bend streams are diagnostic-only (alias during rotation; CC6 is the driver). " +
+               "Right deck: platter on CC6 ch=1 (channel pattern only; rotation not yet re-captured in isolation). " +
+               "Not yet captured: right channel fader, right pitch/tempo, play/pause, cue, deck select, crossfader channel confirmation."
     )
 }

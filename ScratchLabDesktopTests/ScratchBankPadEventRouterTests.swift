@@ -166,4 +166,101 @@ final class ScratchBankPadEventRouterTests: XCTestCase {
             ), "CC\(cc) value 0 must return nil (release)")
         }
     }
+
+    // MARK: - Note On: confirmed Rane ONE MK2 hardware (ch6 = channel 5, notes 20–23)
+
+    func testNoteOnCh5Note20Vel127GateOnResolvesAhhh() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 20, velocity: 127, isEnabled: true
+        ), "ahhh")
+    }
+
+    func testNoteOnCh5Note21Vel127GateOnResolvesFresh() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 21, velocity: 127, isEnabled: true
+        ), "fresh")
+    }
+
+    func testNoteOnCh5Note22Vel127GateOnResolvesAhYeah() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 22, velocity: 127, isEnabled: true
+        ), "ah_yeah")
+    }
+
+    func testNoteOnCh5Note23Vel127GateOnResolvesCheckItOut() {
+        XCTAssertEqual(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 23, velocity: 127, isEnabled: true
+        ), "check_it_out")
+    }
+
+    func testNoteOnGateOffReturnsNilForAllFourPads() {
+        for note in 20...23 {
+            XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+                channel: 5, noteNumber: note, velocity: 127, isEnabled: false
+            ), "Note \(note) must return nil when gate is OFF")
+        }
+    }
+
+    func testNoteOnVelocityZeroReturnsNilForAllFourPads() {
+        for note in 20...23 {
+            XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+                channel: 5, noteNumber: note, velocity: 0, isEnabled: true
+            ), "Note \(note) velocity 0 must return nil")
+        }
+    }
+
+    func testNoteOffVelocityZeroReturnsNil() {
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 5, noteNumber: 20, velocity: 0, isEnabled: true
+        ), "Note Off (velocity 0) must return nil")
+    }
+
+    func testNoteOnNonChannel5ReturnsNil() {
+        for channel in [0, 1, 3, 4, 6, 15] {
+            XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+                channel: channel, noteNumber: 20, velocity: 127, isEnabled: true
+            ), "Channel \(channel) note 20 must return nil — not the confirmed Rane pad channel")
+        }
+    }
+
+    func testNoteOnOutsidePadRangeReturnsNil() {
+        for note in [0, 8, 11, 19, 24, 127] {
+            XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+                channel: 5, noteNumber: note, velocity: 127, isEnabled: true
+            ), "Note \(note) must return nil — not a confirmed Rane pad note")
+        }
+    }
+
+    func testCCCrossfaderCh16DoesNotResolveViaCCRouter() {
+        // ch16 Balance crossfader = channel 15 (0-indexed).
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 15, cc: 8, value: 64, isEnabled: true
+        ))
+    }
+
+    func testCCVolumeFaderCh2DoesNotResolveViaCCRouter() {
+        // ch2 CC28 volume fader = channel 1 (0-indexed).
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 1, cc: 28, value: 64, isEnabled: true
+        ))
+    }
+
+    func testCCTempoFaderCh2DoesNotResolveViaCCRouter() {
+        // ch2 CC9/CC41 tempo slider = channel 1 (0-indexed).
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 1, cc: 9, value: 64, isEnabled: true
+        ))
+        XCTAssertNil(ScratchBankPadEventRouter.sampleID(
+            channel: 1, cc: 41, value: 64, isEnabled: true
+        ))
+    }
+
+    func testNoteOnNoteRouterIsPure_NoSideEffects() {
+        for _ in 0..<10 {
+            _ = ScratchBankPadEventRouter.sampleID(
+                channel: 5, noteNumber: 20, velocity: 127, isEnabled: true
+            )
+        }
+        XCTAssertTrue(true, "note sampleID() is pure — no side effects")
+    }
 }

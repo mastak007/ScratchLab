@@ -150,6 +150,105 @@ final class ScratchBankPadMappingTests: XCTestCase {
         }
     }
 
+    // MARK: - Confirmed hardware note pad catalog
+
+    func testConfirmedHardwareNotePadsHasEightEntries() {
+        XCTAssertEqual(ScratchBankPadMappingCatalog.confirmedHardwareNotePads.count, 8,
+            "confirmedHardwareNotePads must have 8 entries: right deck pads 1–8 (notes 20–27)")
+    }
+
+    func testConfirmedHardwareNotePadsAreNoteMappings() {
+        for pad in ScratchBankPadMappingCatalog.confirmedHardwareNotePads {
+            XCTAssertTrue(pad.isNoteMapping,
+                "All confirmed hardware pads must have isNoteMapping = true (Note On/Off, not CC)")
+        }
+    }
+
+    func testConfirmedHardwareNotePad1IsNote20OnChannel5RightDeck() {
+        let pad = ScratchBankPadMappingCatalog.confirmedHardwareNotePads[0]
+        XCTAssertEqual(pad.midiNoteNumber, 20, "Pad 1 must be note 20")
+        XCTAssertEqual(pad.midiChannel, 5, "Right deck pads on ch=5 (ch6 MIDI Monitor)")
+        XCTAssertEqual(pad.padIndex, 0)
+        XCTAssertEqual(pad.deck, 2, "Deck 2 = right deck (1-indexed v1 model)")
+    }
+
+    func testConfirmedHardwareNotePad4IsNote23OnChannel5() {
+        let pad = ScratchBankPadMappingCatalog.confirmedHardwareNotePads[3]
+        XCTAssertEqual(pad.midiNoteNumber, 23)
+        XCTAssertEqual(pad.midiChannel, 5)
+        XCTAssertEqual(pad.padIndex, 3)
+        XCTAssertEqual(pad.deck, 2)
+    }
+
+    func testConfirmedHardwareNotePad5IsNote24OnChannel5() {
+        let pad = ScratchBankPadMappingCatalog.confirmedHardwareNotePads[4]
+        XCTAssertEqual(pad.midiNoteNumber, 24, "Pad 5 (latest capture) must be note 24")
+        XCTAssertEqual(pad.midiChannel, 5)
+        XCTAssertEqual(pad.padIndex, 4)
+        XCTAssertEqual(pad.deck, 2)
+    }
+
+    func testConfirmedHardwareNotePad8IsNote27OnChannel5() {
+        let pad = ScratchBankPadMappingCatalog.confirmedHardwareNotePads[7]
+        XCTAssertEqual(pad.midiNoteNumber, 27, "Pad 8 must be note 27")
+        XCTAssertEqual(pad.midiChannel, 5)
+        XCTAssertEqual(pad.padIndex, 7)
+        XCTAssertEqual(pad.deck, 2)
+    }
+
+    func testConfirmedHardwareNotePadCoversNotes20Through27() {
+        let notes = ScratchBankPadMappingCatalog.confirmedHardwareNotePads
+            .compactMap { $0.midiNoteNumber }
+            .sorted()
+        XCTAssertEqual(notes, Array(20...27).map(UInt8.init),
+            "confirmedHardwareNotePads must cover notes 20–27")
+    }
+
+    func testConfirmedHardwareNotePadsHaveCorrectSampleIDsForPads1to4() {
+        let pads = ScratchBankPadMappingCatalog.confirmedHardwareNotePads
+        XCTAssertEqual(pads[0].assignedSampleID, "ahhh")
+        XCTAssertEqual(pads[1].assignedSampleID, "fresh")
+        XCTAssertEqual(pads[2].assignedSampleID, "ah_yeah")
+        XCTAssertEqual(pads[3].assignedSampleID, "check_it_out")
+        // Pads 5–8 have no sample assigned yet.
+        XCTAssertEqual(pads[4].assignedSampleID, "")
+        XCTAssertEqual(pads[7].assignedSampleID, "")
+    }
+
+    func testConfirmedHardwareNotePadsAreVerified() {
+        for pad in ScratchBankPadMappingCatalog.confirmedHardwareNotePads {
+            XCTAssertFalse(pad.verificationRequired,
+                "Confirmed hardware pads must have verificationRequired = false")
+        }
+    }
+
+    func testConfirmedHardwareNotePadsDoNotFeedScoring() {
+        for pad in ScratchBankPadMappingCatalog.confirmedHardwareNotePads {
+            XCTAssertFalse(pad.canFeedScoring,
+                "Note pad mappings must never feed scoring at the model layer")
+        }
+    }
+
+    func testConfirmedHardwareNotePadsAreAllRightDeck() {
+        for pad in ScratchBankPadMappingCatalog.confirmedHardwareNotePads {
+            XCTAssertEqual(pad.deck, 2, "All confirmedHardwareNotePads must be right deck (deck 2)")
+        }
+    }
+
+    func testExistingCCPadsAreNotNoteMappings() {
+        for pad in ScratchBankPadMappingCatalog.deck1LargePads {
+            XCTAssertFalse(pad.isNoteMapping,
+                "Deck 1 large pad \(pad.padIndex) must be a CC mapping (isNoteMapping = false)")
+        }
+    }
+
+    func testConfirmedNotePadsCoversFullRightDeckRange() {
+        let notes = ScratchBankPadMappingCatalog.confirmedHardwareNotePads
+            .compactMap { $0.midiNoteNumber }
+        XCTAssertTrue(notes.allSatisfy { $0 >= 20 && $0 <= 27 },
+            "confirmedHardwareNotePads notes must be in range 20–27 (pads 1–8 right deck)")
+    }
+
     // MARK: - 13. Verification display helpers
 
     func testVerificationDisplayStatusWhenRequired() {
