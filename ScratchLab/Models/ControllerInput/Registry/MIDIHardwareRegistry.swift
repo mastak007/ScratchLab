@@ -161,14 +161,17 @@ extension MIDIControllerProfile {
                 signal: .relativeCC(number: 6, encoding: .ringCounter(modulus: 128)),
                 channel: 1,
                 ringModulus: 128,
-                notes: "Right deck platter: CC6 ch2 (ch=1). Right-deck rotation not yet captured; channel follows deck channel pattern."
+                notes: "Right deck platter: CC6 ch2 (ch=1). ±1/event, ~3932 steps/rev. Verified via re-capture 2026-06-25."
             ),
 
             // ── Crossfader ────────────────────────────────────────────────────────────
+            // Confirmed: CC8 on ch=15 (MIDI Monitor ch16). Full 0–127 sweep, all
+            // 128 values observed in isolation.
             MIDIControlBinding(
                 role: MIDIControlRole(kind: .crossfader),
                 signal: .absoluteCC(number: 8),
-                notes: "CC8. Live-verified on ch=0 (ch1). Not yet re-captured in isolation to confirm channel."
+                channel: 15,
+                notes: "Confirmed: CC8 ch=15 (ch16 MIDI Monitor). Full 0–127 sweep. 0=left, 127=right."
             ),
 
             // ── Pitch bend diagnostic (aliasing; not a control signal) ────────────────
@@ -184,7 +187,7 @@ extension MIDIControllerProfile {
                 signal: .pitchBend,
                 channel: 1,
                 isDiagnosticOnly: true,
-                notes: "Pitch Wheel ch=1 — diagnostic only. CC6 is the driver."
+                notes: "Pitch Wheel ch=1 — diagnostic only; aliases during platter rotation. CC6 is the driver. Verified via re-capture 2026-06-25."
             ),
 
             // ── Left deck channel fader ───────────────────────────────────────────────
@@ -205,6 +208,26 @@ extension MIDIControllerProfile {
                 signal: .highResCCPair(msb: 9, lsb: 41),
                 channel: 0,
                 notes: "Confirmed: CC9 MSB + CC41 LSB, ch1 (ch=0). Calibration (direction, range) needed."
+            ),
+
+            // ── Right deck channel fader ──────────────────────────────────────────────
+            // Confirmed via re-capture 2026-06-25: CC28 on ch=1 (ch2 MIDI Monitor).
+            // 0=closed, 127=open. Full sweep observed.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .channelFader, deck: 1, label: "Right Channel Fader"),
+                signal: .absoluteCC(number: 28),
+                channel: 1,
+                notes: "Confirmed: CC28 ch=1 (ch2 MIDI Monitor). 0=down/closed, 127=up/open. Verified via re-capture 2026-06-25."
+            ),
+
+            // ── Right deck pitch/tempo fader (14-bit high-res) ───────────────────────
+            // Confirmed via re-capture 2026-06-25: CC9 (MSB) + CC41 (LSB) on ch=1
+            // (ch2 MIDI Monitor). 14-bit range 0–16383 observed.
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .tempo, deck: 1, label: "Right Pitch/Tempo Fader (raw 14-bit)"),
+                signal: .highResCCPair(msb: 9, lsb: 41),
+                channel: 1,
+                notes: "Confirmed: CC9 MSB + CC41 LSB, ch=1 (ch2 MIDI Monitor). Verified via re-capture 2026-06-25."
             ),
 
             // ── Left deck EQ / gain raw controls ─────────────────────────────────────
@@ -369,14 +392,16 @@ extension MIDIControllerProfile {
                 notes: "Confirmed: Note On ch6 note27."
             ),
         ],
-        notes: "Seed entry — verified Rane ONE MKII hardware facts (2026-06-24). " +
+        notes: "Seed entry — verified Rane ONE MKII hardware facts (2026-06-25). " +
                "Deck channel pattern (MIDI Monitor 1-indexed): left continuous=ch1, right continuous=ch2, " +
-               "left pads=ch5, right pads=ch6. " +
-               "Left deck: CC6 platter (ring), CC8 crossfader, CC28 channel fader, CC9+CC41 14-bit pitch, " +
+               "left pads=ch5, right pads=ch6, crossfader=ch16. " +
+               "Left deck: CC6 platter (ring), CC28 channel fader, CC9+CC41 14-bit pitch, " +
                "CC22-25 EQ/gain (raw, pending isolated label confirmation). " +
+               "Right deck: CC6 platter (ring), CC28 channel fader, CC9+CC41 14-bit pitch — verified via re-capture. " +
+               "Crossfader: CC8 on ch=15 (ch16 MIDI Monitor) — verified full 0–127 sweep. " +
+               "Transport: left=ch=0 note=0, right=ch=1 note=0 (Note On press, Note Off release); " +
+               "CUE vs PLAY differentiation not yet resolved — both emit note=0 on the same deck channel. " +
                "Pads 1–8: left=ch5 notes 20–27, right=ch6 notes 20–27; Note On/Off not CC. " +
-               "Pitch bend streams are diagnostic-only (alias during rotation; CC6 is the driver). " +
-               "Right deck: platter on CC6 ch=1 (channel pattern only; rotation not yet re-captured in isolation). " +
-               "Not yet captured: right channel fader, right pitch/tempo, play/pause, cue, deck select, crossfader channel confirmation."
+               "Pitch bend streams are diagnostic-only (alias during rotation; CC6 is the driver)."
     )
 }
