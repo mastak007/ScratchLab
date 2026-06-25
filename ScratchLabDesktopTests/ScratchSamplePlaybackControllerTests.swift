@@ -205,7 +205,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let frameBeforeDirectionChange = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
-        controller.positionDidChange(steps: 9, direction: .backward)
+        // 5-step backward delta → frameDelta ≈ 251, above the minimum grain floor (≈184).
+        controller.positionDidChange(steps: 5, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertEqual(controller.lastScheduledSourceFrame, frameBeforeDirectionChange)
@@ -241,11 +242,12 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let baseline = Int.max / 2
         controller.positionDidChange(steps: baseline, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: baseline + 1, direction: .forward)
+        // 5-step delta → frameDelta ≈ 251, above the minimum grain floor (≈184).
+        controller.positionDidChange(steps: baseline + 5, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertGreaterThan(controller.currentSampleFrame, 0)
-        XCTAssertLessThan(controller.currentSampleFrame, 1_000)
+        XCTAssertLessThan(controller.currentSampleFrame, 1_500)
     }
 
     // MARK: - statusLabel
@@ -487,5 +489,159 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastScheduleSkippedReason, "directionDeltaMismatch")
         XCTAssertNil(controller.lastScheduledSourceFrame,
             "No segment should be scheduled on direction/delta mismatch")
+    }
+
+    // MARK: - Varispeed grain sizing
+
+    // framesPerStep ≈ 50 for "ahhh" (totalFrames ≈ 196980 / stepsPerFullSample 3932).
+    // requestedFrames = Int(44100 * 1/60) = 735.
+    // minimumGrainFrames = max(2, round(0.25 * 735)) = 184.
+
+    func testSlowPlattersProducesSmallGrainAndLowRate() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // deltaSteps=5 → frameDelta ≈ 251. 251 < 735 → rate < 1, segmentFrames < requestedFrames.
+        // 251 >= 184 → above minimum grain floor.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 5, direction: .forward)
+        controller.waitForAudioQueue()
+
+        guard let segFrames = controller.lastScheduledSegmentFrames,
+              let rate = controller.lastScheduledRate else {
+            XCTFail("Slow platter must produce a scheduled grain")
+            return
+        }
+        let requestedFrames = Int(44100.0 / 60.0)
+        XCTAssertLessThan(segFrames, requestedFrames, "Slow platter: grain smaller than 1x window")
+        XCTAssertLessThanOrEqual(rate, 1.0, "Slow platter: rate ≤ 1")
+        XCTAssertGreaterThanOrEqual(rate, 0.25, "Rate must not fall below varispeed minimum")
+    }
+
+    func testFastPlattersProducesLargeGrainAndHighRate() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // deltaSteps=30 → frameDelta ≈ 1503. 1503 > 735 → rate > 1, segmentFrames > requestedFrames.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 30, direction: .forward)
+        controller.waitForAudioQueue()
+
+        guard let segFrames = controller.lastScheduledSegmentFrames,
+              let rate = controller.lastScheduledRate else {
+            XCTFail("Fast platter must produce a scheduled grain")
+            return
+        }
+        let requestedFrames = Int(44100.0 / 60.0)
+        XCTAssertGreaterThan(segFrames, requestedFrames, "Fast platter: grain larger than 1x window")
+        XCTAssertGreaterThan(rate, 1.0, "Fast platter: rate > 1")
+        XCTAssertLessThanOrEqual(rate, 4.0, "Rate must not exceed varispeed maximum")
+    }
+
+    func testNormalMovementProducesRateNearOne() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // deltaSteps=15 → frameDelta ≈ 752, requestedFrames=735 → rate ≈ 1.02.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 15, direction: .forward)
+        controller.waitForAudioQueue()
+
+        guard let rate = controller.lastScheduledRate else {
+            XCTFail("Normal movement must produce a scheduled grain")
+            return
+        }
+        XCTAssertEqual(rate, 1.0, accuracy: 0.2, "15 steps produces rate near 1.0 (native speed)")
+    }
+
+    func testTinyDeltaSkipsMinimumGrain() {
+        // minimumGrainFrames=2 is decoupled from minVarispeedRate. With framesPerStep≈50
+        // for "ahhh", even a 1-step platter movement gives frameDelta≈50 >> 2, so tinyGrain
+        // never fires in normal use. The tinyGrain guard is a safety net against literal
+        // single-sample grains (frameDelta=1), which can only occur with atypically short
+        // samples (totalFrames < stepsPerFullSample=3932). This test verifies that 1-step
+        // movement schedules correctly at the clamped min rate rather than being suppressed.
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        // 1 step → frameDelta ≈ 50 >> minimumGrainFrames (2): must schedule at min rate.
+        controller.positionDidChange(steps: 1, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "tinyGrain",
+            "Single-step forward (frameDelta≈50) must not be suppressed as tinyGrain")
+        guard let rate = controller.lastScheduledRate else {
+            XCTFail("Single-step forward must schedule a grain")
+            return
+        }
+        XCTAssertEqual(rate, Float(0.25), accuracy: Float(0.01),
+            "Single-step forward must clamp to min varispeed rate (0.25)")
+    }
+
+    func testBackwardMovementUsesMatchingVarispeedRate() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Forward with deltaSteps=20 → frameDelta ≈ 1002.
+        controller.positionDidChange(steps: 100, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 120, direction: .forward)
+        controller.waitForAudioQueue()
+        let forwardRate = controller.lastScheduledRate
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Backward with same magnitude deltaSteps=20 → same frameDelta → same rate.
+        controller.positionDidChange(steps: 100, direction: .backward)
+        controller.waitForAudioQueue()
+        let backwardRate = controller.lastScheduledRate
+
+        guard let fr = forwardRate, let br = backwardRate else {
+            XCTFail("Both forward and backward must schedule a grain at matching step magnitude")
+            return
+        }
+        XCTAssertEqual(fr, br, accuracy: 0.01,
+            "Same step magnitude forward/backward must produce the same varispeed rate")
+    }
+
+    func testOneStepSlowBackwardSchedulesAtMinRate() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Move forward by 10 steps to get currentSampleFrame > 0 (away from boundaryStart).
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 10, direction: .forward)  // frameDelta ≈ 501
+        controller.waitForAudioQueue()
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // One step backward: deltaSteps=1, frameDelta≈50. Not at boundary → must schedule.
+        controller.positionDidChange(steps: 9, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "tinyGrain",
+            "Single-step backward must not be suppressed as tinyGrain")
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryStart",
+            "Single-step backward away from frame 0 must not hit boundaryStart")
+        guard let backRate = controller.lastScheduledRate else {
+            XCTFail("Single-step backward must schedule a grain")
+            return
+        }
+        XCTAssertEqual(backRate, Float(0.25), accuracy: Float(0.01),
+            "Single-step backward must clamp to min varispeed rate (0.25)")
     }
 }

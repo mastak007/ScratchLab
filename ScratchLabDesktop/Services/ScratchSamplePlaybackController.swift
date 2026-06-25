@@ -26,6 +26,7 @@ final class ScratchSamplePlaybackController {
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    private let varispeedNode = AVAudioUnitVarispeed()
 
     // MARK: - Serial audio queue
 
@@ -51,9 +52,10 @@ final class ScratchSamplePlaybackController {
     private var framesPerStep: Double = 1
     private(set) var lastScheduledSourceFrame: Int?
     private(set) var lastScheduledSegmentFrames: Int?
+    private(set) var lastScheduledRate: Float?
     private(set) var lastScheduleSkippedReason: String?
 
-    // MARK: - Rate-limit / segment constants (unchanged)
+    // MARK: - Rate-limit / segment constants
 
     /// Minimum interval between scheduleBuffer calls (seconds).
     private let minScheduleInterval: Double = 1.0 / 60.0
@@ -63,6 +65,10 @@ final class ScratchSamplePlaybackController {
 
     /// CC6 steps per full sample traversal.
     private let stepsPerFullSample: Int = 3932
+
+    /// Varispeed rate clamps — mirrors AVAudioUnitVarispeed's supported range.
+    private let minVarispeedRate: Float = 0.25
+    private let maxVarispeedRate: Float = 4.0
 
     // MARK: - Engine state
 
@@ -81,7 +87,9 @@ final class ScratchSamplePlaybackController {
 
     init() {
         engine.attach(playerNode)
-        engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
+        engine.attach(varispeedNode)
+        engine.connect(playerNode, to: varispeedNode, format: nil)
+        engine.connect(varispeedNode, to: engine.mainMixerNode, format: nil)
     }
 
     deinit {
@@ -177,7 +185,9 @@ final class ScratchSamplePlaybackController {
         framesPerStep = max(1, Double(totalFrames) / Double(stepsPerFullSample))
         lastScheduledSourceFrame = nil
         lastScheduledSegmentFrames = nil
+        lastScheduledRate = nil
         lastScheduleSkippedReason = nil
+        varispeedNode.rate = 1.0
 
         ensureEngineRunning()
 
@@ -309,6 +319,29 @@ final class ScratchSamplePlaybackController {
         let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
         let frameDelta = max(1, Int(frameDeltaDouble))
         let requestedFrames = Int(forward.format.sampleRate * segmentDuration)
+
+        // Skip only pathologically tiny grains (a single PCM sample), which would
+        // produce an audible click. Rate clamping at minVarispeedRate handles the pitch
+        // floor for very slow movement — the two thresholds are intentionally decoupled.
+        // With framesPerStep ≈ 50 on the Rane ONE MKII, even a 1-step platter movement
+        // gives frameDelta ≈ 50, which schedules at clamped minRate (0.25) rather than
+        // being suppressed here.
+        let minimumGrainFrames = 2
+        guard frameDelta >= minimumGrainFrames else {
+            lastScheduleSkippedReason = "tinyGrain"
+            lastPlatterSteps = steps
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=tinyGrain steps=\(steps) frameDelta=\(frameDelta) minimum=\(minimumGrainFrames)")
+            return
+        }
+
+        // Varispeed rate = platter-driven frame displacement / output window size.
+        // A grain of frameDelta frames played at this rate consumes exactly
+        // segmentDuration seconds of real time → one grain per scheduling slot,
+        // no queue buildup. Fast platter → rate>1 → higher pitch. Slow → rate<1 → lower.
+        let rawRate = Double(frameDelta) / Double(requestedFrames)
+        let rate = Float(max(Double(minVarispeedRate), min(Double(maxVarispeedRate), rawRate)))
+        varispeedNode.rate = rate
+
         let sourceFrame: Int
         let segmentFrames: Int
         let segment: AVAudioPCMBuffer?
@@ -317,7 +350,7 @@ final class ScratchSamplePlaybackController {
         case .forward:
             sourceFrame = currentSampleFrame
             let remainingFrames = sourceTotalFrames - sourceFrame
-            segmentFrames = min(requestedFrames, remainingFrames)
+            segmentFrames = min(frameDelta, remainingFrames)
             segment = copySegment(
                 from: forward,
                 startFrame: sourceFrame,
@@ -327,7 +360,7 @@ final class ScratchSamplePlaybackController {
         case .backward:
             sourceFrame = currentSampleFrame
             let availableFrames = sourceFrame + 1
-            segmentFrames = min(requestedFrames, availableFrames)
+            segmentFrames = min(frameDelta, availableFrames)
             segment = copyReversedSegmentEnding(
                 at: sourceFrame,
                 frameCount: segmentFrames,
@@ -337,7 +370,7 @@ final class ScratchSamplePlaybackController {
         }
 
         print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(direction)) currentFrame=\(currentSampleFrame) frameDelta=\(frameDelta) totalFrames=\(sourceTotalFrames)")
-        print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(direction)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) totalFrames=\(sourceTotalFrames)")
+        print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(direction)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) rate=\(String(format: "%.3f", rate)) totalFrames=\(sourceTotalFrames)")
 
         let isValidSegment: Bool
         switch direction {
@@ -389,6 +422,7 @@ final class ScratchSamplePlaybackController {
         lastPlatterSteps = steps
         lastScheduledSourceFrame = sourceFrame
         lastScheduledSegmentFrames = segmentFrames
+        lastScheduledRate = rate
         lastScheduleSkippedReason = nil
     }
 
@@ -429,6 +463,7 @@ final class ScratchSamplePlaybackController {
             self.lastPlatterSteps = nil
             self.lastScheduledSourceFrame = nil
             self.lastScheduledSegmentFrames = nil
+            self.lastScheduledRate = nil
             self.lastScheduleSkippedReason = nil
             print("[ScratchSamplePlaybackController] unloaded")
             self.debugPublishOnMainAsync(field: "unload") { [weak self] in
