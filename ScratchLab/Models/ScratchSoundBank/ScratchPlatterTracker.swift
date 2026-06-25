@@ -6,7 +6,7 @@
 // No scoring. No routing.
 //
 // Rane ONE MKII: CC6 ±1 per event, ~3932 steps/rev, ~800–935 Hz update.
-// Two independent decks: ch=4 (left), ch=5 (right).
+// Two independent decks: ch=0 (left), ch=1 (right).
 
 import Foundation
 import os
@@ -31,9 +31,9 @@ final class ScratchPlatterTracker {
 
     // MARK: - Constants
 
-    /// Known platter channels: 4 = left deck, 5 = right deck.
-    static let leftChannel = 4
-    static let rightChannel = 5
+    /// Known platter channels: 0 = left deck, 1 = right deck.
+    static let leftChannel = 0
+    static let rightChannel = 1
 
     /// Wrap threshold — a CC6 delta larger than this is a 127↔0 boundary crossing.
     static let wrapThreshold = 64
@@ -45,7 +45,7 @@ final class ScratchPlatterTracker {
 
     /// Feed a raw CC6 value (0–127) for a deck channel.
     /// - Parameters:
-    ///   - channel: MIDI channel (4 = left, 5 = right).
+    ///   - channel: MIDI channel (0 = left, 1 = right).
     ///   - value: Raw CC6 data byte (0–127).
     /// - Returns: The signed delta applied (normally ±1), or nil if the channel
     ///   is not a known platter channel.

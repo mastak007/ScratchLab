@@ -1409,7 +1409,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 #endif
     var scratchBankPadPreviewCallback: ((String) -> Void)?
 
-    /// Platter CC6 ring-counter tracker per deck (ch=4 left, ch=5 right).
+    /// Platter CC6 ring-counter tracker per deck (ch=0 left, ch=1 right).
     private let platterTracker = ScratchPlatterTracker()
 
     /// Platter-driven scratch sample playback controller.
@@ -4782,9 +4782,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                 ScratchLabPerformanceSignpost.event("FaderMap", count: value)
                             }
                             // CC6 platter fast path: feed tracker → playback controller.
+                            // Verified Rane ONE MKII: left platter = ch=0 CC6,
+                            // right platter = ch=1 CC6. Pads are ch=4/ch=5 (NOT platter).
                             // Rate-limited inside the controller (~60 Hz); CC6 events
                             // fire at ~800 Hz so the controller drops excess updates.
-                            if controller == 6, channel == 4 || channel == 5 {
+                            if controller == 6, channel == 0 || channel == 1 {
                                 platterTracker.ingest(channel: channel, value: value)
                                 scratchPlaybackController.positionDidChange(
                                     steps: platterTracker.accumulatedSteps(for: channel),
