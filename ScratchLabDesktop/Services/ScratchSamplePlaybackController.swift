@@ -277,30 +277,19 @@ final class ScratchSamplePlaybackController {
             return
         }
 
-        // Guard: direction/delta sign mismatch. Skip when the declared direction
-        // contradicts the step delta sign — this happens transiently when the
-        // platter tracker's direction lags a reversal. Skipping avoids scheduling
-        // a segment in the wrong direction. Only checked when no overflow occurred;
-        // with overflow the sign is ambiguous so the declared direction is trusted.
-        if !deltaResult.overflow {
-            let signMismatch: Bool
-            switch direction {
-            case .forward:  signMismatch = deltaSteps < 0
-            case .backward: signMismatch = deltaSteps > 0
-            }
-            if signMismatch {
-                lastScheduleSkippedReason = "directionDeltaMismatch"
-                lastPlatterSteps = steps
-                print("[ScratchSamplePlaybackController] schedule skipped · reason=directionDeltaMismatch steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(direction))")
-                return
-            }
-        }
+        // Scheduling direction comes from deltaSteps sign — the unambiguous physical
+        // signal. The tracker direction (passed as a parameter) uses a 16-event window
+        // that lags ~20ms at 800Hz; relying on it caused mismatch skips that silenced
+        // the first ~16 grains after every reversal and prevented the needle from
+        // returning to its cue position. The `direction` parameter is used only as a
+        // nil-guard above and is not consulted for actual scheduling direction.
+        let schedulingDirection: ScratchPlatterDirection = deltaSteps > 0 ? .forward : .backward
 
         // Guard: boundary. When currentSampleFrame is already pinned at the sample
         // start (backward) or end (forward), additional motion in the same direction
         // would produce 1-frame segments → audible chatter. Skip scheduling and
         // update lastPlatterSteps so future deltas remain stable after reversal.
-        switch direction {
+        switch schedulingDirection {
         case .backward where currentSampleFrame <= 0:
             lastScheduleSkippedReason = "boundaryStart"
             lastPlatterSteps = steps
@@ -346,7 +335,7 @@ final class ScratchSamplePlaybackController {
         let segmentFrames: Int
         let segment: AVAudioPCMBuffer?
 
-        switch direction {
+        switch schedulingDirection {
         case .forward:
             sourceFrame = currentSampleFrame
             let remainingFrames = sourceTotalFrames - sourceFrame
@@ -369,11 +358,13 @@ final class ScratchSamplePlaybackController {
             currentSampleFrame = clampedSampleFrame(currentSampleFrame - frameDelta)
         }
 
-        print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(direction)) currentFrame=\(currentSampleFrame) frameDelta=\(frameDelta) totalFrames=\(sourceTotalFrames)")
-        print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(direction)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) rate=\(String(format: "%.3f", rate)) totalFrames=\(sourceTotalFrames)")
+        #if DEBUG
+        print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(schedulingDirection)) currentFrame=\(currentSampleFrame) frameDelta=\(frameDelta) totalFrames=\(sourceTotalFrames)")
+        print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(schedulingDirection)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) rate=\(String(format: "%.3f", rate)) totalFrames=\(sourceTotalFrames)")
+        #endif
 
         let isValidSegment: Bool
-        switch direction {
+        switch schedulingDirection {
         case .forward:
             isValidSegment = sourceFrame >= 0 &&
                 sourceFrame < sourceTotalFrames &&
@@ -404,7 +395,7 @@ final class ScratchSamplePlaybackController {
         // Interrupt only on direction change; same-direction grains queue smoothly.
         // Avoid interrupting every tiny platter update, because that can cancel audio
         // before the scheduled segment becomes audible.
-        let opts: AVAudioPlayerNodeBufferOptions = (direction != lastScheduledDirection) ? .interrupts : []
+        let opts: AVAudioPlayerNodeBufferOptions = (schedulingDirection != lastScheduledDirection) ? .interrupts : []
         playerNode.scheduleBuffer(
             segment,
             at: nil,
@@ -417,7 +408,7 @@ final class ScratchSamplePlaybackController {
         }
 
         lastScheduledSteps = steps
-        lastScheduledDirection = direction
+        lastScheduledDirection = schedulingDirection
         lastScheduleTime = now
         lastPlatterSteps = steps
         lastScheduledSourceFrame = sourceFrame

@@ -205,7 +205,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let frameBeforeDirectionChange = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
-        // 5-step backward delta → frameDelta ≈ 251, above the minimum grain floor (≈184).
+        // 5-step backward delta (negative) → schedulingDirection = backward → frameDelta ≈ 251.
         controller.positionDidChange(steps: 5, direction: .backward)
         controller.waitForAudioQueue()
 
@@ -242,7 +242,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let baseline = Int.max / 2
         controller.positionDidChange(steps: baseline, direction: .forward)
         controller.waitForAudioQueue()
-        // 5-step delta → frameDelta ≈ 251, above the minimum grain floor (≈184).
+        // 5-step delta → frameDelta ≈ 251, schedules at sub-1x rate.
         controller.positionDidChange(steps: baseline + 5, direction: .forward)
         controller.waitForAudioQueue()
 
@@ -460,35 +460,105 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Forward with delta = 210 - 199 = +11 (positive, matches forward).
-        // If lastPlatterSteps was not updated by the boundary skip, delta would
-        // be 210 - 200 = +10 instead — either way no mismatch, but if the steps
-        // baseline were stale the next forward call could trigger an erroneous
-        // directionDeltaMismatch from a still-older previous value.
+        // Forward with delta = 210 - 199 = +11 (positive → forward).
+        // If lastPlatterSteps was not updated by the boundary skip, the baseline
+        // would be stale and the computed delta would misrepresent the actual step
+        // displacement — producing an oversized grain on the next event.
         controller.positionDidChange(steps: 210, direction: .forward)
         controller.waitForAudioQueue()
 
-        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "directionDeltaMismatch",
-            "Post-boundary forward step must not be flagged as direction/delta mismatch")
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Post-boundary forward step must schedule successfully")
     }
 
-    func testDirectionDeltaMismatchForwardWithNegativeDeltaSkips() {
+    // MARK: - Scheduling direction from delta sign (Fix A)
+
+    func testNegativeDeltaWithStaleFwdTrackerDirectionSchedulesBackward() {
+        // Scheduling direction derives from deltaSteps sign, not tracker direction.
+        // A negative delta schedules a backward grain even when the tracker still
+        // reports .forward — the typical 16-event (~20ms) lag at a baby-scratch reversal.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Prime: establish lastPlatterSteps = 100.
-        controller.positionDidChange(steps: 100, direction: .forward)
+        // Prime then advance forward so currentSampleFrame > 0 (away from boundaryStart).
+        controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+        controller.positionDidChange(steps: 10, direction: .forward)
+        controller.waitForAudioQueue()
+        let frameAfterForward = controller.currentSampleFrame
+        XCTAssertGreaterThan(frameAfterForward, 0)
 
-        // delta = 99 - 100 = -1 (negative) but direction = forward → mismatch.
-        controller.positionDidChange(steps: 99, direction: .forward)
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // deltaSteps = 9 - 10 = -1 (negative → backward), tracker direction stale .forward.
+        controller.positionDidChange(steps: 9, direction: .forward)
         controller.waitForAudioQueue()
 
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "directionDeltaMismatch")
-        XCTAssertNil(controller.lastScheduledSourceFrame,
-            "No segment should be scheduled on direction/delta mismatch")
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Stale tracker direction must not veto a grain when delta sign is unambiguous")
+        XCTAssertNotNil(controller.lastScheduledRate,
+            "Negative delta with stale forward tracker direction must schedule a backward grain")
+        XCTAssertLessThan(controller.currentSampleFrame, frameAfterForward,
+            "Backward grain must decrease currentSampleFrame")
+    }
+
+    func testPositiveDeltaWithStaleBackwardTrackerDirectionSchedulesForward() {
+        // Symmetric case: positive delta schedules forward even when tracker still
+        // reports .backward — the lag on the other side of a reversal.
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Advance forward, then backward, to establish a position away from boundaries.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+        Thread.sleep(forTimeInterval: 0.02)
+        controller.positionDidChange(steps: 10, direction: .backward)
+        controller.waitForAudioQueue()
+        let frameAfterBackward = controller.currentSampleFrame
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // deltaSteps = 20 - 10 = +10 (positive → forward), tracker direction stale .backward.
+        controller.positionDidChange(steps: 20, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Stale tracker direction must not veto a grain when delta sign is unambiguous")
+        XCTAssertNotNil(controller.lastScheduledRate,
+            "Positive delta with stale backward tracker direction must schedule a forward grain")
+        XCTAssertGreaterThan(controller.currentSampleFrame, frameAfterBackward,
+            "Forward grain must increase currentSampleFrame")
+    }
+
+    func testReversalGrainSchedulesImmediatelyWithStaleFwdDirection() {
+        // Verifies there is no reversal silence gap: the very first backward event after a
+        // forward push must produce a grain even while the tracker still says .forward.
+        // This is the fix for baby-scratch start-point drift.
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 15, direction: .forward)
+        controller.waitForAudioQueue()
+        let frameAfterPush = controller.currentSampleFrame
+        XCTAssertGreaterThan(frameAfterPush, 0, "Forward push must advance frame")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // First backward event at the reversal apex, tracker direction still stale .forward.
+        controller.positionDidChange(steps: 14, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "First backward event at reversal must schedule immediately, not be silently dropped")
+        XCTAssertLessThan(controller.currentSampleFrame, frameAfterPush,
+            "Reversal grain must retreat the needle")
     }
 
     // MARK: - Varispeed grain sizing
