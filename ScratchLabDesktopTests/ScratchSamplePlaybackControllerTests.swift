@@ -165,7 +165,9 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
 
         XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
-        XCTAssertEqual(controller.lastScheduledSourceFrame, controller.totalFrames - 1)
+        // Continuing forward past the end must hit the boundary guard rather than
+        // schedule a 1-frame chatter segment.
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryEnd")
     }
 
     func testBackwardMovementDecreasesFromCurrentFrameContinuously() {
@@ -394,5 +396,96 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         group.wait()
         controller.waitForAudioQueue()
         XCTAssertTrue(true, "Concurrent load/unload dispatch must not crash")
+    }
+
+    // MARK: - Boundary chatter guards
+
+    func testBackwardAtFrameZeroSkipsBoundaryStart() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+        // currentSampleFrame starts at 0 after load.
+
+        // Prime with backward steps so lastPlatterSteps is established.
+        controller.positionDidChange(steps: 100, direction: .backward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        // delta = 99 - 100 = -1 (matches backward), frame = 0 → boundaryStart.
+        controller.positionDidChange(steps: 99, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryStart")
+        XCTAssertEqual(controller.currentSampleFrame, 0)
+        XCTAssertNil(controller.lastScheduledSourceFrame, "No segment should be scheduled at boundaryStart")
+    }
+
+    func testForwardAtLastFrameSkipsBoundaryEnd() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Move to end of sample.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 1_000_000, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Attempting to move further forward must hit boundaryEnd.
+        controller.positionDidChange(steps: 1_000_001, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryEnd")
+        XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
+    }
+
+    func testBoundarySkipUpdatesLastPlatterSteps() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Prime.
+        controller.positionDidChange(steps: 200, direction: .backward)
+        controller.waitForAudioQueue()
+
+        // Hit backward boundary; lastPlatterSteps must update to 199.
+        controller.positionDidChange(steps: 199, direction: .backward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryStart")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Forward with delta = 210 - 199 = +11 (positive, matches forward).
+        // If lastPlatterSteps was not updated by the boundary skip, delta would
+        // be 210 - 200 = +10 instead — either way no mismatch, but if the steps
+        // baseline were stale the next forward call could trigger an erroneous
+        // directionDeltaMismatch from a still-older previous value.
+        controller.positionDidChange(steps: 210, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "directionDeltaMismatch",
+            "Post-boundary forward step must not be flagged as direction/delta mismatch")
+    }
+
+    func testDirectionDeltaMismatchForwardWithNegativeDeltaSkips() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Prime: establish lastPlatterSteps = 100.
+        controller.positionDidChange(steps: 100, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        // delta = 99 - 100 = -1 (negative) but direction = forward → mismatch.
+        controller.positionDidChange(steps: 99, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "directionDeltaMismatch")
+        XCTAssertNil(controller.lastScheduledSourceFrame,
+            "No segment should be scheduled on direction/delta mismatch")
     }
 }

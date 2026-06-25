@@ -267,6 +267,44 @@ final class ScratchSamplePlaybackController {
             return
         }
 
+        // Guard: direction/delta sign mismatch. Skip when the declared direction
+        // contradicts the step delta sign — this happens transiently when the
+        // platter tracker's direction lags a reversal. Skipping avoids scheduling
+        // a segment in the wrong direction. Only checked when no overflow occurred;
+        // with overflow the sign is ambiguous so the declared direction is trusted.
+        if !deltaResult.overflow {
+            let signMismatch: Bool
+            switch direction {
+            case .forward:  signMismatch = deltaSteps < 0
+            case .backward: signMismatch = deltaSteps > 0
+            }
+            if signMismatch {
+                lastScheduleSkippedReason = "directionDeltaMismatch"
+                lastPlatterSteps = steps
+                print("[ScratchSamplePlaybackController] schedule skipped · reason=directionDeltaMismatch steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(direction))")
+                return
+            }
+        }
+
+        // Guard: boundary. When currentSampleFrame is already pinned at the sample
+        // start (backward) or end (forward), additional motion in the same direction
+        // would produce 1-frame segments → audible chatter. Skip scheduling and
+        // update lastPlatterSteps so future deltas remain stable after reversal.
+        switch direction {
+        case .backward where currentSampleFrame <= 0:
+            lastScheduleSkippedReason = "boundaryStart"
+            lastPlatterSteps = steps
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=boundaryStart steps=\(steps) currentFrame=\(currentSampleFrame)")
+            return
+        case .forward where currentSampleFrame >= totalFrames - 1:
+            lastScheduleSkippedReason = "boundaryEnd"
+            lastPlatterSteps = steps
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=boundaryEnd steps=\(steps) currentFrame=\(currentSampleFrame)")
+            return
+        default:
+            break
+        }
+
         let sourceTotalFrames = Int(forward.frameLength)
         let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
         let frameDelta = max(1, Int(frameDeltaDouble))
