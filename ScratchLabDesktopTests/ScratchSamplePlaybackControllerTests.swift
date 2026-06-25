@@ -65,6 +65,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
                        "ahhh.wav must exist at \(wavPath)")
         let result = controller.load(sampleID: "ahhh")
         XCTAssertTrue(result, "Loading ahhh.wav from bundle must succeed")
+        // load() dispatches file I/O to the audio queue; drain before reading state.
+        controller.waitForAudioQueue()
         XCTAssertEqual(controller.loadedSampleID, "ahhh")
     }
 
@@ -73,6 +75,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Even if load fails, unload must not crash.
         controller.load(sampleID: "ahhh")
         controller.unload()
+        // Both load and unload dispatch to the audio queue; drain before reading state.
+        controller.waitForAudioQueue()
         XCTAssertNil(controller.loadedSampleID)
     }
 
@@ -106,11 +110,15 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
     // MARK: - Crossfader gate
 
-    /// Helper: set crossfader and wait for the @Published dispatch to main.
+    /// Helper: set crossfader and wait for the audio queue + main @Published dispatch.
+    ///
+    /// setCrossfader dispatches to the audio queue; audioQueue then dispatches
+    /// @Published updates to main. Drain audioQueue first, then flush main so
+    /// crossfaderGate is visible before the assertion.
     private func setCrossfaderAndWait(_ controller: ScratchSamplePlaybackController, value: Int) {
         controller.setCrossfader(value: value)
-        // setCrossfader dispatches @Published updates to main; flush that work.
-        let expectation = XCTestExpectation(description: "crossfader gate dispatched")
+        controller.waitForAudioQueue()  // drain audioQueue (serial — also drains preceding work)
+        let expectation = XCTestExpectation(description: "crossfader gate dispatched to main")
         DispatchQueue.main.async { expectation.fulfill() }
         wait(for: [expectation], timeout: 1.0)
     }
@@ -168,7 +176,13 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.load(sampleID: "ahhh")
         setCrossfaderAndWait(controller, value: 0)
         XCTAssertEqual(controller.crossfaderGate, 0.0)
+        // unload() dispatches to the audio queue, which then dispatches the
+        // @Published crossfaderGate reset to main. Drain both before asserting.
         controller.unload()
+        controller.waitForAudioQueue()
+        let expectation = XCTestExpectation(description: "unload @Published dispatched to main")
+        DispatchQueue.main.async { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1.0)
         XCTAssertEqual(controller.crossfaderGate, 1.0,
             "Unload must reset crossfader gate to 1.0 (open)")
     }
@@ -180,5 +194,58 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastCrossfaderRawValue, 64)
         setCrossfaderAndWait(controller, value: 0)
         XCTAssertEqual(controller.lastCrossfaderRawValue, 0)
+    }
+
+    // MARK: - Concurrency: dispatch-safety stress tests
+
+    /// Simulates the CoreMIDI scenario: concurrent callers hammering load() and
+    /// positionDidChange() from different threads simultaneously. The serial
+    /// audioQueue must serialise all audio work without crashing or data-racing.
+    func testConcurrentLoadAndPositionDidChangeDoNotCrash() {
+        let controller = ScratchSamplePlaybackController()
+        let group = DispatchGroup()
+        let callers = DispatchQueue(label: "test.concurrent.callers", attributes: .concurrent)
+        for i in 0..<60 {
+            group.enter()
+            callers.async {
+                if i % 3 == 0 {
+                    controller.load(sampleID: "ahhh")
+                } else if i % 3 == 1 {
+                    controller.positionDidChange(
+                        steps: i * 17,
+                        direction: i % 2 == 0 ? .forward : .backward
+                    )
+                } else {
+                    controller.setCrossfader(value: i % 128)
+                }
+                group.leave()
+            }
+        }
+        group.wait()
+        controller.waitForAudioQueue()
+        XCTAssertTrue(true, "Concurrent dispatch to audioQueue must not crash")
+    }
+
+    /// Simulates a pad press (load) overlapping with rapid platter movement
+    /// (positionDidChange) from different threads. Verifies the serial queue
+    /// isolates state mutation so no data race occurs.
+    func testConcurrentLoadAndUnloadDoNotCrash() {
+        let controller = ScratchSamplePlaybackController()
+        let group = DispatchGroup()
+        let callers = DispatchQueue(label: "test.concurrent.loadunload", attributes: .concurrent)
+        for i in 0..<40 {
+            group.enter()
+            callers.async {
+                if i % 2 == 0 {
+                    controller.load(sampleID: i % 4 == 0 ? "ahhh" : "fresh")
+                } else {
+                    controller.unload()
+                }
+                group.leave()
+            }
+        }
+        group.wait()
+        controller.waitForAudioQueue()
+        XCTAssertTrue(true, "Concurrent load/unload dispatch must not crash")
     }
 }

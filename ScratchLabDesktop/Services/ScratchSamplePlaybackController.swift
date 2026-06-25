@@ -7,13 +7,18 @@
 //
 // Owned by MacCaptureEngine. Output = system default audio device.
 // No MIDI routing. No scoring. No Rane audio device routing.
+//
+// Thread model: all public methods are safe to call from any thread, including
+// the CoreMIDI callback thread. They enqueue work on a private serial audioQueue
+// and return immediately so the CoreMIDI callback thread is never blocked by
+// file I/O, engine startup, buffer scheduling, or playerNode mutation.
 
 import AVFoundation
 import Foundation
 
 /// Drives sample playback from a `ScratchPlatterTracker` position.
-/// - Hot cue press: loads the corresponding bundled WAV.
-/// - Platter CC6 movement: updates playback position and schedules audio.
+/// - Hot cue press: loads the corresponding bundled WAV (async, off CoreMIDI thread).
+/// - Platter CC6 movement: updates playback position and schedules audio (async).
 /// - No motion: audio stops after the current short segment plays out.
 final class ScratchSamplePlaybackController {
 
@@ -22,53 +27,48 @@ final class ScratchSamplePlaybackController {
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
 
-    // MARK: - Loaded sample state
+    // MARK: - Serial audio queue
 
-    /// Sample ID currently loaded (nil if no sample loaded).
+    // All AVAudioEngine, AVAudioPlayerNode, AVAudioFile, and AVAudioPCMBuffer
+    // work is confined here. Public methods async-dispatch to it and return
+    // immediately, keeping the CoreMIDI callback thread unblocked.
+    private let audioQueue = DispatchQueue(
+        label: "com.scratchlab.samplePlayback",
+        qos: .userInteractive
+    )
+
+    // MARK: - Loaded sample state (access confined to audioQueue)
+
     private(set) var loadedSampleID: String?
-
-    /// PCM buffer of the loaded sample (forward direction).
     private var forwardBuffer: AVAudioPCMBuffer?
-
-    /// Pre-reversed PCM buffer for backward scratch.
     private var reversedBuffer: AVAudioPCMBuffer?
-
-    /// Total frames in the loaded buffer.
     private var totalFrames: Int = 0
-
-    /// Accumulated steps snapshot at last schedule time.
     private var lastScheduledSteps: Int = 0
-
-    /// Last direction used for scheduling.
     private var lastScheduledDirection: ScratchPlatterDirection?
-
-    /// Timestamp of last schedule (CACurrentMediaTime).
     private var lastScheduleTime: Double = 0
 
-    /// Minimum interval between schedule calls (seconds).
+    // MARK: - Rate-limit / segment constants (unchanged)
+
+    /// Minimum interval between scheduleBuffer calls (seconds).
     private let minScheduleInterval: Double = 1.0 / 60.0
 
     /// Segment duration scheduled per position update (seconds).
-    private let segmentDuration: Double = 0.050   // 50 ms
+    private let segmentDuration: Double = 0.050
 
-    /// CC6 steps per full sample traversal. Maps platter rotation to sample length.
-    /// Rane ONE MKII: ~3932 steps/rev. Default: 1 rev = 1 sample pass.
+    /// CC6 steps per full sample traversal.
     private let stepsPerFullSample: Int = 3932
 
     // MARK: - Engine state
 
     private var engineStarted = false
+    // engineLock guards engineStarted across deinit (any thread) and
+    // ensureEngineRunning (audioQueue), preventing concurrent start/stop.
     private let engineLock = NSLock()
 
-    /// Diagnostic label for the UI.
+    // MARK: - Published state (main thread only)
+
     @Published var statusLabel: String = "idle"
-
-    /// Crossfader gate value (0.0 = fully closed/cut, 1.0 = fully open).
-    /// Applied as `playerNode.volume`. Default 1.0 (open) so audio passes
-    /// before the first crossfader event arrives.
     @Published var crossfaderGate: Float = 1.0
-
-    /// Last raw crossfader CC8 value (0–127), or nil if no event received yet.
     @Published var lastCrossfaderRawValue: Int? = nil
 
     // MARK: - Lifecycle
@@ -82,7 +82,7 @@ final class ScratchSamplePlaybackController {
         stopEngine()
     }
 
-    // MARK: - Engine start/stop
+    // MARK: - Engine start/stop (audioQueue or deinit only)
 
     private func ensureEngineRunning() {
         engineLock.lock()
@@ -110,11 +110,12 @@ final class ScratchSamplePlaybackController {
     // MARK: - Sample loading
 
     /// Load a bundled sample into the playback buffer.
-    /// - Parameter sampleID: Scratch bank sample ID (e.g. "ahhh", "fresh").
-    /// - Returns: True if the sample was loaded successfully.
+    ///
+    /// Returns false synchronously only if the sample ID is unknown or the WAV
+    /// is absent from the bundle. Actual file I/O, buffer preparation, and
+    /// engine startup run on the audio queue; the caller returns immediately.
     @discardableResult
     func load(sampleID: String) -> Bool {
-        // Resolve WAV from bundle.
         guard let url = wavURL(for: sampleID) else {
             print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
             DispatchQueue.main.async { [weak self] in
@@ -122,7 +123,13 @@ final class ScratchSamplePlaybackController {
             }
             return false
         }
+        audioQueue.async { [weak self] in
+            self?.loadOnQueue(sampleID: sampleID, url: url)
+        }
+        return true
+    }
 
+    private func loadOnQueue(sampleID: String, url: URL) {
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: url)
@@ -131,20 +138,17 @@ final class ScratchSamplePlaybackController {
             DispatchQueue.main.async { [weak self] in
                 self?.statusLabel = "error: \(sampleID)"
             }
-            return false
+            return
         }
 
         guard let buffer = readIntoBuffer(file) else {
             print("[ScratchSamplePlaybackController] failed to read PCM for \(sampleID)")
-            return false
+            return
         }
 
         forwardBuffer = buffer
         totalFrames = Int(buffer.frameLength)
-
-        // Pre-reverse for backward scratch.
         reversedBuffer = reverseBuffer(buffer)
-
         loadedSampleID = sampleID
         lastScheduledSteps = 0
         lastScheduledDirection = nil
@@ -157,20 +161,22 @@ final class ScratchSamplePlaybackController {
         DispatchQueue.main.async { [weak self] in
             self?.statusLabel = "loaded: \(sampleID) · system default"
         }
-        return true
     }
 
     // MARK: - Position-driven playback
 
-    /// Called when platter position changes. Schedules audio from the computed
-    /// frame position. Rate-limited to ~60 Hz.
-    /// - Parameters:
-    ///   - steps: Current accumulated CC6 steps from tracker.
-    ///   - direction: Direction of recent movement.
+    /// Called when platter position changes. Dispatches audio scheduling to
+    /// the audio queue and returns immediately from the CoreMIDI callback thread.
     func positionDidChange(steps: Int, direction: ScratchPlatterDirection?) {
+        audioQueue.async { [weak self] in
+            self?.positionDidChangeOnQueue(steps: steps, direction: direction)
+        }
+    }
+
+    private func positionDidChangeOnQueue(steps: Int, direction: ScratchPlatterDirection?) {
         let now = CACurrentMediaTime()
 
-        // Rate-limit to avoid scheduling at CC6 event rate (~800 Hz).
+        // Rate-limit to ~60 Hz.
         guard now - lastScheduleTime >= minScheduleInterval else { return }
 
         // Don't reschedule if position hasn't changed since last schedule.
@@ -182,7 +188,6 @@ final class ScratchSamplePlaybackController {
 
         let frameIndex = sampleFrame(for: steps)
 
-        // Determine which buffer to use based on direction.
         let sourceBuffer: AVAudioPCMBuffer
         let sourceFrame: Int
 
@@ -197,9 +202,16 @@ final class ScratchSamplePlaybackController {
         }
 
         let remainingFrames = totalFrames - sourceFrame
-        let segmentFrames = min(Int(sourceBuffer.format.sampleRate * segmentDuration), max(1, remainingFrames))
+        let segmentFrames = min(
+            Int(sourceBuffer.format.sampleRate * segmentDuration),
+            max(1, remainingFrames)
+        )
 
-        guard let segment = copySegment(from: sourceBuffer, startFrame: sourceFrame, frameCount: segmentFrames) else {
+        guard let segment = copySegment(
+            from: sourceBuffer,
+            startFrame: sourceFrame,
+            frameCount: segmentFrames
+        ) else {
             return
         }
 
@@ -216,36 +228,44 @@ final class ScratchSamplePlaybackController {
 
     /// Stop playback (e.g. when platter is idle).
     func pausePlayback() {
-        playerNode.pause()
-        lastScheduledDirection = nil
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let id = self.loadedSampleID else { return }
-            self.statusLabel = "loaded: \(id) · paused"
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.playerNode.pause()
+            self.lastScheduledDirection = nil
+            let id = self.loadedSampleID
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let id else { return }
+                self.statusLabel = "loaded: \(id) · paused"
+            }
         }
     }
 
     /// Resume after pause.
     func resumePlayback() {
-        guard loadedSampleID != nil else { return }
-        playerNode.play()
+        audioQueue.async { [weak self] in
+            guard let self, self.loadedSampleID != nil else { return }
+            self.playerNode.play()
+        }
     }
 
     /// Unload the current sample and stop audio.
     func unload() {
-        playerNode.stop()
-        forwardBuffer = nil
-        reversedBuffer = nil
-        loadedSampleID = nil
-        totalFrames = 0
-        lastScheduledSteps = 0
-        lastScheduledDirection = nil
-        // Reset crossfader gate to open on unload.
-        crossfaderGate = 1.0
-        lastCrossfaderRawValue = nil
-        DispatchQueue.main.async { [weak self] in
-            self?.statusLabel = "idle"
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.playerNode.stop()
+            self.forwardBuffer = nil
+            self.reversedBuffer = nil
+            self.loadedSampleID = nil
+            self.totalFrames = 0
+            self.lastScheduledSteps = 0
+            self.lastScheduledDirection = nil
+            print("[ScratchSamplePlaybackController] unloaded")
+            DispatchQueue.main.async { [weak self] in
+                self?.statusLabel = "idle"
+                self?.crossfaderGate = 1.0
+                self?.lastCrossfaderRawValue = nil
+            }
         }
-        print("[ScratchSamplePlaybackController] unloaded")
     }
 
     // MARK: - Crossfader gate
@@ -256,18 +276,28 @@ final class ScratchSamplePlaybackController {
     ///   - 0   → fully closed (cut, volume 0.0)
     ///   - 127 → fully open (volume 1.0)
     ///
-    /// Applied as `playerNode.volume`. Linear for the proof; deck-specific
-    /// cut model can replace this later without changing the call site.
-    ///
-    /// Safe to call from any thread — dispatches audio work synchronously.
+    /// Dispatches to the audio queue and returns immediately.
     func setCrossfader(value: Int) {
-        let normalized = Float(value) / 127.0
-        playerNode.volume = normalized
-        let raw = value
-        DispatchQueue.main.async { [weak self] in
-            self?.crossfaderGate = normalized
-            self?.lastCrossfaderRawValue = raw
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            let normalized = Float(value) / 127.0
+            self.playerNode.volume = normalized
+            let raw = value
+            DispatchQueue.main.async { [weak self] in
+                self?.crossfaderGate = normalized
+                self?.lastCrossfaderRawValue = raw
+            }
         }
+    }
+
+    // MARK: - Queue drain (test seam and ordered shutdown)
+
+    /// Block the caller until all pending audio-queue work completes.
+    ///
+    /// Use in tests before reading state that is mutated on the audio queue.
+    /// Do not call from within the audio queue itself.
+    func waitForAudioQueue() {
+        audioQueue.sync {}
     }
 
     // MARK: - Position → frame mapping
@@ -325,7 +355,10 @@ final class ScratchSamplePlaybackController {
         let format = source.format
         let frameCount = Int(source.frameLength)
         guard frameCount > 0,
-              let reversed = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else {
+              let reversed = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(frameCount)
+              ) else {
             return nil
         }
         reversed.frameLength = AVAudioFrameCount(frameCount)
@@ -346,11 +379,18 @@ final class ScratchSamplePlaybackController {
         return reversed
     }
 
-    private func copySegment(from source: AVAudioPCMBuffer, startFrame: Int, frameCount: Int) -> AVAudioPCMBuffer? {
+    private func copySegment(
+        from source: AVAudioPCMBuffer,
+        startFrame: Int,
+        frameCount: Int
+    ) -> AVAudioPCMBuffer? {
         let format = source.format
         let actualCount = min(frameCount, Int(source.frameLength) - startFrame)
         guard actualCount > 0,
-              let segment = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(actualCount)) else {
+              let segment = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(actualCount)
+              ) else {
             return nil
         }
         segment.frameLength = AVAudioFrameCount(actualCount)

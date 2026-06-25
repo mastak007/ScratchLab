@@ -2153,7 +2153,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         scratchBankPadPreviewCallback = { [weak self] sampleID in
             guard let self, self.isScratchBankMIDIPreviewEnabled else { return }
             self.scratchPlaybackController.load(sampleID: sampleID)
-            print("[ScratchSamplePlaybackController] sample loaded: \(sampleID)")
+            print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
         }
 
         NSWorkspace.shared.notificationCenter.addObserver(
