@@ -18,6 +18,16 @@ enum MacWorkspaceRouting {
     }
 }
 
+// TEMP SWIFTUI STATE DIAGNOSTIC: prove which UI binding requests state writes
+// while Advanced -> MIDI & fader is rendering.
+private enum SwiftUIStateMutationProbe {
+    static func publishRequest(field: String) {
+        let now = CACurrentMediaTime()
+        let thread = Thread.isMainThread ? "main" : "background"
+        print("[SwiftUIStateGuard] publish request · field=\(field) thread=\(thread) time=\(String(format: "%.6f", now))")
+    }
+}
+
 struct MacAnalyzerView: View {
     private static let babyScratchReplayModel = LiveNotationOverlayModel.replayNotation(
         from: ScratchNotation.babyScratchFull76BeatQuantized
@@ -304,7 +314,15 @@ struct MacAnalyzerView: View {
         nonmutating set { advancedSectionRaw = newValue.rawValue }
     }
     private var advancedSectionBinding: Binding<AdvancedSection> {
-        Binding(get: { advancedSection }, set: { advancedSection = $0 })
+        Binding(
+            get: { advancedSection },
+            set: { newValue in
+                SwiftUIStateMutationProbe.publishRequest(field: "advancedSectionBinding.advancedSectionRaw")
+                DispatchQueue.main.async {
+                    advancedSection = newValue
+                }
+            }
+        )
     }
 
     @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.practice.rawValue
@@ -478,6 +496,9 @@ struct MacAnalyzerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: routineSessionStore.alertState?.id)
+        .task {
+            await captureEngine.startDeviceDiscoveryAfterViewMount()
+        }
         .onAppear {
             captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
             if liveInputEnabled {
@@ -1883,6 +1904,18 @@ struct MacAnalyzerView: View {
         )
     }
 
+    private var selectedVideoDeviceBinding: Binding<String> {
+        Binding(
+            get: { captureEngine.selectedVideoDeviceUniqueID },
+            set: { newValue in
+                print("[SwiftUIStateGuard] async picker set · field=selectedVideoDeviceUniqueID")
+                DispatchQueue.main.async {
+                    captureEngine.selectedVideoDeviceUniqueID = newValue
+                }
+            }
+        )
+    }
+
     private var selectedAudioDeviceName: String {
         captureEngine.selectedAudioDeviceName
     }
@@ -1919,7 +1952,12 @@ struct MacAnalyzerView: View {
     private var midiSourceSelectionBinding: Binding<String> {
         Binding(
             get: { captureEngine.selectedMIDIInputSourceID },
-            set: { captureEngine.selectedMIDIInputSourceID = $0 }
+            set: { newValue in
+                SwiftUIStateMutationProbe.publishRequest(field: "midiSourceSelectionBinding.selectedMIDIInputSourceID")
+                DispatchQueue.main.async {
+                    captureEngine.selectedMIDIInputSourceID = newValue
+                }
+            }
         )
     }
 
@@ -4318,6 +4356,13 @@ struct MacAnalyzerView: View {
             }
             .toggleStyle(.switch)
 
+            // TEMP HARDWARE DIAGNOSTIC: direct app-side proof path for sample playback.
+            Button("Play ahhh test") {
+                captureEngine.playScratchSampleDiagnostic(sampleID: "ahhh")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+
             if !captureEngine.lastScratchBankPadLabel.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Last scratch bank pad")
@@ -6045,7 +6090,7 @@ struct MacAnalyzerView: View {
                 Text("Camera")
                     .font(.system(size: 13, weight: .semibold))
 
-                Picker("Camera", selection: $captureEngine.selectedVideoDeviceUniqueID) {
+                Picker("Camera", selection: selectedVideoDeviceBinding) {
                     if captureEngine.availableVideoDevices.isEmpty {
                         Text("No cameras found").tag("")
                     } else {
@@ -6751,7 +6796,7 @@ struct MacAnalyzerView: View {
             Text("Camera")
                 .font(.headline)
 
-            Picker("View", selection: $captureEngine.selectedVideoDeviceUniqueID) {
+            Picker("View", selection: selectedVideoDeviceBinding) {
                 if captureEngine.availableVideoDevices.isEmpty {
                     Text("No cameras found").tag("")
                 } else {

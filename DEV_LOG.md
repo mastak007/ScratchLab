@@ -1,5 +1,11 @@
 # DEV_LOG
 
+## 2026-06-26
+- Selected task: user-requested fix for `ScratchSamplePlaybackController.loadOnQueue` / `ensureEngineRunning` path after the queued sample-load edit left the controller structurally broken
+- Files changed: `ScratchLabDesktop/Services/ScratchSamplePlaybackController.swift`, `ScratchLabDesktopTests/ScratchSamplePlaybackControllerTests.swift`, `DEV_LOG.md`
+- Build result: focused `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' test -only-testing:ScratchLabDesktopTests/ScratchSamplePlaybackControllerTests` passed (`20/20`); `git diff --check` passed; `./scripts/build.sh` passed the Python capture-pipeline fixtures (`47/47`) and the playback controller tests inside the full desktop run, but failed on unrelated existing broad-suite failures: `CaptureReliabilityPhase1CoreTests.testAdvancedDiagnosticsExplainCameraAndTickActivity`, `NotationSheetTests.templateDemoStillOwnsBabyScratchTemplateLabel`, three `CrossPlatformNotationParityTests.notationCanvasUsesSharedRenderer` source/parity assertions, plus a test-runner bootstrap exit
+- Follow-up notes: root cause was a malformed `loadOnQueue` block in `ScratchSamplePlaybackController.swift`: an extra closing brace after the load log pushed later class members outside the type, so the desktop target failed to compile with `static properties may only be declared on a type` and an extraneous top-level brace. Fixed the brace structure and restored the main-thread `statusLabel` publish after `ensureEngineRunning()` completes the queued load path. Preserved the existing user-authored sample playback tuning in the dirty worktree: 1/60-second segments, diagnostic preview scheduling from the queued load, same-direction buffer queuing, and explicit unload in the concurrency stress test. No capture, export, notation, dataset, resource, signing, or entitlement code was changed.
+
 ## 2026-06-18
 - Selected task: evidence-driven diagnosis of synthetic quadrature Timecode Prototype live decode instability and CPU load
 - Files changed: `ScratchLab/Models/TimecodePhaseDecoder.swift`, `ScratchLab/Models/TimecodeControlPipeline.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/TimecodeDecoderTests.swift`, `ScratchLabDesktopTests/TimecodeLiveTapTests.swift`, `TASKS.md`, `DEV_LOG.md`

@@ -41,11 +41,17 @@ final class ScratchSamplePlaybackController {
 
     private(set) var loadedSampleID: String?
     private var forwardBuffer: AVAudioPCMBuffer?
-    private var reversedBuffer: AVAudioPCMBuffer?
-    private var totalFrames: Int = 0
+    private(set) var totalFrames: Int = 0
     private var lastScheduledSteps: Int = 0
     private var lastScheduledDirection: ScratchPlatterDirection?
     private var lastScheduleTime: Double = 0
+    private var diagnosticPreviewPlayedSampleID: String?
+    private(set) var currentSampleFrame: Int = 0
+    private var lastPlatterSteps: Int?
+    private var framesPerStep: Double = 1
+    private(set) var lastScheduledSourceFrame: Int?
+    private(set) var lastScheduledSegmentFrames: Int?
+    private(set) var lastScheduleSkippedReason: String?
 
     // MARK: - Rate-limit / segment constants (unchanged)
 
@@ -53,7 +59,7 @@ final class ScratchSamplePlaybackController {
     private let minScheduleInterval: Double = 1.0 / 60.0
 
     /// Segment duration scheduled per position update (seconds).
-    private let segmentDuration: Double = 0.050
+    private let segmentDuration: Double = 1.0 / 60.0
 
     /// CC6 steps per full sample traversal.
     private let stepsPerFullSample: Int = 3932
@@ -80,6 +86,14 @@ final class ScratchSamplePlaybackController {
 
     deinit {
         stopEngine()
+    }
+
+    private func debugPublishOnMainAsync(field: String, _ body: @escaping () -> Void) {
+        let requestTime = CACurrentMediaTime()
+        let requestThread = Thread.isMainThread ? "main" : "background"
+        print("[SwiftUIStateGuard] publish request · field=ScratchSamplePlaybackController.\(field) thread=\(requestThread) time=\(String(format: "%.6f", requestTime))")
+
+        DispatchQueue.main.async(execute: body)
     }
 
     // MARK: - Engine start/stop (audioQueue or deinit only)
@@ -116,9 +130,10 @@ final class ScratchSamplePlaybackController {
     /// engine startup run on the audio queue; the caller returns immediately.
     @discardableResult
     func load(sampleID: String) -> Bool {
+        print("[ScratchSamplePlaybackController] load requested · sampleID=\(sampleID)")
         guard let url = wavURL(for: sampleID) else {
             print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
-            DispatchQueue.main.async { [weak self] in
+            debugPublishOnMainAsync(field: "statusLabel.missing") { [weak self] in
                 self?.statusLabel = "missing: \(sampleID)"
             }
             return false
@@ -130,12 +145,17 @@ final class ScratchSamplePlaybackController {
     }
 
     private func loadOnQueue(sampleID: String, url: URL) {
+        print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
         let file: AVAudioFile
         do {
-            file = try AVAudioFile(forReading: url)
+            file = try AVAudioFile(
+                forReading: url,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
         } catch {
             print("[ScratchSamplePlaybackController] failed to open \(sampleID): \(error)")
-            DispatchQueue.main.async { [weak self] in
+            debugPublishOnMainAsync(field: "statusLabel.error") { [weak self] in
                 self?.statusLabel = "error: \(sampleID)"
             }
             return
@@ -148,17 +168,56 @@ final class ScratchSamplePlaybackController {
 
         forwardBuffer = buffer
         totalFrames = Int(buffer.frameLength)
-        reversedBuffer = reverseBuffer(buffer)
         loadedSampleID = sampleID
         lastScheduledSteps = 0
         lastScheduledDirection = nil
         lastScheduleTime = 0
+        currentSampleFrame = 0
+        lastPlatterSteps = nil
+        framesPerStep = max(1, Double(totalFrames) / Double(stepsPerFullSample))
+        lastScheduledSourceFrame = nil
+        lastScheduledSegmentFrames = nil
+        lastScheduleSkippedReason = nil
 
         ensureEngineRunning()
 
-        let duration = Double(totalFrames) / buffer.format.sampleRate
-        print("[ScratchSamplePlaybackController] loaded \(sampleID) · \(totalFrames) frames · \(String(format: "%.2f", duration))s")
-        DispatchQueue.main.async { [weak self] in
+        if diagnosticPreviewPlayedSampleID == sampleID {
+            print("[ScratchSamplePlaybackController] diagnostic preview skipped · sampleID=\(sampleID)")
+        } else {
+            diagnosticPreviewPlayedSampleID = sampleID
+
+            // HARDWARE DIAGNOSTIC: prove AVAudioEngine + playerNode + loaded sample are audible.
+            let previewFrames = min(
+                Int(buffer.format.sampleRate * 0.35),
+                Int(buffer.frameLength)
+            )
+
+            if let preview = copySegment(
+                from: buffer,
+                startFrame: 0,
+                frameCount: previewFrames
+            ) {
+                playerNode.stop()
+                engine.mainMixerNode.outputVolume = 1.0
+                playerNode.scheduleBuffer(
+                    preview,
+                    at: nil,
+                    options: [],
+                    completionHandler: {
+                        print("[ScratchSamplePlaybackController] diagnostic preview completed")
+                    }
+                )
+                playerNode.volume = 1.0
+                playerNode.play()
+                print("[ScratchSamplePlaybackController] diagnostic preview scheduled · \(previewFrames) frames")
+            } else {
+                print("[ScratchSamplePlaybackController] diagnostic preview failed")
+            }
+        }
+
+        print("[ScratchSamplePlaybackController] loaded \(sampleID)")
+        print("[ScratchSamplePlaybackController] ready for platter · sampleID=\(sampleID) totalFrames=\(totalFrames)")
+        debugPublishOnMainAsync(field: "statusLabel.loaded") { [weak self] in
             self?.statusLabel = "loaded: \(sampleID) · system default"
         }
     }
@@ -179,44 +238,109 @@ final class ScratchSamplePlaybackController {
         // Rate-limit to ~60 Hz.
         guard now - lastScheduleTime >= minScheduleInterval else { return }
 
-        // Don't reschedule if position hasn't changed since last schedule.
-        guard steps != lastScheduledSteps || direction != lastScheduledDirection else {
+        guard let direction else {
+            lastScheduleSkippedReason = "noDirection"
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=noDirection steps=\(steps)")
             return
         }
 
         guard let forward = forwardBuffer, totalFrames > 0 else { return }
 
-        let frameIndex = sampleFrame(for: steps)
-
-        let sourceBuffer: AVAudioPCMBuffer
-        let sourceFrame: Int
-
-        switch direction {
-        case .backward:
-            guard let reversed = reversedBuffer else { return }
-            sourceBuffer = reversed
-            sourceFrame = totalFrames - 1 - frameIndex
-        case .forward, nil:
-            sourceBuffer = forward
-            sourceFrame = frameIndex
-        }
-
-        let remainingFrames = totalFrames - sourceFrame
-        let segmentFrames = min(
-            Int(sourceBuffer.format.sampleRate * segmentDuration),
-            max(1, remainingFrames)
-        )
-
-        guard let segment = copySegment(
-            from: sourceBuffer,
-            startFrame: sourceFrame,
-            frameCount: segmentFrames
-        ) else {
+        guard let previousSteps = lastPlatterSteps else {
+            lastPlatterSteps = steps
+            lastScheduleSkippedReason = "priming"
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=priming steps=\(steps)")
             return
         }
 
-        // Schedule with .interrupts to stop any currently playing segment.
-        playerNode.scheduleBuffer(segment, at: nil, options: .interrupts)
+        let deltaResult = steps.subtractingReportingOverflow(previousSteps)
+        let deltaSteps = deltaResult.overflow ? (steps >= previousSteps ? Int.max : Int.min) : deltaResult.partialValue
+        let deltaStepMagnitude: Double
+        if deltaResult.overflow || deltaSteps == Int.min {
+            deltaStepMagnitude = Double(Int.max)
+        } else {
+            deltaStepMagnitude = Double(abs(deltaSteps))
+        }
+        guard deltaStepMagnitude > 0 else {
+            lastScheduleSkippedReason = "noMotion"
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=noMotion steps=\(steps)")
+            return
+        }
+
+        let sourceTotalFrames = Int(forward.frameLength)
+        let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
+        let frameDelta = max(1, Int(frameDeltaDouble))
+        let requestedFrames = Int(forward.format.sampleRate * segmentDuration)
+        let sourceFrame: Int
+        let segmentFrames: Int
+        let segment: AVAudioPCMBuffer?
+
+        switch direction {
+        case .forward:
+            sourceFrame = currentSampleFrame
+            let remainingFrames = sourceTotalFrames - sourceFrame
+            segmentFrames = min(requestedFrames, remainingFrames)
+            segment = copySegment(
+                from: forward,
+                startFrame: sourceFrame,
+                frameCount: segmentFrames
+            )
+            currentSampleFrame = clampedSampleFrame(currentSampleFrame + frameDelta)
+        case .backward:
+            sourceFrame = currentSampleFrame
+            let availableFrames = sourceFrame + 1
+            segmentFrames = min(requestedFrames, availableFrames)
+            segment = copyReversedSegmentEnding(
+                at: sourceFrame,
+                frameCount: segmentFrames,
+                from: forward
+            )
+            currentSampleFrame = clampedSampleFrame(currentSampleFrame - frameDelta)
+        }
+
+        print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(direction)) currentFrame=\(currentSampleFrame) frameDelta=\(frameDelta) totalFrames=\(sourceTotalFrames)")
+        print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(direction)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) totalFrames=\(sourceTotalFrames)")
+
+        let isValidSegment: Bool
+        switch direction {
+        case .forward:
+            isValidSegment = sourceFrame >= 0 &&
+                sourceFrame < sourceTotalFrames &&
+                segmentFrames > 0 &&
+                sourceFrame + segmentFrames <= sourceTotalFrames
+        case .backward:
+            isValidSegment = sourceFrame >= 0 &&
+                sourceFrame < sourceTotalFrames &&
+                segmentFrames > 0 &&
+                segmentFrames <= sourceFrame + 1
+        }
+
+        guard isValidSegment else {
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=invalidSegment sourceFrame=\(sourceFrame) frames=\(segmentFrames) totalFrames=\(sourceTotalFrames)")
+            lastScheduleSkippedReason = "invalidSegment"
+            lastPlatterSteps = steps
+            lastScheduleTime = now
+            return
+        }
+
+        guard let segment else {
+            lastScheduleSkippedReason = "copyFailed"
+            lastPlatterSteps = steps
+            lastScheduleTime = now
+            return
+        }
+
+        // Interrupt only on direction change; same-direction grains queue smoothly.
+        // Avoid interrupting every tiny platter update, because that can cancel audio
+        // before the scheduled segment becomes audible.
+        let opts: AVAudioPlayerNodeBufferOptions = (direction != lastScheduledDirection) ? .interrupts : []
+        playerNode.scheduleBuffer(
+            segment,
+            at: nil,
+            options: opts,
+            completionHandler: nil
+        )
+
         if !playerNode.isPlaying {
             playerNode.play()
         }
@@ -224,16 +348,20 @@ final class ScratchSamplePlaybackController {
         lastScheduledSteps = steps
         lastScheduledDirection = direction
         lastScheduleTime = now
+        lastPlatterSteps = steps
+        lastScheduledSourceFrame = sourceFrame
+        lastScheduledSegmentFrames = segmentFrames
+        lastScheduleSkippedReason = nil
     }
 
     /// Stop playback (e.g. when platter is idle).
     func pausePlayback() {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            self.playerNode.pause()
+            self.playerNode.stop()
             self.lastScheduledDirection = nil
             let id = self.loadedSampleID
-            DispatchQueue.main.async { [weak self] in
+            self.debugPublishOnMainAsync(field: "statusLabel.paused") { [weak self] in
                 guard let self, let id else { return }
                 self.statusLabel = "loaded: \(id) · paused"
             }
@@ -254,13 +382,18 @@ final class ScratchSamplePlaybackController {
             guard let self else { return }
             self.playerNode.stop()
             self.forwardBuffer = nil
-            self.reversedBuffer = nil
             self.loadedSampleID = nil
             self.totalFrames = 0
             self.lastScheduledSteps = 0
             self.lastScheduledDirection = nil
+            self.diagnosticPreviewPlayedSampleID = nil
+            self.currentSampleFrame = 0
+            self.lastPlatterSteps = nil
+            self.lastScheduledSourceFrame = nil
+            self.lastScheduledSegmentFrames = nil
+            self.lastScheduleSkippedReason = nil
             print("[ScratchSamplePlaybackController] unloaded")
-            DispatchQueue.main.async { [weak self] in
+            self.debugPublishOnMainAsync(field: "unload") { [weak self] in
                 self?.statusLabel = "idle"
                 self?.crossfaderGate = 1.0
                 self?.lastCrossfaderRawValue = nil
@@ -281,9 +414,9 @@ final class ScratchSamplePlaybackController {
         audioQueue.async { [weak self] in
             guard let self else { return }
             let normalized = Float(value) / 127.0
-            self.playerNode.volume = normalized
             let raw = value
-            DispatchQueue.main.async { [weak self] in
+            self.playerNode.volume = 1.0
+            self.debugPublishOnMainAsync(field: "crossfaderGate") { [weak self] in
                 self?.crossfaderGate = normalized
                 self?.lastCrossfaderRawValue = raw
             }
@@ -307,10 +440,22 @@ final class ScratchSamplePlaybackController {
     /// traverses the entire sample.
     func sampleFrame(for steps: Int) -> Int {
         guard totalFrames > 0 else { return 0 }
-        let raw = (steps * totalFrames) / stepsPerFullSample
-        var wrapped = raw % totalFrames
-        if wrapped < 0 { wrapped += totalFrames }
-        return wrapped
+        let scaled = (Double(steps) * Double(totalFrames)) / Double(stepsPerFullSample)
+        var wrapped = scaled.truncatingRemainder(dividingBy: Double(totalFrames))
+        if wrapped < 0 { wrapped += Double(totalFrames) }
+        return min(max(Int(wrapped), 0), totalFrames - 1)
+    }
+
+    private func clampedSampleFrame(_ frame: Int) -> Int {
+        guard totalFrames > 0 else { return 0 }
+        return min(max(frame, 0), totalFrames - 1)
+    }
+
+    private func directionDescription(_ direction: ScratchPlatterDirection) -> String {
+        switch direction {
+        case .forward: return "forward"
+        case .backward: return "backward"
+        }
     }
 
     // MARK: - WAV resolution
@@ -339,6 +484,11 @@ final class ScratchSamplePlaybackController {
     private func readIntoBuffer(_ file: AVAudioFile) -> AVAudioPCMBuffer? {
         let format = file.processingFormat
         let capacity = AVAudioFrameCount(file.length)
+        guard format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved else {
+            print("[ScratchSamplePlaybackController] unsupported PCM format after normalization: \(format)")
+            return nil
+        }
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
             return nil
         }
@@ -346,6 +496,11 @@ final class ScratchSamplePlaybackController {
             try file.read(into: buffer)
         } catch {
             print("[ScratchSamplePlaybackController] read error: \(error)")
+            return nil
+        }
+        guard buffer.frameLength > 0,
+              buffer.floatChannelData != nil else {
+            print("[ScratchSamplePlaybackController] normalized buffer unavailable: \(format)")
             return nil
         }
         return buffer
@@ -363,8 +518,11 @@ final class ScratchSamplePlaybackController {
         }
         reversed.frameLength = AVAudioFrameCount(frameCount)
 
-        guard let srcChannels = source.floatChannelData,
+        guard format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved,
+              let srcChannels = source.floatChannelData,
               let dstChannels = reversed.floatChannelData else {
+            print("[ScratchSamplePlaybackController] reverse skipped · reason=unsupportedFormat format=\(format)")
             return nil
         }
         let channelCount = Int(format.channelCount)
@@ -385,8 +543,17 @@ final class ScratchSamplePlaybackController {
         frameCount: Int
     ) -> AVAudioPCMBuffer? {
         let format = source.format
-        let actualCount = min(frameCount, Int(source.frameLength) - startFrame)
+        let sourceFrames = Int(source.frameLength)
+        guard startFrame >= 0,
+              startFrame < sourceFrames,
+              frameCount > 0 else {
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=invalidSegment sourceFrame=\(startFrame) frames=\(frameCount) totalFrames=\(sourceFrames)")
+            return nil
+        }
+
+        let actualCount = min(frameCount, sourceFrames - startFrame)
         guard actualCount > 0,
+              startFrame + actualCount <= sourceFrames,
               let segment = AVAudioPCMBuffer(
                 pcmFormat: format,
                 frameCapacity: AVAudioFrameCount(actualCount)
@@ -395,8 +562,11 @@ final class ScratchSamplePlaybackController {
         }
         segment.frameLength = AVAudioFrameCount(actualCount)
 
-        guard let srcChannels = source.floatChannelData,
+        guard format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved,
+              let srcChannels = source.floatChannelData,
               let dstChannels = segment.floatChannelData else {
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=unsupportedFormat sourceFrame=\(startFrame) frames=\(actualCount) totalFrames=\(sourceFrames)")
             return nil
         }
         let channelCount = Int(format.channelCount)
@@ -405,6 +575,51 @@ final class ScratchSamplePlaybackController {
             let src = srcChannels[ch].advanced(by: startFrame)
             let dst = dstChannels[ch]
             dst.update(from: src, count: actualCount)
+        }
+        return segment
+    }
+
+    private func copyReversedSegmentEnding(
+        at endFrame: Int,
+        frameCount: Int,
+        from source: AVAudioPCMBuffer
+    ) -> AVAudioPCMBuffer? {
+        let format = source.format
+        let sourceFrames = Int(source.frameLength)
+        guard endFrame >= 0,
+              endFrame < sourceFrames,
+              frameCount > 0 else {
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=invalidSegment sourceFrame=\(endFrame) frames=\(frameCount) totalFrames=\(sourceFrames)")
+            return nil
+        }
+
+        let actualCount = min(frameCount, endFrame + 1)
+        let startFrame = endFrame - actualCount + 1
+        guard startFrame >= 0,
+              actualCount > 0,
+              let segment = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(actualCount)
+              ) else {
+            return nil
+        }
+        segment.frameLength = AVAudioFrameCount(actualCount)
+
+        guard format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved,
+              let srcChannels = source.floatChannelData,
+              let dstChannels = segment.floatChannelData else {
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=unsupportedFormat sourceFrame=\(endFrame) frames=\(actualCount) totalFrames=\(sourceFrames)")
+            return nil
+        }
+
+        let channelCount = Int(format.channelCount)
+        for ch in 0..<channelCount {
+            let src = srcChannels[ch]
+            let dst = dstChannels[ch]
+            for i in 0..<actualCount {
+                dst[i] = src[endFrame - i]
+            }
         }
         return segment
     }

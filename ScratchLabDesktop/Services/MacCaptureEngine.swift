@@ -1414,6 +1414,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// Platter-driven scratch sample playback controller.
     private let scratchPlaybackController = ScratchSamplePlaybackController()
+    private var tempDirectAhhhTriggerArmed = true
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -2101,6 +2102,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var batchedMidiCCMessage: String = ""
     private var batchedMidiSummary: String = "No MIDI received yet"
     private let midiMonitorPublishInterval: CFTimeInterval = 0.25
+    private var lastScratchPlaybackBridgeLogTime: CFTimeInterval = 0
+    private let scratchPlaybackBridgeLogInterval: CFTimeInterval = 0.10
+    private var lastSwiftUIStateGuardLogTime: CFTimeInterval = 0
+    private let swiftUIStateGuardLogInterval: CFTimeInterval = 1.0
     private var isMIDILearning: Bool = false
     private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
@@ -2109,7 +2114,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var routineArtifactRefreshTask: Task<Void, Never>?
     private var fixedRigLayout: DJRigLayout?
     private var fixedRigLayoutUsesManualGuide = false
-    private let autoRefreshDevicesOnInit: Bool
+    private let autoRefreshDevicesAfterViewMount: Bool
+    private var hasStartedDeviceDiscoveryAfterViewMount = false
     private let audioSignalStaleInterval: CFTimeInterval = 0.8
     private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
     private var lastReceivedAudioSampleTime: CFTimeInterval = 0
@@ -2128,13 +2134,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }()
 
     override init() {
-        autoRefreshDevicesOnInit = true
+        autoRefreshDevicesAfterViewMount = true
         super.init()
         configureInitialState()
     }
 
     init(autoRefreshDevices: Bool) {
-        autoRefreshDevicesOnInit = autoRefreshDevices
+        autoRefreshDevicesAfterViewMount = autoRefreshDevices
         super.init()
         configureInitialState()
     }
@@ -2146,16 +2152,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         audioOutput.setSampleBufferDelegate(self, queue: audioQueue)
         movieOutput.movieFragmentInterval = .invalid
         startAudioSignalDecayTimer()
-        rescanRoutineCaptures()
 
         // Scratch bank pad → sample load for platter-driven scratch playback.
         // Hot cue press loads the sample; platter CC6 movement drives audio.
         scratchBankPadPreviewCallback = { [weak self] sampleID in
             guard let self, self.isScratchBankMIDIPreviewEnabled else { return }
+            print("[RanePad] loading sample · sampleID=\(sampleID)")
             self.scratchPlaybackController.load(sampleID: sampleID)
-            print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
         }
-
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleWorkspaceApplicationChange(_:)),
@@ -2171,16 +2175,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         if let data = UserDefaults.standard.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
            let mapping = try? JSONDecoder().decode(CrossfaderCCMapping.self, from: data) {
-            crossfaderCCMapping = mapping
-            midiLearnState = .learned(mapping)
             persistedCrossfaderMapping = mapping
         }
 
         setupMIDIClient()
+    }
 
-        if autoRefreshDevicesOnInit {
-            refreshDevices()
+    @MainActor
+    func startDeviceDiscoveryAfterViewMount() async {
+        guard autoRefreshDevicesAfterViewMount else { return }
+        guard !hasStartedDeviceDiscoveryAfterViewMount else { return }
+        hasStartedDeviceDiscoveryAfterViewMount = true
+
+        await Task.yield()
+
+        if let mapping = persistedCrossfaderMapping {
+            publishOnMainAsync(field: "midiLearn.initialMapping") { [weak self] in
+                self?.crossfaderCCMapping = mapping
+                self?.midiLearnState = .learned(mapping)
+            }
         }
+
+        rescanRoutineCaptures()
+        refreshDevices()
     }
 
     deinit {
@@ -4638,9 +4655,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let learnRequestID = midiLearnRequestID
         let eventCountAtStart = midiEventsReceivedCount
         midiCaptureLock.unlock()
-        Task { @MainActor in
-            midiLearnState = .listening
-            midiLearnFeedback = "Listening..."
+        publishOnMainAsync(field: "midiLearn") { [weak self] in
+            self?.midiLearnState = .listening
+            self?.midiLearnFeedback = "Listening..."
         }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -4651,7 +4668,31 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     && self.midiEventsReceivedCount == eventCountAtStart
             }
             guard shouldWarn else { return }
-            self.midiLearnFeedback = "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
+            self.publishOnMainAsync(field: "midiLearnFeedback") { [weak self] in
+                self?.midiLearnFeedback = "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
+            }
+        }
+    }
+
+    func playScratchSampleDiagnostic(sampleID: String) {
+        print("[ScratchSamplePlaybackBridge] TEMP UI direct load · sampleID=\(sampleID)")
+        scratchPlaybackController.load(sampleID: sampleID)
+    }
+
+    private func publishOnMainAsync(field: String, _ update: @escaping () -> Void) {
+        let requestTime = CACurrentMediaTime()
+        let requestThread = Thread.isMainThread ? "main" : "background"
+        print("[SwiftUIStateGuard] publish request · field=\(field) thread=\(requestThread) time=\(String(format: "%.6f", requestTime))")
+
+        DispatchQueue.main.async { [weak self] in
+            if let self {
+                let now = CACurrentMediaTime()
+                if now - self.lastSwiftUIStateGuardLogTime >= self.swiftUIStateGuardLogInterval {
+                    self.lastSwiftUIStateGuardLogTime = now
+                    print("[SwiftUIStateGuard] async publish · field=\(field)")
+                }
+            }
+            update()
         }
     }
 
@@ -4659,9 +4700,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         isMIDILearning = false
         midiCaptureLock.unlock()
-        Task { @MainActor in
-            midiLearnState = crossfaderCCMapping.map { .learned($0) } ?? .idle
-            midiLearnFeedback = ""
+        publishOnMainAsync(field: "midiLearn") { [weak self] in
+            guard let self else { return }
+            self.midiLearnState = self.crossfaderCCMapping.map { .learned($0) } ?? .idle
+            self.midiLearnFeedback = ""
         }
     }
 
@@ -4671,10 +4713,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         isMIDILearning = false
         midiCaptureLock.unlock()
         UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
-        Task { @MainActor in
-            crossfaderCCMapping = nil
-            midiLearnState = .idle
-            midiLearnFeedback = ""
+        publishOnMainAsync(field: "midiLearn") { [weak self] in
+            self?.crossfaderCCMapping = nil
+            self?.midiLearnState = .idle
+            self?.midiLearnFeedback = ""
         }
     }
 
@@ -4686,10 +4728,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let data = try? JSONEncoder().encode(mapping) {
             UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
         }
-        Task { @MainActor in
-            crossfaderCCMapping = mapping
-            midiLearnState = .learned(mapping)
-            midiLearnFeedback = "Learned Xfader: \(mapping.displayName)"
+        publishOnMainAsync(field: "midiLearn") { [weak self] in
+            self?.crossfaderCCMapping = mapping
+            self?.midiLearnState = .learned(mapping)
+            self?.midiLearnFeedback = "Learned Xfader: \(mapping.displayName)"
         }
     }
 
@@ -4721,7 +4763,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         midiConnectedSourceName = ""
         midiCaptureLock.unlock()
-        Task { @MainActor in
+        publishOnMainAsync(field: "midiListeningState") { [weak self] in
+            guard let self else { return }
             self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Selected"
         }
     }
@@ -4788,9 +4831,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             // fire at ~800 Hz so the controller drops excess updates.
                             if controller == 6, channel == 0 || channel == 1 {
                                 platterTracker.ingest(channel: channel, value: value)
+                                let steps = platterTracker.accumulatedSteps(for: channel)
+                                let direction = platterTracker.recentDirection(for: channel)
+                                let now = CACurrentMediaTime()
+                                if now - lastScratchPlaybackBridgeLogTime >= scratchPlaybackBridgeLogInterval {
+                                    lastScratchPlaybackBridgeLogTime = now
+                                    print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
+                                }
                                 scratchPlaybackController.positionDidChange(
-                                    steps: platterTracker.accumulatedSteps(for: channel),
-                                    direction: platterTracker.recentDirection(for: channel)
+                                    steps: steps,
+                                    direction: direction
                                 )
                             }
                             // CC8 crossfader gate: ch=15 CC8 → sample volume.
@@ -4798,6 +4848,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             // it gates the scratch playback controller directly.
                             if controller == 8, channel == 15 {
                                 scratchPlaybackController.setCrossfader(value: value)
+                                handleTemporaryDirectAhhhTrigger(rawValue: value)
                             }
                             recordReceivedMIDICCEvent(
                                 sourceName: deviceName,
@@ -4815,7 +4866,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             if controller != 6,
                                currentMapping?.controller != controller {
                                 let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
-                                DispatchQueue.main.async { [weak self] in
+                                publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
                                     self?.lastRawPadDiagnostic = diag
                                 }
                                 print("[RanePad] \(diag)")
@@ -4825,12 +4876,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                         } else if statusByte >= 0x80 {
                             switch statusByte & 0xF0 {
                             case 0x80, 0x90, 0xA0, 0xE0:
-                                // Only route Note On events from known Rane pad channels (ch=4=ch5 MIDI
-                                // Monitor left pads, ch=5=ch6 right pads) to the pad preview path.
+                                // Only route Note On events from known Rane pad channels to the pad preview path.
                                 // Start/Stop (note=0 ch=0/ch=1), PFL (note=27 ch=0/ch=1), SYNC (note=2
                                 // ch=1), and all PitchBend/PolyAT events must not enter the pad router.
                                 if statusByte & 0xF0 == 0x90,
-                                   (rawChannel == 4 || rawChannel == 5) {
+                                   (rawChannel == 4 || rawChannel == 5 || rawChannel == 6) {
                                     receiveNoteOnPadEvent(
                                         channel: rawChannel,
                                         noteNumber: rawData1,
@@ -4840,7 +4890,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 #if DEBUG
                                 // Raw diagnostic — only for pad channels to avoid flooding the
                                 // diagnostic label with transport/PFL/PitchBend events.
-                                if rawChannel == 4 || rawChannel == 5 {
+                                if rawChannel == 4 || rawChannel == 5 || rawChannel == 6 {
                                     let kind: String
                                     switch statusByte & 0xF0 {
                                     case 0x90: kind = "Note On"
@@ -4850,7 +4900,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                     default:   kind = "MIDI"
                                     }
                                     let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
-                                    DispatchQueue.main.async { [weak self] in
+                                    publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
                                         self?.lastRawPadDiagnostic = diag
                                     }
                                     print("[RanePad] \(diag)")
@@ -4902,7 +4952,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             availableSources: choices
         )
         if selectedMIDIInputSourceID.isEmpty {
-            midiListeningState = "Not Connected"
+            publishOnMainAsync(field: "midiListeningState") { [weak self] in
+                self?.midiListeningState = "Not Connected"
+            }
         }
         reconnectSelectedMIDIInput()
     }
@@ -4962,7 +5014,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             channel: channel, cc: controller, value: value,
             isPreviewEnabled: isScratchBankMIDIPreviewEnabled
         ) {
-            DispatchQueue.main.async { [weak self] in
+            publishOnMainAsync(field: "lastScratchBankPadLabel") { [weak self] in
                 self?.lastScratchBankPadLabel = compactLabel
             }
         }
@@ -4989,20 +5041,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let latestCC = batchedMidiCCMessage
             let latestSummary = batchedMidiSummary
             midiCaptureLock.unlock()
-            let applyMonitorUpdate = {
+            publishOnMainAsync(field: "midiMonitor") { [weak self] in
+                guard let self else { return }
                 self.midiEventsReceivedCount += count
                 self.lastMIDICCMessage = latestCC
                 self.lastMIDIEventSummary = latestSummary
                 self.midiListeningState = "Listening"
                 if isMidiLearn {
                     self.midiLearnFeedback = latestSummary
-                }
-            }
-            if Thread.isMainThread {
-                applyMonitorUpdate()
-            } else {
-                Task { @MainActor in
-                    applyMonitorUpdate()
                 }
             }
         } else {
@@ -5118,19 +5164,43 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Also usable as a test seam — callers inject channel/noteNumber/velocity directly.
     func receiveNoteOnPadEvent(channel: Int, noteNumber: Int, velocity: Int) {
         guard velocity > 0 else { return }
-        if let sampleID = ScratchBankPadEventRouter.sampleID(
+        print("[RanePad] TEMP diagnostic note received · channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
+        let routedSampleID = ScratchBankPadEventRouter.sampleID(
             channel: channel, noteNumber: noteNumber, velocity: velocity,
             isEnabled: isScratchBankMIDIPreviewEnabled
-        ) {
+        )
+        if let sampleID = routedSampleID {
             scratchBankPadPreviewCallback?(sampleID)
+        }
+        // TEMP HARDWARE DIAGNOSTIC: direct-load ahhh for captured Rane hot cue notes
+        // while keeping the existing ch4/ch5 fallback active during hardware proofing.
+        let isTemporaryAhhhFallback =
+            ((channel == 4 || channel == 5) && (noteNumber == 20 || noteNumber == 24)) ||
+            (channel == 6 && noteNumber == 20)
+        if isTemporaryAhhhFallback, routedSampleID == nil {
+            print("[RanePad] TEMP diagnostic direct load · sampleID=ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
+            scratchPlaybackController.load(sampleID: "ahhh")
         }
         if let label = Self.compactScratchBankNotePadLabel(
             channel: channel, noteNumber: noteNumber, velocity: velocity,
             isPreviewEnabled: isScratchBankMIDIPreviewEnabled
         ) {
-            DispatchQueue.main.async { [weak self] in
+            publishOnMainAsync(field: "lastScratchBankPadLabel") { [weak self] in
                 self?.lastScratchBankPadLabel = label
             }
+        }
+    }
+
+    // TEMP HARDWARE DIAGNOSTIC: one clean proof path from known-good Rane CC8
+    // input into platter-owned sample playback, bypassing pad routing/gates.
+    private func handleTemporaryDirectAhhhTrigger(rawValue: Int) {
+        if rawValue > 120, tempDirectAhhhTriggerArmed {
+            tempDirectAhhhTriggerArmed = false
+            print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger fired · source=cc8 raw=\(rawValue)")
+            scratchPlaybackController.load(sampleID: "ahhh")
+        } else if rawValue < 20, !tempDirectAhhhTriggerArmed {
+            tempDirectAhhhTriggerArmed = true
+            print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger reset · source=cc8 raw=\(rawValue)")
         }
     }
 
@@ -5139,7 +5209,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         closeMIDIInput()
         guard let selectedSource = availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID }),
               let endpoint = midiSourceEndpoints[selectedSource] else {
-            Task { @MainActor in
+            publishOnMainAsync(field: "midiListeningState") { [weak self] in
+                guard let self else { return }
                 self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
             }
             return
@@ -5149,8 +5220,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiConnectedSourceName = selectedSource.name
         midiCaptureLock.unlock()
         MIDIPortConnectSource(midiInputPort, endpoint, nil)
-        Task { @MainActor in
-            self.midiListeningState = "Listening"
+        publishOnMainAsync(field: "midiListeningState") { [weak self] in
+            self?.midiListeningState = "Listening"
         }
     }
 
@@ -5161,14 +5232,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         batchedMidiSummary = "No MIDI received yet"
         lastMidiMonitorPublishTime = 0
         midiCaptureLock.unlock()
-        midiEventsReceivedCount = 0
-        lastMIDIEventSummary = "No MIDI received yet"
-        lastMIDICCMessage = "CC -- Ch -- Value --"
-        midiLearnFeedback = ""
-        lastScratchBankPadLabel = ""
+        publishOnMainAsync(field: "midiMonitorReset") { [weak self] in
+            self?.midiEventsReceivedCount = 0
+            self?.lastMIDIEventSummary = "No MIDI received yet"
+            self?.lastMIDICCMessage = "CC -- Ch -- Value --"
+            self?.midiLearnFeedback = ""
+            self?.lastScratchBankPadLabel = ""
 #if DEBUG
-        lastRawPadDiagnostic = ""
+            self?.lastRawPadDiagnostic = ""
 #endif
+        }
     }
 
     private struct MIDISourceEndpoint {

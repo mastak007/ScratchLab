@@ -101,6 +101,151 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertTrue(true, "Large step values must not crash")
     }
 
+    func testLoadedSampleHugeStepCountsDoNotCrash() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: Int.max / 2, direction: .forward)
+        controller.positionDidChange(steps: Int.min / 2, direction: .backward)
+        controller.positionDidChange(steps: 8_728, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.loadedSampleID, "ahhh")
+    }
+
+    func testLoadedSampleReverseNearZeroDoesNotCrash() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .backward)
+        controller.positionDidChange(steps: -1, direction: .backward)
+        controller.positionDidChange(steps: 1, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.loadedSampleID, "ahhh")
+    }
+
+    func testForwardMovementIncreasesSourceFrameContinuously() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 100, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        controller.positionDidChange(steps: 110, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertGreaterThan(controller.currentSampleFrame, 0)
+        XCTAssertEqual(controller.lastScheduledSourceFrame, 0)
+    }
+
+    func testForwardMovementNearEndClampsWithoutWrapping() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 1_000_000, direction: .forward)
+        controller.waitForAudioQueue()
+        Thread.sleep(forTimeInterval: 0.02)
+        controller.positionDidChange(steps: 1_000_001, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
+        XCTAssertEqual(controller.lastScheduledSourceFrame, controller.totalFrames - 1)
+    }
+
+    func testBackwardMovementDecreasesFromCurrentFrameContinuously() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 100, direction: .forward)
+        controller.waitForAudioQueue()
+        let forwardFrame = controller.currentSampleFrame
+
+        Thread.sleep(forTimeInterval: 0.02)
+        controller.positionDidChange(steps: 90, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduledSourceFrame, forwardFrame)
+        XCTAssertLessThan(controller.currentSampleFrame, forwardFrame)
+    }
+
+    func testDirectionChangeDoesNotJumpToOppositeSideOfSample() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 10, direction: .forward)
+        controller.waitForAudioQueue()
+        let frameBeforeDirectionChange = controller.currentSampleFrame
+
+        Thread.sleep(forTimeInterval: 0.02)
+        controller.positionDidChange(steps: 9, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduledSourceFrame, frameBeforeDirectionChange)
+        XCTAssertLessThan(controller.currentSampleFrame, frameBeforeDirectionChange)
+        XCTAssertLessThan(controller.lastScheduledSourceFrame ?? .max, controller.totalFrames / 4)
+    }
+
+    func testNilDirectionAndZeroDeltaDoNotSchedule() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 50, direction: nil)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "noDirection")
+        XCTAssertNil(controller.lastScheduledSourceFrame)
+
+        controller.positionDidChange(steps: 50, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+        XCTAssertNil(controller.lastScheduledSourceFrame)
+    }
+
+    func testHugeAbsoluteStepsUseDeltaOnlyAfterTrackingIsEstablished() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else {
+            return
+        }
+        controller.waitForAudioQueue()
+
+        let baseline = Int.max / 2
+        controller.positionDidChange(steps: baseline, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: baseline + 1, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertGreaterThan(controller.currentSampleFrame, 0)
+        XCTAssertLessThan(controller.currentSampleFrame, 1_000)
+    }
+
     // MARK: - statusLabel
 
     func testStatusLabelStartsWithIdle() {
@@ -222,6 +367,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             }
         }
         group.wait()
+        controller.waitForAudioQueue()
+        controller.unload()
         controller.waitForAudioQueue()
         XCTAssertTrue(true, "Concurrent dispatch to audioQueue must not crash")
     }
