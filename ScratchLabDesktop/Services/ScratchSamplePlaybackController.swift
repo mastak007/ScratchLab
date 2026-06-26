@@ -63,8 +63,11 @@ final class ScratchSamplePlaybackController {
     /// Segment duration scheduled per position update (seconds).
     private let segmentDuration: Double = 1.0 / 60.0
 
-    /// CC6 steps per full sample traversal.
-    private let stepsPerFullSample: Int = 3932
+    /// Nominal vinyl RPM for normal-speed playback (33⅓ RPM).
+    private static let nominalVinylRPM: Double = 100.0 / 3.0
+
+    /// Controller steps per platter revolution (Rane ONE MKII CC6).
+    private let stepsPerRevolution: Int = 3932
 
     /// Varispeed rate clamps — mirrors AVAudioUnitVarispeed's supported range.
     private let minVarispeedRate: Float = 0.25
@@ -182,7 +185,15 @@ final class ScratchSamplePlaybackController {
         lastScheduleTime = 0
         currentSampleFrame = 0
         lastPlatterSteps = nil
-        framesPerStep = max(1, Double(totalFrames) / Double(stepsPerFullSample))
+        // 33⅓ RPM → 1.8 s/rev → normal-speed playback allocates
+        // (sampleRate × 1.8) frames per revolution, distributed across
+        // controller steps. This way the varispeed graph hits rate=1.0
+        // when the platter turns at nominal vinyl speed, regardless of
+        // sample length — a 1 s snare and a 10 s bass both play back at
+        // the same pitch for the same platter speed.
+        let vinylSecondsPerRevolution = 60.0 / Self.nominalVinylRPM
+        let rate = Double(buffer.format.sampleRate)
+        framesPerStep = max(1, (rate * vinylSecondsPerRevolution) / Double(stepsPerRevolution))
         lastScheduledSourceFrame = nil
         lastScheduledSegmentFrames = nil
         lastScheduledRate = nil
@@ -226,7 +237,7 @@ final class ScratchSamplePlaybackController {
         }
 
         print("[ScratchSamplePlaybackController] loaded \(sampleID)")
-        print("[ScratchSamplePlaybackController] ready for platter · sampleID=\(sampleID) totalFrames=\(totalFrames)")
+        print("[ScratchSamplePlaybackController] ready for platter · sampleID=\(sampleID) totalFrames=\(totalFrames) framesPerStep=\(String(format: "%.2f", framesPerStep))")
         debugPublishOnMainAsync(field: "statusLabel.loaded") { [weak self] in
             self?.statusLabel = "loaded: \(sampleID) · system default"
         }
@@ -501,10 +512,11 @@ final class ScratchSamplePlaybackController {
 
     /// Map accumulated CC6 steps to a sample frame index.
     /// Cycles within 0..<totalFrames. One full revolution (~3932 steps)
-    /// traverses the entire sample.
+    /// wraps the full sample; forward/backward advances at the
+    /// framesPerStep pace (driven by vinyl RPM, not sample length).
     func sampleFrame(for steps: Int) -> Int {
         guard totalFrames > 0 else { return 0 }
-        let scaled = (Double(steps) * Double(totalFrames)) / Double(stepsPerFullSample)
+        let scaled = (Double(steps) * Double(totalFrames)) / Double(stepsPerRevolution)
         var wrapped = scaled.truncatingRemainder(dividingBy: Double(totalFrames))
         if wrapped < 0 { wrapped += Double(totalFrames) }
         return min(max(Int(wrapped), 0), totalFrames - 1)
