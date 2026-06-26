@@ -200,13 +200,13 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 10, direction: .forward)
+        controller.positionDidChange(steps: 20, direction: .forward)
         controller.waitForAudioQueue()
         let frameBeforeDirectionChange = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
-        // 5-step backward delta (negative) → schedulingDirection = backward → frameDelta ≈ 101.
-        controller.positionDidChange(steps: 5, direction: .backward)
+        // 10-step backward delta (negative) → schedulingDirection = backward → frameDelta ≈ 202.
+        controller.positionDidChange(steps: 10, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertEqual(controller.lastScheduledSourceFrame, frameBeforeDirectionChange)
@@ -242,8 +242,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let baseline = Int.max / 2
         controller.positionDidChange(steps: baseline, direction: .forward)
         controller.waitForAudioQueue()
-        // 5-step delta → frameDelta ≈ 101, schedules at sub-1x rate.
-        controller.positionDidChange(steps: baseline + 5, direction: .forward)
+        // 12-step delta → frameDelta ≈ 242, above nearStop gate, schedules at sub-1x rate.
+        controller.positionDidChange(steps: baseline + 12, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertGreaterThan(controller.currentSampleFrame, 0)
@@ -484,15 +484,15 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Prime then advance forward so currentSampleFrame > 0 (away from boundaryStart).
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 10, direction: .forward)
+        controller.positionDidChange(steps: 20, direction: .forward)
         controller.waitForAudioQueue()
         let frameAfterForward = controller.currentSampleFrame
         XCTAssertGreaterThan(frameAfterForward, 0)
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // deltaSteps = 9 - 10 = -1 (negative → backward), tracker direction stale .forward.
-        controller.positionDidChange(steps: 9, direction: .forward)
+        // deltaSteps = 10 - 20 = -10 (negative → backward), tracker direction stale .forward.
+        controller.positionDidChange(steps: 10, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNil(controller.lastScheduleSkippedReason,
@@ -544,15 +544,16 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 15, direction: .forward)
+        controller.positionDidChange(steps: 25, direction: .forward)
         controller.waitForAudioQueue()
         let frameAfterPush = controller.currentSampleFrame
         XCTAssertGreaterThan(frameAfterPush, 0, "Forward push must advance frame")
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // First backward event at the reversal apex, tracker direction still stale .forward.
-        controller.positionDidChange(steps: 14, direction: .forward)
+        // First backward event at reversal apex, tracker direction stale .forward.
+        // deltaSteps = 15 - 25 = -10 → frameDelta ≈ 202, above nearStop gate.
+        controller.positionDidChange(steps: 15, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNil(controller.lastScheduleSkippedReason,
@@ -565,18 +566,17 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
     // framesPerStep ≈ 20 for "ahhh" (vinyl-correct: sampleRate × 1.8 / stepsPerRevolution).
     // requestedFrames = Int(44100 * 1/60) = 735.
-    // minimumGrainFrames = 2 (decoupled from varispeed; see controller).
+    // nearStop gate: frameDelta < 184 suppressed (minAudibleDeltaSteps=9 × framesPerStep).
 
     func testSlowPlattersProducesSmallGrainAndLowRate() {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // deltaSteps=5 → frameDelta ≈ 101. 101 < 735 → rate < 1, segmentFrames < requestedFrames.
-        // 101 >= 2 → above minimum grain floor.
+        // deltaSteps=12 → frameDelta ≈ 242. 242 > 184 (above nearStop gate), < 735 → rate < 1.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 5, direction: .forward)
+        controller.positionDidChange(steps: 12, direction: .forward)
         controller.waitForAudioQueue()
 
         guard let segFrames = controller.lastScheduledSegmentFrames,
@@ -631,13 +631,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     }
 
     func testTinyDeltaSkipsMinimumGrain() {
-        // minimumGrainFrames=2 is decoupled from minVarispeedRate. With framesPerStep≈20
-        // for "ahhh", even a 1-step platter movement gives frameDelta≈20 >> 2, so tinyGrain
-        // never fires in normal use. The tinyGrain guard is a safety net against literal
-        // single-sample grains (frameDelta=1), which can only occur with atypically short
-        // samples (totalFrames < stepsPerRevolution × framesPerStep). This test verifies that
-        // 1-step movement schedules correctly at the clamped min rate rather than being
-        // suppressed.
+        // tinyGrain (frameDelta < 2) and nearStop (frameDelta < minAudibleFrameDelta)
+        // are independent gates. With framesPerStep≈20, a 1-step movement gives
+        // frameDelta≈20, which is >> tinyGrain threshold (2) but below nearStop
+        // threshold (≈182). The nearStop gate suppresses it; the needle still
+        // advances silently so the virtual stylus tracks the physical platter.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
@@ -646,18 +644,17 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
         XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
 
-        // 1 step → frameDelta ≈ 20 >> minimumGrainFrames (2): must schedule at min rate.
+        // 1 step → frameDelta ≈ 20. Suppressed by nearStop, NOT by tinyGrain.
         controller.positionDidChange(steps: 1, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "tinyGrain",
             "Single-step forward (frameDelta≈20) must not be suppressed as tinyGrain")
-        guard let rate = controller.lastScheduledRate else {
-            XCTFail("Single-step forward must schedule a grain")
-            return
-        }
-        XCTAssertEqual(rate, Float(0.25), accuracy: Float(0.01),
-            "Single-step forward must clamp to min varispeed rate (0.25)")
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop",
+            "Single-step forward (frameDelta≈20) must be suppressed as nearStop")
+        // Needle advances silently through the near-stop gate.
+        XCTAssertEqual(controller.currentSampleFrame, 20,
+            "Near-stop gate must advance needle silently (20 frames for 1 step)")
     }
 
     func testBackwardMovementUsesMatchingVarispeedRate() {
@@ -692,27 +689,133 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Move forward by 10 steps to get currentSampleFrame > 0 (away from boundaryStart).
+        // Move forward enough that the backward grain stays above nearStop
+        // threshold and away from frame 0.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 10, direction: .forward)  // frameDelta ≈ 202
+        controller.positionDidChange(steps: 20, direction: .forward)  // frameDelta ≈ 404
         controller.waitForAudioQueue()
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // One step backward: deltaSteps=1, frameDelta≈20. Not at boundary → must schedule.
-        controller.positionDidChange(steps: 9, direction: .backward)
+        // 9-step backward: frameDelta≈182, right at the nearStop threshold,
+        // schedules at clamped min varispeed rate (0.25).
+        controller.positionDidChange(steps: 11, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "tinyGrain",
-            "Single-step backward must not be suppressed as tinyGrain")
+            "9-step backward (frameDelta≈182) must not be suppressed as tinyGrain")
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryStart",
-            "Single-step backward away from frame 0 must not hit boundaryStart")
+            "9-step backward away from frame 0 must not hit boundaryStart")
         guard let backRate = controller.lastScheduledRate else {
-            XCTFail("Single-step backward must schedule a grain")
+            XCTFail("9-step backward must schedule a grain at the nearStop threshold")
             return
         }
         XCTAssertEqual(backRate, Float(0.25), accuracy: Float(0.01),
-            "Single-step backward must clamp to min varispeed rate (0.25)")
+            "9-step backward (frameDelta≈182) must clamp to min varispeed rate (0.25)")
+    }
+
+    // MARK: - Near-stop gate (anti-farting)
+
+    func testNearStopGateSkipsSchedulingBelowThreshold() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // 5-step delta → frameDelta ≈ 101 < minAudibleFrameDelta (≈182).
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        controller.positionDidChange(steps: 5, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop",
+            "5-step delta (frameDelta≈101) below threshold must skip as nearStop")
+        XCTAssertNil(controller.lastScheduledRate,
+            "Near-stop skip must not schedule a grain")
+    }
+
+    func testNearStopGateSchedulesAtThreshold() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // 9-step delta → frameDelta ≈ 182, right at the nearStop threshold.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 9, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNotNil(controller.lastScheduledRate,
+            "9-step delta (at threshold) must schedule a grain")
+    }
+
+    func testNearStopGateSchedulesAboveThreshold() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // 15-step delta → frameDelta ≈ 303, well above nearStop threshold.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 15, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "15-step delta (above threshold) must not skip")
+        XCTAssertNotNil(controller.lastScheduledRate,
+            "15-step delta must schedule a grain")
+    }
+
+    func testNearStopGateUpdatesLastPlatterSteps() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Establish tracking with a forward push that schedules.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Now a tiny backward delta that hits nearStop.
+        // lastPlatterSteps must be updated so the next forward delta is correct.
+        controller.positionDidChange(steps: 16, direction: .backward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Forward delta = 30 - 16 = +14 (not 30 - 20 = +10 if stale).
+        controller.positionDidChange(steps: 30, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Post-nearStop forward step must schedule with correct delta baseline")
+    }
+
+    func testNearStopGateAdvancesNeedleSilently() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        let before = controller.currentSampleFrame
+        XCTAssertEqual(before, 0)
+
+        // Priming.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+
+        // 3-step delta → frameDelta ≈ 61, below nearStop threshold.
+        // Needle should advance silently.
+        controller.positionDidChange(steps: 3, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop")
+        XCTAssertEqual(controller.currentSampleFrame, 61,
+            "Near-stop gate must advance needle silently (3 steps × ~20.19 frames/step, rounded)")
     }
 }

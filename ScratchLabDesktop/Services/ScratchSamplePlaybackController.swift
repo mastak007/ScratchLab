@@ -69,6 +69,13 @@ final class ScratchSamplePlaybackController {
     /// Controller steps per platter revolution (Rane ONE MKII CC6).
     private let stepsPerRevolution: Int = 3932
 
+    /// Minimum CC6 step delta that produces a continuous-sounding grain.
+    /// Below ~9 steps/slot at 33⅓ RPM, the varispeed floor (0.25) cannot
+    /// stretch the grain to fill the 16.7 ms scheduling slot, producing a
+    /// rapid on/off/on sputter ("farting"). Silently track the needle;
+    /// suppress the grain.
+    private let minAudibleDeltaSteps = 9
+
     /// Varispeed rate clamps — mirrors AVAudioUnitVarispeed's supported range.
     private let minVarispeedRate: Float = 0.25
     private let maxVarispeedRate: Float = 4.0
@@ -320,17 +327,35 @@ final class ScratchSamplePlaybackController {
         let frameDelta = max(1, Int(frameDeltaDouble))
         let requestedFrames = Int(forward.format.sampleRate * segmentDuration)
 
-        // Skip only pathologically tiny grains (a single PCM sample), which would
-        // produce an audible click. Rate clamping at minVarispeedRate handles the pitch
-        // floor for very slow movement — the two thresholds are intentionally decoupled.
-        // With framesPerStep ≈ 50 on the Rane ONE MKII, even a 1-step platter movement
-        // gives frameDelta ≈ 50, which schedules at clamped minRate (0.25) rather than
-        // being suppressed here.
+        // Skip pathologically tiny grains (a single PCM sample), which would
+        // produce an audible click. This guard catches literal single-sample
+        // grains (frameDelta=1) that can only occur with atypically short
+        // samples. The nearStop gate below handles musical near-stop motion.
         let minimumGrainFrames = 2
         guard frameDelta >= minimumGrainFrames else {
             lastScheduleSkippedReason = "tinyGrain"
             lastPlatterSteps = steps
             print("[ScratchSamplePlaybackController] schedule skipped · reason=tinyGrain steps=\(steps) frameDelta=\(frameDelta) minimum=\(minimumGrainFrames)")
+            return
+        }
+
+        // Near-stop gate: when the platter moves too slowly, the varispeed
+        // floor (0.25) cannot stretch the grain to fill the 16.7 ms scheduling
+        // slot. Scheduling the grain would produce a rapid on/off/on sputter
+        // ("farting"). Suppress scheduling but advance the needle position
+        // silently so the virtual stylus stays in sync with the physical platter.
+        let minAudibleFrameDelta = max(1, Int(Double(minAudibleDeltaSteps) * framesPerStep))
+        guard frameDelta >= minAudibleFrameDelta else {
+            switch schedulingDirection {
+            case .forward:
+                currentSampleFrame = clampedSampleFrame(currentSampleFrame + frameDelta)
+            case .backward:
+                currentSampleFrame = clampedSampleFrame(currentSampleFrame - frameDelta)
+            }
+            lastScheduleSkippedReason = "nearStop"
+            lastPlatterSteps = steps
+            lastScheduleTime = now
+            print("[ScratchSamplePlaybackController] schedule skipped · reason=nearStop deltaSteps=\(deltaSteps) threshold=\(minAudibleFrameDelta) frameDelta=\(frameDelta)")
             return
         }
 
