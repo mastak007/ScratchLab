@@ -72,12 +72,11 @@ final class ScratchSamplePlaybackController {
     private let stepsPerRevolution: Int = 3932
 
     /// Minimum CC6 step delta that produces a continuous-sounding grain.
-    /// At 9 steps, rawRate ≈ 0.246 falls below minVarispeedRate (0.25) and is
-    /// clamped, leaving a 0.25 ms gap between grains that causes residual flutter.
-    /// 10 steps is the first value where rawRate (≈ 0.274) clears the floor with
-    /// no clamping and the grain fills exactly one 16.7 ms scheduling slot.
-    /// Below this threshold, silently advance the needle without scheduling.
-    private let minAudibleDeltaSteps = 10
+    /// Below ~9 steps/slot at 33⅓ RPM, the varispeed floor (0.25) cannot
+    /// stretch the grain to fill the 16.7 ms scheduling slot, producing a
+    /// rapid on/off/on sputter ("farting"). Silently track the needle;
+    /// suppress the grain.
+    private let minAudibleDeltaSteps = 9
 
     /// Maximum frameDelta to borrow from the previous direction when
     /// compensating the first grain after a reversal. Caps the symmetry

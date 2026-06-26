@@ -566,14 +566,14 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
     // framesPerStep ≈ 20 for "ahhh" (vinyl-correct: sampleRate × 1.8 / stepsPerRevolution).
     // requestedFrames = Int(44100 * 1/60) = 735.
-    // nearStop gate: frameDelta < 202 suppressed (minAudibleDeltaSteps=10 × framesPerStep).
+    // nearStop gate: frameDelta < 184 suppressed (minAudibleDeltaSteps=9 × framesPerStep).
 
     func testSlowPlattersProducesSmallGrainAndLowRate() {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // deltaSteps=12 → frameDelta ≈ 242. 242 > 202 (above nearStop gate), < 735 → rate < 1.
+        // deltaSteps=12 → frameDelta ≈ 242. 242 > 184 (above nearStop gate), < 735 → rate < 1.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
         controller.positionDidChange(steps: 12, direction: .forward)
@@ -634,7 +634,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // tinyGrain (frameDelta < 2) and nearStop (frameDelta < minAudibleFrameDelta)
         // are independent gates. With framesPerStep≈20, a 1-step movement gives
         // frameDelta≈20, which is >> tinyGrain threshold (2) but below nearStop
-        // threshold (≈202). The nearStop gate suppresses it; the needle still
+        // threshold (≈182). The nearStop gate suppresses it; the needle still
         // advances silently so the virtual stylus tracks the physical platter.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
@@ -685,10 +685,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     }
 
     func testTinyForwardDeltaAtMinRateThreshold() {
-        // Verifies the varispeed rate at the nearStop boundary when two
-        // same-direction grains ensure no reversal compensation fires.
-        // At minAudibleDeltaSteps=10, rawRate ≈ 0.274 — above minVarispeedRate
-        // (0.25), so no clamping occurs at the threshold.
+        // Verifies the varispeed rate clamp at the nearStop boundary when
+        // two same-direction grains ensure no reversal compensation fires.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
@@ -701,22 +699,20 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Second forward grain: 10 steps → frameDelta≈202.
+        // Second forward grain: 9 steps → frameDelta≈182.
         // Same direction → no reversal compensation.
-        // rawRate = 202/735 ≈ 0.275 → above minVarispeedRate (0.25), not clamped.
-        controller.positionDidChange(steps: 30, direction: .forward)
+        // rawRate = 182/735 ≈ 0.248 → clamped to minVarispeedRate (0.25).
+        controller.positionDidChange(steps: 29, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertFalse(controller.lastReversalCompensated,
             "Same-direction grains must not trigger reversal compensation")
         guard let rate = controller.lastScheduledRate else {
-            XCTFail("10-step same-direction grain must schedule")
+            XCTFail("9-step same-direction grain must schedule")
             return
         }
-        XCTAssertGreaterThan(rate, Float(0.25),
-            "10-step grain (frameDelta≈202) at threshold must be above varispeed floor — not clamped")
-        XCTAssertEqual(rate, Float(0.275), accuracy: Float(0.01),
-            "10-step grain must produce rate ≈ 0.275")
+        XCTAssertEqual(rate, Float(0.25), accuracy: Float(0.01),
+            "9-step grain (frameDelta≈182) at threshold must clamp to min varispeed rate (0.25)")
     }
 
     // MARK: - Near-stop gate (anti-farting)
@@ -726,7 +722,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // 5-step delta → frameDelta ≈ 101 < minAudibleFrameDelta (≈202).
+        // 5-step delta → frameDelta ≈ 101 < minAudibleFrameDelta (≈182).
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
         XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
@@ -745,14 +741,14 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // 10-step delta → frameDelta ≈ 202, right at the nearStop threshold.
+        // 9-step delta → frameDelta ≈ 182, right at the nearStop threshold.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 10, direction: .forward)
+        controller.positionDidChange(steps: 9, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNotNil(controller.lastScheduledRate,
-            "10-step delta (at threshold) must schedule a grain")
+            "9-step delta (at threshold) must schedule a grain")
     }
 
     func testNearStopGateSchedulesAboveThreshold() {
