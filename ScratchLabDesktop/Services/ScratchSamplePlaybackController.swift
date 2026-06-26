@@ -54,6 +54,8 @@ final class ScratchSamplePlaybackController {
     private(set) var lastScheduledSegmentFrames: Int?
     private(set) var lastScheduledRate: Float?
     private(set) var lastScheduleSkippedReason: String?
+    private(set) var lastEffectiveFrameDelta: Int?
+    private(set) var lastReversalCompensated: Bool = false
 
     // MARK: - Rate-limit / segment constants
 
@@ -75,6 +77,12 @@ final class ScratchSamplePlaybackController {
     /// rapid on/off/on sputter ("farting"). Silently track the needle;
     /// suppress the grain.
     private let minAudibleDeltaSteps = 9
+
+    /// Maximum frameDelta to borrow from the previous direction when
+    /// compensating the first grain after a reversal. Caps the symmetry
+    /// compensation so a very fast push doesn't produce a pathological
+    /// jump on the matching return stroke. ~1500 frames ≈ 34 ms of audio.
+    private let reversalSymmetryCapFrames = 1500
 
     /// Varispeed rate clamps — mirrors AVAudioUnitVarispeed's supported range.
     private let minVarispeedRate: Float = 0.25
@@ -205,6 +213,8 @@ final class ScratchSamplePlaybackController {
         lastScheduledSegmentFrames = nil
         lastScheduledRate = nil
         lastScheduleSkippedReason = nil
+        lastEffectiveFrameDelta = nil
+        lastReversalCompensated = false
         varispeedNode.rate = 1.0
 
         ensureEngineRunning()
@@ -359,11 +369,38 @@ final class ScratchSamplePlaybackController {
             return
         }
 
+        // Reversal symmetry: the first grain after a direction change is
+        // starved by the 60 Hz rate limiter — the new direction's motion
+        // only accumulates during the ~16.7 ms gap. This creates an
+        // asymmetry where the last forward grain covers ~727 frames but
+        // the first backward grain covers only ~101 frames, causing the
+        // start point to drift forward on every baby-scratch cycle.
+        //
+        // Compensate by borrowing the last direction's effective frameDelta,
+        // capped so a very fast push doesn't produce a pathological jump on
+        // the matching return stroke.
+        let reversalCompensated: Bool
+        let effectiveFrameDelta: Int
+        if schedulingDirection != lastScheduledDirection,
+           let lastEff = lastEffectiveFrameDelta {
+            let borrowed = min(lastEff, reversalSymmetryCapFrames)
+            if borrowed > frameDelta {
+                effectiveFrameDelta = borrowed
+                reversalCompensated = true
+            } else {
+                effectiveFrameDelta = frameDelta
+                reversalCompensated = false
+            }
+        } else {
+            effectiveFrameDelta = frameDelta
+            reversalCompensated = false
+        }
+
         // Varispeed rate = platter-driven frame displacement / output window size.
-        // A grain of frameDelta frames played at this rate consumes exactly
+        // A grain of effectiveFrameDelta frames played at this rate consumes exactly
         // segmentDuration seconds of real time → one grain per scheduling slot,
         // no queue buildup. Fast platter → rate>1 → higher pitch. Slow → rate<1 → lower.
-        let rawRate = Double(frameDelta) / Double(requestedFrames)
+        let rawRate = Double(effectiveFrameDelta) / Double(requestedFrames)
         let rate = Float(max(Double(minVarispeedRate), min(Double(maxVarispeedRate), rawRate)))
         varispeedNode.rate = rate
 
@@ -375,27 +412,27 @@ final class ScratchSamplePlaybackController {
         case .forward:
             sourceFrame = currentSampleFrame
             let remainingFrames = sourceTotalFrames - sourceFrame
-            segmentFrames = min(frameDelta, remainingFrames)
+            segmentFrames = min(effectiveFrameDelta, remainingFrames)
             segment = copySegment(
                 from: forward,
                 startFrame: sourceFrame,
                 frameCount: segmentFrames
             )
-            currentSampleFrame = clampedSampleFrame(currentSampleFrame + frameDelta)
+            currentSampleFrame = clampedSampleFrame(currentSampleFrame + effectiveFrameDelta)
         case .backward:
             sourceFrame = currentSampleFrame
             let availableFrames = sourceFrame + 1
-            segmentFrames = min(frameDelta, availableFrames)
+            segmentFrames = min(effectiveFrameDelta, availableFrames)
             segment = copyReversedSegmentEnding(
                 at: sourceFrame,
                 frameCount: segmentFrames,
                 from: forward
             )
-            currentSampleFrame = clampedSampleFrame(currentSampleFrame - frameDelta)
+            currentSampleFrame = clampedSampleFrame(currentSampleFrame - effectiveFrameDelta)
         }
 
         #if DEBUG
-        print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(schedulingDirection)) currentFrame=\(currentSampleFrame) frameDelta=\(frameDelta) totalFrames=\(sourceTotalFrames)")
+        print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(schedulingDirection)) currentFrame=\(currentSampleFrame) effectiveFrameDelta=\(effectiveFrameDelta) totalFrames=\(sourceTotalFrames)")
         print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(schedulingDirection)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) rate=\(String(format: "%.3f", rate)) totalFrames=\(sourceTotalFrames)")
         #endif
 
@@ -451,6 +488,8 @@ final class ScratchSamplePlaybackController {
         lastScheduledSegmentFrames = segmentFrames
         lastScheduledRate = rate
         lastScheduleSkippedReason = nil
+        lastEffectiveFrameDelta = effectiveFrameDelta
+        lastReversalCompensated = reversalCompensated
     }
 
     /// Stop playback (e.g. when platter is idle).
@@ -492,6 +531,8 @@ final class ScratchSamplePlaybackController {
             self.lastScheduledSegmentFrames = nil
             self.lastScheduledRate = nil
             self.lastScheduleSkippedReason = nil
+            self.lastEffectiveFrameDelta = nil
+            self.lastReversalCompensated = false
             print("[ScratchSamplePlaybackController] unloaded")
             self.debugPublishOnMainAsync(field: "unload") { [weak self] in
                 self?.statusLabel = "idle"

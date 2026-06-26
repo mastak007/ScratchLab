@@ -684,35 +684,35 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Same step magnitude forward/backward must produce the same varispeed rate")
     }
 
-    func testOneStepSlowBackwardSchedulesAtMinRate() {
+    func testTinyForwardDeltaAtMinRateThreshold() {
+        // Verifies the varispeed rate clamp at the nearStop boundary when
+        // two same-direction grains ensure no reversal compensation fires.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Move forward enough that the backward grain stays above nearStop
-        // threshold and away from frame 0.
+        // First forward grain: 20 steps → frameDelta≈404, establishes position.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 20, direction: .forward)  // frameDelta ≈ 404
+        controller.positionDidChange(steps: 20, direction: .forward)
         controller.waitForAudioQueue()
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // 9-step backward: frameDelta≈182, right at the nearStop threshold,
-        // schedules at clamped min varispeed rate (0.25).
-        controller.positionDidChange(steps: 11, direction: .backward)
+        // Second forward grain: 9 steps → frameDelta≈182.
+        // Same direction → no reversal compensation.
+        // rawRate = 182/735 ≈ 0.248 → clamped to minVarispeedRate (0.25).
+        controller.positionDidChange(steps: 29, direction: .forward)
         controller.waitForAudioQueue()
 
-        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "tinyGrain",
-            "9-step backward (frameDelta≈182) must not be suppressed as tinyGrain")
-        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryStart",
-            "9-step backward away from frame 0 must not hit boundaryStart")
-        guard let backRate = controller.lastScheduledRate else {
-            XCTFail("9-step backward must schedule a grain at the nearStop threshold")
+        XCTAssertFalse(controller.lastReversalCompensated,
+            "Same-direction grains must not trigger reversal compensation")
+        guard let rate = controller.lastScheduledRate else {
+            XCTFail("9-step same-direction grain must schedule")
             return
         }
-        XCTAssertEqual(backRate, Float(0.25), accuracy: Float(0.01),
-            "9-step backward (frameDelta≈182) must clamp to min varispeed rate (0.25)")
+        XCTAssertEqual(rate, Float(0.25), accuracy: Float(0.01),
+            "9-step grain (frameDelta≈182) at threshold must clamp to min varispeed rate (0.25)")
     }
 
     // MARK: - Near-stop gate (anti-farting)
@@ -817,5 +817,173 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop")
         XCTAssertEqual(controller.currentSampleFrame, 61,
             "Near-stop gate must advance needle silently (3 steps × ~20.19 frames/step, rounded)")
+    }
+
+    // MARK: - Reversal symmetry (Fix 2)
+
+    func testReversalCompensatesFirstBackwardGrain() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Forward push: 20 steps → frameDelta ≈ 404.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+        let frameAfterPush = controller.currentSampleFrame
+        XCTAssertEqual(frameAfterPush, 404)
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Reverse with 10 steps (starved) → raw frameDelta ≈ 202.
+        // Compensation: lastEffectiveFrameDelta=404 > 202 → borrow 404.
+        controller.positionDidChange(steps: 10, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Backward grain at reversal must schedule")
+        XCTAssertTrue(controller.lastReversalCompensated,
+            "First backward grain after forward must be compensated")
+        XCTAssertEqual(controller.lastEffectiveFrameDelta, 404,
+            "Effective frameDelta must match the last forward grain (404)")
+        // With effectiveFrameDelta=404 and segmentFrames=min(404, pos+1),
+        // pos returns to 0 (needle back at start).
+        XCTAssertEqual(controller.currentSampleFrame, 0,
+            "Compensated backward grain must return needle to start")
+    }
+
+    func testReversalCompensatesFirstForwardGrain() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Move forward so there is room to move backward from.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 30, direction: .forward)
+        controller.waitForAudioQueue()
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Backward: deltaSteps=20 → frameDelta ≈ 404.
+        controller.positionDidChange(steps: 10, direction: .backward)
+        controller.waitForAudioQueue()
+        let frameAfterBackward = controller.currentSampleFrame
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Forward reversal with 10 steps (starved) → raw frameDelta ≈ 202.
+        // Compensation: lastEffectiveFrameDelta=404 > 202 → borrow 404.
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Forward grain at reversal must schedule")
+        XCTAssertTrue(controller.lastReversalCompensated,
+            "First forward grain after backward must be compensated")
+        XCTAssertGreaterThan(controller.currentSampleFrame, frameAfterBackward,
+            "Compensated forward grain must advance needle")
+    }
+
+    func testBabyScratchCyclesReturnNearStart() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Prime.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+
+        // Simulate 3 baby-scratch cycles: forward push + backward return.
+        // Each push: 20 steps forward → frameDelta ≈ 404 (actual).
+        // Each reversal: compensated to 404, returning needle near 0.
+        for _ in 0..<3 {
+            // Forward push.
+            controller.positionDidChange(steps: 20, direction: .forward)
+            controller.waitForAudioQueue()
+
+            Thread.sleep(forTimeInterval: 0.02)
+
+            // Backward return (starved to 12 steps → raw 242, compensated to 404).
+            controller.positionDidChange(steps: 8, direction: .backward)
+            controller.waitForAudioQueue()
+        }
+
+        // After 3 cycles with compensation, needle should stay near start.
+        // Without compensation, it would have drifted to ~3×404 forward.
+        XCTAssertEqual(controller.currentSampleFrame, 0,
+            "Baby-scratch cycles with reversal compensation must return near start")
+    }
+
+    func testReversalCompensationClampedNearBoundaryEnd() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Force needle near end of sample.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 1_000_000, direction: .forward)
+        controller.waitForAudioQueue()
+        let nearEnd = controller.currentSampleFrame
+        XCTAssertEqual(nearEnd, controller.totalFrames - 1, "Needle must be at end")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Reverse with compensated grain: lastEffectiveFrameDelta ≈ large.
+        // segmentFrames = min(effectiveFrameDelta, sourceFrame+1) — clamped.
+        controller.positionDidChange(steps: 1_000_000 - 20, direction: .backward)
+        controller.waitForAudioQueue()
+
+        // BoundaryEnd (then backing away): the grain must not crash or truncate badly.
+        XCTAssertLessThan(controller.currentSampleFrame, nearEnd,
+            "Backward grain at end must retreat needle safely")
+    }
+
+    func testReversalCompensationClampedNearBoundaryStart() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Push forward modestly, then backward to near zero.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Backward with large compensated grain — clamped to availableFrames.
+        controller.positionDidChange(steps: 0, direction: .backward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.currentSampleFrame, 0,
+            "Compensated backward grain near start must stop at frame 0")
+    }
+
+    func testNearStopGateStillWinsOverReversalCompensation() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Forward push to establish a large lastEffectiveFrameDelta.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 30, direction: .forward)
+        controller.waitForAudioQueue()
+        let forwardEff = controller.lastEffectiveFrameDelta
+        XCTAssertGreaterThan(forwardEff ?? 0, 500, "Forward push must be well above nearStop")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Reverse with a tiny delta (3 steps → frameDelta ≈ 61, below nearStop).
+        // Near-stop gate must fire BEFORE reversal compensation is considered.
+        controller.positionDidChange(steps: 27, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop",
+            "Near-stop gate must suppress a tiny reversal grain even when compensation is available")
+        XCTAssertFalse(controller.lastReversalCompensated,
+            "Reversal compensation must not fire when nearStop skipped the grain")
     }
 }
