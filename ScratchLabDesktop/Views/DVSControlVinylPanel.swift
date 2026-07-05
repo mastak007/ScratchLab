@@ -10,10 +10,10 @@ struct DVSControlVinylPanel: View {
 
     @ObservedObject var pipeline: TimecodeControlPipeline
 
+    @StateObject private var logger = DVSLiveLogger()
     @State private var tick = false
     @State private var copyConfirmed = false
 
-    private let logger = DVSLiveLogger()
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -184,15 +184,25 @@ struct DVSControlVinylPanel: View {
     private var logSection: some View {
         GroupBox("Live Log") {
             VStack(alignment: .leading, spacing: 6) {
-                Text(DVSLiveLogger.logURL.path)
+                Text(logger.logURL.path)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
+                HStack {
+                    Text(logger.lastWriteStatus)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(
+                            logger.lastWriteStatus.hasPrefix("OK") ? Color.green
+                            : logger.lastWriteStatus.hasPrefix("write error") ? Color.red
+                            : Color.secondary
+                        )
+                    Spacer()
+                }
                 HStack(spacing: 8) {
                     Button(copyConfirmed ? "Copied" : "Copy log path") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(DVSLiveLogger.logURL.path, forType: .string)
+                        NSPasteboard.general.setString(logger.logURL.path, forType: .string)
                         copyConfirmed = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             copyConfirmed = false
