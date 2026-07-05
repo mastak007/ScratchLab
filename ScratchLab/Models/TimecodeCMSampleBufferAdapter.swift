@@ -37,6 +37,11 @@ struct TimecodeCMSampleBufferAdapter {
         let rms: Float
         let peak: Float
         let correlation: Float
+        let leftDominantFrequencyHz: Float
+        let rightDominantFrequencyHz: Float
+        let leftZeroCrossingRate: Float
+        let rightZeroCrossingRate: Float
+        let frequenciesStable: Bool
         let score: Float
         let rejectionReason: String?
     }
@@ -216,12 +221,30 @@ struct TimecodeCMSampleBufferAdapter {
             return nil
         }
 
-        let pairSummary = result.perPairDiagnostics.map {
-            "\($0.label):rms=\(String(format: "%.5f", $0.rms)),peak=\(String(format: "%.5f", $0.peak))"
+        let pairSummary = result.perPairDiagnostics.map { pair -> String in
+            "\(pair.label):rms=\(String(format: "%.5f", pair.rms))"
+                + ",peak=\(String(format: "%.5f", pair.peak))"
+                + ",score=\(String(format: "%.3f", pair.score))"
+                + ",freqStable=\(pair.frequenciesStable)"
+                + ",freqHzL=\(Int(pair.leftDominantFrequencyHz))"
+                + ",freqHzR=\(Int(pair.rightDominantFrequencyHz))"
+                + ",zcrL=\(String(format: "%.4f", pair.leftZeroCrossingRate))"
+                + ",zcrR=\(String(format: "%.4f", pair.rightZeroCrossingRate))"
+                + ",reject=\(pair.rejectionReason ?? "none")"
         }.joined(separator: ";")
         diagnosticParts.append("selected=\(result.selectedChannelPair)")
         diagnosticParts.append("recommended=\(result.autoRecommendedChannelPair ?? "none")")
         diagnosticParts.append("pairs=[\(pairSummary)]")
+        if let recommendedDiagnostic = result.perPairDiagnostics.first(
+            where: { $0.label == result.autoRecommendedChannelPair }
+        ) {
+            let autoSelectionReason = recommendedDiagnostic.rejectionReason.map {
+                "no pair passed validity checks; defaulted to \(recommendedDiagnostic.label) (reason: \($0))"
+            } ?? "\(recommendedDiagnostic.label) highest-scoring usable carrier pair"
+                + " (score=\(String(format: "%.3f", recommendedDiagnostic.score)),"
+                + " freqStable=\(recommendedDiagnostic.frequenciesStable))"
+            diagnosticParts.append("autoReason=\(autoSelectionReason)")
+        }
         if let warning = result.warning {
             diagnosticParts.append("warning=\(warning)")
         }
@@ -457,6 +480,17 @@ struct TimecodeCMSampleBufferAdapter {
         )
     }
 
+    /// Broad plausible DVS control-tone carrier band. A pair whose per-channel
+    /// dominant frequency falls outside this range (including 0 Hz — no
+    /// oscillation at all) cannot be real quadrature timecode, regardless of
+    /// how loud it is.
+    private static let carrierRangeHz: ClosedRange<Float> = 500...2_500
+
+    /// A channel with a zero-crossing rate at or below this floor is not
+    /// oscillating in any meaningful sense (e.g. DC, silence, or a 0 Hz
+    /// reading) and cannot be carrying a timecode carrier.
+    private static let minimumCarrierZeroCrossingRate: Float = 0.001
+
     private static func makePairDiagnostic(
         left: [Float],
         right: [Float],
@@ -471,17 +505,29 @@ struct TimecodeCMSampleBufferAdapter {
         let frequenciesStable = abs(
             leftDiagnostic.dominantFrequencyHz - rightDiagnostic.dominantFrequencyHz
         ) < 2_000
+        // Frequency agreement alone isn't enough — a pair with 0 Hz / 0
+        // zero-crossings on both channels (no oscillation at all) trivially
+        // "agrees" and must not be mistaken for a carrier. Require both
+        // channels to show an actual oscillation in the plausible DVS
+        // carrier band before a loud pair can be considered timecode.
+        let hasCarrierEvidence = Self.carrierRangeHz.contains(leftDiagnostic.dominantFrequencyHz)
+            && Self.carrierRangeHz.contains(rightDiagnostic.dominantFrequencyHz)
+            && leftDiagnostic.zeroCrossingRate > Self.minimumCarrierZeroCrossingRate
+            && rightDiagnostic.zeroCrossingRate > Self.minimumCarrierZeroCrossingRate
         let usable = rms >= 0.001 && peak >= 0.002 && peak < 0.999
+            && frequenciesStable && hasCarrierEvidence
         let score = usable
-            ? rms * 4 + correlation * 0.25 + (frequenciesStable ? 0.15 : 0)
+            ? rms * 4 + correlation * 0.25 + 0.15
             : -1
         let rejection: String?
         if rms < 0.001 {
             rejection = "near silence"
         } else if peak >= 0.999 {
             rejection = "clipping"
+        } else if !hasCarrierEvidence {
+            rejection = "no timecode carrier"
         } else if !frequenciesStable {
-            rejection = "unstable channel frequencies"
+            rejection = "no timecode evidence"
         } else {
             rejection = nil
         }
@@ -491,6 +537,11 @@ struct TimecodeCMSampleBufferAdapter {
             rms: rms,
             peak: peak,
             correlation: correlation,
+            leftDominantFrequencyHz: leftDiagnostic.dominantFrequencyHz,
+            rightDominantFrequencyHz: rightDiagnostic.dominantFrequencyHz,
+            leftZeroCrossingRate: leftDiagnostic.zeroCrossingRate,
+            rightZeroCrossingRate: rightDiagnostic.zeroCrossingRate,
+            frequenciesStable: frequenciesStable,
             score: score,
             rejectionReason: rejection
         )

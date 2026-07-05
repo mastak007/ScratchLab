@@ -98,6 +98,62 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         }
         return samples
     }
+
+    /// Builds a 14-channel buffer with a quiet, plausible quadrature control-tone
+    /// pair (matching dominant frequency on both channels) at `quietPairStart`,
+    /// and a much louder pair at `loudPairStart` whose two channels carry
+    /// unrelated tones (400 Hz vs 6 kHz) — loud, but with no shared carrier, so
+    /// it must not be mistaken for real DVS timecode.
+    private func makeInt32InterleavedWithLoudNonTimecodePair(
+        frameCount: Int,
+        channelCount: Int,
+        quietPairStart: Int,
+        loudPairStart: Int
+    ) -> [Int32] {
+        var samples = [Int32](repeating: 0, count: frameCount * channelCount)
+        for frame in 0..<frameCount {
+            let quietPhase = 2 * Double.pi * 1_000 * Double(frame) / 48_000
+            samples[frame * channelCount + quietPairStart] =
+                Int32(sin(quietPhase) * Double(Int32.max) * 0.05)
+            samples[frame * channelCount + quietPairStart + 1] =
+                Int32(cos(quietPhase) * Double(Int32.max) * 0.05)
+
+            let loudLeftPhase = 2 * Double.pi * 400 * Double(frame) / 48_000
+            let loudRightPhase = 2 * Double.pi * 6_000 * Double(frame) / 48_000
+            samples[frame * channelCount + loudPairStart] =
+                Int32(sin(loudLeftPhase) * Double(Int32.max) * 0.9)
+            samples[frame * channelCount + loudPairStart + 1] =
+                Int32(sin(loudRightPhase) * Double(Int32.max) * 0.9)
+        }
+        return samples
+    }
+
+    /// Builds a 14-channel buffer with a quiet, genuine ~1 kHz quadrature pair
+    /// at `quietPairStart`, and a much louder pair at `loudPairStart` that is
+    /// pure DC on both channels — no oscillation at all, so 0 Hz / 0
+    /// zero-crossings on both channels. This reproduces the real Rane 13/14
+    /// field failure: loud, frequency-"matching" (0 == 0), but no carrier.
+    private func makeInt32InterleavedWithLoudZeroHzPair(
+        frameCount: Int,
+        channelCount: Int,
+        quietPairStart: Int,
+        loudPairStart: Int
+    ) -> [Int32] {
+        var samples = [Int32](repeating: 0, count: frameCount * channelCount)
+        for frame in 0..<frameCount {
+            let quietPhase = 2 * Double.pi * 1_000 * Double(frame) / 48_000
+            samples[frame * channelCount + quietPairStart] =
+                Int32(sin(quietPhase) * Double(Int32.max) * 0.05)
+            samples[frame * channelCount + quietPairStart + 1] =
+                Int32(cos(quietPhase) * Double(Int32.max) * 0.05)
+
+            samples[frame * channelCount + loudPairStart] =
+                Int32(Double(Int32.max) * 0.7)
+            samples[frame * channelCount + loudPairStart + 1] =
+                Int32(Double(Int32.max) * 0.75)
+        }
+        return samples
+    }
 #endif
 
     // MARK: - Tests
@@ -320,6 +376,71 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         XCTAssertEqual(result.selectedChannelPair, "3/4")
         XCTAssertNil(result.perPairDiagnostics[1].rejectionReason)
         XCTAssertEqual(result.perPairDiagnostics[0].rejectionReason, "near silence")
+    }
+
+    // A loud pair with no shared carrier between its channels (not plausible
+    // DVS timecode) must not outscore a quieter pair that looks like real
+    // quadrature control tone, even though raw RMS/peak favor the loud pair.
+    func testLoudNonTimecodePairLosesToQuieterPlausiblePair() throws {
+        let raw = makeInt32InterleavedWithLoudNonTimecodePair(
+            frameCount: 512,
+            channelCount: 14,
+            quietPairStart: 2,
+            loudPairStart: 12
+        )
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        let quietPair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 2 })
+        let loudPair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 12 })
+
+        XCTAssertGreaterThan(loudPair.rms, quietPair.rms, "Fixture must make the invalid pair louder")
+        // Both 400 Hz and 6 kHz fall outside the plausible DVS carrier band
+        // (500-2500 Hz), so this is now caught by the carrier-range gate
+        // before the frequency-agreement gate is even reached.
+        XCTAssertEqual(loudPair.rejectionReason, "no timecode carrier")
+        XCTAssertNil(quietPair.rejectionReason)
+        XCTAssertEqual(result.autoRecommendedChannelPair, "3/4")
+        XCTAssertEqual(result.selectedChannelPair, "3/4")
+    }
+
+    // Reproduces the real Rane 13/14 field failure: a loud pair with 0 Hz / 0
+    // zero-crossings on both channels (pure DC, no oscillation at all) must
+    // not win Auto over a quieter pair with a genuine ~1 kHz carrier.
+    func testLoudZeroHzPairLosesToQuieterCarrierPair() throws {
+        let raw = makeInt32InterleavedWithLoudZeroHzPair(
+            frameCount: 512,
+            channelCount: 14,
+            quietPairStart: 4,
+            loudPairStart: 12
+        )
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        let quietPair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 4 })
+        let loudPair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 12 })
+
+        XCTAssertGreaterThan(loudPair.rms, quietPair.rms, "Fixture must make the invalid pair louder")
+        XCTAssertEqual(loudPair.leftDominantFrequencyHz, 0, accuracy: 0.001)
+        XCTAssertEqual(loudPair.rightDominantFrequencyHz, 0, accuracy: 0.001)
+        XCTAssertEqual(loudPair.leftZeroCrossingRate, 0, accuracy: 0.000_001)
+        XCTAssertEqual(loudPair.rightZeroCrossingRate, 0, accuracy: 0.000_001)
+        XCTAssertEqual(loudPair.rejectionReason, "no timecode carrier")
+        XCTAssertNil(quietPair.rejectionReason)
+        XCTAssertEqual(result.autoRecommendedChannelPair, "5/6")
+        XCTAssertEqual(result.selectedChannelPair, "5/6")
     }
 
     func testUnsupportedFormatReturnsDiagnosticWarning() {
