@@ -11,7 +11,9 @@ struct DVSControlVinylPanel: View {
     @ObservedObject var pipeline: TimecodeControlPipeline
 
     @State private var tick = false
+    @State private var copyConfirmed = false
 
+    private let logger = DVSLiveLogger()
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -24,9 +26,13 @@ struct DVSControlVinylPanel: View {
             if !hasSignal {
                 setupGuidanceSection
             }
+            logSection
         }
         .padding()
-        .onReceive(timer) { _ in tick.toggle() }
+        .onReceive(timer) { _ in
+            tick.toggle()
+            logger.append(makeLogEntry())
+        }
     }
 
     // MARK: - Signal
@@ -173,6 +179,74 @@ struct DVSControlVinylPanel: View {
         }
     }
 
+    // MARK: - Live log
+
+    private var logSection: some View {
+        GroupBox("Live Log") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(DVSLiveLogger.logURL.path)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                HStack(spacing: 8) {
+                    Button(copyConfirmed ? "Copied" : "Copy log path") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(DVSLiveLogger.logURL.path, forType: .string)
+                        copyConfirmed = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            copyConfirmed = false
+                        }
+                    }
+                    .controlSize(.small)
+                    Button("Clear live log") {
+                        logger.clear()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(4)
+        }
+    }
+
+    // MARK: - Log entry builder
+
+    private func makeLogEntry() -> DVSLogEntry {
+        let d = pipeline.latestDiagnosis
+        let c = pipeline.counters
+        let totalDropped = c.droppedSilence + c.droppedClipped + c.droppedWeakSignal
+            + c.droppedChannelFault + c.droppedLowConfidence
+        return DVSLogEntry(
+            timestamp: Date(),
+            sampleRate: pipeline.diagnosticsTap.sampleRate,
+            channelCount: pipeline.diagnosticsTap.channelCount,
+            selectedChannelMode: pipeline.inputChannel.rawValue,
+            leftRMS: d?.leftRMS ?? 0,
+            rightRMS: d?.rightRMS,
+            leftPeak: d?.leftPeak ?? 0,
+            rightPeak: d?.rightPeak,
+            signalHealth: pipeline.signalHealth.rawValue,
+            hasSignal: hasSignal,
+            direction: pipeline.currentDirection.rawValue,
+            speed: abs(pipeline.currentRate),
+            rawRate: pipeline.currentRate,
+            smoothedRate: c.smoothedRate,
+            confidence: c.averageConfidence,
+            minConfidence: pipeline.minConfidence,
+            maxRate: pipeline.maxRate,
+            dropReason: pipeline.lastDropReason?.rawValue,
+            dominantFrequencyHz: d?.zcrFrequencyEstimateLeft,
+            zeroCrossingRateLeft: d?.zeroCrossingRateLeft,
+            phaseDelta: pipeline.latestDecodeResult?.frames.last?.deltaPosition,
+            acceptedCount: c.acceptedMotionSamples,
+            droppedCount: totalDropped,
+            silenceCount: c.droppedSilence,
+            weakCount: c.droppedWeakSignal,
+            lowConfidenceCount: c.droppedLowConfidence,
+            clippedCount: c.droppedClipped
+        )
+    }
+
     // MARK: - Derived state
 
     private var hasSignal: Bool {
@@ -186,7 +260,7 @@ struct DVSControlVinylPanel: View {
     private var peak: Float { pipeline.latestDiagnosis?.leftPeak ?? 0 }
     private var frequencyHz: Float? { pipeline.latestDiagnosis?.zcrFrequencyEstimateLeft }
     private var relativeRate: Double { abs(pipeline.currentRate) }
-    private var confidence: Double { pipeline.latestDecodeResult?.averageConfidence ?? 0 }
+    private var confidence: Double { pipeline.counters.averageConfidence }
 
     private var direction: DVSTimecodeStatus.Direction {
         switch pipeline.currentDirection {

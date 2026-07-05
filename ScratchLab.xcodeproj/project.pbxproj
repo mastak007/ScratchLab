@@ -104,6 +104,7 @@
 		SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */; };
 		SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */; };
 		DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */; };
+		DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */; };
 		DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
@@ -727,6 +728,7 @@
 		DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSTimecodeStatus.swift; sourceTree = "<group>"; };
 		SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeratoControlVinylAnalyzer.swift; sourceTree = "<group>"; };
 		DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSControlVinylPanel.swift; sourceTree = "<group>"; };
+		DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSLiveLogger.swift; sourceTree = "<group>"; };
 		DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSControlVinylAnalyzerTests.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnosticsTests.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
@@ -1391,6 +1393,7 @@
 				SNT0000000SNT001SNT00001 /* ScratchNotationTimeline.swift */,
 				SCT0000000SCT001SCT00001 /* ScratchClassifying.swift */,
 				STS0000000STS001STS00001 /* ScratchTypeMetadataSafety.swift */,
+				DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -1895,6 +1898,7 @@
 				DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
 				SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 				DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */,
+				DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
