@@ -69,9 +69,36 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
             silenceCount: 0,
             weakCount: 0,
             lowConfidenceCount: 0,
-            clippedCount: 0
+            clippedCount: 0,
+            sourceChannelCount: 0,
+            selectedChannelPair: "Auto",
+            autoRecommendedChannelPair: nil,
+            perChannelRMS: [],
+            perChannelPeak: [],
+            perPairRMS: [],
+            perPairPeak: [],
+            adapterFormat: "test",
+            adapterWarning: nil
         )
     }
+
+#if ENABLE_TIMECODE_LIVE_TAP
+    private func makeInt32Interleaved(
+        frameCount: Int,
+        channelCount: Int,
+        activePairStart: Int
+    ) -> [Int32] {
+        var samples = [Int32](repeating: 0, count: frameCount * channelCount)
+        for frame in 0..<frameCount {
+            let phase = 2 * Double.pi * 1_000 * Double(frame) / 48_000
+            samples[frame * channelCount + activePairStart] =
+                Int32(sin(phase) * Double(Int32.max) * 0.4)
+            samples[frame * channelCount + activePairStart + 1] =
+                Int32(cos(phase) * Double(Int32.max) * 0.4)
+        }
+        return samples
+    }
+#endif
 
     // MARK: - Tests
 
@@ -209,4 +236,99 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         XCTAssertEqual(logger.lastWriteStatus, "Log cleared")
         XCTAssertEqual(logger.totalLinesWritten, 0)
     }
+
+#if ENABLE_TIMECODE_LIVE_TAP
+    func testInt32InterleavedStereoNormalisation() throws {
+        let raw: [Int32] = [Int32.max, Int32.min, 1_073_741_824, -1_073_741_824]
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 2,
+                sampleRate: 48_000,
+                selection: .pair(startChannel: 0)
+            )
+        )
+
+        XCTAssertEqual(result.left[0], 1, accuracy: 0.000_001)
+        XCTAssertEqual(result.right[0], -1, accuracy: 0.000_001)
+        XCTAssertEqual(result.left[1], 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(result.right[1], -0.5, accuracy: 0.000_001)
+    }
+
+    func testInt32InterleavedFourteenChannelExtraction() throws {
+        let raw = makeInt32Interleaved(frameCount: 256, channelCount: 14, activePairStart: 2)
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        XCTAssertEqual(result.sourceChannelCount, 14)
+        XCTAssertEqual(result.perChannelDiagnostics.count, 14)
+        XCTAssertEqual(result.perPairDiagnostics.count, 7)
+    }
+
+    func testSelectingPairThreeFourFromFourteenChannelBuffer() throws {
+        let raw = makeInt32Interleaved(frameCount: 256, channelCount: 14, activePairStart: 2)
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .pair(startChannel: 2)
+            )
+        )
+
+        XCTAssertEqual(result.selectedChannelPair, "3/4")
+        XCTAssertGreaterThan(result.perChannelDiagnostics[2].rms, 0.2)
+        XCTAssertGreaterThan(result.perChannelDiagnostics[3].rms, 0.2)
+        XCTAssertNotEqual(result.left, result.right, "Quadrature channels should differ")
+    }
+
+    func testSilentPairOneTwoReportsActivePairThreeFour() throws {
+        let raw = makeInt32Interleaved(frameCount: 256, channelCount: 14, activePairStart: 2)
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .pair(startChannel: 0)
+            )
+        )
+
+        XCTAssertEqual(result.perPairDiagnostics[0].rms, 0, accuracy: 0.000_001)
+        XCTAssertGreaterThan(result.perPairDiagnostics[1].rms, 0.2)
+        XCTAssertEqual(result.autoRecommendedChannelPair, "3/4")
+        XCTAssertNotNil(result.warning)
+    }
+
+    func testAutoRecommendsAndSelectsActivePair() throws {
+        let raw = makeInt32Interleaved(frameCount: 256, channelCount: 14, activePairStart: 2)
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        XCTAssertEqual(result.autoRecommendedChannelPair, "3/4")
+        XCTAssertEqual(result.selectedChannelPair, "3/4")
+        XCTAssertNil(result.perPairDiagnostics[1].rejectionReason)
+        XCTAssertEqual(result.perPairDiagnostics[0].rejectionReason, "near silence")
+    }
+
+    func testUnsupportedFormatReturnsDiagnosticWarning() {
+        let warning = TimecodeCMSampleBufferAdapter.unsupportedFormatWarning(
+            bitsPerChannel: 24,
+            isFloat: false
+        )
+
+        XCTAssertEqual(warning, "Unsupported LPCM format: Int24")
+    }
+#endif
 }

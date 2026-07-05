@@ -131,5 +131,14 @@ struct DVSLogEntry: Encodable {
     let weakCount: Int
     let lowConfidenceCount: Int
     let clippedCount: Int
+    let sourceChannelCount: Int
+    let selectedChannelPair: String
+    let autoRecommendedChannelPair: String?
+    let perChannelRMS: [Float]
+    let perChannelPeak: [Float]
+    let perPairRMS: [Float]
+    let perPairPeak: [Float]
+    let adapterFormat: String
+    let adapterWarning: String?
 }
 #endif

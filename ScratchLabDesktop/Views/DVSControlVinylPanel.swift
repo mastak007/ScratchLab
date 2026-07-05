@@ -24,6 +24,9 @@ struct DVSControlVinylPanel: View {
             if !hasSignal {
                 setupGuidanceSection
             }
+#if ENABLE_TIMECODE_LIVE_TAP
+            sourceChannelsSection
+#endif
             logSection
         }
         .padding()
@@ -178,6 +181,102 @@ struct DVSControlVinylPanel: View {
 
     // MARK: - Live log
 
+#if ENABLE_TIMECODE_LIVE_TAP
+    private var sourceChannelsSection: some View {
+        GroupBox("USB Input Channels") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let diagnostics = TimecodeCMSampleBufferAdapter.latestDiagnostics {
+                    diagnosticRow("Format", diagnostics.formatSummary)
+                    diagnosticRow("Sample rate", "\(diagnostics.sampleRate) Hz")
+                    diagnosticRow("Source channels", "\(diagnostics.sourceChannelCount)")
+
+                    Picker("DVS pair", selection: channelPairSelectionBinding) {
+                        Text("Auto").tag(TimecodeCMSampleBufferAdapter.ChannelPairSelection.auto)
+                        ForEach(
+                            Array(stride(from: 0, to: diagnostics.sourceChannelCount - 1, by: 2)),
+                            id: \.self
+                        ) { startChannel in
+                            Text("\(startChannel + 1)/\(startChannel + 2)")
+                                .tag(
+                                    TimecodeCMSampleBufferAdapter.ChannelPairSelection.pair(
+                                        startChannel: startChannel
+                                    )
+                                )
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    diagnosticRow("Selected", diagnostics.selectedChannelPair)
+                    diagnosticRow(
+                        "Auto recommendation",
+                        diagnostics.autoRecommendedChannelPair ?? "—"
+                    )
+
+                    if let warning = diagnostics.warning {
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    Divider()
+                    Text("Per channel")
+                        .font(.caption.bold())
+                    ForEach(diagnostics.perChannelDiagnostics, id: \.channelIndex) { channel in
+                        Text(channelDiagnosticText(channel))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(channel.isNearSilent ? .secondary : .primary)
+                            .textSelection(.enabled)
+                    }
+
+                    Divider()
+                    Text("Per pair")
+                        .font(.caption.bold())
+                    ForEach(diagnostics.perPairDiagnostics, id: \.startChannel) { pair in
+                        Text(pairDiagnosticText(pair))
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                } else {
+                    Text("Waiting for a live audio buffer.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(4)
+        }
+    }
+
+    private var channelPairSelectionBinding:
+        Binding<TimecodeCMSampleBufferAdapter.ChannelPairSelection> {
+        Binding(
+            get: { TimecodeCMSampleBufferAdapter.channelPairSelection },
+            set: { TimecodeCMSampleBufferAdapter.channelPairSelection = $0 }
+        )
+    }
+
+    private func channelDiagnosticText(
+        _ channel: TimecodeCMSampleBufferAdapter.ChannelDiagnostic
+    ) -> String {
+        let raw = channel.maxAbsRaw.map(String.init) ?? "—"
+        let state = (channel.isNearSilent ? "  SILENT" : "")
+            + (channel.isClipping ? "  CLIPPING" : "")
+        return "Ch \(channel.channelIndex + 1)  "
+            + "RMS \(String(format: "%.5f", channel.rms))  "
+            + "Peak \(String(format: "%.5f", channel.peak))  "
+            + "Raw \(raw)  ~\(Int(channel.dominantFrequencyHz)) Hz\(state)"
+    }
+
+    private func pairDiagnosticText(
+        _ pair: TimecodeCMSampleBufferAdapter.PairDiagnostic
+    ) -> String {
+        let state = pair.rejectionReason.map { "Rejected: \($0)" } ?? "Candidate"
+        return "\(pair.label)  "
+            + "RMS \(String(format: "%.5f", pair.rms))  "
+            + "Peak \(String(format: "%.5f", pair.peak))  "
+            + "Corr \(String(format: "%.3f", pair.correlation))  \(state)"
+    }
+#endif
+
     private var logSection: some View {
         GroupBox("Live Log") {
             VStack(alignment: .leading, spacing: 6) {
@@ -239,6 +338,30 @@ struct DVSControlVinylPanel: View {
     private func makeLogEntry() -> DVSLogEntry {
         let d = pipeline.latestDiagnosis
         let c = pipeline.counters
+#if ENABLE_TIMECODE_LIVE_TAP
+        let adapter = TimecodeCMSampleBufferAdapter.latestDiagnostics
+        let sourceChannelCount = adapter?.sourceChannelCount ?? 0
+        let selectedChannelPair = adapter?.selectedChannelPair ?? "—"
+        let autoRecommendedChannelPair = adapter?.autoRecommendedChannelPair
+        let perChannelRMS = adapter?.perChannelDiagnostics.map(\.rms) ?? []
+        let perChannelPeak = adapter?.perChannelDiagnostics.map(\.peak) ?? []
+        let perPairRMS = adapter?.perPairDiagnostics.map(\.rms) ?? []
+        let perPairPeak = adapter?.perPairDiagnostics.map(\.peak) ?? []
+        let adapterFormat = adapter.map {
+            "\($0.formatSummary) @ \($0.sampleRate) Hz"
+        } ?? "Unavailable"
+        let adapterWarning = adapter?.warning
+#else
+        let sourceChannelCount = 0
+        let selectedChannelPair = "Unavailable"
+        let autoRecommendedChannelPair: String? = nil
+        let perChannelRMS: [Float] = []
+        let perChannelPeak: [Float] = []
+        let perPairRMS: [Float] = []
+        let perPairPeak: [Float] = []
+        let adapterFormat = "Unavailable"
+        let adapterWarning: String? = nil
+#endif
         let totalDropped = c.droppedSilence + c.droppedClipped + c.droppedWeakSignal
             + c.droppedChannelFault + c.droppedLowConfidence
         return DVSLogEntry(
@@ -268,7 +391,16 @@ struct DVSControlVinylPanel: View {
             silenceCount: c.droppedSilence,
             weakCount: c.droppedWeakSignal,
             lowConfidenceCount: c.droppedLowConfidence,
-            clippedCount: c.droppedClipped
+            clippedCount: c.droppedClipped,
+            sourceChannelCount: sourceChannelCount,
+            selectedChannelPair: selectedChannelPair,
+            autoRecommendedChannelPair: autoRecommendedChannelPair,
+            perChannelRMS: perChannelRMS,
+            perChannelPeak: perChannelPeak,
+            perPairRMS: perPairRMS,
+            perPairPeak: perPairPeak,
+            adapterFormat: adapterFormat,
+            adapterWarning: adapterWarning
         )
     }
 
