@@ -1,24 +1,23 @@
 #if DEBUG
 import Foundation
 
-/// Throttled background JSONL writer for DVS hardware validation.
+/// Background JSONL writer for periodic DVS hardware validation snapshots.
 ///
-/// On init, attempts to resolve the log file to the project's scratchpad
-/// directory (using #file). If the App Sandbox blocks that path, falls back
-/// to FileManager.temporaryDirectory — always writable in a sandboxed build.
+/// Writes to the app container's temporary directory, which is writable in a
+/// sandboxed build.
 /// All file I/O runs on a private utility queue; never on the audio or main thread.
 final class DVSLiveLogger: ObservableObject {
 
-    /// Resolved log file URL — project scratchpad when writable, temp dir otherwise.
-    @Published private(set) var logURL: URL
+    /// Absolute URL of the JSONL log file in the app container.
+    let logURL: URL
 
     /// Human-readable status of the last write attempt.
     @Published private(set) var lastWriteStatus: String = "Not yet written"
-
-    private static let minInterval: TimeInterval = 1.0 / 5.0  // 5 Hz throttle
+    @Published private(set) var lastWriteTimestamp: Date?
+    @Published private(set) var lastWriteError: String?
+    @Published private(set) var totalLinesWritten = 0
 
     private let queue = DispatchQueue(label: "dvs.live.logger", qos: .utility)
-    private var lastWriteDate: Date = .distantPast
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -27,73 +26,77 @@ final class DVSLiveLogger: ObservableObject {
         return e
     }()
 
-    init() {
-        logURL = Self.resolveLogURL()
+    init(logURL: URL? = nil) {
+        self.logURL = logURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScratchLab/DVSDiagnostics", isDirectory: true)
+            .appendingPathComponent("dvs_diagnostics.jsonl")
     }
 
     func append(_ entry: DVSLogEntry) {
         let url = logURL
         queue.async { [self] in
             let now = Date()
-            guard now.timeIntervalSince(lastWriteDate) >= DVSLiveLogger.minInterval else { return }
-            lastWriteDate = now
-            let status = writeEntry(entry, to: url)
-            DispatchQueue.main.async { self.lastWriteStatus = status }
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try writeEntry(entry, to: url)
+                DispatchQueue.main.async {
+                    self.lastWriteStatus = "Write succeeded"
+                    self.lastWriteTimestamp = now
+                    self.lastWriteError = nil
+                    self.totalLinesWritten += 1
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self.lastWriteStatus = "Write failed"
+                    self.lastWriteTimestamp = now
+                    self.lastWriteError = message
+                }
+            }
         }
     }
 
     func clear() {
         let url = logURL
-        queue.async {
-            try? FileManager.default.removeItem(at: url)
+        queue.async { [self] in
+            do {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+                DispatchQueue.main.async {
+                    self.lastWriteStatus = "Log cleared"
+                    self.lastWriteTimestamp = nil
+                    self.lastWriteError = nil
+                    self.totalLinesWritten = 0
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async {
+                    self.lastWriteStatus = "Clear failed"
+                    self.lastWriteError = message
+                }
+            }
         }
-        DispatchQueue.main.async { self.lastWriteStatus = "Log cleared" }
     }
 
     // MARK: - Private
 
-    /// Try project scratchpad first; fall back to temp dir if the sandbox blocks it.
-    private static func resolveLogURL() -> URL {
-        let preferred = URL(fileURLWithPath: #file)  // .../ScratchLabDesktop/Services/DVSLiveLogger.swift
-            .deletingLastPathComponent()              // .../ScratchLabDesktop/Services/
-            .deletingLastPathComponent()              // .../ScratchLabDesktop/
-            .deletingLastPathComponent()              // project root
-            .appendingPathComponent("scratchpad/dvs_live/dvs_diagnostics.jsonl")
-
-        let dir = preferred.deletingLastPathComponent()
-        if (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil {
-            return preferred
-        }
-
-        // App Sandbox blocked the project-root path — fall back to temp dir.
-        let fallback = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dvs_live/dvs_diagnostics.jsonl")
-        try? FileManager.default.createDirectory(
-            at: fallback.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        return fallback
-    }
-
-    private func writeEntry(_ entry: DVSLogEntry, to url: URL) -> String {
-        guard let data = try? encoder.encode(entry),
-              let line = String(data: data, encoding: .utf8) else {
-            return "encode error"
+    private func writeEntry(_ entry: DVSLogEntry, to url: URL) throws {
+        let data = try encoder.encode(entry)
+        guard let line = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
         }
         let text = line + "\n"
-        do {
-            if FileManager.default.fileExists(atPath: url.path) {
-                let handle = try FileHandle(forWritingTo: url)
-                handle.seekToEndOfFile()
-                handle.write(Data(text.utf8))
-                try handle.close()
-            } else {
-                try text.write(to: url, atomically: false, encoding: .utf8)
-            }
-            let c = Calendar.current.dateComponents([.hour, .minute, .second], from: Date())
-            return String(format: "OK %02d:%02d:%02d", c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
-        } catch {
-            return "write error: \(error.localizedDescription)"
+        if FileManager.default.fileExists(atPath: url.path) {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(text.utf8))
+        } else {
+            try text.write(to: url, atomically: false, encoding: .utf8)
         }
     }
 }

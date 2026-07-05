@@ -4,14 +4,12 @@ import SwiftUI
 /// Mac Analyzer panel: DVS control-vinyl signal diagnostics.
 ///
 /// Read-only view — surfaces diagnostics from a `TimecodeControlPipeline`
-/// already owned by the parent screen. No scoring, playback, or notation
-/// wiring. Isolated from MIDI, sample routing, and camera subsystems.
+/// already owned by the parent screen. Isolated from unrelated app subsystems.
 struct DVSControlVinylPanel: View {
 
     @ObservedObject var pipeline: TimecodeControlPipeline
 
     @StateObject private var logger = DVSLiveLogger()
-    @State private var tick = false
     @State private var copyConfirmed = false
 
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
@@ -30,7 +28,6 @@ struct DVSControlVinylPanel: View {
         }
         .padding()
         .onReceive(timer) { _ in
-            tick.toggle()
             logger.append(makeLogEntry())
         }
     }
@@ -187,19 +184,24 @@ struct DVSControlVinylPanel: View {
                 Text(logger.logURL.path)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                HStack {
-                    Text(logger.lastWriteStatus)
+                    .textSelection(.enabled)
+                diagnosticRow("Status", logger.lastWriteStatus)
+                diagnosticRow(
+                    "Last write",
+                    logger.lastWriteTimestamp?.formatted(date: .omitted, time: .standard) ?? "—"
+                )
+                diagnosticRow("Lines written", "\(logger.totalLinesWritten)")
+                if let error = logger.lastWriteError {
+                    Text("Error: \(error)")
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(
-                            logger.lastWriteStatus.hasPrefix("OK") ? Color.green
-                            : logger.lastWriteStatus.hasPrefix("write error") ? Color.red
-                            : Color.secondary
-                        )
-                    Spacer()
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
                 }
                 HStack(spacing: 8) {
+                    Button("Write test line") {
+                        logger.append(makeLogEntry())
+                    }
+                    .controlSize(.small)
                     Button(copyConfirmed ? "Copied" : "Copy log path") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(logger.logURL.path, forType: .string)
@@ -217,6 +219,19 @@ struct DVSControlVinylPanel: View {
             }
             .padding(4)
         }
+    }
+
+    private func diagnosticRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .foregroundStyle(
+                    label == "Status" && value.hasSuffix("failed") ? Color.red : Color.primary
+                )
+        }
+        .font(.system(.caption2, design: .monospaced))
     }
 
     // MARK: - Log entry builder

@@ -41,6 +41,38 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         return (left, right)
     }
 
+    private func makeLogEntry() -> DVSLogEntry {
+        DVSLogEntry(
+            timestamp: Date(),
+            sampleRate: 0,
+            channelCount: 0,
+            selectedChannelMode: "auto",
+            leftRMS: 0,
+            rightRMS: nil,
+            leftPeak: 0,
+            rightPeak: nil,
+            signalHealth: "noSignal",
+            hasSignal: false,
+            direction: "unknown",
+            speed: 0,
+            rawRate: 0,
+            smoothedRate: 0,
+            confidence: 0,
+            minConfidence: 0,
+            maxRate: 0,
+            dropReason: nil,
+            dominantFrequencyHz: nil,
+            zeroCrossingRateLeft: nil,
+            phaseDelta: nil,
+            acceptedCount: 0,
+            droppedCount: 0,
+            silenceCount: 0,
+            weakCount: 0,
+            lowConfidenceCount: 0,
+            clippedCount: 0
+        )
+    }
+
     // MARK: - Tests
 
     // 1. Silence → no signal
@@ -146,5 +178,35 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         let status = analyzer.analyze(left: tone, right: [], sampleRate: 44100)
         // Must return a valid status without crashing; signal detection not guaranteed for mono
         XCTAssertNotNil(status, "Mono input (right=[]) must not crash")
+    }
+
+    func testLiveLoggerWritesNoSignalEntryAndClearsFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let logURL = directory.appendingPathComponent("dvs_diagnostics.jsonl")
+        let logger = DVSLiveLogger(logURL: logURL)
+
+        logger.append(makeLogEntry())
+
+        let writeDeadline = Date().addingTimeInterval(2)
+        while !FileManager.default.fileExists(atPath: logURL.path), Date() < writeDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        let line = try String(contentsOf: logURL, encoding: .utf8)
+        XCTAssertTrue(line.hasSuffix("\n"))
+        XCTAssertTrue(line.contains("\"hasSignal\":false"))
+        XCTAssertEqual(logger.lastWriteStatus, "Write succeeded")
+        XCTAssertEqual(logger.totalLinesWritten, 1)
+        XCTAssertNil(logger.lastWriteError)
+
+        logger.clear()
+
+        let clearDeadline = Date().addingTimeInterval(2)
+        while FileManager.default.fileExists(atPath: logURL.path), Date() < clearDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logURL.path))
+        XCTAssertEqual(logger.lastWriteStatus, "Log cleared")
+        XCTAssertEqual(logger.totalLinesWritten, 0)
     }
 }
