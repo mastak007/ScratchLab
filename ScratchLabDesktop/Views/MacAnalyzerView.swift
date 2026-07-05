@@ -1668,6 +1668,7 @@ struct MacAnalyzerView: View {
             }
         case .timecodeInput:
             VStack(alignment: .leading, spacing: 22) {
+                DVSControlVinylPanel(pipeline: timecodePipeline)
                 TimecodeControlCard(pipeline: timecodePipeline, bridge: timecodeBridge)
             }
 #if ENABLE_TIMECODE_LIVE_TAP

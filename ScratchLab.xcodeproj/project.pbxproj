@@ -99,6 +99,12 @@
 		TCA000023TCA023TCA00001 /* TimecodePrototypeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */; };
 		TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */; };
 		TCT000009TCT009TCT00001 /* TimecodePrototypeProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000025TCR025TCR00001 /* TimecodePrototypeProfileTests.swift */; };
+		DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
+		DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
+		SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */; };
+		SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */; };
+		DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */; };
+		DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
 		51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
@@ -718,6 +724,10 @@
 		TCR000023TCR023TCR00001 /* TimecodeFixtureValidationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeFixtureValidationTests.swift; path = TimecodeFixtureValidationTests.swift; sourceTree = "<group>"; };
 		TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeProfile.swift; path = TimecodePrototypeProfile.swift; sourceTree = "<group>"; };
 		TCR000025TCR025TCR00001 /* TimecodePrototypeProfileTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeProfileTests.swift; path = TimecodePrototypeProfileTests.swift; sourceTree = "<group>"; };
+		DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSTimecodeStatus.swift; sourceTree = "<group>"; };
+		SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeratoControlVinylAnalyzer.swift; sourceTree = "<group>"; };
+		DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSControlVinylPanel.swift; sourceTree = "<group>"; };
+		DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSControlVinylAnalyzerTests.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeSignalDiagnosticsTests.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
 		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
@@ -1027,6 +1037,7 @@
 				TCR000020TCR020TCR00001 /* TimecodePlaybackBridgeTests.swift */,
 				TCR000023TCR023TCR00001 /* TimecodeFixtureValidationTests.swift */,
 			TCR000025TCR025TCR00001 /* TimecodePrototypeProfileTests.swift */,
+				DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -1244,6 +1255,8 @@
 				TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */,
 				TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */,
 			TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */,
+				DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */,
+				SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */,
 			SBPMGRP00001000 /* ScratchSoundBank */,
 			CI00GRP00001 /* ControllerInput */,
 			);
@@ -1358,6 +1371,7 @@
 				CPN0000000CPN001CPN00001 /* CameraPassthroughNotationView.swift */,
 				207BAC452827202EE87BABD7 /* TimecodeInputStatusCard.swift */,
 				TCR000009TCR009TCR00001 /* TimecodeControlCard.swift */,
+				DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -1878,6 +1892,9 @@
 				TCA000021TCA021TCA00001 /* TimecodeFixtureValidationReport.swift in Sources */,
 				TCA000022TCA022TCA00001 /* TimecodeFixtureLoader.swift in Sources */,
 			TCA000023TCA023TCA00001 /* TimecodePrototypeProfile.swift in Sources */,
+				DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
+				SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
+				DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */,
 			);
 		};
 		517A55FC2FAE1C02009EC734 /* Sources */ = {
@@ -2039,6 +2056,8 @@
 				TCB000021TCB021TCB00001 /* TimecodeFixtureValidationReport.swift in Sources */,
 				TCB000022TCB022TCB00001 /* TimecodeFixtureLoader.swift in Sources */,
 			TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */,
+				DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
+				SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 			);
 		};
 		EADB844A93257D934F14DAA7 /* Sources */ = {
@@ -2160,6 +2179,7 @@
 				TCT000007TCT007TCT00001 /* TimecodePlaybackBridgeTests.swift in Sources */,
 				TCT000008TCT008TCT00001 /* TimecodeFixtureValidationTests.swift in Sources */,
 			TCT000009TCT009TCT00001 /* TimecodePrototypeProfileTests.swift in Sources */,
+				DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
