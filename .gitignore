@@ -89,3 +89,10 @@ debug_captures/
 AI_HANDOFF/
 analysis/
 deep-research-skills/
+
+# Local-only debug/investigation scratch output (audio/MIDI capture dumps,
+# one-off capture/parse scripts). Not referenced by app, tests, or scripts.
+scratchpad/
+
+# Local dev utility — not referenced by app, tests, or build scripts.
+scripts/reset_scratchlab_local_state.sh
