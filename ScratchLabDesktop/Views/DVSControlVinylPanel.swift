@@ -5,125 +5,130 @@ import SwiftUI
 ///
 /// Read-only view — surfaces diagnostics from a `TimecodeControlPipeline`
 /// already owned by the parent screen. Isolated from unrelated app subsystems.
+///
+/// Layout is intentionally stable across live updates: every section is
+/// always present once mounted (no block insertion/removal), values render
+/// in fixed-height rows, and verbose per-channel/per-pair detail lives in a
+/// collapsed disclosure group so hardware validation isn't disrupted by
+/// layout reflow.
 struct DVSControlVinylPanel: View {
 
     @ObservedObject var pipeline: TimecodeControlPipeline
 
     @StateObject private var logger = DVSLiveLogger()
     @State private var copyConfirmed = false
+#if ENABLE_TIMECODE_LIVE_TAP
+    @State private var isDetailsExpanded = false
+#endif
 
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            signalSection
-            motionSection
-            if let reason = pipeline.lastDropReason {
-                dropsSection(reason: reason)
-            }
-            if !hasSignal {
-                setupGuidanceSection
-            }
+            controlsSection
+            liveReadingsSection
+            statusSection
 #if ENABLE_TIMECODE_LIVE_TAP
-            sourceChannelsSection
+            detailsSection
 #endif
             logSection
         }
         .padding()
+        .transaction { $0.animation = nil }
         .onReceive(timer) { _ in
             logger.append(makeLogEntry())
         }
     }
 
-    // MARK: - Signal
+    // MARK: - Controls (stable — mode, live tap, pair/channel selection, health)
 
-    private var signalSection: some View {
-        GroupBox("Signal") {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Circle()
-                        .fill(hasSignal ? Color.green : Color.red)
-                        .frame(width: 10, height: 10)
-                    Text(hasSignal ? "Signal present" : "No signal")
-                        .font(.system(.body, design: .monospaced))
-                }
+    private var controlsSection: some View {
+        GroupBox("Controls") {
+            VStack(alignment: .leading, spacing: 8) {
+                diagnosticRow("Mode", pipeline.mode.shortLabel)
+                diagnosticRow("Live tap", liveTapStatusText)
 
-                if hasSignal {
-                    HStack(spacing: 4) {
-                        Text("RMS")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 40, alignment: .leading)
-                        GeometryReader { geo in
-                            Capsule()
-                                .fill(Color.accentColor.opacity(0.25))
-                                .overlay(alignment: .leading) {
-                                    Capsule()
-                                        .fill(Color.accentColor)
-                                        .frame(width: geo.size.width * CGFloat(min(rms * 4, 1)))
-                                }
-                        }
-                        .frame(height: 6)
-                        Text(String(format: "%.4f", rms))
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(width: 55, alignment: .trailing)
-                    }
-
-                    HStack(spacing: 4) {
-                        Text("Peak")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 40, alignment: .leading)
-                        GeometryReader { geo in
-                            Capsule()
-                                .fill(Color.orange.opacity(0.25))
-                                .overlay(alignment: .leading) {
-                                    Capsule()
-                                        .fill(peak > 0.95 ? Color.red : Color.orange)
-                                        .frame(width: geo.size.width * CGFloat(min(peak, 1)))
-                                }
-                        }
-                        .frame(height: 6)
-                        Text(String(format: "%.4f", peak))
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(width: 55, alignment: .trailing)
-                    }
-
-                    if let freq = frequencyHz {
-                        HStack {
-                            Text("~\(Int(freq)) Hz").font(.system(.caption, design: .monospaced))
-                            Text("carrier estimate").foregroundStyle(.secondary).font(.caption)
-                        }
+#if ENABLE_TIMECODE_LIVE_TAP
+                Picker("USB channel pair", selection: channelPairSelectionBinding) {
+                    Text("Auto").tag(TimecodeCMSampleBufferAdapter.ChannelPairSelection.auto)
+                    ForEach(pairOptions, id: \.self) { startChannel in
+                        Text("\(startChannel + 1)/\(startChannel + 2)")
+                            .tag(
+                                TimecodeCMSampleBufferAdapter.ChannelPairSelection.pair(
+                                    startChannel: startChannel
+                                )
+                            )
                     }
                 }
+                .pickerStyle(.menu)
+
+                diagnosticRow("Channel mode", pipeline.inputChannel.label)
+                diagnosticRow("Auto-recommended pair", diagnostics?.autoRecommendedChannelPair ?? "—")
+#else
+                diagnosticRow("USB channel pair", "Not compiled")
+#endif
+                diagnosticRow("Signal health", pipeline.signalHealth.rawValue)
             }
             .padding(4)
         }
     }
 
-    // MARK: - Motion
+    private var liveTapStatusText: String {
+#if ENABLE_TIMECODE_LIVE_TAP
+        pipeline.liveTapEnabled ? "On" : "Off"
+#else
+        "Not compiled"
+#endif
+    }
 
-    private var motionSection: some View {
-        GroupBox("Motion") {
-            HStack(spacing: 16) {
-                directionBadge
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Speed")
-                            .foregroundStyle(.secondary)
-                        Text(String(format: "%.2f×", relativeRate))
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    HStack {
-                        Text("Conf.")
-                            .foregroundStyle(.secondary)
-                        Text(String(format: "%.0f%%", confidence * 100))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(confidence > 0.6 ? Color.primary : Color.orange)
-                    }
+    // MARK: - Live readings (stable — updates in place, never inserts/removes rows)
+
+    private var liveReadingsSection: some View {
+        GroupBox("Live Readings") {
+            VStack(alignment: .leading, spacing: 6) {
+                levelRow(label: "RMS", value: rms, tint: .accentColor)
+                levelRow(label: "Peak", value: peak, tint: peak > 0.95 ? .red : .orange)
+                diagnosticRow("Frequency", frequencyHz.map { "~\(Int($0)) Hz" } ?? "—")
+
+                Divider()
+
+                HStack(spacing: 16) {
+                    directionBadge
+                    diagnosticRow("Speed", String(format: "%.2f×", relativeRate))
+                    diagnosticRow("Conf.", String(format: "%.0f%%", confidence * 100))
                 }
-                Spacer()
+
+                diagnosticRow("Selected pair", diagnostics?.selectedChannelPair ?? "—")
+                diagnosticRow(
+                    "Adapter format",
+                    diagnostics.map { "\($0.formatSummary) @ \(Int($0.sampleRate)) Hz" } ?? "—"
+                )
             }
             .padding(4)
         }
+    }
+
+    private func levelRow(label: String, value: Float, tint: Color) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+            GeometryReader { geo in
+                Capsule()
+                    .fill(tint.opacity(0.25))
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(tint)
+                            .frame(width: geo.size.width * CGFloat(min(value * 4, 1)))
+                    }
+            }
+            .frame(height: 6)
+            Text(String(format: "%.4f", value))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 55, alignment: .trailing)
+        }
+        .font(.system(.caption2, design: .monospaced))
+        .frame(minHeight: 16)
     }
 
     private var directionBadge: some View {
@@ -138,112 +143,93 @@ struct DVSControlVinylPanel: View {
         return Text(label)
             .font(.system(.caption, design: .monospaced).bold())
             .foregroundStyle(color)
+            .frame(minWidth: 100, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
     }
 
-    // MARK: - Drops
+    // MARK: - Status (fixed-height rows in place of appearing/disappearing blocks)
 
-    private func dropsSection(reason: TimecodeDropoutReason) -> some View {
-        GroupBox("Last Drop") {
-            Text(reason.rawValue)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.orange)
-                .padding(4)
-        }
-    }
-
-    // MARK: - Setup guidance
-
-    private var setupGuidanceSection: some View {
-        GroupBox("Setup") {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("No DVS signal detected. Check:")
-                    .font(.caption.bold())
-                    .padding(.bottom, 2)
-                setupItem("Turntable is on and needle is down")
-                setupItem("Phono cable connected to audio interface")
-                setupItem("Correct input device selected in Mac Analyzer")
-                setupItem("Timecode mode set to Diagnostics or Prototype")
-                setupItem("Live tap enabled (ENABLE_TIMECODE_LIVE_TAP flag)")
+    private var statusSection: some View {
+        GroupBox("Status") {
+            VStack(alignment: .leading, spacing: 6) {
+                diagnosticRow("Last drop", pipeline.lastDropReason?.rawValue ?? "None")
+                diagnosticRow("Setup", hasSignal ? "OK — signal present" : setupSummary)
+                    .help(setupChecklistTooltip)
+                diagnosticRow("Pair warning", diagnostics?.warning ?? "None")
             }
             .padding(4)
         }
     }
 
-    private func setupItem(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text("•").foregroundStyle(.secondary)
-            Text(text).font(.caption).foregroundStyle(.secondary)
-        }
+    private var setupSummary: String {
+        "No signal — check turntable, cable, input, mode, live tap"
     }
 
-    // MARK: - Live log
+    private var setupChecklistTooltip: String {
+        [
+            "Turntable is on and needle is down",
+            "Phono cable connected to audio interface",
+            "Correct input device selected in Mac Analyzer",
+            "Timecode mode set to Diagnostics or Prototype",
+            "Live tap enabled (ENABLE_TIMECODE_LIVE_TAP flag)"
+        ].joined(separator: "\n")
+    }
+
+    // MARK: - Details (collapsed by default — verbose per-channel/per-pair diagnostics)
 
 #if ENABLE_TIMECODE_LIVE_TAP
-    private var sourceChannelsSection: some View {
-        GroupBox("USB Input Channels") {
-            VStack(alignment: .leading, spacing: 8) {
-                if let diagnostics = TimecodeCMSampleBufferAdapter.latestDiagnostics {
-                    diagnosticRow("Format", diagnostics.formatSummary)
-                    diagnosticRow("Sample rate", "\(diagnostics.sampleRate) Hz")
-                    diagnosticRow("Source channels", "\(diagnostics.sourceChannelCount)")
+    private var detailsSection: some View {
+        GroupBox("Details") {
+            DisclosureGroup("Per-channel / per-pair diagnostics", isExpanded: $isDetailsExpanded) {
+                if let diagnostics {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            diagnosticRow("Sample rate", "\(diagnostics.sampleRate) Hz")
+                            diagnosticRow("Source channels", "\(diagnostics.sourceChannelCount)")
 
-                    Picker("DVS pair", selection: channelPairSelectionBinding) {
-                        Text("Auto").tag(TimecodeCMSampleBufferAdapter.ChannelPairSelection.auto)
-                        ForEach(
-                            Array(stride(from: 0, to: diagnostics.sourceChannelCount - 1, by: 2)),
-                            id: \.self
-                        ) { startChannel in
-                            Text("\(startChannel + 1)/\(startChannel + 2)")
-                                .tag(
-                                    TimecodeCMSampleBufferAdapter.ChannelPairSelection.pair(
-                                        startChannel: startChannel
-                                    )
-                                )
+                            Divider()
+                            Text("Per channel")
+                                .font(.caption.bold())
+                            ForEach(diagnostics.perChannelDiagnostics, id: \.channelIndex) { channel in
+                                Text(channelDiagnosticText(channel))
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(channel.isNearSilent ? .secondary : .primary)
+                                    .textSelection(.enabled)
+                            }
+
+                            Divider()
+                            Text("Per pair")
+                                .font(.caption.bold())
+                            ForEach(diagnostics.perPairDiagnostics, id: \.startChannel) { pair in
+                                Text(pairDiagnosticText(pair))
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
                         }
+                        .padding(.top, 4)
                     }
-                    .pickerStyle(.menu)
-
-                    diagnosticRow("Selected", diagnostics.selectedChannelPair)
-                    diagnosticRow(
-                        "Auto recommendation",
-                        diagnostics.autoRecommendedChannelPair ?? "—"
-                    )
-
-                    if let warning = diagnostics.warning {
-                        Text(warning)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-
-                    Divider()
-                    Text("Per channel")
-                        .font(.caption.bold())
-                    ForEach(diagnostics.perChannelDiagnostics, id: \.channelIndex) { channel in
-                        Text(channelDiagnosticText(channel))
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(channel.isNearSilent ? .secondary : .primary)
-                            .textSelection(.enabled)
-                    }
-
-                    Divider()
-                    Text("Per pair")
-                        .font(.caption.bold())
-                    ForEach(diagnostics.perPairDiagnostics, id: \.startChannel) { pair in
-                        Text(pairDiagnosticText(pair))
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
+                    .frame(maxHeight: 220)
                 } else {
                     Text("Waiting for a live audio buffer.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .padding(.top, 4)
                 }
             }
+            .font(.caption.bold())
             .padding(4)
         }
+    }
+
+    private var diagnostics: TimecodeCMSampleBufferAdapter.DiagnosticsSnapshot? {
+        TimecodeCMSampleBufferAdapter.latestDiagnostics
+    }
+
+    private var pairOptions: [Int] {
+        guard let count = diagnostics?.sourceChannelCount, count > 1 else { return [] }
+        return Array(stride(from: 0, to: count - 1, by: 2))
     }
 
     private var channelPairSelectionBinding:
@@ -277,6 +263,8 @@ struct DVSControlVinylPanel: View {
     }
 #endif
 
+    // MARK: - Live log (fixed position, always last)
+
     private var logSection: some View {
         GroupBox("Live Log") {
             VStack(alignment: .leading, spacing: 6) {
@@ -290,12 +278,7 @@ struct DVSControlVinylPanel: View {
                     logger.lastWriteTimestamp?.formatted(date: .omitted, time: .standard) ?? "—"
                 )
                 diagnosticRow("Lines written", "\(logger.totalLinesWritten)")
-                if let error = logger.lastWriteError {
-                    Text("Error: \(error)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                }
+                diagnosticRow("Error", logger.lastWriteError ?? "None")
                 HStack(spacing: 8) {
                     Button("Write test line") {
                         logger.append(makeLogEntry())
@@ -329,8 +312,12 @@ struct DVSControlVinylPanel: View {
                 .foregroundStyle(
                     label == "Status" && value.hasSuffix("failed") ? Color.red : Color.primary
                 )
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(minWidth: 70, alignment: .trailing)
         }
         .font(.system(.caption2, design: .monospaced))
+        .frame(minHeight: 16)
     }
 
     // MARK: - Log entry builder
