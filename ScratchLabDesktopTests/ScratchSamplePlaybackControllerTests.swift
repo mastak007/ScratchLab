@@ -150,7 +150,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastScheduledSourceFrame, 0)
     }
 
-    func testForwardMovementNearEndClampsWithoutWrapping() {
+    func testForwardMovementPastEndWrapsToStart() {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else {
             return
@@ -159,16 +159,28 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 1_000_000, direction: .forward)
+
+        // Move to just past the halfway point (uncapped, proportional movement) —
+        // comfortably under the per-tick frame-delta cap, so this is a normal
+        // forward push, not a saturating one.
+        controller.positionDidChange(steps: 9_000, direction: .forward)
         controller.waitForAudioQueue()
+        let nearEndFrame = controller.currentSampleFrame
+        XCTAssertGreaterThan(nearEndFrame, controller.totalFrames / 2,
+            "Setup must land the needle well past the loop's midpoint")
+
         Thread.sleep(forTimeInterval: 0.02)
-        controller.positionDidChange(steps: 1_000_001, direction: .forward)
+
+        // Push far enough forward to cross the loop end. The old
+        // clamp-without-wrapping behavior stuck at totalFrames - 1; looping
+        // instead wraps the excess motion back around to near the loop origin.
+        controller.positionDidChange(steps: 10_000, direction: .forward)
         controller.waitForAudioQueue()
 
-        XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
-        // Continuing forward past the end must hit the boundary guard rather than
-        // schedule a 1-frame chatter segment.
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryEnd")
+        XCTAssertLessThan(controller.currentSampleFrame, nearEndFrame,
+            "Forward motion past the loop end must wrap to near the loop origin, not stick at the last frame")
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryEnd",
+            "boundaryEnd no longer exists now that the sample loops")
     }
 
     func testBackwardMovementDecreasesFromCurrentFrameContinuously() {
@@ -403,73 +415,97 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
     // MARK: - Boundary chatter guards
 
-    func testBackwardAtFrameZeroSkipsBoundaryStart() {
+    func testBackwardMovementPastOriginWrapsToEnd() {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
         // currentSampleFrame starts at 0 after load.
 
-        // Prime with backward steps so lastPlatterSteps is established.
-        controller.positionDidChange(steps: 100, direction: .backward)
-        controller.waitForAudioQueue()
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
-
-        // delta = 99 - 100 = -1 (matches backward), frame = 0 → boundaryStart.
-        controller.positionDidChange(steps: 99, direction: .backward)
-        controller.waitForAudioQueue()
-
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryStart")
-        XCTAssertEqual(controller.currentSampleFrame, 0)
-        XCTAssertNil(controller.lastScheduledSourceFrame, "No segment should be scheduled at boundaryStart")
-    }
-
-    func testForwardAtLastFrameSkipsBoundaryEnd() {
-        let controller = ScratchSamplePlaybackController()
-        guard controller.load(sampleID: "ahhh") else { return }
-        controller.waitForAudioQueue()
-
-        // Move to end of sample.
+        // Move forward a bit first so backward motion has to cross the loop
+        // origin ("12 o'clock") to reach the wrap, rather than starting
+        // exactly on it.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 1_000_000, direction: .forward)
+        controller.positionDidChange(steps: 200, direction: .forward)
         controller.waitForAudioQueue()
-        XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
+        let frameAfterForward = controller.currentSampleFrame
+        XCTAssertGreaterThan(frameAfterForward, 0)
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Attempting to move further forward must hit boundaryEnd.
-        controller.positionDidChange(steps: 1_000_001, direction: .forward)
+        // Push far enough backward to cross the loop origin. The old
+        // clamp-without-wrapping behavior stuck at frame 0; looping instead
+        // wraps the excess motion around to near the loop end.
+        controller.positionDidChange(steps: -300, direction: .backward)
         controller.waitForAudioQueue()
 
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryEnd")
-        XCTAssertEqual(controller.currentSampleFrame, controller.totalFrames - 1)
+        XCTAssertGreaterThan(controller.currentSampleFrame, frameAfterForward,
+            "Backward motion past the loop origin must wrap to near the loop end, not stick at frame 0")
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryStart",
+            "boundaryStart no longer exists now that the sample loops")
     }
 
-    func testBoundarySkipUpdatesLastPlatterSteps() {
+    func testForwardPastEndContinuesSchedulingAfterWrap() {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Prime.
-        controller.positionDidChange(steps: 200, direction: .backward)
+        // Move near the loop end, then cross it.
+        controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-
-        // Hit backward boundary; lastPlatterSteps must update to 199.
-        controller.positionDidChange(steps: 199, direction: .backward)
+        controller.positionDidChange(steps: 9_000, direction: .forward)
         controller.waitForAudioQueue()
-        XCTAssertEqual(controller.lastScheduleSkippedReason, "boundaryStart")
+        let nearEndFrame = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Forward with delta = 210 - 199 = +11 (positive → forward).
-        // If lastPlatterSteps was not updated by the boundary skip, the baseline
-        // would be stale and the computed delta would misrepresent the actual step
-        // displacement — producing an oversized grain on the next event.
-        controller.positionDidChange(steps: 210, direction: .forward)
+        controller.positionDidChange(steps: 10_000, direction: .forward)
+        controller.waitForAudioQueue()
+        let wrappedFrame = controller.currentSampleFrame
+        XCTAssertLessThan(wrappedFrame, nearEndFrame, "Needle must have wrapped past the loop end")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Continued forward motion after the wrap must keep scheduling
+        // normally from the new (wrapped) position — not skip as though
+        // still pinned at a permanent boundary.
+        controller.positionDidChange(steps: 10_030, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNil(controller.lastScheduleSkippedReason,
-            "Post-boundary forward step must schedule successfully")
+            "Forward motion after wrapping must schedule normally")
+        XCTAssertGreaterThan(controller.currentSampleFrame, wrappedFrame)
+    }
+
+    func testWrapDoesNotLeaveStaleSkipReason() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Prime backward, then cross the loop origin so the needle wraps to
+        // the loop end.
+        controller.positionDidChange(steps: 200, direction: .backward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        controller.positionDidChange(steps: -300, direction: .backward)
+        controller.waitForAudioQueue()
+        let wrappedFrame = controller.currentSampleFrame
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryStart",
+            "boundaryStart no longer exists now that the sample loops")
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Continued backward motion after the wrap must keep scheduling
+        // normally from the new (wrapped) position — no stale boundary-style
+        // skip reason should linger from before the wrap.
+        controller.positionDidChange(steps: -400, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Post-wrap backward motion must schedule successfully")
+        XCTAssertEqual(controller.lastScheduledSourceFrame, wrappedFrame,
+            "Scheduling after the wrap must continue from the wrapped position")
     }
 
     // MARK: - Scheduling direction from delta sign (Fix A)
@@ -917,29 +953,29 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Baby-scratch cycles with reversal compensation must return near start")
     }
 
-    func testReversalCompensationClampedNearBoundaryEnd() {
+    func testReversalCompensationNearLoopEndWrapsSafely() {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Force needle near end of sample.
+        // Force needle near the loop end (uncapped, proportional movement).
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 1_000_000, direction: .forward)
+        controller.positionDidChange(steps: 9_000, direction: .forward)
         controller.waitForAudioQueue()
         let nearEnd = controller.currentSampleFrame
-        XCTAssertEqual(nearEnd, controller.totalFrames - 1, "Needle must be at end")
+        XCTAssertGreaterThan(nearEnd, controller.totalFrames / 2, "Needle must be near the loop end")
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Reverse with compensated grain: lastEffectiveFrameDelta ≈ large.
-        // segmentFrames = min(effectiveFrameDelta, sourceFrame+1) — clamped.
-        controller.positionDidChange(steps: 1_000_000 - 20, direction: .backward)
+        // Reverse with a compensated grain near the loop end — must retreat
+        // (or wrap) safely, never crash or produce an invalid segment,
+        // regardless of whether the compensated grain crosses the origin.
+        controller.positionDidChange(steps: 8_980, direction: .backward)
         controller.waitForAudioQueue()
 
-        // BoundaryEnd (then backing away): the grain must not crash or truncate badly.
-        XCTAssertLessThan(controller.currentSampleFrame, nearEnd,
-            "Backward grain at end must retreat needle safely")
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "invalidSegment")
+        XCTAssertNotEqual(controller.lastScheduleSkippedReason, "copyFailed")
     }
 
     func testReversalCompensationClampedNearBoundaryStart() {
@@ -1140,5 +1176,59 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Rate must be set after a successfully faded backward grain")
         XCTAssertLessThan(controller.currentSampleFrame, frameAfterForward,
             "currentSampleFrame must retreat after a faded backward grain")
+    }
+
+    // MARK: - TimecodeDriveStepConverter (DVS → CC6-step domain adapter)
+
+    func testStepConverterAtRateZeroProducesNoSteps() {
+        var converter = TimecodeDriveStepConverter()
+        let (steps, direction) = converter.steps(forRate: 0, direction: .forward, elapsed: 1.0)
+        XCTAssertEqual(steps, 0)
+        XCTAssertEqual(direction, .forward)
+    }
+
+    func testStepConverterUnknownDirectionMapsToNil() {
+        var converter = TimecodeDriveStepConverter()
+        let (_, direction) = converter.steps(forRate: 1.0, direction: .unknown, elapsed: 0.1)
+        XCTAssertNil(direction)
+    }
+
+    func testStepConverterForwardDirectionMapsToForward() {
+        var converter = TimecodeDriveStepConverter()
+        let (_, direction) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 0.1)
+        XCTAssertEqual(direction, .forward)
+    }
+
+    func testStepConverterBackwardDirectionMapsToBackward() {
+        var converter = TimecodeDriveStepConverter()
+        let (_, direction) = converter.steps(forRate: 1.0, direction: .backward, elapsed: 0.1)
+        XCTAssertEqual(direction, .backward)
+    }
+
+    func testStepConverterRateOneForOneRevolutionMatchesStepsPerRevolution() {
+        // rate=1.0 is nominal 33⅓ RPM → one revolution every 1.8s.
+        // Integrating for 1.8s at rate=1.0 should yield ~3932 steps
+        // (the Rane ONE MKII CC6 ring-counter resolution), matching the
+        // same convention ScratchSamplePlaybackController uses for
+        // framesPerStep.
+        var converter = TimecodeDriveStepConverter()
+        let (steps, _) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 1.8)
+        XCTAssertEqual(steps, 3932)
+    }
+
+    func testStepConverterAccumulatesAcrossCalls() {
+        var converter = TimecodeDriveStepConverter()
+        let (firstSteps, _) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 0.9)
+        let (secondSteps, _) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 0.9)
+        XCTAssertGreaterThan(secondSteps, firstSteps,
+            "Accumulated steps must grow across successive ticks at a sustained rate")
+    }
+
+    func testStepConverterNegativeRateDecreasesAccumulatedSteps() {
+        var converter = TimecodeDriveStepConverter()
+        let (forwardSteps, _) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 0.9)
+        let (afterReverse, _) = converter.steps(forRate: -1.0, direction: .backward, elapsed: 0.9)
+        XCTAssertLessThan(afterReverse, forwardSteps,
+            "A negative rate must retreat the accumulated step count")
     }
 }

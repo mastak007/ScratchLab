@@ -320,24 +320,12 @@ final class ScratchSamplePlaybackController {
         // nil-guard above and is not consulted for actual scheduling direction.
         let schedulingDirection: ScratchPlatterDirection = deltaSteps > 0 ? .forward : .backward
 
-        // Guard: boundary. When currentSampleFrame is already pinned at the sample
-        // start (backward) or end (forward), additional motion in the same direction
-        // would produce 1-frame segments → audible chatter. Skip scheduling and
-        // update lastPlatterSteps so future deltas remain stable after reversal.
-        switch schedulingDirection {
-        case .backward where currentSampleFrame <= 0:
-            lastScheduleSkippedReason = "boundaryStart"
-            lastPlatterSteps = steps
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=boundaryStart steps=\(steps) currentFrame=\(currentSampleFrame)")
-            return
-        case .forward where currentSampleFrame >= totalFrames - 1:
-            lastScheduleSkippedReason = "boundaryEnd"
-            lastPlatterSteps = steps
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=boundaryEnd steps=\(steps) currentFrame=\(currentSampleFrame)")
-            return
-        default:
-            break
-        }
+        // The sample loops at its own length: frame 0 is the "12 o'clock" loop
+        // origin, and `totalFrames` is the loop end. Motion is never blocked at
+        // either edge — `wrappedSampleFrame` carries it around instead, so the
+        // needle simply continues into the wrapped region. `currentSampleFrame`
+        // is always kept in [0, totalFrames) by wrapping (see below), so it can
+        // never itself sit exactly at a boundary the way the old clamp did.
 
         let sourceTotalFrames = Int(forward.frameLength)
         let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
@@ -365,9 +353,9 @@ final class ScratchSamplePlaybackController {
         guard frameDelta >= minAudibleFrameDelta else {
             switch schedulingDirection {
             case .forward:
-                currentSampleFrame = clampedSampleFrame(currentSampleFrame + frameDelta)
+                currentSampleFrame = wrappedSampleFrame(currentSampleFrame + frameDelta)
             case .backward:
-                currentSampleFrame = clampedSampleFrame(currentSampleFrame - frameDelta)
+                currentSampleFrame = wrappedSampleFrame(currentSampleFrame - frameDelta)
             }
             lastScheduleSkippedReason = "nearStop"
             lastPlatterSteps = steps
@@ -425,7 +413,7 @@ final class ScratchSamplePlaybackController {
                 startFrame: sourceFrame,
                 frameCount: segmentFrames
             )
-            currentSampleFrame = clampedSampleFrame(currentSampleFrame + effectiveFrameDelta)
+            currentSampleFrame = wrappedSampleFrame(currentSampleFrame + effectiveFrameDelta)
         case .backward:
             sourceFrame = currentSampleFrame
             let availableFrames = sourceFrame + 1
@@ -435,7 +423,7 @@ final class ScratchSamplePlaybackController {
                 frameCount: segmentFrames,
                 from: forward
             )
-            currentSampleFrame = clampedSampleFrame(currentSampleFrame - effectiveFrameDelta)
+            currentSampleFrame = wrappedSampleFrame(currentSampleFrame - effectiveFrameDelta)
         }
 
         #if DEBUG
@@ -599,9 +587,14 @@ final class ScratchSamplePlaybackController {
         return min(max(Int(wrapped), 0), totalFrames - 1)
     }
 
-    private func clampedSampleFrame(_ frame: Int) -> Int {
+    /// Wraps a frame index into the loop region `[0, totalFrames)` — the
+    /// full loaded sample. Frame 0 is the "12 o'clock" loop origin: crossing
+    /// past `totalFrames` wraps to the start, crossing before 0 wraps to the
+    /// end, in both cases continuing motion rather than stopping at the edge.
+    private func wrappedSampleFrame(_ frame: Int) -> Int {
         guard totalFrames > 0 else { return 0 }
-        return min(max(frame, 0), totalFrames - 1)
+        let wrapped = frame % totalFrames
+        return wrapped < 0 ? wrapped + totalFrames : wrapped
     }
 
     /// Apply a symmetric linear fade-in/fade-out ramp to the leading and trailing
