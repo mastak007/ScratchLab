@@ -1,5 +1,11 @@
 # DEV_LOG
 
+## 2026-07-07
+- Selected task: commit and push two focused pending fixes — the Practice Live Notation show/hide toggle and the ScratchSamplePlaybackController grain edge-fade (backward scratch sample scheduling stabilization)
+- Files changed: `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktop/Services/ScratchSamplePlaybackController.swift`, `ScratchLabDesktopTests/ScratchSamplePlaybackControllerTests.swift`, `TASKS.md`, `DEV_LOG.md`
+- Build result: focused notation suites (`LiveNotationOverlayTests`, `NotationLaneGeometryTests`, `NotationLaneGeometryViewTests`, `ScratchNotationPresentationAdapterTests`) passed `91/91`; focused `ScratchSamplePlaybackControllerTests` passed `59/59`; required Debug `ScratchLabDesktop` arm64 build passed; `git diff --check` passed at every stage; pushed to `main` as commits `18e8b79` (Live notation: add Practice visibility toggle) and `0d883d6` (macOS: stabilize backward scratch sample scheduling)
+- Follow-up notes: `18e8b79` added a compact "Show Live Notation" toggle (default on) to the existing Practice-tab notation strip header, reusing the same icon+text capsule pattern already used by the Review tab's "Notation Overlay" toggle; disabling it hides only the caption and the strip itself, the "Live Notation" title stays visible, and no new notation model/renderer/clock/timer was introduced — visually confirmed live (built app launched directly, toggled off/on, Listen still moved the cursor with forward/backward colours intact, no crash). `0d883d6` added a 32-frame linear edge-fade (`grainEdgeFadeFrames`/`applyEdgeFade(to:)`) applied to every scheduled scratch grain immediately before `scheduleBuffer`, removing the PCM-cut click at grain boundaries; this is direction-agnostic (applies identically to forward and reversed/backward grains) and sits entirely after the existing `invalidSegment`/`copyFailed` guards, so `currentSampleFrame` movement, skip-reason logic, and DVS/platter-following delta handling were untouched. No camera, DVS, MIDI, scoring, audio-routing, signing, bundle, or entitlement changes in either commit.
+
 ## 2026-07-06
 - Selected task: user-requested Live Notation UX/discoverability pass on the existing macOS Practice-tab notation strip
 - Files changed: `ScratchLabDesktop/Views/MacAnalyzerView.swift`
