@@ -92,6 +92,86 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertTrue(true, "Consecutive loads/unloads must not crash")
     }
 
+    // MARK: - ensureLoadedForDVSDrive (auto-load for DVS drive arming)
+
+    func testEnsureLoadedForDVSDriveLoadsWhenNotLoaded() {
+        let controller = ScratchSamplePlaybackController()
+        XCTAssertNil(controller.loadedSampleID)
+
+        let result = controller.ensureLoadedForDVSDrive(sampleID: "ahhh")
+        controller.waitForAudioQueue()
+
+        guard Bundle.main.path(forResource: "ahhh", ofType: "wav") != nil else {
+            // No bundle in this test context — must fail cleanly, not crash.
+            XCTAssertFalse(result)
+            return
+        }
+        XCTAssertTrue(result, "ensureLoadedForDVSDrive must load when nothing is loaded yet")
+        XCTAssertEqual(controller.loadedSampleID, "ahhh")
+    }
+
+    func testEnsureLoadedForDVSDriveDoesNotReloadWhenAlreadyLoaded() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Advance playback position so a reload would be detectable.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.waitForAudioQueue()
+        let frameBeforeEnsure = controller.currentSampleFrame
+        XCTAssertGreaterThan(frameBeforeEnsure, 0)
+
+        // Calling ensureLoadedForDVSDrive again with the same sample ID
+        // (as a DVS evaluation tick would, every ~0.1s) must not reload —
+        // currentSampleFrame must be untouched, not reset to 0.
+        _ = controller.ensureLoadedForDVSDrive(sampleID: "ahhh")
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.currentSampleFrame, frameBeforeEnsure,
+            "Repeated ensureLoadedForDVSDrive calls for an already-loaded sample must not reset playback position")
+    }
+
+    func testEnsureLoadedForDVSDriveThenPositionDidChangeSchedules() {
+        let controller = ScratchSamplePlaybackController()
+        guard Bundle.main.path(forResource: "ahhh", ofType: "wav") != nil else { return }
+
+        XCTAssertNil(controller.loadedSampleID, "Precondition: nothing loaded yet, matching a DVS-only session before arming")
+
+        _ = controller.ensureLoadedForDVSDrive(sampleID: "ahhh")
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.loadedSampleID, "ahhh")
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNotNil(controller.lastScheduledSourceFrame,
+            "Once ensureLoadedForDVSDrive has loaded a sample, DVS-driven positionDidChange must actually schedule audio")
+    }
+
+    func testManualLoadStillReloadsAndResetsPosition() {
+        // Preserves existing manual-trigger behavior: load(sampleID:) is not
+        // idempotent and always resets position, unlike ensureLoadedForDVSDrive.
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertGreaterThan(controller.currentSampleFrame, 0)
+
+        controller.load(sampleID: "ahhh")
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(controller.currentSampleFrame, 0,
+            "Manual load(sampleID:) must still reset position on every call, unchanged from before")
+    }
+
     // MARK: - sampleFrame edge cases
 
     func testSampleFrameWithLargeSteps() {

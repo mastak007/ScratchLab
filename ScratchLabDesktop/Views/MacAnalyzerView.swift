@@ -431,8 +431,19 @@ struct MacAnalyzerView: View {
         } else {
             appliedLine = "Last DVS position update: none yet"
         }
+        let sampleLine: String
+        if captureEngine.dvsSampleLoadFailed {
+            sampleLine = "Sample loaded: FAILED (WAV missing)"
+        } else if captureEngine.isDVSSampleLoaded {
+            sampleLine = "Sample loaded: yes"
+        } else if captureEngine.dvsAutoLoadAttempted {
+            sampleLine = "Sample loaded: loading…"
+        } else {
+            sampleLine = "Sample loaded: no (auto-load not attempted yet)"
+        }
         return VStack(alignment: .leading, spacing: 2) {
             Text(statusLine).font(.caption).foregroundStyle(.secondary)
+            Text(sampleLine).font(.caption).foregroundStyle(.secondary)
             Text(appliedLine).font(.caption).foregroundStyle(.secondary)
         }
     }

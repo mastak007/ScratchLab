@@ -177,6 +177,35 @@ final class ScratchSamplePlaybackController {
         return true
     }
 
+    /// Ensures `sampleID` is loaded before DVS-driven position updates can
+    /// reach `positionDidChange`. Unlike `load(sampleID:)`, this is
+    /// idempotent: if `sampleID` is already the loaded sample, it does
+    /// nothing — safe to call on every DVS evaluation tick without reload
+    /// churn or resetting `currentSampleFrame` mid-scratch. The idempotency
+    /// check runs on the audio queue (where `loadedSampleID` is mutated),
+    /// so it is race-free regardless of the caller's thread.
+    ///
+    /// Returns false synchronously only if the sample ID is unknown or the
+    /// WAV is absent from the bundle — same failure contract as
+    /// `load(sampleID:)`. Does not affect manual `load(sampleID:)` callers
+    /// (hot-cue pads, crossfader trigger, debug button), which always
+    /// reload/reset as before.
+    @discardableResult
+    func ensureLoadedForDVSDrive(sampleID: String) -> Bool {
+        guard let url = wavURL(for: sampleID) else {
+            print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
+            debugPublishOnMainAsync(field: "statusLabel.missing") { [weak self] in
+                self?.statusLabel = "missing: \(sampleID)"
+            }
+            return false
+        }
+        audioQueue.async { [weak self] in
+            guard let self, self.loadedSampleID != sampleID else { return }
+            self.loadOnQueue(sampleID: sampleID, url: url)
+        }
+        return true
+    }
+
     private func loadOnQueue(sampleID: String, url: URL) {
         print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
         let file: AVAudioFile

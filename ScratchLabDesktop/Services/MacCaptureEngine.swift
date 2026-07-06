@@ -1463,13 +1463,41 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// this session (bridge inactive, gated off, or never evaluated).
     @Published private(set) var lastTimecodeDriveAppliedAt: Date?
 
+    /// Diagnostic only: whether an auto-load of the DVS drive sample has
+    /// been requested this session (does not mean it necessarily
+    /// succeeded — see `dvsSampleLoadFailed`).
+    @Published private(set) var dvsAutoLoadAttempted: Bool = false
+
+    /// Diagnostic only: true if the most recent DVS auto-load request
+    /// failed (sample ID unknown or WAV missing from the bundle).
+    @Published private(set) var dvsSampleLoadFailed: Bool = false
+
+    /// Diagnostic only: whether `scratchPlaybackController` currently has
+    /// any sample loaded (of any source — DVS, MIDI pad, or debug button).
+    var isDVSSampleLoaded: Bool { scratchPlaybackController.loadedSampleID != nil }
+
+    /// Sample ID armed for DVS-driven playback. Matches the "ahhh" sample
+    /// used elsewhere (hot-cue pads, debug preview button).
+    private static let dvsDriveSampleID = "ahhh"
+
     private var timecodeDriveStepConverter = TimecodeDriveStepConverter()
 
     /// Forwards an already-gated `TimecodePlaybackDrive` (validated by
     /// `TimecodePlaybackBridge.evaluate`) into the existing platter-driven
     /// sample playback path. No-op unless `dvsPlaybackDriveActive` is true.
+    ///
+    /// Ensures the DVS drive sample is loaded before forwarding motion —
+    /// arms as soon as `dvsPlaybackDriveActive` is true, independent of
+    /// whether `drive` itself is non-nil yet, so the sample is ready
+    /// before the first valid motion arrives. `ensureLoadedForDVSDrive` is
+    /// idempotent and safe to call every tick: it does not reload or reset
+    /// `currentSampleFrame` once the sample is already loaded.
     func forwardTimecodeDrive(_ drive: TimecodePlaybackDrive?, elapsed: TimeInterval) {
-        guard dvsPlaybackDriveActive, let drive else { return }
+        guard dvsPlaybackDriveActive else { return }
+        let loadOK = scratchPlaybackController.ensureLoadedForDVSDrive(sampleID: Self.dvsDriveSampleID)
+        dvsAutoLoadAttempted = true
+        dvsSampleLoadFailed = !loadOK
+        guard let drive else { return }
         let (steps, direction) = timecodeDriveStepConverter.steps(
             forRate: drive.rate,
             direction: drive.direction,
