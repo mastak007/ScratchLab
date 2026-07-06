@@ -24,6 +24,7 @@
 		219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* CoachDemoMotion */; };
 		219D8D63A93840FC9A724C11 /* Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Notation */; };
 		219D8D64A93840FC9A724C11 /* PracticeReelAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000043 /* PracticeReelAudio */; };
+		B9AF9EDA370241CF8BEFDB7C /* PracticeReelAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000043 /* PracticeReelAudio */; };
 		SSSAHIOS /* ahhh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAHFREF /* ahhh.wav */; };
 		SSSAHMAC /* ahhh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAHFREF /* ahhh.wav */; };
 		SSSFRIOS /* fresh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSFRFREF /* fresh.wav */; };
