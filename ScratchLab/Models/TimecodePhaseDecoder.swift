@@ -373,13 +373,25 @@ public struct TimecodePhaseDecoder: Sendable {
         var delta = rightPhase - leftPhase
         delta = unwrapPhaseDelta(delta)
 
-        // Fitted coefficient magnitude is the channel carrier amplitude.
-        // Use geometric mean so one dead channel pulls confidence down.
-        let leftNorm = leftMag
-        let rightNorm = rightMag
-        let corrMag = sqrt(leftNorm * rightNorm)  // geometric mean, clamped to [0,1] below
+        // `leftMag`/`rightMag` are fitted carrier *amplitudes*, in the same
+        // physical units as the input samples — not amplitude-independent
+        // correlation coefficients. Comparing them directly against
+        // `minCorrelationMagnitude` (documented as a [0, 1] threshold)
+        // rejected any real-world signal whose absolute level sits below
+        // that threshold, regardless of how cleanly it phase-locked (e.g.
+        // ~0.03 RMS DVS line level vs. a 0.1 gate). Normalize each fitted
+        // amplitude against that channel's own RMS-derived amplitude
+        // (RMS × √2 for a sinusoid) so the result is a true goodness-of-fit
+        // in [0, 1], independent of signal level: ~1.0 when the channel's
+        // energy is concentrated at the carrier frequency, lower when it
+        // isn't — regardless of how loud or quiet the signal is overall.
+        let leftRMS = Double(rms(left))
+        let rightRMS = Double(rms(right))
+        let leftNorm = leftRMS > 0 ? min(leftMag / (leftRMS * 2.0.squareRoot()), 1.0) : 0
+        let rightNorm = rightRMS > 0 ? min(rightMag / (rightRMS * 2.0.squareRoot()), 1.0) : 0
+        let corrMag = sqrt(leftNorm * rightNorm)  // geometric mean, already in [0,1]
 
-        return (delta, min(corrMag, 1.0))
+        return (delta, corrMag)
     }
 
     // MARK: - Helpers

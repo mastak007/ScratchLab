@@ -89,13 +89,16 @@ final class TimecodeDecoderTests: XCTestCase {
     }
 
     /// Create a sequence of continuous 1 kHz quadrature buffers matching
-    /// `scratchlab_quadrature_1khz_60s.wav`: left sine, right sine +90 degrees.
+    /// `scratchlab_quadrature_1khz_60s.wav`: left sine, right sine offset by
+    /// `phaseOffsetDegrees` (default +90, the nominal quadrature relationship).
     private func makeContinuousQuadratureInputs(
         bufferCount: Int,
         framesPerBuffer: Int = 1024,
-        amplitude: Float = 0.42
+        amplitude: Float = 0.42,
+        phaseOffsetDegrees: Float = 90
     ) -> [TimecodePhaseDecoder.StereoInput] {
-        (0..<bufferCount).map { bufferIndex in
+        let phaseOffsetRadians = phaseOffsetDegrees * Float.pi / 180.0
+        return (0..<bufferCount).map { bufferIndex in
             let startFrame = bufferIndex * framesPerBuffer
             var left: [Float] = []
             var right: [Float] = []
@@ -106,7 +109,7 @@ final class TimecodeDecoderTests: XCTestCase {
                 let absoluteFrame = startFrame + frameOffset
                 let phase = 2.0 * Float.pi * carrierFrequency * Float(absoluteFrame) / Float(sampleRate)
                 left.append(amplitude * sin(phase))
-                right.append(amplitude * sin(phase + Float.pi / 2.0))
+                right.append(amplitude * sin(phase + phaseOffsetRadians))
             }
 
             return TimecodePhaseDecoder.StereoInput(
@@ -287,25 +290,51 @@ final class TimecodeDecoderTests: XCTestCase {
     // MARK: - 6. Confidence decreases for weak signal
 
     func testTimecodeDecoderConfidenceDecreasesForWeakInput() {
+        // Before the noPhaseLock units-mismatch fix, this test used a
+        // quieter — but equally clean — signal and expected lower
+        // confidence purely from reduced amplitude. That was actually
+        // asserting the bug: a raw fitted amplitude compared against an
+        // absolute threshold, not a genuine amplitude-independent
+        // goodness-of-fit (see testCorrelationGateIsAmplitudeIndependent,
+        // which now proves a quieter clean signal decodes just as well as
+        // a loud one). "Weak" here means genuinely degraded — the carrier
+        // contaminated with an unrelated tone — not merely quiet.
         let decoder = makeDecoder()
 
-        // Strong signal
-        let strongInputs = makePhaseProgression(bufferCount: 5, phaseStep: 0.3, amplitude: 0.5)
-        let strongResult = decoder.decode(strongInputs)
+        // Clean signal
+        let cleanInputs = makePhaseProgression(bufferCount: 5, phaseStep: 0.3, amplitude: 0.5)
+        let cleanResult = decoder.decode(cleanInputs)
 
-        // Weak signal (amplitude just above silence threshold)
-        let weakInputs = makePhaseProgression(bufferCount: 5, phaseStep: 0.3, amplitude: 0.02)
-        let weakResult = decoder.decode(weakInputs)
-
-        XCTAssertGreaterThan(strongResult.frames.count, 0)
-        // Weak signal may still decode but with lower confidence
-        if weakResult.frames.count > 0 {
-            XCTAssertGreaterThan(
-                strongResult.averageConfidence, weakResult.averageConfidence,
-                "Strong signal confidence (\(strongResult.averageConfidence)) should exceed weak signal confidence (\(weakResult.averageConfidence))"
+        // Degraded signal: same carrier, contaminated with a second,
+        // unrelated tone at comparable amplitude.
+        let degradedInputs = (0..<5).map { i -> TimecodePhaseDecoder.StereoInput in
+            let base = makeStereoInput(
+                amplitude: 0.5, rightPhaseOffset: 0.3 * Float(i),
+                relativeTime: TimeInterval(i) * timePerBuffer
+            )
+            let contamination = sineTone(
+                frequency: 275, sampleRate: sampleRate,
+                frameCount: framesPerBuffer, amplitude: 0.4
+            )
+            let degradedLeft = zip(base.left, contamination).map(+)
+            let degradedRight = zip(base.right, contamination).map(+)
+            return TimecodePhaseDecoder.StereoInput(
+                left: degradedLeft, right: degradedRight,
+                sampleRate: sampleRate, relativeTime: base.relativeTime
             )
         }
-        // If weak produces no frames, that's also valid — confidence was too low
+        let degradedResult = decoder.decode(degradedInputs)
+
+        XCTAssertGreaterThan(cleanResult.frames.count, 0)
+        // Degraded signal may still decode but with lower confidence
+        if degradedResult.frames.count > 0 {
+            XCTAssertGreaterThan(
+                cleanResult.averageConfidence, degradedResult.averageConfidence,
+                "Clean signal confidence (\(cleanResult.averageConfidence)) should exceed noise-degraded signal confidence (\(degradedResult.averageConfidence))"
+            )
+        }
+        // If the degraded signal produces no frames, that's also valid — its
+        // correlation was too degraded to trust.
     }
 
     // MARK: - 7. Adapter drops low-confidence samples
@@ -564,5 +593,81 @@ final class TimecodeDecoderTests: XCTestCase {
             XCTAssertTrue((0.5...2.0).contains(ratio),
                 "Forward and backward velocity magnitudes should be similar, ratio=\(ratio)")
         }
+    }
+
+    // MARK: - 9. noPhaseLock units-mismatch fix
+
+    /// Matches a real Rane ONE MKII DVS snapshot: ~0.033 RMS, ~-81° phase
+    /// offset, `signalHealth: usable`. Before the fix, `extractPhaseDelta`
+    /// returned the raw fitted carrier *amplitude* (in the same units as
+    /// the input samples) as `correlationMagnitude`, compared directly
+    /// against `minCorrelationMagnitude` (documented as a [0, 1] threshold).
+    /// A realistic ~0.033 RMS signal's fitted amplitude never cleared the
+    /// hardcoded 0.1 gate, so every frame was dropped as `.noPhaseLock`
+    /// regardless of how cleanly it phase-locked.
+    func testRealisticAmplitudeNearQuadratureSignalIsAccepted() {
+        let decoder = makeDecoder()
+        let inputs = makeContinuousQuadratureInputs(
+            bufferCount: 20,
+            amplitude: 0.047,   // ≈ 0.033 RMS × √2, matching the hardware snapshot
+            phaseOffsetDegrees: -81
+        )
+
+        let result = decoder.decode(inputs)
+
+        XCTAssertGreaterThan(result.frames.count, 0,
+            "A clean, realistic-amplitude near-quadrature signal must not be dropped as noPhaseLock")
+        XCTAssertNotEqual(result.dropoutReason, .noPhaseLock)
+        XCTAssertEqual(result.signalHealth, .usable)
+    }
+
+    /// The same clean signal at very different absolute amplitudes must be
+    /// accepted equally — proving `correlationMagnitude` is now a true
+    /// amplitude-independent goodness-of-fit rather than a raw amplitude
+    /// compared against an absolute threshold.
+    func testCorrelationGateIsAmplitudeIndependent() {
+        let decoder = makeDecoder()
+        let loudInputs = makeContinuousQuadratureInputs(bufferCount: 10, amplitude: 0.5, phaseOffsetDegrees: -81)
+        let quietInputs = makeContinuousQuadratureInputs(bufferCount: 10, amplitude: 0.033, phaseOffsetDegrees: -81)
+
+        let loudResult = decoder.decode(loudInputs)
+        let quietResult = decoder.decode(quietInputs)
+
+        XCTAssertGreaterThan(loudResult.frames.count, 0)
+        XCTAssertGreaterThan(quietResult.frames.count, 0,
+            "A quiet but clean signal must decode just as reliably as a loud one")
+        XCTAssertNotEqual(quietResult.dropoutReason, .noPhaseLock)
+    }
+
+    /// A right channel carrying an unrelated frequency (not a phase-shifted
+    /// copy of the carrier) must still fail the phase-lock gate at the same
+    /// amplitude the true quadrature pair above passes — proving the fix
+    /// corrected the units, not loosened or disabled the gate.
+    func testMismatchedFrequencyStillRejectedAtSameRealisticAmplitude() {
+        let decoder = makeDecoder()
+        let amplitude: Float = 0.047
+        let otherFrequency: Float = 200   // unrelated to the 1 kHz carrier
+
+        let inputs = (0..<10).map { i -> TimecodePhaseDecoder.StereoInput in
+            let relativeTime = TimeInterval(i) * timePerBuffer
+            let left = sineTone(
+                frequency: carrierFrequency, sampleRate: sampleRate,
+                frameCount: framesPerBuffer, amplitude: amplitude
+            )
+            let right = sineTone(
+                frequency: otherFrequency, sampleRate: sampleRate,
+                frameCount: framesPerBuffer, amplitude: amplitude
+            )
+            return TimecodePhaseDecoder.StereoInput(
+                left: left, right: right,
+                sampleRate: sampleRate, relativeTime: relativeTime
+            )
+        }
+
+        let result = decoder.decode(inputs)
+
+        XCTAssertEqual(result.frames.count, 0,
+            "A right channel with no real carrier at the reference frequency must still be rejected, even at an amplitude the true quadrature pair passes")
+        XCTAssertEqual(result.dropoutReason, .noPhaseLock)
     }
 }
