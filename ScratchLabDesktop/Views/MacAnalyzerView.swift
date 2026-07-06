@@ -415,6 +415,29 @@ struct MacAnalyzerView: View {
 #endif
     #endif
 
+    #if DEBUG
+    /// Diagnostic-only: whether DVS motion is currently driving scratch
+    /// playback (suppressing raw MIDI CC6), and when it last actually
+    /// reached `positionDidChange`. Helps distinguish "bridge is gated off"
+    /// from "bridge evaluated but never actually forwarded a position update."
+    private var dvsPlaybackDriveDiagnosticText: some View {
+        let statusLine = captureEngine.dvsPlaybackDriveActive
+            ? "DVS Drive: active (MIDI CC6 suppressed)"
+            : "DVS Drive: inactive (MIDI CC6 controls playback)"
+        let appliedLine: String
+        if let appliedAt = captureEngine.lastTimecodeDriveAppliedAt {
+            let elapsed = Date().timeIntervalSince(appliedAt)
+            appliedLine = String(format: "Last DVS position update: %.1fs ago", elapsed)
+        } else {
+            appliedLine = "Last DVS position update: none yet"
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(statusLine).font(.caption).foregroundStyle(.secondary)
+            Text(appliedLine).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    #endif
+
     private var stagingInspectorContexts: [StagingInspectorContext] {
         [
             StagingInspectorContext(
@@ -621,6 +644,14 @@ struct MacAnalyzerView: View {
             guard timecodePipeline.liveTapEnabled,
                   timecodePipeline.mode == .controlPrototype else { return }
             timecodePipeline.flushDecode()
+            // Gate is enforced entirely by TimecodePlaybackBridge.evaluate
+            // (mode, signal health, confidence, staleness, direction,
+            // validation). forwardTimecodeDrive is a no-op unless
+            // dvsPlaybackDriveActive is true, which mirrors the same
+            // user-facing toggle the bridge already exposes.
+            captureEngine.dvsPlaybackDriveActive = timecodeBridge.playbackDriveEnabled
+            timecodeBridge.evaluate(pipeline: timecodePipeline)
+            captureEngine.forwardTimecodeDrive(timecodeBridge.currentDrive, elapsed: 0.1)
         }
 #endif
         .sheet(isPresented: $isShowingRawJSONInspector, onDismiss: {
@@ -1707,6 +1738,7 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 22) {
                 DVSControlVinylPanel(pipeline: timecodePipeline)
                 TimecodeControlCard(pipeline: timecodePipeline, bridge: timecodeBridge)
+                dvsPlaybackDriveDiagnosticText
             }
 #if ENABLE_TIMECODE_LIVE_TAP
             .onAppear {

@@ -29,6 +29,41 @@ private enum ScratchLabDesktopDefaultsKey {
     static let selectedMIDIInputSourceID = "scratchlab.mac.selectedMIDIInputSourceID"
 }
 
+/// Converts a `TimecodePlaybackDrive`'s rate + direction into the CC6-step
+/// domain `ScratchSamplePlaybackController.positionDidChange` expects.
+///
+/// `TimecodePlaybackDrive.rate` is a normalized rate where `1.0` corresponds
+/// to nominal 33⅓ RPM — the same convention `ScratchSamplePlaybackController`
+/// already assumes when it derives `framesPerStep` from `stepsPerRevolution`
+/// at that RPM. Integrating rate over elapsed time in that shared convention
+/// yields a step count directly comparable to real CC6 ring-counter steps,
+/// so DVS-driven and MIDI-driven grains behave the same for the same
+/// platter speed.
+struct TimecodeDriveStepConverter {
+    /// Rane ONE MKII CC6 ring-counter resolution (steps per platter revolution).
+    private static let stepsPerRevolution: Double = 3932
+    /// Nominal 33⅓ RPM, expressed as seconds per revolution.
+    private static let vinylSecondsPerRevolution: Double = 60.0 / (100.0 / 3.0)
+    private static let stepsPerSecondAtRate1: Double = stepsPerRevolution / vinylSecondsPerRevolution
+
+    private var accumulatedSteps: Double = 0
+
+    mutating func steps(
+        forRate rate: Double,
+        direction: TimecodeDirection,
+        elapsed: TimeInterval
+    ) -> (steps: Int, direction: ScratchPlatterDirection?) {
+        accumulatedSteps += rate * Self.stepsPerSecondAtRate1 * elapsed
+        let mappedDirection: ScratchPlatterDirection?
+        switch direction {
+        case .forward:  mappedDirection = .forward
+        case .backward: mappedDirection = .backward
+        case .unknown:  mappedDirection = nil
+        }
+        return (Int(accumulatedSteps.rounded()), mappedDirection)
+    }
+}
+
 final class MacCaptureEngine: NSObject, ObservableObject {
     enum LiveRecordDirection: String, Equatable {
         case forward
@@ -1415,6 +1450,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Platter-driven scratch sample playback controller.
     private let scratchPlaybackController = ScratchSamplePlaybackController()
     private var tempDirectAhhhTriggerArmed = true
+
+    /// When true, a gated `TimecodePlaybackDrive` from `TimecodePlaybackBridge`
+    /// drives `scratchPlaybackController`, and the raw MIDI CC6 platter path
+    /// below is suppressed so the two sources never drive playback at once.
+    /// Defaults to false — MIDI CC6 behavior is unchanged unless the DVS
+    /// panel explicitly enables the bridge.
+    @Published var dvsPlaybackDriveActive: Bool = false
+
+    /// Timestamp of the most recent DVS-driven `positionDidChange` call —
+    /// diagnostic only. `nil` means no DVS motion has reached playback yet
+    /// this session (bridge inactive, gated off, or never evaluated).
+    @Published private(set) var lastTimecodeDriveAppliedAt: Date?
+
+    private var timecodeDriveStepConverter = TimecodeDriveStepConverter()
+
+    /// Forwards an already-gated `TimecodePlaybackDrive` (validated by
+    /// `TimecodePlaybackBridge.evaluate`) into the existing platter-driven
+    /// sample playback path. No-op unless `dvsPlaybackDriveActive` is true.
+    func forwardTimecodeDrive(_ drive: TimecodePlaybackDrive?, elapsed: TimeInterval) {
+        guard dvsPlaybackDriveActive, let drive else { return }
+        let (steps, direction) = timecodeDriveStepConverter.steps(
+            forRate: drive.rate,
+            direction: drive.direction,
+            elapsed: elapsed
+        )
+        scratchPlaybackController.positionDidChange(steps: steps, direction: direction)
+        lastTimecodeDriveAppliedAt = Date()
+    }
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -4838,10 +4901,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                     lastScratchPlaybackBridgeLogTime = now
                                     print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
                                 }
-                                scratchPlaybackController.positionDidChange(
-                                    steps: steps,
-                                    direction: direction
-                                )
+                                // Suppress the raw MIDI CC6 path while DVS/timecode
+                                // motion is driving playback, so the two sources
+                                // never call positionDidChange at the same time.
+                                if !dvsPlaybackDriveActive {
+                                    scratchPlaybackController.positionDidChange(
+                                        steps: steps,
+                                        direction: direction
+                                    )
+                                }
                             }
                             // CC8 crossfader: diagnostics/MIDI-learn only.
                             // Not wired to scratch sample playback until the crossfader
