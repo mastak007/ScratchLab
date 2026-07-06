@@ -377,6 +377,7 @@ struct MacAnalyzerView: View {
     @State private var demoWithBeatStartUptime: TimeInterval? = nil
     // Practice with Beat notation clock anchor (systemUptime when beat started)
     @State private var practiceBeatStartUptime: TimeInterval? = nil
+    @State private var showLiveNotation = true
     @State private var isShowingAllRoutineSessions = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
@@ -663,29 +664,54 @@ struct MacAnalyzerView: View {
         return Group {
             if !replayModel.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Live Notation")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.white)
+                    HStack(spacing: 8) {
+                        Text("Live Notation")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(.white)
 
-                    Text("Press Listen to see the Baby Scratch cursor move.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.68))
+                        Spacer(minLength: 8)
 
-                    TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
-                        LiveNotationOverlayView(
-                            model: replayModel,
-                            currentTime: practiceNotationCurrentTime,
-                            background: .translucent,
-                            drawMode: .replayReveal,
-                            viewportSeconds: 3.2,
-                            beatGridBPM: 79,
-                            beatGridFirstBeatTime: 0.336,
-                            beatsPerBar: 4,
-                            maximumAmplitude: 0.35
+                        Button {
+                            showLiveNotation.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: showLiveNotation ? "eye" : "eye.slash")
+                                    .font(.system(size: 10, weight: .semibold))
+                                Text("Show Live Notation")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            }
+                            .foregroundStyle(showLiveNotation ? Color.white : Color.white.opacity(0.55))
+                        }
+                        .buttonStyle(.borderless)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            showLiveNotation ? Color.white.opacity(0.15) : Color.white.opacity(0.07),
+                            in: RoundedRectangle(cornerRadius: 4)
                         )
-                        .frame(height: 80)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .padding(.top, 4)
+                    }
+
+                    if showLiveNotation {
+                        Text("Press Listen to see the Baby Scratch cursor move.")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.68))
+
+                        TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
+                            LiveNotationOverlayView(
+                                model: replayModel,
+                                currentTime: practiceNotationCurrentTime,
+                                background: .translucent,
+                                drawMode: .replayReveal,
+                                viewportSeconds: 3.2,
+                                beatGridBPM: 79,
+                                beatGridFirstBeatTime: 0.336,
+                                beatsPerBar: 4,
+                                maximumAmplitude: 0.35
+                            )
+                            .frame(height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(.top, 4)
+                        }
                     }
                 }
             }
