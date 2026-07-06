@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import ScratchLab
 
 /// ScratchSamplePlaybackController tests.
@@ -985,5 +986,159 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Near-stop gate must suppress a tiny reversal grain even when compensation is available")
         XCTAssertFalse(controller.lastReversalCompensated,
             "Reversal compensation must not fire when nearStop skipped the grain")
+    }
+
+    // MARK: - Grain edge fade
+
+    // grainEdgeFadeFrames = 32 (ScratchSamplePlaybackController.grainEdgeFadeFrames).
+    // Tests call applyEdgeFade(to:) directly on synthetic buffers to verify the
+    // PCM ramp without requiring a loaded sample or audio engine.
+    // Non-interleaved Float32 buffers are used to match the controller's format guard.
+
+    private func makeSyntheticBuffer(frames: Int, channels: Int = 2, value: Float = 1.0) -> AVAudioPCMBuffer? {
+        guard let format = AVAudioFormat(
+            standardFormatWithSampleRate: 44100,
+            channels: AVAudioChannelCount(channels)
+        ) else { return nil }
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(frames)
+        ) else { return nil }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        guard let channelData = buffer.floatChannelData else { return nil }
+        for ch in 0..<channels {
+            for i in 0..<frames { channelData[ch][i] = value }
+        }
+        return buffer
+    }
+
+    func testGrainEdgeFadeInZerosFirstFrame() {
+        let controller = ScratchSamplePlaybackController()
+        guard let buffer = makeSyntheticBuffer(frames: 100) else { XCTFail("buffer"); return }
+        controller.applyEdgeFade(to: buffer)
+        guard let channels = buffer.floatChannelData else { XCTFail("no channel data"); return }
+        XCTAssertEqual(channels[0][0], 0.0, accuracy: 0.001,
+            "Fade-in must zero the first frame of the grain (ch 0)")
+        XCTAssertEqual(channels[1][0], 0.0, accuracy: 0.001,
+            "Fade-in must zero the first frame of the grain (ch 1)")
+    }
+
+    func testGrainEdgeFadeOutZerosLastFrame() {
+        let controller = ScratchSamplePlaybackController()
+        guard let buffer = makeSyntheticBuffer(frames: 100) else { XCTFail("buffer"); return }
+        controller.applyEdgeFade(to: buffer)
+        guard let channels = buffer.floatChannelData else { XCTFail("no channel data"); return }
+        XCTAssertEqual(channels[0][99], 0.0, accuracy: 0.001,
+            "Fade-out must zero the last frame of the grain (ch 0)")
+        XCTAssertEqual(channels[1][99], 0.0, accuracy: 0.001,
+            "Fade-out must zero the last frame of the grain (ch 1)")
+    }
+
+    func testGrainEdgeFadeMiddleFramesUnmodified() {
+        // Buffer large enough that middle frames fall outside both fade windows.
+        // grainEdgeFadeFrames=32 → fade-in covers [0,31], fade-out covers [68,99] for 100 frames.
+        // Middle frame 50 must remain at the original value (1.0).
+        let controller = ScratchSamplePlaybackController()
+        guard let buffer = makeSyntheticBuffer(frames: 100) else { XCTFail("buffer"); return }
+        controller.applyEdgeFade(to: buffer)
+        guard let channels = buffer.floatChannelData else { XCTFail("no channel data"); return }
+        XCTAssertEqual(channels[0][50], 1.0, accuracy: 0.001,
+            "Frames outside the fade window must remain at their original value")
+    }
+
+    func testGrainEdgeFadeRampIsMonotonic() {
+        // Fade-in must be strictly increasing over [0, grainEdgeFadeFrames).
+        // Fade-out must be strictly decreasing over the matching tail.
+        let controller = ScratchSamplePlaybackController()
+        guard let buffer = makeSyntheticBuffer(frames: 100, channels: 1) else { XCTFail("buffer"); return }
+        controller.applyEdgeFade(to: buffer)
+        guard let channels = buffer.floatChannelData else { XCTFail("no channel data"); return }
+        // Fade-in: frames 0..31 increasing (f=32).
+        for i in 1..<32 {
+            XCTAssertGreaterThan(channels[0][i], channels[0][i - 1],
+                "Fade-in must be strictly increasing at frame \(i)")
+        }
+        // Fade-out: frames 68..99 decreasing.
+        for i in (69..<100) {
+            XCTAssertGreaterThan(channels[0][i - 1], channels[0][i],
+                "Fade-out must be strictly decreasing at frame \(i)")
+        }
+    }
+
+    func testGrainEdgeFadeClampsTinyBuffer() {
+        // A 4-frame buffer with grainEdgeFadeFrames=32 must clamp f to count/2=2.
+        // Expected after fade with f=2:
+        //   frame 0: 1.0 × (0/2) = 0.0
+        //   frame 1: 1.0 × (1/2) = 0.5
+        //   frame 2: 1.0 × (1/2) = 0.5  (fade-out i=1: data[4-1-1] = data[2])
+        //   frame 3: 1.0 × (0/2) = 0.0
+        let controller = ScratchSamplePlaybackController()
+        guard let buffer = makeSyntheticBuffer(frames: 4, channels: 1) else { XCTFail("buffer"); return }
+        controller.applyEdgeFade(to: buffer)
+        guard let channels = buffer.floatChannelData else { XCTFail("no channel data"); return }
+        XCTAssertEqual(channels[0][0], 0.0, accuracy: 0.001, "Frame 0 must be zeroed")
+        XCTAssertEqual(channels[0][1], 0.5, accuracy: 0.001, "Frame 1 must be ramped to 0.5")
+        XCTAssertEqual(channels[0][2], 0.5, accuracy: 0.001, "Frame 2 must be ramped to 0.5")
+        XCTAssertEqual(channels[0][3], 0.0, accuracy: 0.001, "Frame 3 must be zeroed")
+    }
+
+    func testGrainEdgeFadeEmptyBufferDoesNotCrash() {
+        // A zero-length buffer must not crash (f = min(32, 0/2) = 0 → early return).
+        let controller = ScratchSamplePlaybackController()
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 0) else {
+            XCTFail("Could not create zero-capacity buffer")
+            return
+        }
+        buffer.frameLength = 0
+        controller.applyEdgeFade(to: buffer)
+        XCTAssertTrue(true, "applyEdgeFade on zero-length buffer must not crash")
+    }
+
+    func testFadeDoesNotAffectForwardSchedulingState() {
+        // Verify that the fade does not alter currentSampleFrame, rate, or skip reason.
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 20, direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Forward grain with edge fade must schedule without skipping")
+        XCTAssertNotNil(controller.lastScheduledRate,
+            "Rate must be set after a successfully faded forward grain")
+        XCTAssertGreaterThan(controller.currentSampleFrame, 0,
+            "currentSampleFrame must advance after a faded forward grain")
+    }
+
+    func testFadeDoesNotAffectBackwardSchedulingState() {
+        // Verify fade on backward (reversed) grain does not alter scheduling logic.
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // Prime and push forward so there is room to scratch backward.
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 30, direction: .forward)
+        controller.waitForAudioQueue()
+        let frameAfterForward = controller.currentSampleFrame
+        XCTAssertGreaterThan(frameAfterForward, 0)
+
+        Thread.sleep(forTimeInterval: 0.02)
+
+        // Backward scratch: delta = 10 - 30 = -20 → backward grain.
+        controller.positionDidChange(steps: 10, direction: .backward)
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason,
+            "Backward grain with edge fade must schedule without skipping")
+        XCTAssertNotNil(controller.lastScheduledRate,
+            "Rate must be set after a successfully faded backward grain")
+        XCTAssertLessThan(controller.currentSampleFrame, frameAfterForward,
+            "currentSampleFrame must retreat after a faded backward grain")
     }
 }

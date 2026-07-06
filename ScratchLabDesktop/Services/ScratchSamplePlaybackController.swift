@@ -88,6 +88,13 @@ final class ScratchSamplePlaybackController {
     private let minVarispeedRate: Float = 0.25
     private let maxVarispeedRate: Float = 4.0
 
+    /// PCM frames ramped from/to zero at the leading and trailing edge of each
+    /// scheduled scratch grain. The ramp smooths the hard PCM cut that would
+    /// otherwise cause a click when the waveform value at the cut point is non-zero.
+    /// Clamped to at most half the grain's frame count, so tiny grains are never
+    /// fully zeroed. Not applied to the diagnostic load preview.
+    let grainEdgeFadeFrames = 32
+
     // MARK: - Engine state
 
     private var engineStarted = false
@@ -465,6 +472,10 @@ final class ScratchSamplePlaybackController {
             return
         }
 
+        // Smooth PCM boundary discontinuities before scheduling.
+        // Not applied to the diagnostic preview (which calls copySegment directly).
+        applyEdgeFade(to: segment)
+
         // Interrupt only on direction change; same-direction grains queue smoothly.
         // Avoid interrupting every tiny platter update, because that can cancel audio
         // before the scheduled segment becomes audible.
@@ -591,6 +602,28 @@ final class ScratchSamplePlaybackController {
     private func clampedSampleFrame(_ frame: Int) -> Int {
         guard totalFrames > 0 else { return 0 }
         return min(max(frame, 0), totalFrames - 1)
+    }
+
+    /// Apply a symmetric linear fade-in/fade-out ramp to the leading and trailing
+    /// `grainEdgeFadeFrames` samples of `buffer`, mutating it in place.
+    /// The fade length is clamped to at most half the buffer's frame count so
+    /// that tiny grains produced near sample boundaries are never fully zeroed.
+    func applyEdgeFade(to buffer: AVAudioPCMBuffer) {
+        guard buffer.format.commonFormat == .pcmFormatFloat32,
+              !buffer.format.isInterleaved,
+              let channels = buffer.floatChannelData else { return }
+        let count = Int(buffer.frameLength)
+        let f = min(grainEdgeFadeFrames, count / 2)
+        guard f > 0 else { return }
+        let channelCount = Int(buffer.format.channelCount)
+        for ch in 0..<channelCount {
+            let data = channels[ch]
+            for i in 0..<f {
+                let ramp = Float(i) / Float(f)
+                data[i]             *= ramp   // fade in: frame 0 → 0.0, frame f-1 → (f-1)/f
+                data[count - 1 - i] *= ramp   // fade out: last frame → 0.0
+            }
+        }
     }
 
     private func directionDescription(_ direction: ScratchPlatterDirection) -> String {
