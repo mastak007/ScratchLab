@@ -29,6 +29,20 @@ struct TimecodeControlCard: View {
     /// Persisted preset selection.
     @AppStorage("scratchlab.mac.timecodePreset") private var persistedPresetRaw: String = TimecodeControlPreset.scratchLabPrototype.rawValue
 
+    /// Persisted user-customized min confidence, independent of any preset's
+    /// fixed constant. Only read/written when the preset is `.manual` — a
+    /// fresh `TimecodeControlPipeline` instance (e.g. after relaunch) starts
+    /// at its own default and has no memory of a prior manual adjustment, so
+    /// this is what lets a deliberately-set value (e.g. 0.10) survive.
+    @AppStorage("scratchlab.mac.timecodeMinConfidenceOverride") private var persistedMinConfidenceOverride: Double = 0.3
+
+    /// Persisted user-customized direction sign, independent of any preset's
+    /// fixed constant (both built-in presets fix this to `false`). Some real
+    /// DVS hardware's quadrature wiring reports the opposite sign convention
+    /// this decoder assumes — this lets a user correct it per-device and
+    /// have it survive relaunch, mirroring `persistedMinConfidenceOverride`.
+    @AppStorage("scratchlab.mac.timecodeInvertDirectionOverride") private var persistedInvertDirectionOverride: Bool = false
+
     /// Current selected preset.
     @State private var selectedPreset: TimecodeControlPreset = .scratchLabPrototype
 
@@ -73,6 +87,14 @@ struct TimecodeControlCard: View {
             // Restore persisted preset
             if let restored = TimecodeControlPreset(rawValue: persistedPresetRaw) {
                 selectedPreset = restored
+                if restored == .manual {
+                    // A fresh pipeline instance (e.g. after relaunch) has its
+                    // own defaults, not the user's prior custom values —
+                    // restore them before re-applying the (round-trip)
+                    // manual profile so the customization isn't lost.
+                    pipeline.minConfidence = persistedMinConfidenceOverride
+                    pipeline.invertDirection = persistedInvertDirectionOverride
+                }
                 applyPreset(restored)
             }
         }
@@ -92,6 +114,24 @@ struct TimecodeControlCard: View {
         profile.apply(to: pipeline)
         bridge.validationRequired = profile.validationRequired
         bridge.validationOverride = false
+    }
+
+    /// Wraps `pipeline.invertDirection` so a direct user toggle (and only a
+    /// direct user toggle — `applyPreset` writes `pipeline.invertDirection`
+    /// straight through the `@Published` property, never through this
+    /// binding) persists the value and marks calibration as custom, the same
+    /// way the Min confidence slider's `onEditingChanged` does.
+    private var invertDirectionBinding: Binding<Bool> {
+        Binding(
+            get: { pipeline.invertDirection },
+            set: { newValue in
+                pipeline.invertDirection = newValue
+                persistedInvertDirectionOverride = newValue
+                if selectedPreset != .manual {
+                    selectedPreset = .manual
+                }
+            }
+        )
     }
 
     // MARK: - Mode section
@@ -401,16 +441,26 @@ struct TimecodeControlCard: View {
             }
 
             // Invert direction
-            Toggle(isOn: $pipeline.invertDirection) {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.left.arrow.right")
-                        .font(.system(size: 11))
-                    Text("Invert direction")
-                        .font(.system(size: 12, weight: .medium))
+            HStack(spacing: 6) {
+                Toggle(isOn: invertDirectionBinding) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.system(size: 11))
+                        Text("Invert direction")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                if selectedPreset == .manual {
+                    Text("custom")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
                 }
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
 
             // Rate scale
             VStack(alignment: .leading, spacing: 4) {
@@ -434,12 +484,34 @@ struct TimecodeControlCard: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer()
+                    if selectedPreset == .manual {
+                        Text("custom")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                    }
                     Text(String(format: "%.2f", pipeline.minConfidence))
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.primary)
                 }
-                Slider(value: $pipeline.minConfidence, in: 0.0...1.0, step: 0.05)
-                    .controlSize(.small)
+                Slider(
+                    value: $pipeline.minConfidence,
+                    in: 0.0...1.0,
+                    step: 0.05,
+                    onEditingChanged: { isEditing in
+                        // Fire once, on release — not on every intermediate
+                        // drag value — and only for direct user interaction
+                        // (applyPreset() never goes through this callback).
+                        guard !isEditing else { return }
+                        persistedMinConfidenceOverride = pipeline.minConfidence
+                        if selectedPreset != .manual {
+                            selectedPreset = .manual
+                        }
+                    }
+                )
+                .controlSize(.small)
             }
 
             // Max rate

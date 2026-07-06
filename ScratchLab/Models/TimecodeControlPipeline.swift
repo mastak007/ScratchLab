@@ -95,6 +95,60 @@ public struct TimecodeControlCounters: Equatable, Sendable {
     /// Maximum absolute smoothed rate observed across all decode windows.
     public var maxAbsSmoothedRate: Double = 0
 
+    // MARK: - Acceptance-gate diagnostics (DEBUG investigation aid)
+    //
+    // These fields make the confidence-acceptance path directly observable:
+    // where frames are lost (decoder never forming a frame vs. the stability
+    // filter rejecting a formed frame), and what threshold was actually in
+    // effect, so a live capture can be checked without guessing.
+
+    /// `pipeline.minConfidence` at the time of the most recent flush.
+    public var minConfidenceRuntime: Double = 0
+
+    /// The stability filter's `config.minConfidenceForUpdate` at the time of
+    /// the most recent flush. Must equal `minConfidenceRuntime` — if it
+    /// doesn't, the UI setting is not reaching the acceptance gate.
+    public var stabilityMinConfidenceRuntime: Double = 0
+
+    /// Number of valid (phase-locked) per-buffer confidence samples the
+    /// decoder saw in the most recent flush — this is `decodedSamples` for
+    /// that flush specifically, before any frame/delta is formed.
+    public var decodedFrameCount: Int = 0
+
+    /// Number of frames the decoder actually formed (needs ≥2 valid buffers
+    /// in the same flush window) before the stability filter runs.
+    public var preFilterFrameCount: Int = 0
+
+    /// Number of frames the stability filter accepted, before the (separate)
+    /// `TimecodePlatterAdapter` confidence filter runs.
+    public var postFilterFrameCount: Int = 0
+
+    /// Minimum per-buffer confidence in the most recent flush.
+    public var frameConfidenceMin: Double = 0
+
+    /// Maximum per-buffer confidence in the most recent flush.
+    public var frameConfidenceMax: Double = 0
+
+    /// Of the most recent flush's formed frames, how many had confidence
+    /// ≥ `minConfidenceRuntime`.
+    public var framesAboveMinConfidence: Int = 0
+
+    /// Of the most recent flush's formed frames, how many had confidence
+    /// < `minConfidenceRuntime`.
+    public var framesBelowMinConfidence: Int = 0
+
+    /// Cumulative count of frames rejected specifically for low confidence
+    /// (subset of the session's total rejected-spike count).
+    public var lowConfidenceRejectCount: Int = 0
+
+    /// Cumulative count of frames rejected specifically for an excessive
+    /// rate delta (subset of the session's total rejected-spike count).
+    public var rateSpikeRejectCount: Int = 0
+
+    /// The rejection reason for the first rejected frame in the most recent
+    /// flush (empty if nothing was rejected that flush).
+    public var firstRejectReasonThisFlush: String = ""
+
     public init() {}
 }
 
@@ -235,7 +289,17 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     private var pendingDiagnosticsBufferCount = 0
     private var lastDiagnosticsPublishAudioTime: TimeInterval = -.infinity
     private let diagnosticsEngine = TimecodeSignalDiagnostics()
-    private let stabilityFilter = TimecodeMotionStabilityFilter()
+    /// Rebuilt on each access from the pipeline's own (UI/profile-adjustable)
+    /// `minConfidence`, mirroring the existing `decoder` computed-property
+    /// pattern below. Previously this was a `let` built once from the static
+    /// `.conservative` config, whose `minConfidenceForUpdate` (0.3) never
+    /// tracked `minConfidence` — so lowering the UI's confidence threshold
+    /// had no effect on the gate that actually rejects frames.
+    private var stabilityFilter: TimecodeMotionStabilityFilter {
+        TimecodeMotionStabilityFilter(
+            config: TimecodeStabilityConfig(minConfidenceForUpdate: minConfidence)
+        )
+    }
     private var stabilityFilterState = TimecodeStabilityFilterState()
     private let liveDiagnosticsPublishInterval: TimeInterval = 0.1
 
@@ -388,6 +452,17 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         c.signalHealth = decodeResult.signalHealth.rawValue
         signalHealth = decodeResult.signalHealth
 
+        // Acceptance-gate diagnostics for this flush (see field docs on
+        // TimecodeControlCounters for what each one proves).
+        c.minConfidenceRuntime = minConfidence
+        c.stabilityMinConfidenceRuntime = stabilityFilter.config.minConfidenceForUpdate
+        c.decodedFrameCount = decodeResult.counters.decodedSamples
+        c.preFilterFrameCount = decodeResult.frames.count
+        c.frameConfidenceMin = decodeResult.counters.frameConfidenceMin
+        c.frameConfidenceMax = decodeResult.counters.frameConfidenceMax
+        c.framesAboveMinConfidence = decodeResult.frames.filter { $0.confidence >= minConfidence }.count
+        c.framesBelowMinConfidence = decodeResult.frames.filter { $0.confidence < minConfidence }.count
+
         // Record per-decode-window drop reason from the decoder
         if decodeResult.frames.isEmpty, let reason = decodeResult.dropoutReason {
             c.lastDropReason = reason.rawValue
@@ -444,6 +519,12 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         }
         c.lastDropoutDuration = filterResult.metrics.lastDropoutDuration
         c.maxAbsSmoothedRate = max(c.maxAbsSmoothedRate, filterResult.metrics.maxAbsSmoothedRate)
+
+        // Acceptance-gate diagnostics (see field docs on TimecodeControlCounters)
+        c.postFilterFrameCount = filterResult.accepted.count
+        c.lowConfidenceRejectCount += filterResult.metrics.lowConfidenceRejectCount
+        c.rateSpikeRejectCount += filterResult.metrics.rateSpikeRejectCount
+        c.firstRejectReasonThisFlush = filterResult.metrics.firstRejectReason
 
         // No trusted output (decoder empty, spike-rejected, or dropout)?
         guard !filterResult.accepted.isEmpty else {
@@ -578,6 +659,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             decodedDirection: currentDirection.rawValue,
             decodedRate: currentRate,
             decoderConfidence: counters.averageConfidence,
+            invertDirectionActive: invertDirection,
             acceptedMotionSamples: counters.acceptedMotionSamples,
             recordedSamples: recordedSamples,
             droppedSilence: counters.droppedSilence,
@@ -611,6 +693,18 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             isFrequencyDisparate: cls?.isFrequencyDisparate ?? false,
             decoderRejectionNote: cls?.decoderRejectionNote ?? "",
             classificationSampleRate: cls?.classificationSampleRate ?? 0,
+            minConfidenceRuntime: counters.minConfidenceRuntime,
+            stabilityMinConfidenceRuntime: counters.stabilityMinConfidenceRuntime,
+            decodedFrameCount: counters.decodedFrameCount,
+            preFilterFrameCount: counters.preFilterFrameCount,
+            postFilterFrameCount: counters.postFilterFrameCount,
+            frameConfidenceMin: counters.frameConfidenceMin,
+            frameConfidenceMax: counters.frameConfidenceMax,
+            framesAboveMinConfidence: counters.framesAboveMinConfidence,
+            framesBelowMinConfidence: counters.framesBelowMinConfidence,
+            lowConfidenceRejectCount: counters.lowConfidenceRejectCount,
+            rateSpikeRejectCount: counters.rateSpikeRejectCount,
+            firstRejectReasonThisFlush: counters.firstRejectReasonThisFlush,
             validationStatus: finalStatus
         )
     }

@@ -235,6 +235,31 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         XCTAssertEqual(profile.maxRate, 10.0, accuracy: 0.001)
     }
 
+    func testApplyingManualProfileDoesNotOverwriteUserCustomMinConfidence() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        // User manually dials in a custom confidence threshold below both
+        // built-in presets (0.3 / 0.25) — matching a real low-amplitude DVS
+        // signal whose confidence ceiling sits around 0.15.
+        pipeline.minConfidence = 0.10
+
+        // Re-applying the Manual preset (what TimecodeControlCard's onAppear
+        // / preset-refresh path does) must round-trip the pipeline's current
+        // value unchanged — this is the contract the UI relies on to avoid
+        // silently discarding a user's calibration.
+        let manualProfile = TimecodePrototypeProfile.make(preset: .manual, pipeline: pipeline)
+        manualProfile.apply(to: pipeline)
+
+        XCTAssertEqual(pipeline.minConfidence, 0.10, accuracy: 0.0001,
+                       "applying the Manual preset must not overwrite a user-customized minConfidence")
+
+        // Contrast: explicitly selecting a built-in preset still overrides it,
+        // by design — only the automatic re-apply path must be non-destructive.
+        TimecodePrototypeProfile.scratchLabPrototype().apply(to: pipeline)
+        XCTAssertEqual(pipeline.minConfidence, 0.3, accuracy: 0.0001,
+                       "explicitly selecting a built-in preset must still apply its fixed value")
+    }
+
     func testProfileApplicationDoesNotChangeModeOrLiveTap() {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.liveTapEnabled = true

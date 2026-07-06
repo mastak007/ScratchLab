@@ -103,6 +103,18 @@ public struct TimecodeStabilityFilterMetrics: Equatable, Sendable {
     /// Number of frames rejected as spikes or low-confidence this flush.
     public var rejectedSpikeCount: Int = 0
 
+    /// Of `rejectedSpikeCount`, how many were rejected specifically for
+    /// confidence below `config.minConfidenceForUpdate` (not a rate spike).
+    public var lowConfidenceRejectCount: Int = 0
+
+    /// Of `rejectedSpikeCount`, how many were rejected specifically for an
+    /// excessive rate delta (not low confidence).
+    public var rateSpikeRejectCount: Int = 0
+
+    /// The rejection reason for the *first* frame rejected this flush (as
+    /// opposed to `lastSpikeReason`, which reflects the most recent one).
+    public var firstRejectReason: String = ""
+
     /// Non-zero when the current dropout duration is within the short-hold
     /// window (≥ shortDropoutHoldMs and < longDropoutFailMs).
     public var heldDropoutCount: Int = 0
@@ -222,7 +234,11 @@ public struct TimecodeMotionStabilityFilter: Sendable {
             // --- Confidence gate ---
             if frame.confidence < config.minConfidenceForUpdate {
                 metrics.rejectedSpikeCount += 1
+                metrics.lowConfidenceRejectCount += 1
                 metrics.lastSpikeReason = "low_confidence"
+                if metrics.firstRejectReason.isEmpty {
+                    metrics.firstRejectReason = metrics.lastSpikeReason
+                }
                 continue
             }
 
@@ -240,9 +256,13 @@ public struct TimecodeMotionStabilityFilter: Sendable {
                 let rateDelta = abs(rawRate - currentSmoothed)
                 if rateDelta > config.maxRateDeltaPerSecond {
                     metrics.rejectedSpikeCount += 1
+                    metrics.rateSpikeRejectCount += 1
                     metrics.lastSpikeReason = String(
                         format: "rate_spike_%.1f_delta_per_s", rateDelta
                     )
+                    if metrics.firstRejectReason.isEmpty {
+                        metrics.firstRejectReason = metrics.lastSpikeReason
+                    }
                     continue
                 }
             }

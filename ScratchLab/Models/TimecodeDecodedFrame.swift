@@ -110,6 +110,15 @@ public struct TimecodeDecoderCounters: Equatable, Sendable {
     /// Average confidence across all decoded frames.
     public var averageConfidence: Double = 0
 
+    /// Minimum per-buffer confidence seen this decode pass, over all valid
+    /// (phase-locked) inputs — including buffers that never formed a frame
+    /// because there weren't enough consecutive samples to form a delta.
+    public var frameConfidenceMin: Double = 0
+
+    /// Maximum per-buffer confidence seen this decode pass (see
+    /// `frameConfidenceMin`).
+    public var frameConfidenceMax: Double = 0
+
     /// Aggregate signal health label for the decode window (raw value from
     /// `SignalHealth`).
     public var signalHealth: String = SignalHealth.noSignal.rawValue

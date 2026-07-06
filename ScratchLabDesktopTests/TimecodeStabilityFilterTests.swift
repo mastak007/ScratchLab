@@ -484,6 +484,168 @@ final class TimecodeStabilityFilterTests: XCTestCase {
                        "Recorder sourceLabel must remain 'timecode_live' after Batch 7")
     }
 
+    // MARK: - 15. Stability filter confidence gate tracks pipeline.minConfidence
+
+    func testStabilityFilterConfidenceGateTracksPipelineMinConfidence() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        // Realistic phono-level amplitude (~0.11), matching the live Rane 5/6
+        // field capture, not the saturated 0.5 amplitude used elsewhere in
+        // this file. This produces low-but-genuine confidence.
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(
+            pipeline.counters.acceptedMotionSamples, 0,
+            "Low-amplitude quadrature signal must be rejected at the default minConfidence (0.3), "
+                + "reproducing the live Rane 5/6 field failure"
+        )
+
+        // Lowering minConfidence via the pipeline's own published property must
+        // actually reach the stability filter's acceptance gate — not just the
+        // separate downstream TimecodePlatterAdapter gate.
+        pipeline.reset()
+        pipeline.minConfidence = 0.05
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        _ = pipeline.flushDecode()
+
+        XCTAssertGreaterThan(
+            pipeline.counters.acceptedMotionSamples, 0,
+            "Lowering pipeline.minConfidence must relax the stability filter's gate and accept frames"
+        )
+    }
+
+    // MARK: - 16. Acceptance-gate diagnostics expose exactly where frames are lost
+
+    func testAcceptanceGateDiagnosticsAtDefaultMinConfidenceShowLowConfidenceRejection() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        _ = pipeline.flushDecode()
+
+        // The runtime threshold actually used by the gate must match the
+        // (default) pipeline setting.
+        XCTAssertEqual(pipeline.counters.minConfidenceRuntime, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(pipeline.counters.stabilityMinConfidenceRuntime, 0.3, accuracy: 0.0001,
+                       "Stability filter's runtime threshold must track pipeline.minConfidence")
+
+        // 6 pushed buffers accumulate into one flush, so the decoder sees 6
+        // valid per-buffer confidence samples and forms 5 deltas (frames)
+        // before the stability filter runs.
+        XCTAssertEqual(pipeline.counters.decodedFrameCount, 6)
+        XCTAssertEqual(pipeline.counters.preFilterFrameCount, 5)
+
+        // Confidence bounds must be populated and internally consistent.
+        XCTAssertGreaterThanOrEqual(pipeline.counters.frameConfidenceMax, pipeline.counters.frameConfidenceMin)
+
+        // At the default 0.3 threshold, this low-amplitude signal's frames
+        // must all fall below it — proving *where* they're lost (the
+        // stability filter's confidence gate, not decoder frame formation).
+        XCTAssertEqual(pipeline.counters.framesAboveMinConfidence, 0)
+        XCTAssertGreaterThan(pipeline.counters.framesBelowMinConfidence, 0)
+        XCTAssertEqual(pipeline.counters.postFilterFrameCount, 0)
+        XCTAssertGreaterThan(pipeline.counters.lowConfidenceRejectCount, 0)
+        XCTAssertEqual(pipeline.counters.rateSpikeRejectCount, 0)
+        XCTAssertEqual(pipeline.counters.firstRejectReasonThisFlush, "low_confidence")
+    }
+
+    func testAcceptanceGateDiagnosticsAtLoweredMinConfidenceShowFramesPassing() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.minConfidence = 0.10
+
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.counters.minConfidenceRuntime, 0.10, accuracy: 0.0001)
+        XCTAssertEqual(pipeline.counters.stabilityMinConfidenceRuntime, 0.10, accuracy: 0.0001)
+
+        // With the gate lowered below this signal's actual confidence range,
+        // frames must now clear it end to end.
+        XCTAssertGreaterThan(pipeline.counters.framesAboveMinConfidence, 0)
+        XCTAssertGreaterThan(pipeline.counters.postFilterFrameCount, 0)
+        XCTAssertEqual(pipeline.counters.lowConfidenceRejectCount, 0)
+    }
+
+    // MARK: - 17. invertDirection flips both direction and rate sign
+
+    func testForwardPhaseSequenceReportsForwardWhenNotInverted() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = false
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+                       "positive phase progression must report forward when invertDirection is false")
+        XCTAssertGreaterThan(pipeline.currentRate, 0,
+                             "forward motion must have positive rate when invertDirection is false")
+    }
+
+    func testForwardPhaseSequenceReportsBackwardWhenInverted() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = true
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .backward,
+                       "invertDirection must flip a forward-raw sequence to report backward")
+        XCTAssertLessThan(pipeline.currentRate, 0,
+                          "invertDirection must negate the rate sign")
+    }
+
+    func testBackwardPhaseSequenceReportsBackwardWhenNotInverted() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = false
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .backward,
+                       "negative phase progression must report backward when invertDirection is false")
+        XCTAssertLessThan(pipeline.currentRate, 0)
+    }
+
+    func testBackwardPhaseSequenceReportsForwardWhenInverted() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = true
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+                       "invertDirection must flip a backward-raw sequence to report forward")
+        XCTAssertGreaterThan(pipeline.currentRate, 0,
+                            "invertDirection must negate the rate sign back to positive")
+    }
+
+    func testValidationSnapshotReflectsInvertedDirectionAndRate() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = true
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        _ = pipeline.flushDecode()
+
+        let snap = pipeline.makeValidationSnapshot()
+        XCTAssertEqual(snap.decodedDirection, TimecodeDirection.backward.rawValue,
+                       "validation snapshot must reflect the inverted direction")
+        XCTAssertLessThan(snap.decodedRate, 0,
+                          "validation snapshot must reflect the inverted (negative) rate")
+    }
+
+    func testInvertDirectionHasNoEffectInDiagnosticsOnlyMode() {
+        let pipeline = makePipeline(mode: .diagnosticsOnly)
+        pipeline.invertDirection = true
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        _ = pipeline.flushDecode()
+
+        // Diagnostics Only never runs the decoder (see prior investigation) —
+        // invertDirection must not change that.
+        XCTAssertEqual(pipeline.currentDirection, .unknown)
+        XCTAssertEqual(pipeline.currentRate, 0, accuracy: 0.0001)
+    }
+
     // MARK: - 14. Pipeline dropout clock advances when no input buffers arrive
 
     func testPipelineDropoutClockAdvancesOnEmptyFlushWindows() {

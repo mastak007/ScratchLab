@@ -116,6 +116,11 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// Average confidence across the most recent decode window, in [0, 1].
     public var decoderConfidence: Double
 
+    /// `pipeline.invertDirection` at capture time — makes the calibration
+    /// toggle's actual runtime state directly observable in the snapshot,
+    /// rather than requiring a screen check of the UI control.
+    public var invertDirectionActive: Bool
+
     // MARK: - Counters
 
     /// Motion samples that passed confidence filtering and were accepted into
@@ -239,6 +244,50 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// Sample rate used for classification (Hz).
     public var classificationSampleRate: Double
 
+    // MARK: - Acceptance-gate diagnostics (DEBUG investigation aid)
+
+    /// `pipeline.minConfidence` at capture time.
+    public var minConfidenceRuntime: Double
+
+    /// The stability filter's runtime `minConfidenceForUpdate`. Must equal
+    /// `minConfidenceRuntime` — if not, the UI setting isn't reaching the gate.
+    public var stabilityMinConfidenceRuntime: Double
+
+    /// Valid per-buffer confidence samples in the most recent flush, before
+    /// any frame/delta was formed.
+    public var decodedFrameCount: Int
+
+    /// Frames the decoder formed in the most recent flush, before the
+    /// stability filter ran.
+    public var preFilterFrameCount: Int
+
+    /// Frames the stability filter accepted in the most recent flush.
+    public var postFilterFrameCount: Int
+
+    /// Minimum per-buffer confidence in the most recent flush.
+    public var frameConfidenceMin: Double
+
+    /// Maximum per-buffer confidence in the most recent flush.
+    public var frameConfidenceMax: Double
+
+    /// Frames in the most recent flush with confidence ≥ minConfidenceRuntime.
+    public var framesAboveMinConfidence: Int
+
+    /// Frames in the most recent flush with confidence < minConfidenceRuntime.
+    public var framesBelowMinConfidence: Int
+
+    /// Cumulative session count of frames rejected specifically for low
+    /// confidence.
+    public var lowConfidenceRejectCount: Int
+
+    /// Cumulative session count of frames rejected specifically for an
+    /// excessive rate delta.
+    public var rateSpikeRejectCount: Int
+
+    /// Rejection reason for the first rejected frame in the most recent
+    /// flush.
+    public var firstRejectReasonThisFlush: String
+
     // MARK: - Classification
 
     /// High-level validation status derived from the other fields.
@@ -259,6 +308,7 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         decodedDirection: String,
         decodedRate: Double,
         decoderConfidence: Double,
+        invertDirectionActive: Bool = false,
         acceptedMotionSamples: Int,
         recordedSamples: Int,
         droppedSilence: Int,
@@ -292,6 +342,18 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         isFrequencyDisparate: Bool = false,
         decoderRejectionNote: String = "",
         classificationSampleRate: Double = 0,
+        minConfidenceRuntime: Double = 0,
+        stabilityMinConfidenceRuntime: Double = 0,
+        decodedFrameCount: Int = 0,
+        preFilterFrameCount: Int = 0,
+        postFilterFrameCount: Int = 0,
+        frameConfidenceMin: Double = 0,
+        frameConfidenceMax: Double = 0,
+        framesAboveMinConfidence: Int = 0,
+        framesBelowMinConfidence: Int = 0,
+        lowConfidenceRejectCount: Int = 0,
+        rateSpikeRejectCount: Int = 0,
+        firstRejectReasonThisFlush: String = "",
         validationStatus: TimecodeValidationStatus
     ) {
         self.mode = mode
@@ -306,6 +368,7 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         self.decodedDirection = decodedDirection
         self.decodedRate = decodedRate
         self.decoderConfidence = decoderConfidence
+        self.invertDirectionActive = invertDirectionActive
         self.acceptedMotionSamples = acceptedMotionSamples
         self.recordedSamples = recordedSamples
         self.droppedSilence = droppedSilence
@@ -339,6 +402,18 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         self.isFrequencyDisparate = isFrequencyDisparate
         self.decoderRejectionNote = decoderRejectionNote
         self.classificationSampleRate = classificationSampleRate
+        self.minConfidenceRuntime = minConfidenceRuntime
+        self.stabilityMinConfidenceRuntime = stabilityMinConfidenceRuntime
+        self.decodedFrameCount = decodedFrameCount
+        self.preFilterFrameCount = preFilterFrameCount
+        self.postFilterFrameCount = postFilterFrameCount
+        self.frameConfidenceMin = frameConfidenceMin
+        self.frameConfidenceMax = frameConfidenceMax
+        self.framesAboveMinConfidence = framesAboveMinConfidence
+        self.framesBelowMinConfidence = framesBelowMinConfidence
+        self.lowConfidenceRejectCount = lowConfidenceRejectCount
+        self.rateSpikeRejectCount = rateSpikeRejectCount
+        self.firstRejectReasonThisFlush = firstRejectReasonThisFlush
         self.validationStatus = validationStatus
     }
 
@@ -415,12 +490,20 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         L RMS / Peak:    \(String(format: "%.4f / %.4f", leftRMS, leftPeak))
         R RMS / Peak:    \(String(format: "%.4f / %.4f", rightRMS, rightPeak))
         Direction:       \(decodedDirection)
+        Invert direction:\(invertDirectionActive)
         Rate (raw):      \(String(format: "%.3f u/s", decodedRate))
         Rate (smoothed): \(String(format: "%.3f u/s", smoothedRate))
         Smoothing:       \(smoothingActive ? "active" : "inactive")
         Max abs rate:    \(String(format: "%.3f u/s", maxAbsRate))
         Max smo rate:    \(String(format: "%.3f u/s", maxAbsSmoothedRate))
         Confidence:      \(String(format: "%.3f", decoderConfidence))
+        Min conf (UI):   \(String(format: "%.3f", minConfidenceRuntime))
+        Min conf (gate): \(String(format: "%.3f", stabilityMinConfidenceRuntime))
+        Frames (raw/pre/post-filter): \(decodedFrameCount) / \(preFilterFrameCount) / \(postFilterFrameCount)
+        Frame conf min/max: \(String(format: "%.3f / %.3f", frameConfidenceMin, frameConfidenceMax))
+        Frames above/below minConf: \(framesAboveMinConfidence) / \(framesBelowMinConfidence)
+        Low-conf/spike rejects (session): \(lowConfidenceRejectCount) / \(rateSpikeRejectCount)
+        First reject reason (this flush): \(firstRejectReasonThisFlush.isEmpty ? "(none)" : firstRejectReasonThisFlush)
         Accepted:        \(acceptedMotionSamples)
         Recorded:        \(recordedSamples)
         Dropped silence: \(droppedSilence)

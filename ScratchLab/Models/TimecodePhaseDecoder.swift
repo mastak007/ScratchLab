@@ -273,6 +273,8 @@ public struct TimecodePhaseDecoder: Sendable {
         // --- Aggregate counters ---
         let avgConfidence = rawConfidences.isEmpty ? 0 : sumConfidence / Double(rawConfidences.count)
         counters.averageConfidence = avgConfidence
+        counters.frameConfidenceMin = rawConfidences.min() ?? 0
+        counters.frameConfidenceMax = rawConfidences.max() ?? 0
 
         let health = classifyHealth(anySilence: anySilence, anyClipping: anyClipping, hasSignal: !rawPhases.isEmpty)
         counters.signalHealth = health.rawValue
