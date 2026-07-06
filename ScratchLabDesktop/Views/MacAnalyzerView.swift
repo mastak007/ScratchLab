@@ -662,20 +662,31 @@ struct MacAnalyzerView: View {
         let replayModel = Self.babyScratchReplayModel
         return Group {
             if !replayModel.isEmpty {
-                TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
-                    LiveNotationOverlayView(
-                        model: replayModel,
-                        currentTime: practiceNotationCurrentTime,
-                        background: .translucent,
-                        drawMode: .replayReveal,
-                        viewportSeconds: 3.2,
-                        beatGridBPM: 79,
-                        beatGridFirstBeatTime: 0.336,
-                        beatsPerBar: 4,
-                        maximumAmplitude: 0.35
-                    )
-                    .frame(height: 80)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Live Notation")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Text("Press Listen to see the Baby Scratch cursor move.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.68))
+
+                    TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
+                        LiveNotationOverlayView(
+                            model: replayModel,
+                            currentTime: practiceNotationCurrentTime,
+                            background: .translucent,
+                            drawMode: .replayReveal,
+                            viewportSeconds: 3.2,
+                            beatGridBPM: 79,
+                            beatGridFirstBeatTime: 0.336,
+                            beatsPerBar: 4,
+                            maximumAmplitude: 0.35
+                        )
+                        .frame(height: 80)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.top, 4)
+                    }
                 }
             }
         }
