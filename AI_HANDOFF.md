@@ -1,5 +1,59 @@
 # AI Handoff
 
+## 2026-07-07 — DVS sample auto-load slice LANDED (commit `4d5157c`, pushed, in sync with `origin/main`)
+
+DVS-driven sample playback now auto-loads the `"ahhh"` sample before
+playback-drive scheduling. This closes the gap where DVS scratch
+motion could arrive before any sample was loaded to play it against.
+
+### Sync status
+
+- Branch: `main`.
+- `origin/main` is synced with local `main`.
+- Latest pushed commit: `4d5157c31509d0580cad58d21a6afaac2efc6cd4`
+  (`DVS: auto-load sample before playback drive`).
+- Working tree was clean after push.
+- No CI / GitHub Actions configured: no `.github/workflows/` directory
+  in this repo.
+
+### What the slice does
+
+- `ScratchSamplePlaybackController.ensureLoadedForDVSDrive(sampleID:)`
+  is idempotent — repeat calls for an already-loaded sample do not
+  reset playback position. The existing manual `load(sampleID:)` is
+  unchanged and still resets playback position on every call (hot-cue
+  pads, crossfader trigger, debug button all keep their old behavior).
+- `MacCaptureEngine.forwardTimecodeDrive` arms/loads the sample as
+  soon as `dvsPlaybackDriveActive` is true, independent of whether a
+  `TimecodePlaybackDrive` value has arrived yet, tracking
+  `dvsAutoLoadAttempted` / `dvsSampleLoadFailed`.
+- `MacAnalyzerView`'s DVS status card gained a diagnostic line:
+  `Sample loaded: yes / no / loading… / FAILED (WAV missing)`.
+
+### Files changed in `4d5157c`
+
+- `ScratchLabDesktop/Services/MacCaptureEngine.swift`
+- `ScratchLabDesktop/Services/ScratchSamplePlaybackController.swift`
+- `ScratchLabDesktop/Views/MacAnalyzerView.swift`
+- `ScratchLabDesktopTests/ScratchSamplePlaybackControllerTests.swift`
+
+### Validation
+
+| Gate | Result |
+|---|---|
+| `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'` | `** BUILD SUCCEEDED **` |
+| `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'` | `** TEST BUILD SUCCEEDED **` |
+| `xcrun xctest -XCTest ScratchLabDesktopTests.ScratchSamplePlaybackControllerTests <bundle>` (DOT-selector workaround + DerivedData `Frameworks/` symlink to `ScratchLab.debug.dylib`, per `project_test_runner_hang`) | 70/70 tests passed, 0 failures, ~0.2 s |
+
+### Important caveat
+
+This verifies sample auto-load and scheduling readiness only. It does
+**not** prove hardware DVS feel, platter-follow accuracy, audio
+quality, latency, or Rane end-to-end behavior. The next required step
+remains hardware validation with real Rane/DVS movement.
+
+---
+
 ## 2026-05-27 — Notation track safe stop point reached (Sections 1–9 closed; HEAD `f1b3b7b`, in sync with `origin/main`)
 
 The notation/timing/semantics/coaching/presentation/replay/debug-Review
