@@ -431,8 +431,11 @@ struct MacAnalyzerView: View {
         } else {
             appliedLine = "Last DVS position update: none yet"
         }
+        let diagnostics = captureEngine.dvsPlaybackDiagnostics
         let sampleLine: String
-        if captureEngine.dvsSampleLoadFailed {
+        if let loadError = diagnostics?.lastLoadError {
+            sampleLine = "Sample loaded: FAILED (\(loadError))"
+        } else if captureEngine.dvsSampleLoadFailed {
             sampleLine = "Sample loaded: FAILED (WAV missing)"
         } else if captureEngine.isDVSSampleLoaded {
             sampleLine = "Sample loaded: yes"
@@ -441,10 +444,33 @@ struct MacAnalyzerView: View {
         } else {
             sampleLine = "Sample loaded: no (auto-load not attempted yet)"
         }
+        // Distinguishes "no audio because scheduling was suppressed" (a gate
+        // or logic reason — visible below) from "scheduling succeeded but
+        // the output path is silent" (engine/player/routing) — the two
+        // failure classes that look identical from the bridge's "Driving"
+        // status and the sample-loaded line above.
+        let scheduleLine: String
+        if let reason = diagnostics?.lastScheduleSkippedReason {
+            scheduleLine = "Last schedule: skipped (\(reason))"
+        } else if diagnostics?.lastScheduledSourceFrame != nil {
+            let rateText = diagnostics?.lastScheduledRate.map { String(format: "%.3f", $0) } ?? "?"
+            scheduleLine = "Last schedule: OK · rate=\(rateText)"
+        } else {
+            scheduleLine = "Last schedule: none yet"
+        }
+        let engineLine: String
+        if let diagnostics {
+            let frame = diagnostics.currentSampleFrame
+            engineLine = "Engine running: \(diagnostics.engineRunning ? "yes" : "no") · Player playing: \(diagnostics.playerIsPlaying ? "yes" : "no") · frame=\(frame)"
+        } else {
+            engineLine = "Engine running: unknown (no diagnostics yet)"
+        }
         return VStack(alignment: .leading, spacing: 2) {
             Text(statusLine).font(.caption).foregroundStyle(.secondary)
             Text(sampleLine).font(.caption).foregroundStyle(.secondary)
             Text(appliedLine).font(.caption).foregroundStyle(.secondary)
+            Text(scheduleLine).font(.caption).foregroundStyle(.secondary)
+            Text(engineLine).font(.caption).foregroundStyle(.secondary)
         }
     }
     #endif

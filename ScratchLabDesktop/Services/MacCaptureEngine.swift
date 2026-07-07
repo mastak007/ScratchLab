@@ -1476,6 +1476,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// any sample loaded (of any source — DVS, MIDI pad, or debug button).
     var isDVSSampleLoaded: Bool { scratchPlaybackController.loadedSampleID != nil }
 
+    /// Diagnostic only: point-in-time playback-controller state as of the
+    /// most recent `forwardTimecodeDrive` tick. Distinguishes "motion never
+    /// reached the scheduler" from "scheduling happened but produced no
+    /// audible output" — those two failure classes are indistinguishable
+    /// from `dvsPlaybackDriveActive` / the bridge's "Driving" status alone.
+    /// One tick behind the schedule call within the same
+    /// `forwardTimecodeDrive` invocation (the schedule itself is queued
+    /// async), but continuously refreshed at the ~10 Hz tick rate.
+    @Published private(set) var dvsPlaybackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics?
+
     /// Sample ID armed for DVS-driven playback. Matches the "ahhh" sample
     /// used elsewhere (hot-cue pads, debug preview button).
     private static let dvsDriveSampleID = "ahhh"
@@ -1494,6 +1504,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// `currentSampleFrame` once the sample is already loaded.
     func forwardTimecodeDrive(_ drive: TimecodePlaybackDrive?, elapsed: TimeInterval) {
         guard dvsPlaybackDriveActive else { return }
+        defer { dvsPlaybackDiagnostics = scratchPlaybackController.diagnosticsSnapshot() }
         let loadOK = scratchPlaybackController.ensureLoadedForDVSDrive(sampleID: Self.dvsDriveSampleID)
         dvsAutoLoadAttempted = true
         dvsSampleLoadFailed = !loadOK

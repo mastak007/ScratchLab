@@ -57,6 +57,16 @@ final class ScratchSamplePlaybackController {
     private(set) var lastEffectiveFrameDelta: Int?
     private(set) var lastReversalCompensated: Bool = false
 
+    /// Set when the most recent `loadOnQueue` attempt failed after the
+    /// synchronous URL-resolution check passed (file open error, unreadable
+    /// PCM, etc.) — the failure class `ensureLoadedForDVSDrive`'s boolean
+    /// return value cannot report, because that return only reflects
+    /// whether a load was successfully *queued*, not whether the queued
+    /// load actually completed. `nil` after a successful load. Cleared at
+    /// the start of every load attempt so a stale error from a previous
+    /// sample doesn't linger.
+    private(set) var lastLoadError: String?
+
     // MARK: - Rate-limit / segment constants
 
     /// Minimum interval between scheduleBuffer calls (seconds).
@@ -208,6 +218,7 @@ final class ScratchSamplePlaybackController {
 
     private func loadOnQueue(sampleID: String, url: URL) {
         print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
+        lastLoadError = nil
         let file: AVAudioFile
         do {
             file = try AVAudioFile(
@@ -217,6 +228,7 @@ final class ScratchSamplePlaybackController {
             )
         } catch {
             print("[ScratchSamplePlaybackController] failed to open \(sampleID): \(error)")
+            lastLoadError = "open failed: \(error.localizedDescription)"
             debugPublishOnMainAsync(field: "statusLabel.error") { [weak self] in
                 self?.statusLabel = "error: \(sampleID)"
             }
@@ -225,6 +237,7 @@ final class ScratchSamplePlaybackController {
 
         guard let buffer = readIntoBuffer(file) else {
             print("[ScratchSamplePlaybackController] failed to read PCM for \(sampleID)")
+            lastLoadError = "unreadable PCM"
             return
         }
 
@@ -600,6 +613,43 @@ final class ScratchSamplePlaybackController {
     /// Do not call from within the audio queue itself.
     func waitForAudioQueue() {
         audioQueue.sync {}
+    }
+
+    // MARK: - Diagnostics
+
+    /// Point-in-time snapshot of playback state, for distinguishing "no
+    /// audio because nothing was ever scheduled" from "scheduling
+    /// happened but the output path is silent" — the two failure classes
+    /// that look identical from the UI toggle / bridge status alone.
+    struct DVSPlaybackDiagnostics: Equatable {
+        let loadedSampleID: String?
+        let lastLoadError: String?
+        let engineRunning: Bool
+        let playerIsPlaying: Bool
+        let currentSampleFrame: Int
+        let lastScheduleSkippedReason: String?
+        let lastScheduledRate: Float?
+        let lastScheduledSourceFrame: Int?
+    }
+
+    /// Reads all fields together on `audioQueue` so the snapshot is
+    /// internally consistent (no torn reads across a concurrent
+    /// `positionDidChangeOnQueue` mutation). Safe to call from any
+    /// thread, including the main thread on a UI polling timer — the
+    /// audioQueue work here is a handful of variable reads, not I/O.
+    func diagnosticsSnapshot() -> DVSPlaybackDiagnostics {
+        audioQueue.sync {
+            DVSPlaybackDiagnostics(
+                loadedSampleID: loadedSampleID,
+                lastLoadError: lastLoadError,
+                engineRunning: engineStarted,
+                playerIsPlaying: playerNode.isPlaying,
+                currentSampleFrame: currentSampleFrame,
+                lastScheduleSkippedReason: lastScheduleSkippedReason,
+                lastScheduledRate: lastScheduledRate,
+                lastScheduledSourceFrame: lastScheduledSourceFrame
+            )
+        }
     }
 
     // MARK: - Position → frame mapping

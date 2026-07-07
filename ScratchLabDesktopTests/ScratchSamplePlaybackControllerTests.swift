@@ -172,6 +172,85 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Manual load(sampleID:) must still reset position on every call, unchanged from before")
     }
 
+    // MARK: - diagnosticsSnapshot (hardware-silence triage)
+
+    func testDiagnosticsSnapshotBeforeAnyLoadShowsNothingLoaded() {
+        let controller = ScratchSamplePlaybackController()
+        let snapshot = controller.diagnosticsSnapshot()
+
+        XCTAssertNil(snapshot.loadedSampleID)
+        XCTAssertNil(snapshot.lastLoadError)
+        XCTAssertFalse(snapshot.engineRunning)
+        XCTAssertFalse(snapshot.playerIsPlaying)
+        XCTAssertEqual(snapshot.currentSampleFrame, 0)
+        XCTAssertNil(snapshot.lastScheduleSkippedReason)
+        XCTAssertNil(snapshot.lastScheduledRate)
+        XCTAssertNil(snapshot.lastScheduledSourceFrame)
+    }
+
+    func testDiagnosticsSnapshotReflectsSuccessfulLoad() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        let snapshot = controller.diagnosticsSnapshot()
+        XCTAssertEqual(snapshot.loadedSampleID, "ahhh")
+        XCTAssertNil(snapshot.lastLoadError,
+            "A successful load must not leave a stale lastLoadError from a prior attempt")
+        XCTAssertTrue(snapshot.engineRunning,
+            "Loading a sample must start the audio engine — a silent-but-loaded state should be visible as engineRunning=false if this regresses")
+    }
+
+    func testDiagnosticsSnapshotReflectsUnknownSampleIDAsLoadFailure() {
+        let controller = ScratchSamplePlaybackController()
+        // "not_a_real_sample" is not in knownSampleIDs, so wavURL(for:) always
+        // returns nil regardless of bundle contents — this exercises the
+        // synchronous failure path both ensureLoadedForDVSDrive and load(:)
+        // share, independent of whether the test bundle carries app resources.
+        XCTAssertFalse(controller.ensureLoadedForDVSDrive(sampleID: "not_a_real_sample"))
+        controller.waitForAudioQueue()
+
+        let snapshot = controller.diagnosticsSnapshot()
+        XCTAssertNil(snapshot.loadedSampleID)
+    }
+
+    func testDiagnosticsSnapshotShowsSkippedReasonBeforeFirstScheduledGrain() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        // The very first positionDidChange after a load always primes
+        // (no previous step to diff against) — this must surface in
+        // diagnostics as a visible skip reason, not silently look
+        // identical to "scheduling succeeded."
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+
+        let snapshot = controller.diagnosticsSnapshot()
+        XCTAssertEqual(snapshot.lastScheduleSkippedReason, "priming")
+        XCTAssertNil(snapshot.lastScheduledSourceFrame)
+    }
+
+    func testDiagnosticsSnapshotShowsScheduledRateAfterAudibleMotion() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        // Large enough delta to clear both the tinyGrain and nearStop gates.
+        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.waitForAudioQueue()
+
+        let snapshot = controller.diagnosticsSnapshot()
+        XCTAssertNil(snapshot.lastScheduleSkippedReason,
+            "A schedule that actually ran must clear the skipped reason so diagnostics don't show a stale gate")
+        XCTAssertNotNil(snapshot.lastScheduledRate)
+        XCTAssertNotNil(snapshot.lastScheduledSourceFrame)
+        XCTAssertTrue(snapshot.playerIsPlaying,
+            "Once a grain is scheduled, the player node must actually be playing — false here would point at an output-path problem rather than a scheduling gate")
+    }
+
     // MARK: - sampleFrame edge cases
 
     func testSampleFrameWithLargeSteps() {
