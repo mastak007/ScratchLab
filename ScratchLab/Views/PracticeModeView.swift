@@ -1381,8 +1381,16 @@ struct PracticeModeView: View {
             currentStreak = 0
         }
         
-        // Show feedback
+        // Show feedback — prepend the coaching message before combo/drill
+        // overrides so the general coaching hint sits below mode-specific lines.
         lastFeedback = result.feedback
+        if let coachingText = NotationFeedbackState.coachingMessage(
+            accuracy: result.accuracy,
+            isOnBeat: result.timing.isOnBeat,
+            beatOffset: result.timing.beatOffset
+        ), !lastFeedback.contains(coachingText) {
+            lastFeedback.insert(coachingText, at: 0)
+        }
         if isComboChallengeMode {
             if comboCompleted {
                 lastFeedback.insert("Phrase cleared: \(comboTargetStepCount)/\(comboTargetStepCount) locked", at: 0)

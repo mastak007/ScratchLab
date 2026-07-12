@@ -66,6 +66,85 @@ extension NotationFeedbackState {
     /// True for states that show a timing-correction marker.
     var isTimingCorrection: Bool { self == .early || self == .late }
 
+    /// Returns one concise, beginner-friendly coaching message derived from the
+    /// same accuracy/timing signals already produced by the detection pipeline.
+    ///
+    /// No per-primitive or motion-phase inference is made — the message uses only
+    /// accuracy, on-beat status, and beat-offset. No early/late/reversal/primitive
+    /// claims about motion phase are made — "early" and "late" refer strictly to
+    /// timing relative to the beat grid (beatOffset).
+    ///
+    /// Precedence (highest to lowest):
+    /// 1. Clearly early (beatOffset < earlyOffsetThresholdMs).
+    /// 2. Clearly late (beatOffset > lateOffsetThresholdMs).
+    /// 3. Excellent accuracy + on beat (no timing correction needed).
+    /// 4. On-beat accuracy feedback.
+    /// 5. Off-beat feedback when offset is neutral or invalid.
+    /// 6. Low-accuracy fallback.
+    ///
+    /// Timing correction (early/late) takes precedence over praise/accuracy
+    /// because beatOffset is a direct measurement — when it exceeds the
+    /// threshold the user needs timing advice regardless of scratch quality.
+    ///
+    /// - Parameters:
+    ///   - accuracy: Scratch accuracy in [0, 100].
+    ///   - isOnBeat: Whether the detected scratch aligns with the beat grid.
+    ///   - beatOffset: Beat phase offset in milliseconds (negative = early).
+    /// - Returns: A single coaching message, or `nil` when signals are
+    ///   insufficient to produce advice.
+    static func coachingMessage(
+        accuracy: Double,
+        isOnBeat: Bool,
+        beatOffset: Double
+    ) -> String? {
+        let offsetIsValid = beatOffset.isFinite
+
+        // 1. Clearly early — beat offset threshold has precedence over accuracy
+        //    and isOnBeat because beatOffset is a direct measurement.
+        if offsetIsValid && beatOffset < earlyOffsetThresholdMs {
+            return "You were slightly early. Let the beat arrive before starting the motion."
+        }
+
+        // 2. Clearly late.
+        if offsetIsValid && beatOffset > lateOffsetThresholdMs {
+            return "You were slightly late. Begin the motion a little sooner."
+        }
+
+        // 3. Excellent accuracy and on beat (offset is within neutral range
+        //    since early/late checks above already passed).
+        if accuracy >= excellentAccuracyThreshold && isOnBeat {
+            return "Good timing and a clean match."
+        }
+
+        // 4. On-beat feedback based on accuracy.
+        if isOnBeat {
+            if accuracy >= correctAccuracyThreshold {
+                return "Your timing was good. Repeat the motion more consistently."
+            }
+            if accuracy >= closeAccuracyThreshold {
+                return "You're getting close. Keep the motion smooth and consistent."
+            }
+            // Falls through to low-accuracy fallback.
+        }
+
+        // 5. Generic off-beat feedback — only when offset is invalid or within
+        //    the neutral threshold range (meaning the timing signal doesn't
+        //    clearly indicate early or late).
+        if !isOnBeat && (!offsetIsValid ||
+            (beatOffset >= earlyOffsetThresholdMs && beatOffset <= lateOffsetThresholdMs)) {
+            if accuracy >= correctAccuracyThreshold {
+                return "Good motion. Focus on landing with the beat."
+            }
+            if accuracy >= closeAccuracyThreshold {
+                return "Nearly there. Try to stay in time with the beat."
+            }
+            // Falls through to low-accuracy fallback.
+        }
+
+        // 6. Low-accuracy fallback.
+        return "Slow it down and focus on one smooth forward-and-back motion."
+    }
+
     /// How quickly the effect decays, in seconds. Independent of render settings
     /// so callers can schedule a reset without holding a style reference.
     var decayDuration: TimeInterval {

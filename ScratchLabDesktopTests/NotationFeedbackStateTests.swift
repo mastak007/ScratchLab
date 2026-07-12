@@ -210,3 +210,200 @@ final class NotationFeedbackStateTests: XCTestCase {
         XCTAssertGreaterThan(NotationFeedbackState.early.decayDuration, 0)
     }
 }
+
+// MARK: - Coaching message tests
+
+final class CoachingMessageTests: XCTestCase {
+
+    // MARK: - Helpers
+
+    private func msg(accuracy: Double, isOnBeat: Bool, beatOffset: Double) -> String? {
+        NotationFeedbackState.coachingMessage(
+            accuracy: accuracy,
+            isOnBeat: isOnBeat,
+            beatOffset: beatOffset
+        )
+    }
+
+    // MARK: - 1. Excellent accuracy + on beat
+
+    func testHighAccuracyOnBeat() {
+        XCTAssertEqual(msg(accuracy: 95, isOnBeat: true, beatOffset: 5),
+                       "Good timing and a clean match.")
+    }
+
+    func testAccuracyAtExcellentThresholdOnBeat() {
+        XCTAssertEqual(
+            msg(accuracy: NotationFeedbackState.excellentAccuracyThreshold,
+                isOnBeat: true, beatOffset: 0),
+            "Good timing and a clean match.")
+    }
+
+    // MARK: - 2. Early offset takes priority over accuracy feedback
+
+    func testHighAccuracyEarly() {
+        XCTAssertEqual(msg(accuracy: 95, isOnBeat: true, beatOffset: -120),
+                       "You were slightly early. Let the beat arrive before starting the motion.")
+    }
+
+    func testMediumAccuracyEarly() {
+        XCTAssertEqual(msg(accuracy: 65, isOnBeat: false, beatOffset: -90),
+                       "You were slightly early. Let the beat arrive before starting the motion.")
+    }
+
+    func testEarlyBoundary() {
+        XCTAssertEqual(
+            msg(accuracy: 40, isOnBeat: false,
+                beatOffset: NotationFeedbackState.earlyOffsetThresholdMs - 0.1),
+            "You were slightly early. Let the beat arrive before starting the motion.")
+    }
+
+    // MARK: - 3. Late offset takes priority over accuracy feedback
+
+    func testHighAccuracyLate() {
+        XCTAssertEqual(msg(accuracy: 85, isOnBeat: true, beatOffset: 120),
+                       "You were slightly late. Begin the motion a little sooner.")
+    }
+
+    func testMediumAccuracyLate() {
+        XCTAssertEqual(msg(accuracy: 60, isOnBeat: false, beatOffset: 90),
+                       "You were slightly late. Begin the motion a little sooner.")
+    }
+
+    func testLateBoundary() {
+        XCTAssertEqual(
+            msg(accuracy: 40, isOnBeat: false,
+                beatOffset: NotationFeedbackState.lateOffsetThresholdMs + 0.1),
+            "You were slightly late. Begin the motion a little sooner.")
+    }
+
+    // MARK: - 4. On-beat feedback by accuracy
+
+    func testCorrectAccuracyOnBeat() {
+        XCTAssertEqual(msg(accuracy: 78, isOnBeat: true, beatOffset: 12),
+                       "Your timing was good. Repeat the motion more consistently.")
+    }
+
+    func testCloseAccuracyOnBeat() {
+        XCTAssertEqual(msg(accuracy: 58, isOnBeat: true, beatOffset: 3),
+                       "You're getting close. Keep the motion smooth and consistent.")
+    }
+
+    // MARK: - 5. Off-beat with neutral offset → generic off-beat advice
+
+    func testCorrectAccuracyOffBeatNeutralOffset() {
+        XCTAssertEqual(msg(accuracy: 78, isOnBeat: false, beatOffset: 10),
+                       "Good motion. Focus on landing with the beat.")
+    }
+
+    func testCloseAccuracyOffBeatNeutralOffset() {
+        XCTAssertEqual(msg(accuracy: 58, isOnBeat: false, beatOffset: -30),
+                       "Nearly there. Try to stay in time with the beat.")
+    }
+
+    func testAccuracyAtCorrectThresholdOffBeatNeutral() {
+        XCTAssertEqual(
+            msg(accuracy: NotationFeedbackState.correctAccuracyThreshold,
+                isOnBeat: false, beatOffset: 10),
+            "Good motion. Focus on landing with the beat.")
+    }
+
+    func testAccuracyAtCloseThresholdOffBeatNeutral() {
+        XCTAssertEqual(
+            msg(accuracy: NotationFeedbackState.closeAccuracyThreshold,
+                isOnBeat: false, beatOffset: 5),
+            "Nearly there. Try to stay in time with the beat.")
+    }
+
+    // MARK: - 6. Invalid beatOffset handling
+
+    func testNaNBeatOffset() {
+        // isOnBeat must be false when offset is NaN (NaN ≤ 80 is false), so this
+        // falls through to generic off-beat or low-accuracy fallback.
+        let result = msg(accuracy: 75, isOnBeat: false, beatOffset: .nan)
+        XCTAssertEqual(result,
+                       "Good motion. Focus on landing with the beat.")
+    }
+
+    func testInfinityBeatOffset() {
+        let result = msg(accuracy: 75, isOnBeat: false, beatOffset: .infinity)
+        XCTAssertEqual(result,
+                       "Good motion. Focus on landing with the beat.")
+    }
+
+    func testNegativeInfinityBeatOffset() {
+        let result = msg(accuracy: 75, isOnBeat: false, beatOffset: -.infinity)
+        XCTAssertEqual(result,
+                       "Good motion. Focus on landing with the beat.")
+    }
+
+    func testNaNBeatOffsetLowAccuracy() {
+        let result = msg(accuracy: 30, isOnBeat: false, beatOffset: .nan)
+        XCTAssertEqual(result,
+                       "Slow it down and focus on one smooth forward-and-back motion.")
+    }
+
+    // MARK: - 7. Low accuracy fallback
+
+    func testLowAccuracyDefault() {
+        XCTAssertEqual(msg(accuracy: 20, isOnBeat: false, beatOffset: 10),
+                       "Slow it down and focus on one smooth forward-and-back motion.")
+    }
+
+    func testLowAccuracyOnBeat() {
+        XCTAssertEqual(msg(accuracy: 30, isOnBeat: true, beatOffset: 3),
+                       "Slow it down and focus on one smooth forward-and-back motion.")
+    }
+
+    // MARK: - 8. Table-driven: priority ordering (compact)
+
+    func testPriorityOrdering() {
+        let cases: [(accuracy: Double, onBeat: Bool, offset: Double, expected: String)] = [
+            // 1. Early overrides everything
+            (95, true,  -60, "You were slightly early. Let the beat arrive before starting the motion."),
+            (60, false, -60, "You were slightly early. Let the beat arrive before starting the motion."),
+            // 2. Late overrides everything
+            (85, true,  60,  "You were slightly late. Begin the motion a little sooner."),
+            (60, false, 60,  "You were slightly late. Begin the motion a little sooner."),
+            // 3. Excellent + on beat (offset neutral)
+            (95, true,  5,   "Good timing and a clean match."),
+            // 4. On-beat by accuracy
+            (75, true,  10,  "Your timing was good. Repeat the motion more consistently."),
+            (55, true,  10,  "You're getting close. Keep the motion smooth and consistent."),
+            // 5. Off-beat neutral offset
+            (75, false, 10,  "Good motion. Focus on landing with the beat."),
+            (55, false, 10,  "Nearly there. Try to stay in time with the beat."),
+            // 6. Fallback
+            (30, true,  0,   "Slow it down and focus on one smooth forward-and-back motion."),
+            (30, false, 0,   "Slow it down and focus on one smooth forward-and-back motion."),
+        ]
+        for (i, c) in cases.enumerated() {
+            let actual = msg(accuracy: c.accuracy, isOnBeat: c.onBeat, beatOffset: c.offset)
+            XCTAssertEqual(actual, c.expected,
+                           "Case \(i): accuracy=\(c.accuracy), onBeat=\(c.onBeat), offset=\(c.offset)")
+        }
+    }
+
+    // MARK: - 9. No reversal or primitive-level language in any message
+
+    func testNoReversalOrPrimitiveLanguage() {
+        let messages = [
+            msg(accuracy: 95, isOnBeat: true,  beatOffset: 0),
+            msg(accuracy: 85, isOnBeat: true,  beatOffset: 60),
+            msg(accuracy: 95, isOnBeat: true,  beatOffset: -60),
+            msg(accuracy: 35, isOnBeat: false, beatOffset: -80),
+            msg(accuracy: 28, isOnBeat: false, beatOffset: 120),
+            msg(accuracy: 20, isOnBeat: false, beatOffset: 10),
+            msg(accuracy: 30, isOnBeat: true,  beatOffset: 0),
+        ].compactMap { $0 }
+
+        let joined = messages.joined(separator: " ").lowercased()
+        XCTAssertFalse(joined.contains("reversal"), "Must not claim early/late reversal")
+        XCTAssertFalse(joined.contains("stroke"), "Must not claim per-stroke info")
+        XCTAssertFalse(joined.contains("travel"), "Must not claim travel distance")
+        XCTAssertFalse(joined.contains("primitive"), "Must not claim primitive-level info")
+        XCTAssertFalse(joined.contains("drift"), "Must not claim timing drift")
+        XCTAssertFalse(joined.contains("crossfader"), "Must not claim fader timing")
+        XCTAssertFalse(joined.contains("clipped"), "Must not claim clipped motion")
+    }
+}
