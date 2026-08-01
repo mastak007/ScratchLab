@@ -451,5 +451,387 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
 
         XCTAssertEqual(warning, "Unsupported LPCM format: Int24")
     }
+
+    // MARK: - Carrier retention via production state machine
+
+    /// Helper: creates a minimal PairDiagnostic for state-machine tests.
+    private func pairDiag(
+        startChannel: Int, score: Float = -1, rms: Float = 0.3,
+        freqHzL: Float = 300, freqHzR: Float = 300,
+        zcr: Float = 0.01
+    ) -> TimecodeCMSampleBufferAdapter.PairDiagnostic {
+        .init(
+            label: "\(startChannel + 1)/\(startChannel + 2)",
+            startChannel: startChannel,
+            rms: rms,
+            peak: rms * 2,
+            correlation: 0.5,
+            leftDominantFrequencyHz: freqHzL,
+            rightDominantFrequencyHz: freqHzR,
+            leftZeroCrossingRate: zcr,
+            rightZeroCrossingRate: zcr,
+            frequenciesStable: true,
+            score: score,
+            rejectionReason: score >= 0 ? nil : "no timecode carrier"
+        )
+    }
+
+    /// 1. Auto acquires a valid carrier from a cold start (no pair held yet).
+    func testRetentionAutoAcquiresValidPair() {
+        let diags = [pairDiag(startChannel: 2, score: 1.0, rms: 0.3)]
+        let (newState) = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: .empty, perPairDiagnostics: diags, selection: .auto
+        )
+
+        XCTAssertEqual(newState.heldPair?.start, 2, "Auto must acquire pair 3/4")
+        XCTAssertNil(newState.candidatePair)
+        XCTAssertEqual(newState.candidateStreak, 0)
+    }
+
+    /// 2 & 3. 3/4 becomes silent/invalid during a turnaround — held pair
+    /// must be retained and selection must remain 3/4, not fall back to
+    /// whatever pair (even 1/2) happens to score least-negative.
+    func testRetentionHoldsThroughSilenceDuringTurnaround() {
+        let held = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        // 3/4 has gone silent (negative score); 1/2 is also silent/invalid,
+        // matching a real turnaround where nothing currently passes.
+        let diags = [
+            pairDiag(startChannel: 0, score: -1, rms: 0.0001),
+            pairDiag(startChannel: 2, score: -1, rms: 0.0),
+        ]
+        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: held, perPairDiagnostics: diags, selection: .auto
+        )
+
+        XCTAssertEqual(newState.heldPair?.start, 2,
+            "Held pair 3/4 must be retained through silence — must not fall back to 1/2 or release")
+        XCTAssertNil(newState.candidatePair)
+        XCTAssertEqual(newState.candidateStreak, 0)
+    }
+
+    /// Holding must not expire no matter how many consecutive invalid
+    /// buffers occur — there is no time-based window anymore. Control
+    /// vinyl naturally loses carrier at zero speed; a long stop/pause must
+    /// not release the held pair.
+    func testRetentionHoldsIndefinitelyAcrossManyInvalidBuffers() {
+        var state = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        let silentDiags = [pairDiag(startChannel: 2, score: -1, rms: 0.0)]
+        for _ in 0..<500 {
+            state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+                currentState: state, perPairDiagnostics: silentDiags, selection: .auto
+            )
+        }
+        XCTAssertEqual(state.heldPair?.start, 2,
+            "Held pair must still be 3/4 after 500 consecutive silent buffers — no time-based expiry")
+    }
+
+    /// 4. When the held pair's carrier returns (valid score again), decoding
+    /// resumes on the SAME pair — no switch, no re-acquisition churn.
+    func testRetentionCarrierReturnsWithoutSwitching() {
+        let heldDuringSilence = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        let carrierReturnedDiags = [pairDiag(startChannel: 2, score: 0.9, rms: 0.28)]
+        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: heldDuringSilence, perPairDiagnostics: carrierReturnedDiags, selection: .auto
+        )
+
+        XCTAssertEqual(newState.heldPair?.start, 2,
+            "Pair 3/4 carrier returning must resume decoding on the same pair, not switch")
+    }
+
+    /// 5. A single-buffer transient signal on another pair must not steal
+    /// selection — only a *sustained* advantage does (see test 6).
+    func testRetentionTransientOtherPairDoesNotStealSelection() {
+        let held = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        // One buffer where an unrelated pair momentarily scores higher.
+        let diags = [
+            pairDiag(startChannel: 2, score: 0.2, rms: 0.15),
+            pairDiag(startChannel: 6, score: 0.9, rms: 0.4),
+        ]
+        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: held, perPairDiagnostics: diags, selection: .auto
+        )
+
+        XCTAssertEqual(newState.heldPair?.start, 2,
+            "A single transient buffer favoring another pair must not switch the held pair")
+        XCTAssertEqual(newState.candidatePair, 6,
+            "The transient advantage should start a candidate streak, not switch immediately")
+        XCTAssertEqual(newState.candidateStreak, 1)
+    }
+
+    /// 6. A sustained, meaningfully-stronger different pair CAN switch
+    /// selection once its advantage persists across the confirmation
+    /// window (5 consecutive buffers).
+    func testRetentionSustainedStrongerPairSwitchesSelection() {
+        var state = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        let sustainedBetterDiags = [
+            pairDiag(startChannel: 2, score: 0.2, rms: 0.15),
+            pairDiag(startChannel: 6, score: 0.9, rms: 0.4),
+        ]
+        for i in 0..<4 {
+            state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+                currentState: state, perPairDiagnostics: sustainedBetterDiags, selection: .auto
+            )
+            XCTAssertEqual(state.heldPair?.start, 2,
+                "Must still be holding 3/4 before the confirmation window elapses (buffer \(i + 1)/5)")
+        }
+        // 5th consecutive buffer — confirmation threshold reached.
+        state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: state, perPairDiagnostics: sustainedBetterDiags, selection: .auto
+        )
+        XCTAssertEqual(state.heldPair?.start, 6,
+            "A sustained (5-buffer) stronger pair must switch the held selection")
+        XCTAssertNil(state.candidatePair)
+        XCTAssertEqual(state.candidateStreak, 0)
+    }
+
+    /// A candidate streak must reset if the advantage doesn't actually
+    /// persist across consecutive buffers (proves this is a *consecutive*
+    /// streak, not a cumulative counter).
+    func testRetentionCandidateStreakResetsWhenAdvantageLapses() {
+        var state = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        let betterDiags = [
+            pairDiag(startChannel: 2, score: 0.2, rms: 0.15),
+            pairDiag(startChannel: 6, score: 0.9, rms: 0.4),
+        ]
+        let heldWinsDiags = [
+            pairDiag(startChannel: 2, score: 0.9, rms: 0.3),
+            pairDiag(startChannel: 6, score: 0.2, rms: 0.1),
+        ]
+        state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: state, perPairDiagnostics: betterDiags, selection: .auto
+        )
+        state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: state, perPairDiagnostics: betterDiags, selection: .auto
+        )
+        XCTAssertEqual(state.candidateStreak, 2)
+
+        // Held pair wins this buffer — streak must reset, not just pause.
+        state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: state, perPairDiagnostics: heldWinsDiags, selection: .auto
+        )
+        XCTAssertNil(state.candidatePair)
+        XCTAssertEqual(state.candidateStreak, 0)
+        XCTAssertEqual(state.heldPair?.start, 2)
+
+        // Advantage resumes — streak must start over from 1, not resume at 3.
+        state = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: state, perPairDiagnostics: betterDiags, selection: .auto
+        )
+        XCTAssertEqual(state.candidateStreak, 1,
+            "An interrupted advantage must restart the confirmation streak, not resume it")
+    }
+
+    /// Manual selection returns empty retention state (retention only
+    /// applies to Auto).
+    func testRetentionManualSelectionReturnsEmptyState() {
+        let held = TimecodeCMSampleBufferAdapter.RetentionState(
+            heldPair: (2, 0.3), candidatePair: nil, candidateStreak: 0
+        )
+        let diags = [pairDiag(startChannel: 2, score: 1.0, rms: 0.3)]
+        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: held, perPairDiagnostics: diags, selection: .pair(startChannel: 0)
+        )
+
+        XCTAssertNil(newState.heldPair, "Manual mode must not hold any pair")
+        XCTAssertEqual(newState, .empty)
+    }
+
+    /// `resetPairRetention()` (called on capture device change, manual
+    /// selection, or session restart) clears any held pair from the
+    /// production static state that `stereoSampleResult` reads.
+    func testResetPairRetentionClearsHeldPair() {
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+        XCTAssertNil(TimecodeCMSampleBufferAdapter.lastValidPair,
+            "resetPairRetention() must clear any held pair")
+    }
+
+    /// Setting `channelPairSelection` (a manual selection change) must
+    /// itself reset retention — this is the production wiring for one of
+    /// the three reset conditions (capture device change, manual selection,
+    /// session restart).
+    func testChangingChannelPairSelectionResetsRetention() {
+        let original = TimecodeCMSampleBufferAdapter.channelPairSelection
+        defer { TimecodeCMSampleBufferAdapter.channelPairSelection = original }
+
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .pair(startChannel: 4)
+        XCTAssertNil(TimecodeCMSampleBufferAdapter.lastValidPair,
+            "Changing channelPairSelection must reset any held pair")
+    }
+
+    /// 9. No unrelated audio pair becomes valid merely because it has high RMS
+    /// (uses the full adapter pipeline, not the pure state function).
+    func testLoudNonCarrierNotValidViaRetentionPipeline() throws {
+        let raw = makeInt32InterleavedWithLoudNonTimecodePair(
+            frameCount: 512, channelCount: 14,
+            quietPairStart: 2, loudPairStart: 12
+        )
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw, channelCount: 14, sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+        let loudPair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 12 })
+        XCTAssertEqual(loudPair.rejectionReason, "no timecode carrier",
+                       "Loud non-carrier pair must still be rejected")
+        XCTAssertEqual(result.autoRecommendedChannelPair, "3/4",
+                       "Stateless entry must pick the valid carrier, not the loud non-carrier")
+    }
+
+    // MARK: - Retention concurrency / race safety
+
+    /// Cold start with every pair scoring negative must remain empty, not
+    /// acquire a negative-scoring pair (the acquisition guard requires
+    /// `score >= 0`).
+    func testColdStartAllNegativeScoresRemainsEmpty() {
+        let diags = [
+            pairDiag(startChannel: 0, score: -1, rms: 0.0),
+            pairDiag(startChannel: 2, score: -1, rms: 0.0001),
+        ]
+        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: .empty, perPairDiagnostics: diags, selection: .auto
+        )
+        XCTAssertNil(newState.heldPair,
+            "Cold start with no valid (score >= 0) pair must remain empty, not acquire a negative-scoring pair")
+        XCTAssertEqual(newState, .empty)
+    }
+
+    /// Pins the deterministic tie-break behavior of `max(by:)` used for
+    /// cold-start acquisition: `Array.max(by:)` never replaces its running
+    /// result on an exact tie (the ordering predicate is strict `<`), so the
+    /// first pair in diagnostics order wins any equal-score tie. This test
+    /// exists so a future change to the acquisition logic (or an
+    /// unexpected standard-library behavior change) fails loudly instead of
+    /// silently changing which pair Auto acquires on a tie.
+    func testColdStartTiedScoresPicksFirstPairDeterministically() {
+        let diags = [
+            pairDiag(startChannel: 0, score: 0.5, rms: 0.2),
+            pairDiag(startChannel: 2, score: 0.5, rms: 0.2),
+        ]
+        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: .empty, perPairDiagnostics: diags, selection: .auto
+        )
+        XCTAssertEqual(newState.heldPair?.start, 0,
+            "Tied pair scores must resolve deterministically to the first pair in diagnostics order")
+    }
+
+    /// A retention-update transaction that began (snapshot captured) before
+    /// an explicit reset must not be able to write its computed held pair
+    /// back after the reset — the reset must always win over a
+    /// late-arriving, stale transaction.
+    func testStaleTransactionBeforeResetCannotRepublishHeldPair() {
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+
+        // Simulate an in-flight audio callback: capture a snapshot, then
+        // compute a new state from it exactly as `stereoSampleResult`
+        // would.
+        let snapshot = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
+        let diags = [pairDiag(startChannel: 2, score: 1.0, rms: 0.3)]
+        let computed = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: snapshot.state, perPairDiagnostics: diags, selection: snapshot.selection
+        )
+
+        // A reset arrives after the snapshot was captured but before the
+        // stale transaction commits — the real race window.
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+
+        let applied = TimecodeCMSampleBufferAdapter.commitRetentionTransaction(computed, snapshot: snapshot)
+        XCTAssertFalse(applied, "A stale transaction captured before a reset must not be applied")
+        XCTAssertNil(TimecodeCMSampleBufferAdapter.lastValidPair,
+            "Reset must win — a late-arriving stale transaction must not repopulate the held pair")
+    }
+
+    /// A stale Auto transaction captured before a manual selection change
+    /// must not be able to restore Auto retention after that change.
+    func testStaleAutoTransactionBeforeSelectionChangeCannotRestoreRetention() {
+        let originalSelection = TimecodeCMSampleBufferAdapter.channelPairSelection
+        defer { TimecodeCMSampleBufferAdapter.channelPairSelection = originalSelection }
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .auto
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+
+        let snapshot = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
+        let diags = [pairDiag(startChannel: 2, score: 1.0, rms: 0.3)]
+        let computed = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: snapshot.state, perPairDiagnostics: diags, selection: snapshot.selection
+        )
+
+        // A manual selection change arrives after the snapshot was
+        // captured but before the stale Auto transaction commits.
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .pair(startChannel: 4)
+
+        let applied = TimecodeCMSampleBufferAdapter.commitRetentionTransaction(computed, snapshot: snapshot)
+        XCTAssertFalse(applied,
+            "A stale Auto transaction captured before a manual selection change must not be applied")
+        XCTAssertNil(TimecodeCMSampleBufferAdapter.lastValidPair,
+            "Manual selection change must win — a late-arriving stale Auto transaction must not restore Auto retention")
+    }
+
+    /// Bounded stress test: many concurrent retention-update transactions
+    /// racing against concurrent resets and selection changes must never
+    /// crash, deadlock, or leave inconsistent state, and a final explicit
+    /// reset (issued after all concurrent work completes) must always
+    /// leave retention empty. Run under Thread Sanitizer to additionally
+    /// prove there is no data race on the underlying stored state.
+    func testConcurrentSelectionAndResetVersusRetentionUpdatesLeavesConsistentFinalState() {
+        let originalSelection = TimecodeCMSampleBufferAdapter.channelPairSelection
+        defer { TimecodeCMSampleBufferAdapter.channelPairSelection = originalSelection }
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .auto
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+
+        let iterations = 500
+        let group = DispatchGroup()
+        let updaterQueue = DispatchQueue(label: "retention-stress-updater", attributes: .concurrent)
+        let controlQueue = DispatchQueue(label: "retention-stress-control", attributes: .concurrent)
+
+        for i in 0..<iterations {
+            group.enter()
+            updaterQueue.async {
+                let snapshot = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
+                let diags = [self.pairDiag(startChannel: 2, score: 0.8, rms: 0.3)]
+                let computed = TimecodeCMSampleBufferAdapter.updateRetentionState(
+                    currentState: snapshot.state, perPairDiagnostics: diags, selection: snapshot.selection
+                )
+                TimecodeCMSampleBufferAdapter.commitRetentionTransaction(computed, snapshot: snapshot)
+                group.leave()
+            }
+            if i % 37 == 0 {
+                group.enter()
+                controlQueue.async {
+                    TimecodeCMSampleBufferAdapter.resetPairRetention()
+                    group.leave()
+                }
+            }
+            if i % 53 == 0 {
+                group.enter()
+                controlQueue.async {
+                    TimecodeCMSampleBufferAdapter.channelPairSelection = .pair(startChannel: 0)
+                    TimecodeCMSampleBufferAdapter.channelPairSelection = .auto
+                    group.leave()
+                }
+            }
+        }
+
+        let waitResult = group.wait(timeout: .now() + 10)
+        XCTAssertEqual(waitResult, .success, "Concurrent retention stress test must complete within timeout")
+
+        // Issued after all concurrent work above has completed — must
+        // deterministically leave retention empty regardless of how the
+        // updater/control operations interleaved.
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+        XCTAssertNil(TimecodeCMSampleBufferAdapter.lastValidPair,
+            "A final explicit reset must always leave retention empty, no matter how updater/control operations interleaved")
+    }
 #endif
 }

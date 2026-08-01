@@ -3247,6 +3247,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func reconfigureSession() {
+        // A capture device change invalidates any DVS pair Auto selection
+        // is currently holding — the new device's channel layout may not
+        // even resemble the old one.
+        #if DEBUG && ENABLE_TIMECODE_LIVE_TAP
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+        #endif
         let selectedAudioID = selectedAudioDeviceUniqueID
         let selectedVideoID = selectedVideoDeviceUniqueID
         let audioDevices = availableAudioDevices

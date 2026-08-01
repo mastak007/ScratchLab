@@ -77,10 +77,225 @@ struct TimecodeCMSampleBufferAdapter {
     private nonisolated(unsafe) static var storedDiagnostics: DiagnosticsSnapshot?
     private nonisolated(unsafe) static var storedLastDiagnostic = ""
     private nonisolated(unsafe) static var storedCaptureDeviceDebugInfo = ""
+    /// Start channel of the pair Auto selection is currently holding, once
+    /// acquired. Held indefinitely (see `RetentionState`) until a
+    /// sustained, meaningfully-better alternative is confirmed or
+    /// `resetPairRetention()` is called.
+    private nonisolated(unsafe) static var storedLastValidPair: (start: Int, rms: Float)?
+    private nonisolated(unsafe) static var storedCandidatePair: Int?
+    private nonisolated(unsafe) static var storedCandidateStreak: Int = 0
+    /// Bumped by `resetPairRetentionLocked()` — i.e. on every explicit
+    /// reset and every actual `channelPairSelection` change. A retention
+    /// transaction (`RetentionTransactionSnapshot`) captured before a bump
+    /// is stale once the bump happens, and `commitRetentionTransaction`
+    /// refuses to publish a stale transaction's result. This is what makes
+    /// a reset or selection change win over a slower, already-in-flight
+    /// audio callback that started computing its own retention update
+    /// before the reset/change occurred.
+    private nonisolated(unsafe) static var storedRetentionGeneration: Int = 0
+
+    /// Retention state used by the production `stereoSampleResult` path and
+    /// accessible to focused tests via `updateRetentionState(...)`.
+    ///
+    /// Control vinyl naturally loses carrier or becomes unstable at zero
+    /// speed (a stop, a turnaround, a reversal) — this is expected, not a
+    /// fault, and must not cause Auto selection to abandon an already-
+    /// validated pair. Once a pair is held, it is held indefinitely (no
+    /// time-based expiry, no energy/RMS floor) regardless of how many
+    /// consecutive buffers it scores negative on, until either a different
+    /// pair earns the hold through sustained, meaningfully-better evidence,
+    /// or an explicit reset occurs (capture device change, manual
+    /// selection, session restart — see `resetPairRetention()`).
+    struct RetentionState: Equatable {
+        /// The pair Auto is currently holding, or nil before first
+        /// acquisition.
+        var heldPair: (start: Int, rms: Float)?
+        /// The alternate pair currently building a switch-confirmation
+        /// streak (nil when no alternate is currently out-scoring the held
+        /// pair by a meaningful margin).
+        var candidatePair: Int?
+        /// Consecutive buffers `candidatePair` has out-scored the held pair
+        /// by more than `switchScoreAdvantage`.
+        var candidateStreak: Int
+
+        static func == (lhs: RetentionState, rhs: RetentionState) -> Bool {
+            lhs.heldPair?.start == rhs.heldPair?.start
+                && lhs.candidatePair == rhs.candidatePair
+                && lhs.candidateStreak == rhs.candidateStreak
+        }
+
+        static let empty = RetentionState(heldPair: nil, candidatePair: nil, candidateStreak: 0)
+    }
+
+    /// Minimum score advantage a different pair must show over the held
+    /// pair, on a single buffer, to begin (or continue) a switch-
+    /// confirmation streak. Real measured scores cluster around 0.3-0.4;
+    /// this is large enough to reject noise-level score jitter between
+    /// otherwise-similar pairs.
+    private static let switchScoreAdvantage: Float = 0.05
+
+    /// Consecutive buffers a candidate pair must sustain its score
+    /// advantage before Auto actually switches the held pair. At the
+    /// ~10 ms audio-buffer cadence this is ~50 ms of sustained evidence —
+    /// enough to reject a transient blip on an unrelated channel while
+    /// still remaining responsive to a genuine, sustained pair change.
+    private static let switchConfirmBufferCount = 5
+
+    /// Pure function that computes the next retention state from the
+    /// current per-pair diagnostics and the previous state. The production
+    /// `stereoSampleResult` calls this and applies the result to the stored
+    /// state.
+    ///
+    /// - Parameters:
+    ///   - currentState: The retention state from the previous call.
+    ///   - perPairDiagnostics: Diagnostics for this buffer.
+    ///   - selection: Current channel pair selection mode.
+    /// - Returns: The new retention state.
+    static func updateRetentionState(
+        currentState: RetentionState,
+        perPairDiagnostics: [PairDiagnostic],
+        selection: ChannelPairSelection
+    ) -> RetentionState {
+        guard selection == .auto else {
+            return .empty
+        }
+
+        guard let held = currentState.heldPair else {
+            // Nothing held yet — acquire the first valid (score >= 0) pair.
+            if let best = perPairDiagnostics.max(by: { $0.score < $1.score }), best.score >= 0 {
+                return RetentionState(heldPair: (best.startChannel, best.rms), candidatePair: nil, candidateStreak: 0)
+            }
+            return .empty
+        }
+
+        // Already holding a pair. Keep holding it — through silence, a
+        // stop, a reversal, or any single invalid buffer — unless a
+        // *different* pair has shown a sustained, meaningfully-better
+        // score across `switchConfirmBufferCount` consecutive buffers.
+        let heldDiag = perPairDiagnostics.first { $0.startChannel == held.start }
+        let heldScore = heldDiag?.score ?? -1
+        let heldRMS = heldDiag?.rms ?? held.rms
+        let bestOther = perPairDiagnostics
+            .filter { $0.startChannel != held.start }
+            .max { $0.score < $1.score }
+
+        guard let bestOther, bestOther.score >= 0, bestOther.score > heldScore + Self.switchScoreAdvantage else {
+            // No meaningfully-better alternative this buffer — reset any
+            // in-progress candidate streak and keep holding.
+            return RetentionState(heldPair: (held.start, heldRMS), candidatePair: nil, candidateStreak: 0)
+        }
+
+        if currentState.candidatePair == bestOther.startChannel {
+            let streak = currentState.candidateStreak + 1
+            if streak >= Self.switchConfirmBufferCount {
+                // Sustained across enough buffers — confirmed switch.
+                return RetentionState(heldPair: (bestOther.startChannel, bestOther.rms), candidatePair: nil, candidateStreak: 0)
+            }
+            return RetentionState(heldPair: (held.start, heldRMS), candidatePair: bestOther.startChannel, candidateStreak: streak)
+        }
+        // A new (different) candidate just appeared — start its streak.
+        return RetentionState(heldPair: (held.start, heldRMS), candidatePair: bestOther.startChannel, candidateStreak: 1)
+    }
+
+    /// A retention-update transaction begins by snapshotting the selection,
+    /// retention state, and generation together, atomically, via
+    /// `beginRetentionTransaction()`. The caller then computes a new
+    /// `RetentionState` from that snapshot — using `updateRetentionState`,
+    /// off the lock, since diagnostics scoring can be comparatively heavy —
+    /// and finally calls `commitRetentionTransaction(_:snapshot:)` to
+    /// publish it. The commit only succeeds if `storedRetentionGeneration`
+    /// (and, defensively, `storedSelection`) still match what was captured
+    /// in the snapshot; otherwise a reset or selection change happened
+    /// while this transaction was in flight, and the computed result —
+    /// having been derived from now-stale state — is silently discarded
+    /// rather than published. This is what prevents a slow, already-
+    /// in-flight audio callback from resurrecting a held pair after a
+    /// concurrent reset or manual selection change has already cleared it:
+    /// the reset always wins, and the discarded callback's own selected
+    /// audio (its `StereoResult`) is still returned to its caller as
+    /// normal — only the retention bookkeeping for that one buffer is
+    /// dropped, and the very next callback recomputes retention fresh from
+    /// the current (post-reset) state.
+    ///
+    /// Because a successful commit does not itself bump the generation,
+    /// this specifically protects against reset/selection-change races
+    /// (which run on other threads — UI, session reconfiguration). It
+    /// assumes retention-update transactions do not run concurrently with
+    /// each other, which holds today because `stereoSampleResult(from:)`
+    /// is only ever invoked serially, from the capture pipeline's own
+    /// delegate queue.
+    struct RetentionTransactionSnapshot: Equatable {
+        let selection: ChannelPairSelection
+        let state: RetentionState
+        let generation: Int
+    }
+
+    static func beginRetentionTransaction() -> RetentionTransactionSnapshot {
+        stateLock.withLock {
+            RetentionTransactionSnapshot(
+                selection: storedSelection,
+                state: RetentionState(
+                    heldPair: storedLastValidPair,
+                    candidatePair: storedCandidatePair,
+                    candidateStreak: storedCandidateStreak
+                ),
+                generation: storedRetentionGeneration
+            )
+        }
+    }
+
+    @discardableResult
+    static func commitRetentionTransaction(
+        _ newState: RetentionState,
+        snapshot: RetentionTransactionSnapshot
+    ) -> Bool {
+        stateLock.withLock {
+            guard storedRetentionGeneration == snapshot.generation,
+                  storedSelection == snapshot.selection else {
+                return false
+            }
+            storedLastValidPair = newState.heldPair
+            storedCandidatePair = newState.candidatePair
+            storedCandidateStreak = newState.candidateStreak
+            return true
+        }
+    }
+
+    /// Resets retention fields and bumps the generation. Caller must
+    /// already hold `stateLock` — this never acquires it itself, so it is
+    /// safe to call from within another `withLock` block (e.g. the
+    /// `channelPairSelection` setter) without nesting locks on the
+    /// non-recursive `stateLock`.
+    private static func resetPairRetentionLocked() {
+        storedLastValidPair = nil
+        storedCandidatePair = nil
+        storedCandidateStreak = 0
+        storedRetentionGeneration += 1
+    }
+
+    /// Clears Auto pair retention. Call on capture device change, an
+    /// explicit user pair selection, or session restart — the only
+    /// conditions under which a held pair should be forgotten.
+    static func resetPairRetention() {
+        stateLock.withLock {
+            resetPairRetentionLocked()
+        }
+    }
 
     static var channelPairSelection: ChannelPairSelection {
         get { stateLock.withLock { storedSelection } }
-        set { stateLock.withLock { storedSelection = newValue } }
+        set {
+            // Selection mutation and the retention reset it triggers are
+            // performed atomically under a single lock acquisition, so no
+            // concurrent retention transaction can observe the new
+            // selection together with the pre-reset generation (or vice
+            // versa) — see `resetPairRetentionLocked()`.
+            stateLock.withLock {
+                guard storedSelection != newValue else { return }
+                storedSelection = newValue
+                resetPairRetentionLocked()
+            }
+        }
     }
 
     static var latestDiagnostics: DiagnosticsSnapshot? {
@@ -95,6 +310,10 @@ struct TimecodeCMSampleBufferAdapter {
     static var captureDeviceDebugInfo: String {
         get { stateLock.withLock { storedCaptureDeviceDebugInfo } }
         set { stateLock.withLock { storedCaptureDeviceDebugInfo = newValue } }
+    }
+
+    static var lastValidPair: (start: Int, rms: Float)? {
+        stateLock.withLock { storedLastValidPair }
     }
 
     static func stereoSampleResult(from sampleBuffer: CMSampleBuffer) -> StereoResult? {
@@ -208,6 +427,8 @@ struct TimecodeCMSampleBufferAdapter {
             guard pts.flags.contains(.valid) else { return nil }
             return pts.value > 0 ? UInt64(pts.value) : mach_absolute_time()
         }()
+        let retentionSnapshot = beginRetentionTransaction()
+
 #if DEBUG
         if DebugTimecodeCapture.isCapturing,
            channels.count > 3 {
@@ -226,12 +447,38 @@ struct TimecodeCMSampleBufferAdapter {
             sampleRate: sampleRate,
             hostTime: hostTime,
             formatSummary: formatSummary,
-            selection: channelPairSelection
+            selection: retentionSnapshot.selection,
+            previousValidPair: retentionSnapshot.state.heldPair
         )
         guard let result else {
             recordFailure((diagnosticParts + ["Unable to select channel pair"]).joined(separator: " | "))
             return nil
         }
+        // Compute the next retention state from this buffer's diagnostics,
+        // then attempt to publish it. The commit is a no-op if a reset or
+        // selection change happened after `retentionSnapshot` was captured
+        // (see `commitRetentionTransaction`) — a rare race between this
+        // buffer's processing and a concurrent reset/selection change on
+        // the UI or session thread. In that case this buffer's own
+        // `result` (its selected audio) is still returned normally; only
+        // the retention bookkeeping for this one buffer is discarded, and
+        // the next callback recomputes retention fresh from the current
+        // state.
+        let newRetentionState = Self.updateRetentionState(
+            currentState: retentionSnapshot.state,
+            perPairDiagnostics: result.perPairDiagnostics,
+            selection: retentionSnapshot.selection
+        )
+        commitRetentionTransaction(newRetentionState, snapshot: retentionSnapshot)
+        // True when this buffer is being served from a held pair despite
+        // its own score being negative this buffer (silence, a stop, a
+        // reversal) — used below to report "holding" rather than
+        // "defaulted" in diagnostics.
+        let isHoldingThroughInvalidBuffer = retentionSnapshot.selection == .auto
+            && newRetentionState.heldPair?.start == result.perPairDiagnostics.first(where: {
+                $0.label == result.autoRecommendedChannelPair
+            })?.startChannel
+            && result.perPairDiagnostics.first(where: { $0.label == result.autoRecommendedChannelPair })?.rejectionReason != nil
 
         let pairSummary = result.perPairDiagnostics.map { pair -> String in
             "\(pair.label):rms=\(String(format: "%.5f", pair.rms))"
@@ -250,11 +497,17 @@ struct TimecodeCMSampleBufferAdapter {
         if let recommendedDiagnostic = result.perPairDiagnostics.first(
             where: { $0.label == result.autoRecommendedChannelPair }
         ) {
-            let autoSelectionReason = recommendedDiagnostic.rejectionReason.map {
-                "no pair passed validity checks; defaulted to \(recommendedDiagnostic.label) (reason: \($0))"
-            } ?? "\(recommendedDiagnostic.label) highest-scoring usable carrier pair"
-                + " (score=\(String(format: "%.3f", recommendedDiagnostic.score)),"
-                + " freqStable=\(recommendedDiagnostic.frequenciesStable))"
+            let autoSelectionReason: String
+            if isHoldingThroughInvalidBuffer {
+                autoSelectionReason = "holding last valid pair \(recommendedDiagnostic.label)"
+                    + " (reason: \(recommendedDiagnostic.rejectionReason ?? "unknown"))"
+            } else if let reason = recommendedDiagnostic.rejectionReason {
+                autoSelectionReason = "no pair passed validity checks; defaulted to \(recommendedDiagnostic.label) (reason: \(reason))"
+            } else {
+                autoSelectionReason = "\(recommendedDiagnostic.label) highest-scoring usable carrier pair"
+                    + " (score=\(String(format: "%.3f", recommendedDiagnostic.score)),"
+                    + " freqStable=\(recommendedDiagnostic.frequenciesStable))"
+            }
             diagnosticParts.append("autoReason=\(autoSelectionReason)")
         }
         if let warning = result.warning {
@@ -278,12 +531,14 @@ struct TimecodeCMSampleBufferAdapter {
         return result
     }
 
-    /// Pure conversion entry point used by focused diagnostics tests.
+    /// Test-only entry point that exposes `previousValidPair` for carrier
+    /// retention tests. Pass a warm pair to simulate a prior validated carrier.
     static func adaptInterleavedInt32(
         _ samples: [Int32],
         channelCount: Int,
         sampleRate: Double,
-        selection: ChannelPairSelection
+        selection: ChannelPairSelection,
+        previousValidPair: (start: Int, rms: Float)?
     ) -> StereoResult? {
         guard channelCount > 0, samples.count >= channelCount else { return nil }
         let normalized = samples.map { Float(Double($0) / 2_147_483_648.0) }
@@ -296,7 +551,25 @@ struct TimecodeCMSampleBufferAdapter {
             sampleRate: sampleRate,
             hostTime: nil,
             formatSummary: "Int32 interleaved, \(channelCount)ch, 32-bit",
-            selection: selection
+            selection: selection,
+            previousValidPair: previousValidPair
+        )
+    }
+
+    /// Pure conversion entry point used by focused diagnostics tests.
+    /// Each call is stateless — no pair memory is carried between calls.
+    static func adaptInterleavedInt32(
+        _ samples: [Int32],
+        channelCount: Int,
+        sampleRate: Double,
+        selection: ChannelPairSelection
+    ) -> StereoResult? {
+        adaptInterleavedInt32(
+            samples,
+            channelCount: channelCount,
+            sampleRate: sampleRate,
+            selection: selection,
+            previousValidPair: nil
         )
     }
 
@@ -381,7 +654,8 @@ struct TimecodeCMSampleBufferAdapter {
         sampleRate: Double,
         hostTime: UInt64?,
         formatSummary: String,
-        selection: ChannelPairSelection
+        selection: ChannelPairSelection,
+        previousValidPair: (start: Int, rms: Float)? = nil
     ) -> StereoResult? {
         guard let first = channels.first, !first.isEmpty else { return nil }
         if channels.count == 1 {
@@ -426,7 +700,29 @@ struct TimecodeCMSampleBufferAdapter {
                 channelDiagnostics: channelDiagnostics
             )
         }
-        guard let recommended = pairDiagnostics.max(by: { $0.score < $1.score }) else { return nil }
+        guard let best = pairDiagnostics.max(by: { $0.score < $1.score }) else { return nil }
+
+        // Determine the auto-recommended pair. Auto always prefers the
+        // currently-held pair (from `RetentionState`, threaded in here via
+        // `previousValidPair`), regardless of whether some other pair
+        // scores higher on this single buffer. Retention is held
+        // indefinitely — no time-based expiry and no consecutive-invalid-
+        // buffer counter — until a different pair earns the hold through a
+        // sustained, meaningfully-better score confirmed by
+        // `updateRetentionState` over multiple buffers, or an explicit
+        // reset occurs. This is deliberately not a per-buffer "whichever
+        // scores best right now" choice: a transient signal on another
+        // channel must not steal selection for one buffer while the held
+        // pair is still the validated one. When no pair is currently held
+        // (`previousValidPair` is nil — cold start, or freshly reset),
+        // fall back to the single best-scoring pair.
+        let recommended: PairDiagnostic
+        if selection == .auto, let previous = previousValidPair,
+           let held = pairDiagnostics.first(where: { $0.startChannel == previous.start }) {
+            recommended = held
+        } else {
+            recommended = best
+        }
 
         let requestedStart: Int
         switch selection {

@@ -549,6 +549,9 @@ struct TimecodeControlCard: View {
                 Spacer()
                 Button("Reset Calibration") {
                     pipeline.reset()
+                    #if ENABLE_TIMECODE_LIVE_TAP
+                    TimecodeCMSampleBufferAdapter.resetPairRetention()
+                    #endif
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1163,6 +1166,9 @@ struct TimecodeControlCard_Host: View {
                         Button("Flush + Reset") {
                             pipeline.flushDecode()
                             pipeline.reset()
+                            #if ENABLE_TIMECODE_LIVE_TAP
+                            TimecodeCMSampleBufferAdapter.resetPairRetention()
+                            #endif
                             feedCount = 0
                         }
                         .buttonStyle(.borderedProminent)
