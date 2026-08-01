@@ -69,6 +69,45 @@ public enum TimecodePlaybackBridgeState: String, Equatable, Sendable, CaseIterab
     }
 }
 
+/// Exact result of the most recent bridge evaluation.
+///
+/// `blockedByBadSignal` intentionally groups several fail-closed conditions
+/// for the compact status UI. This value preserves the individual gate so
+/// hardware debugging does not depend on ephemeral Xcode console output.
+public enum TimecodePlaybackBridgeDecision: String, Equatable, Hashable, Sendable {
+    case notEvaluated
+    case disabled
+    case pipelineDisabled
+    case diagnosticsOnly
+    case replayActive
+    case liveTapOff
+    case unusableSignalHealth
+    case staleSignal
+    case lowConfidence
+    case missingTimeline
+    case unknownDirection
+    case validationRequired
+    case driving
+
+    public var label: String {
+        switch self {
+        case .notEvaluated:         return "Not evaluated yet"
+        case .disabled:             return "Playback bridge disabled"
+        case .pipelineDisabled:     return "Timecode pipeline disabled"
+        case .diagnosticsOnly:      return "Diagnostics-only mode"
+        case .replayActive:         return "Replay is active"
+        case .liveTapOff:           return "Live timecode tap is off"
+        case .unusableSignalHealth: return "Signal health is not usable"
+        case .staleSignal:          return "Latest input buffer is stale"
+        case .lowConfidence:        return "Confidence is below bridge minimum"
+        case .missingTimeline:      return "No trusted platter timeline"
+        case .unknownDirection:     return "Platter direction is unknown"
+        case .validationRequired:   return "Validation has not passed"
+        case .driving:              return "All gates passed"
+        }
+    }
+}
+
 // MARK: - TimecodePlaybackDrive
 
 /// Output produced by the bridge when timecode is trusted and allowed to
@@ -137,24 +176,68 @@ public struct TimecodePlaybackDrive: Equatable, Sendable {
 /// ```
 public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable {
 
+    /// `evaluate` runs on the dedicated DVS control queue while SwiftUI reads
+    /// diagnostics — and mutates gate configuration (`playbackDriveEnabled`,
+    /// `validationOverride`, `isReplayActive`, `validationRequired`) — on the
+    /// main thread. Keep the complete output transaction, every public output
+    /// read, and every gate-input value `evaluate` consults behind one
+    /// recursive lock. Recursive locking is required because evaluation
+    /// captures/publishes snapshots through the same locked computed
+    /// properties.
+    private let outputLock = NSRecursiveLock()
+    private var storedState: TimecodePlaybackBridgeState = .disabled
+    private var storedCurrentDrive: TimecodePlaybackDrive?
+    private var storedLastDecision: TimecodePlaybackBridgeDecision = .notEvaluated
+    private var storedDecisionCounts: [TimecodePlaybackBridgeDecision: Int] = [:]
+
+    /// Lock-protected mirror of `playbackDriveEnabled`, kept current by that
+    /// property's `didSet`. `evaluate` reads this instead of the raw
+    /// `@Published` storage, which SwiftUI can mutate on the main thread
+    /// concurrently with evaluation on the DVS control queue.
+    private var storedPlaybackDriveEnabled: Bool = false
+    /// Lock-protected mirror of `validationOverride`, kept current by that
+    /// property's `didSet`, for the same reason as `storedPlaybackDriveEnabled`.
+    private var storedValidationOverride: Bool = false
+    /// Lock-protected backing storage for `isReplayActive`.
+    private var storedIsReplayActive: Bool = false
+    /// Lock-protected backing storage for `validationRequired`.
+    private var storedValidationRequired: Bool = true
+
     // MARK: - Configuration
 
     /// Master toggle. When `false`, the bridge never produces drive output.
     /// Defaults to `false`.
     @Published public var playbackDriveEnabled: Bool = false {
         didSet {
+            outputLock.lock()
+            storedPlaybackDriveEnabled = playbackDriveEnabled
+            outputLock.unlock()
             if !playbackDriveEnabled, oldValue {
+                outputLock.lock()
+                defer { outputLock.unlock() }
                 // Clear output when toggled off so stale drive signal is not
                 // consumed by the playback path.
                 currentDrive = nil
                 state = .disabled
+                lastDecision = .disabled
             }
         }
     }
 
     /// Set to `true` by the playback controller when a replay take is active.
     /// The bridge blocks timecode driving while this is `true`.
-    public var isReplayActive: Bool = false
+    public var isReplayActive: Bool {
+        get {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return storedIsReplayActive
+        }
+        set {
+            outputLock.lock()
+            storedIsReplayActive = newValue
+            outputLock.unlock()
+        }
+    }
 
     /// When `true`, the user has explicitly overridden the validation
     /// requirement gate. This allows playback to drive even when the
@@ -162,14 +245,31 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
     ///
     /// Defaults to `false`. Must be explicitly toggled by the user after
     /// confirming they understand the risks.
-    @Published public var validationOverride: Bool = false
+    @Published public var validationOverride: Bool = false {
+        didSet {
+            outputLock.lock()
+            storedValidationOverride = validationOverride
+            outputLock.unlock()
+        }
+    }
 
     /// When `true`, the bridge requires `validationStatus == .usablePrototypeControl`
     /// before allowing playback. Set by the active profile.
     ///
     /// Defaults to `true` — validation is required unless the profile
     /// explicitly sets it to `false` (e.g., manual mode).
-    public var validationRequired: Bool = true
+    public var validationRequired: Bool {
+        get {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return storedValidationRequired
+        }
+        set {
+            outputLock.lock()
+            storedValidationRequired = newValue
+            outputLock.unlock()
+        }
+    }
 
     /// Maximum absolute rate allowed in position-units per second.
     /// Rates exceeding this are clamped.
@@ -186,10 +286,72 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
     // MARK: - Published output
 
     /// Current bridge state.
-    @Published public private(set) var state: TimecodePlaybackBridgeState = .disabled
+    public private(set) var state: TimecodePlaybackBridgeState {
+        get {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return storedState
+        }
+        set {
+            outputLock.lock()
+            storedState = newValue
+            outputLock.unlock()
+        }
+    }
 
     /// Most recent drive output, or `nil` when the bridge is not driving.
-    @Published public private(set) var currentDrive: TimecodePlaybackDrive?
+    public private(set) var currentDrive: TimecodePlaybackDrive? {
+        get {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return storedCurrentDrive
+        }
+        set {
+            outputLock.lock()
+            storedCurrentDrive = newValue
+            outputLock.unlock()
+        }
+    }
+
+    /// Exact outcome of the most recent gate evaluation.
+    public private(set) var lastDecision: TimecodePlaybackBridgeDecision {
+        get {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return storedLastDecision
+        }
+        set {
+            outputLock.lock()
+            storedLastDecision = newValue
+            outputLock.unlock()
+        }
+    }
+
+    /// Session counts for every evaluated decision, retained so a transient
+    /// reversal-time block remains visible after the platter stops.
+    public private(set) var decisionCounts: [TimecodePlaybackBridgeDecision: Int] {
+        get {
+            outputLock.lock()
+            defer { outputLock.unlock() }
+            return storedDecisionCounts
+        }
+        set {
+            outputLock.lock()
+            storedDecisionCounts = newValue
+            outputLock.unlock()
+        }
+    }
+
+    /// Compact hardware-debug summary of the gates that can interrupt motion.
+    public var blockingDecisionSummary: String {
+        outputLock.lock()
+        defer { outputLock.unlock() }
+        return "health \(storedDecisionCounts[.unusableSignalHealth, default: 0]) · " +
+        "stale \(storedDecisionCounts[.staleSignal, default: 0]) · " +
+        "confidence \(storedDecisionCounts[.lowConfidence, default: 0]) · " +
+        "timeline \(storedDecisionCounts[.missingTimeline, default: 0]) · " +
+        "direction \(storedDecisionCounts[.unknownDirection, default: 0])"
+    }
 
     /// Source label emitted by this bridge on drive output.
     public static let sourceLabel = "timecode_prototype_playback"
@@ -205,13 +367,22 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         minConfidence: Double = 0.3,
         staleThreshold: TimeInterval = 2.0
     ) {
+        self.maxPlaybackRate = maxPlaybackRate
+        self.minConfidence = minConfidence
+        self.staleThreshold = staleThreshold
+        // Explicitly seed every lock-protected shadow from the initializer
+        // argument directly, rather than relying on didSet firing during
+        // init. `evaluate` reads only these shadows, so a bridge constructed
+        // with e.g. playbackDriveEnabled: true must see that value on its
+        // very first evaluation regardless of property-observer timing.
+        storedPlaybackDriveEnabled = playbackDriveEnabled
+        storedIsReplayActive = isReplayActive
+        storedValidationRequired = validationRequired
+        storedValidationOverride = validationOverride
         self.playbackDriveEnabled = playbackDriveEnabled
         self.isReplayActive = isReplayActive
         self.validationRequired = validationRequired
         self.validationOverride = validationOverride
-        self.maxPlaybackRate = maxPlaybackRate
-        self.minConfidence = minConfidence
-        self.staleThreshold = staleThreshold
         self.state = playbackDriveEnabled ? .armed : .disabled
     }
 
@@ -234,9 +405,18 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         pipeline: TimecodeControlPipeline,
         now: Date = Date()
     ) -> TimecodePlaybackDrive? {
+        outputLock.lock()
+        defer { outputLock.unlock() }
+        let previousOutput = observableOutputSnapshot
+        defer { publishOutputChange(ifDifferentFrom: previousOutput) }
+
         // Gate 1: Bridge must be enabled
-        guard playbackDriveEnabled else {
+        // Reads the lock-protected shadow, not the raw @Published storage,
+        // since SwiftUI can set playbackDriveEnabled from the main thread
+        // concurrently with this evaluation on the DVS control queue.
+        guard storedPlaybackDriveEnabled else {
             state = .disabled
+            recordDecision(.disabled)
             currentDrive = nil
             return nil
         }
@@ -245,10 +425,12 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         switch pipeline.mode {
         case .disabled:
             state = .disabled
+            recordDecision(.pipelineDisabled)
             currentDrive = nil
             return nil
         case .diagnosticsOnly:
             state = .blockedByDiagnosticsOnly
+            recordDecision(.diagnosticsOnly)
             currentDrive = nil
             return nil
         case .controlPrototype:
@@ -256,8 +438,9 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         }
 
         // Gate 3: Replay must not be active
-        if isReplayActive {
+        if storedIsReplayActive {
             state = .blockedByReplay
+            recordDecision(.replayActive)
             currentDrive = nil
             return nil
         }
@@ -265,6 +448,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         // Gate 4: Live tap must be enabled
         guard pipeline.liveTapEnabled else {
             state = .blockedByLiveTapOff
+            recordDecision(.liveTapOff)
             currentDrive = nil
             return nil
         }
@@ -272,6 +456,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         // Gate 5: Signal health must be usable
         guard pipeline.signalHealth == .usable else {
             state = .blockedByBadSignal
+            recordDecision(.unusableSignalHealth)
             currentDrive = nil
             return nil
         }
@@ -281,6 +466,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
             let age = now.timeIntervalSince(lastBuffer)
             if age > staleThreshold {
                 state = .blockedByBadSignal
+                recordDecision(.staleSignal)
                 currentDrive = nil
                 return nil
             }
@@ -292,6 +478,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         // Gate 7: Confidence must meet threshold
         guard pipeline.counters.averageConfidence >= minConfidence || pipeline.counters.acceptedMotionSamples > 0 else {
             state = .blockedByBadSignal
+            recordDecision(.lowConfidence)
             currentDrive = nil
             return nil
         }
@@ -300,6 +487,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         guard let timeline = pipeline.latestPlatterTimeline,
               !timeline.samples.isEmpty else {
             state = .blockedByBadSignal
+            recordDecision(.missingTimeline)
             currentDrive = nil
             return nil
         }
@@ -307,16 +495,18 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         // Gate 9: Direction must be known
         guard pipeline.currentDirection != .unknown else {
             state = .blockedByBadSignal
+            recordDecision(.unknownDirection)
             currentDrive = nil
             return nil
         }
 
         // Gate 10: Validation status must be usable (or user overrides)
-        if validationRequired {
+        if storedValidationRequired {
             let snap = pipeline.makeValidationSnapshot(now: now)
             let statusOK = snap.validationStatus == .usablePrototypeControl
-            if !statusOK && !validationOverride {
+            if !statusOK && !storedValidationOverride {
                 state = .blockedByValidationRequired
+                recordDecision(.validationRequired)
                 currentDrive = nil
                 return nil
             }
@@ -340,6 +530,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         )
 
         state = .driving
+        recordDecision(.driving)
         currentDrive = drive
         return drive
     }
@@ -350,8 +541,52 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
     /// Does not change `playbackDriveEnabled`.
     /// Resets `validationOverride` to `false` for safety.
     public func reset() {
+        outputLock.lock()
+        defer { outputLock.unlock() }
+        let previousOutput = observableOutputSnapshot
+        defer { publishOutputChange(ifDifferentFrom: previousOutput) }
+
         currentDrive = nil
         validationOverride = false
-        state = playbackDriveEnabled ? .armed : .disabled
+        state = storedPlaybackDriveEnabled ? .armed : .disabled
+        lastDecision = storedPlaybackDriveEnabled ? .notEvaluated : .disabled
+        decisionCounts.removeAll(keepingCapacity: true)
+    }
+
+    private struct ObservableOutputSnapshot: Equatable {
+        let state: TimecodePlaybackBridgeState
+        let currentDrive: TimecodePlaybackDrive?
+        let lastDecision: TimecodePlaybackBridgeDecision
+        let decisionCounts: [TimecodePlaybackBridgeDecision: Int]
+    }
+
+    private var observableOutputSnapshot: ObservableOutputSnapshot {
+        ObservableOutputSnapshot(
+            state: state,
+            currentDrive: currentDrive,
+            lastDecision: lastDecision,
+            decisionCounts: decisionCounts
+        )
+    }
+
+    /// Bridge gates update state, drive, decision, and counters as one
+    /// coherent result. Invalidate observers once after that result is
+    /// complete instead of once for every field assignment.
+    private func publishOutputChange(
+        ifDifferentFrom previous: ObservableOutputSnapshot
+    ) {
+        guard previous != observableOutputSnapshot else { return }
+        if Thread.isMainThread {
+            objectWillChange.send()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+
+    private func recordDecision(_ decision: TimecodePlaybackBridgeDecision) {
+        storedLastDecision = decision
+        storedDecisionCounts[decision, default: 0] += 1
     }
 }

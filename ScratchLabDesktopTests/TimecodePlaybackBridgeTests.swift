@@ -21,6 +21,7 @@
 // Batch 8: Prototype playback bridge. DEBUG/prototype only.
 
 import XCTest
+import Combine
 @testable import ScratchLab
 
 final class TimecodePlaybackBridgeTests: XCTestCase {
@@ -42,6 +43,8 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
     private func makeBridge(
         enabled: Bool = false,
         isReplayActive: Bool = false,
+        validationRequired: Bool = true,
+        validationOverride: Bool = false,
         maxPlaybackRate: Double = 5.0,
         minConfidence: Double = 0.3,
         staleThreshold: TimeInterval = 2.0
@@ -49,6 +52,8 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
         TimecodePlaybackBridge(
             playbackDriveEnabled: enabled,
             isReplayActive: isReplayActive,
+            validationRequired: validationRequired,
+            validationOverride: validationOverride,
             maxPlaybackRate: maxPlaybackRate,
             minConfidence: minConfidence,
             staleThreshold: staleThreshold
@@ -109,6 +114,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
                        "playbackDriveEnabled must default to false")
         XCTAssertEqual(bridge.state, .disabled,
                        "bridge state must default to .disabled")
+        XCTAssertEqual(bridge.lastDecision, .notEvaluated)
         XCTAssertNil(bridge.currentDrive,
                      "currentDrive must default to nil")
         XCTAssertFalse(bridge.isReplayActive,
@@ -128,6 +134,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
         XCTAssertNil(drive, "bridge must return nil when pipeline is diagnosticsOnly")
         XCTAssertEqual(bridge.state, .blockedByDiagnosticsOnly,
                        "bridge state must be .blockedByDiagnosticsOnly")
+        XCTAssertEqual(bridge.lastDecision, .diagnosticsOnly)
     }
 
     // MARK: - 3. Disabled mode cannot drive playback
@@ -170,6 +177,8 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
         XCTAssertNotNil(drive, "bridge must produce drive output when enabled and signal is trusted")
         XCTAssertEqual(bridge.state, .driving,
                        "bridge state must be .driving when producing output")
+        XCTAssertEqual(bridge.lastDecision, .driving)
+        XCTAssertEqual(bridge.decisionCounts[.driving], 1)
 
         guard let drive = drive else { return }
 
@@ -177,6 +186,194 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
                        "source label must be timecode_prototype_playback")
         XCTAssertFalse(drive.timeline.samples.isEmpty,
                        "drive must carry a non-empty timeline")
+    }
+
+    func testBridgeEvaluationPublishesOneCoherentOutputChange() {
+        let pipeline = makeTrustedPipeline()
+        let bridge = makeBridge(enabled: true)
+        var publicationCount = 0
+        let observation = bridge.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        let drive = bridge.evaluate(pipeline: pipeline)
+
+        XCTAssertNotNil(drive)
+        XCTAssertEqual(bridge.state, .driving)
+        XCTAssertEqual(bridge.lastDecision, .driving)
+        XCTAssertEqual(bridge.decisionCounts[.driving], 1)
+        XCTAssertEqual(
+            publicationCount,
+            1,
+            "one bridge evaluation must expose state, drive, decision, and counters together"
+        )
+        withExtendedLifetime(observation) {}
+    }
+
+    func testBridgeDiagnosticsRemainSafeDuringConcurrentEvaluationAndReads() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let bridge = makeBridge(enabled: false)
+        let iterations = 2_000
+        let queue = DispatchQueue(
+            label: "com.scratchlab.tests.timecodeBridgeConcurrency",
+            attributes: .concurrent
+        )
+        let group = DispatchGroup()
+
+        group.enter()
+        queue.async {
+            for _ in 0..<iterations {
+                _ = bridge.evaluate(pipeline: pipeline)
+            }
+            group.leave()
+        }
+
+        group.enter()
+        queue.async {
+            for _ in 0..<iterations {
+                _ = bridge.state
+                _ = bridge.currentDrive
+                _ = bridge.lastDecision
+                _ = bridge.decisionCounts
+                _ = bridge.blockingDecisionSummary
+            }
+            group.leave()
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 10), .success)
+        XCTAssertEqual(bridge.lastDecision, .disabled)
+        XCTAssertEqual(bridge.decisionCounts[.disabled], iterations)
+    }
+
+    /// Reproduces the reviewed concern directly: `playbackDriveEnabled`,
+    /// `validationOverride`, `isReplayActive`, and `validationRequired` are
+    /// exactly the gate-input properties SwiftUI can set from the main
+    /// thread while `evaluate` runs on the DVS control queue. This test
+    /// mutates all four from a concurrent writer thread while a second
+    /// thread repeatedly calls `evaluate`, so a real unsynchronized access
+    /// is exercised deterministically rather than relying on incidental
+    /// scheduling. It must pass cleanly under Thread Sanitizer.
+    func testBridgeGateConfigurationRemainsSafeDuringConcurrentEvaluation() {
+        let pipeline = makeTrustedPipeline()
+        let bridge = makeBridge(enabled: false)
+        let iterations = 2_000
+        let queue = DispatchQueue(
+            label: "com.scratchlab.tests.timecodeBridgeConfigConcurrency",
+            attributes: .concurrent
+        )
+        let group = DispatchGroup()
+
+        group.enter()
+        queue.async {
+            for _ in 0..<iterations {
+                _ = bridge.evaluate(pipeline: pipeline)
+            }
+            group.leave()
+        }
+
+        group.enter()
+        queue.async {
+            for i in 0..<iterations {
+                bridge.playbackDriveEnabled = (i % 2 == 0)
+                bridge.validationOverride = (i % 3 == 0)
+                bridge.isReplayActive = (i % 5 == 0)
+                bridge.validationRequired = (i % 7 != 0)
+            }
+            group.leave()
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 10), .success)
+
+        // Drive the bridge into a fully known configuration and confirm a
+        // subsequent evaluation still reflects it coherently — proving the
+        // concurrent writes above did not corrupt the bridge's own state.
+        bridge.isReplayActive = false
+        bridge.validationRequired = false
+        bridge.validationOverride = false
+        bridge.playbackDriveEnabled = true
+        let finalDrive = bridge.evaluate(pipeline: pipeline)
+        XCTAssertNotNil(finalDrive, "bridge must still evaluate correctly after concurrent config writes")
+        XCTAssertEqual(bridge.state, .driving)
+        XCTAssertEqual(bridge.lastDecision, .driving)
+    }
+
+    // MARK: - 5b. Initializer arguments are honored on the very first evaluation
+    //
+    // `evaluate` reads the lock-protected shadow copies, not the raw
+    // properties, so these prove the shadows are seeded correctly by the
+    // initializer itself — not merely by a property observer that happens
+    // to fire on a later assignment.
+
+    func testPlaybackDriveEnabledInitializerArgumentDrivesFirstEvaluation() {
+        let pipeline = makeTrustedPipeline()
+        // Constructed directly (not via makeBridge's default-then-toggle
+        // pattern) with playbackDriveEnabled: true, then evaluated once.
+        let bridge = TimecodePlaybackBridge(playbackDriveEnabled: true)
+
+        let drive = bridge.evaluate(pipeline: pipeline)
+
+        XCTAssertNotNil(drive, "playbackDriveEnabled: true from the initializer must be honored on the first evaluation")
+        XCTAssertEqual(bridge.state, .driving)
+    }
+
+    func testIsReplayActiveInitializerArgumentBlocksFirstEvaluation() {
+        let pipeline = makeTrustedPipeline()
+        let bridge = TimecodePlaybackBridge(playbackDriveEnabled: true, isReplayActive: true)
+
+        let drive = bridge.evaluate(pipeline: pipeline)
+
+        XCTAssertNil(drive, "isReplayActive: true from the initializer must be honored on the first evaluation")
+        XCTAssertEqual(bridge.state, .blockedByReplay)
+    }
+
+    func testValidationRequiredFalseInitializerArgumentSkipsValidationGateOnFirstEvaluation() {
+        let pipeline = makeTrustedPipeline()
+        let bridge = TimecodePlaybackBridge(
+            playbackDriveEnabled: true,
+            validationRequired: false
+        )
+
+        let drive = bridge.evaluate(pipeline: pipeline)
+
+        XCTAssertNotNil(drive, "validationRequired: false from the initializer must be honored on the first evaluation")
+        XCTAssertNotEqual(bridge.state, .blockedByValidationRequired)
+    }
+
+    /// Isolates gate 10 deterministically: the bridge's own `staleThreshold`
+    /// is set far larger than `TimecodeValidationSnapshot`'s fixed 5s
+    /// `staleThreshold`, so evaluating 6s after the last buffer passes the
+    /// bridge's gate 6 (not stale) while the validation snapshot itself
+    /// reports `.stale` (not `.usablePrototypeControl`) — making validation
+    /// the only possible blocker, without depending on a fragile decoder
+    /// state to naturally fail validation.
+    func testValidationOverrideInitializerArgumentIsHonoredOnFirstEvaluation() {
+        let pipeline = makeTrustedPipeline()
+        let future = Date().addingTimeInterval(6)
+        let snap = pipeline.makeValidationSnapshot(now: future)
+        XCTAssertNotEqual(snap.validationStatus, .usablePrototypeControl,
+                          "validation snapshot must not be usable 6s after the last buffer given its fixed 5s threshold")
+
+        let bridgeNoOverride = TimecodePlaybackBridge(
+            playbackDriveEnabled: true,
+            validationRequired: true,
+            validationOverride: false,
+            staleThreshold: 100.0
+        )
+        let driveNoOverride = bridgeNoOverride.evaluate(pipeline: pipeline, now: future)
+        XCTAssertNil(driveNoOverride, "validation must block when not overridden")
+        XCTAssertEqual(bridgeNoOverride.state, .blockedByValidationRequired)
+
+        // Constructed directly with validationOverride: true — the override
+        // must be honored on this bridge's very first evaluation.
+        let bridgeWithOverride = TimecodePlaybackBridge(
+            playbackDriveEnabled: true,
+            validationRequired: true,
+            validationOverride: true,
+            staleThreshold: 100.0
+        )
+        let driveWithOverride = bridgeWithOverride.evaluate(pipeline: pipeline, now: future)
+        XCTAssertNotNil(driveWithOverride, "validationOverride: true from the initializer must be honored on the first evaluation")
+        XCTAssertNotEqual(bridgeWithOverride.state, .blockedByValidationRequired)
     }
 
     // MARK: - 6. Bad signal emits no playback-control output
@@ -476,6 +673,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
             XCTAssertNil(drive, "bridge must block when signal is stale")
             XCTAssertEqual(bridge.state, .blockedByBadSignal,
                            "bridge state must be .blockedByBadSignal for stale signal")
+            XCTAssertEqual(bridge.lastDecision, .staleSignal)
         }
         // If lastBufferReceivedAt was never set by the test helpers,
         // the bridge allows it (synthetic data path).
@@ -498,6 +696,8 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
         XCTAssertNil(bridge.currentDrive, "reset must clear currentDrive")
         XCTAssertEqual(bridge.state, .armed,
                        "reset must return to .armed when bridge is enabled")
+        XCTAssertEqual(bridge.lastDecision, .notEvaluated)
+        XCTAssertTrue(bridge.decisionCounts.isEmpty)
         XCTAssertTrue(bridge.playbackDriveEnabled,
                       "reset must not change playbackDriveEnabled")
     }
@@ -510,6 +710,7 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
 
         XCTAssertEqual(bridge.state, .disabled,
                        "reset must keep .disabled when bridge is not enabled")
+        XCTAssertEqual(bridge.lastDecision, .disabled)
         XCTAssertNil(bridge.currentDrive)
     }
 
