@@ -789,4 +789,134 @@ final class TimecodeLiveTapTests: XCTestCase {
         XCTAssertNil(pipeline.lastBufferReceivedAt,
                      "disabled mode must not update lastBufferReceivedAt")
     }
+
+#if ENABLE_TIMECODE_LIVE_TAP
+
+    func testDebugFixtureRecorderExposesCompleteHardwareCaptureProtocol() {
+        XCTAssertEqual(
+            DebugTimecodeCapture.labels,
+            [
+                "stationary",
+                "steady_normal",
+                "slow_forward",
+                "slow_backward",
+                "fast_forward",
+                "fast_backward",
+                "slow_reversals",
+                "fast_reversals",
+                "fine_flicks",
+                "baby_scratch",
+                "start_stop",
+                "needle_lift",
+                "position_start",
+                "position_middle",
+                "position_end"
+            ]
+        )
+    }
+
+    func testDebugFixtureRecorderWritesMultichannelPairAndCallbackTimeline() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScratchLabTimecodeFixtureTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            DebugTimecodeCapture.cancel()
+            try? FileManager.default.removeItem(at: rootURL)
+        }
+
+        XCTAssertTrue(
+            DebugTimecodeCapture.begin(
+                label: "slow_forward",
+                rootDirectoryURL: rootURL
+            ),
+            DebugTimecodeCapture.lastStartError ?? "fixture recorder did not start"
+        )
+
+        let frameCount = 128
+        for callbackIndex in 0..<2 {
+            let frameOffset = callbackIndex * frameCount
+            let channels: [[Float]] = (0..<14).map { channel in
+                (0..<frameCount).map { frame in
+                    let absoluteFrame = frameOffset + frame
+                    let phase = 2 * Float.pi * Float(300 + channel * 100)
+                        * Float(absoluteFrame) / 48_000
+                    return Float(channel + 1) * 0.1 * sin(phase)
+                }
+            }
+            DebugTimecodeCapture.record(
+                channels: channels,
+                sampleRate: 48_000,
+                hostTime: UInt64(10_000 + callbackIndex),
+                formatSummary: "test Float32 non-interleaved, 14ch"
+            )
+        }
+
+        let summary = try XCTUnwrap(DebugTimecodeCapture.finish())
+        XCTAssertEqual(summary.label, "slow_forward")
+        XCTAssertEqual(summary.sampleRate, 48_000)
+        XCTAssertEqual(summary.sourceChannelCount, 14)
+        XCTAssertEqual(summary.sampleCount, 256)
+        XCTAssertEqual(summary.callbackCount, 2)
+        XCTAssertTrue(summary.errors.isEmpty, summary.errors.joined(separator: " | "))
+
+        let rawURL = try XCTUnwrap(summary.rawMultichannelURL)
+        let pairURL = try XCTUnwrap(summary.stereoPairURL)
+        let rawFile = try AVAudioFile(forReading: rawURL)
+        let pairFile = try AVAudioFile(forReading: pairURL)
+        XCTAssertEqual(rawFile.processingFormat.channelCount, 14)
+        XCTAssertEqual(rawFile.processingFormat.sampleRate, 48_000)
+        XCTAssertEqual(rawFile.length, 256)
+        XCTAssertEqual(pairFile.processingFormat.channelCount, 2)
+        XCTAssertEqual(pairFile.processingFormat.sampleRate, 48_000)
+        XCTAssertEqual(pairFile.length, 256)
+
+        let pairBuffer = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: pairFile.processingFormat,
+            frameCapacity: AVAudioFrameCount(pairFile.length)
+        ))
+        try pairFile.read(into: pairBuffer)
+        let pairChannels = try XCTUnwrap(pairBuffer.floatChannelData)
+        let expectedFrame = 17
+        let expectedLeft = 0.3 * sin(
+            2 * Float.pi * 500 * Float(expectedFrame) / 48_000
+        )
+        let expectedRight = 0.4 * sin(
+            2 * Float.pi * 600 * Float(expectedFrame) / 48_000
+        )
+        XCTAssertEqual(pairChannels[0][expectedFrame], expectedLeft, accuracy: 0.000_01)
+        XCTAssertEqual(pairChannels[1][expectedFrame], expectedRight, accuracy: 0.000_01)
+
+        let callbackText = try String(contentsOf: summary.callbacksURL, encoding: .utf8)
+        let callbackLines = callbackText.split(separator: "\n")
+        XCTAssertEqual(callbackLines.count, 2)
+        let firstCallbackData = try XCTUnwrap(callbackLines.first?.data(using: .utf8))
+        let firstCallback = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: firstCallbackData) as? [String: Any]
+        )
+        XCTAssertEqual(firstCallback["sequenceNumber"] as? Int, 0)
+        XCTAssertEqual(firstCallback["sourceFrameStart"] as? Int, 0)
+        XCTAssertEqual(firstCallback["frameCount"] as? Int, 128)
+        XCTAssertEqual(firstCallback["hostTime"] as? Int, 10_000)
+        let secondCallbackData = try XCTUnwrap(callbackLines.last?.data(using: .utf8))
+        let secondCallback = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: secondCallbackData) as? [String: Any]
+        )
+        XCTAssertEqual(secondCallback["sequenceNumber"] as? Int, 1)
+        XCTAssertEqual(secondCallback["sourceFrameStart"] as? Int, 128)
+        XCTAssertEqual(secondCallback["hostTime"] as? Int, 10_001)
+
+        let manifestData = try Data(contentsOf: summary.manifestURL)
+        let manifest = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
+        )
+        XCTAssertEqual(manifest["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(manifest["label"] as? String, "slow_forward")
+        XCTAssertEqual(manifest["sourceChannelCount"] as? Int, 14)
+        XCTAssertEqual(manifest["sampleCount"] as? Int, 256)
+        XCTAssertEqual(manifest["callbackCount"] as? Int, 2)
+        XCTAssertEqual(manifest["sourcePair"] as? String, "3/4")
+        XCTAssertEqual(manifest["rawMultichannelFile"] as? String, rawURL.lastPathComponent)
+        XCTAssertEqual(manifest["stereoPairFile"] as? String, pairURL.lastPathComponent)
+    }
+
+#endif
 }

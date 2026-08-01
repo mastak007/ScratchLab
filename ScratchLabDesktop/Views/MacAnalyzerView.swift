@@ -28,6 +28,113 @@ private enum SwiftUIStateMutationProbe {
     }
 }
 
+#if DEBUG
+private struct DebugTimecodeCaptureCard: View {
+    @Binding var label: String
+    let status: String
+    let summary: DebugTimecodeCapture.Summary?
+    let isCapturing: Bool
+    let startCapture: () -> Void
+    let stopCapture: () -> Void
+    let copySummary: (String) -> Void
+    let copyFolderPath: (URL) -> Void
+    let revealFolder: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("DVS Fixture Recorder")
+                .font(.headline)
+            Text("Saves all physical source channels before pair selection, pair 3/4 as WAV, and ordered callback timestamps.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Stacked label-above-value, not inline, so the sidebar's
+            // 340–460pt width (see `advancedWorkspace`) goes entirely to
+            // the picker's value instead of being split with a "Label:"
+            // title — the inline form put the longest label
+            // ("steady_normal") at risk of clipping in the narrow sidebar.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Label")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Label", selection: $label) {
+                    ForEach(DebugTimecodeCapture.labels, id: \.self) { captureLabel in
+                        Text(captureLabel).tag(captureLabel)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(isCapturing)
+
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Start Recording", action: startCapture)
+                        .disabled(isCapturing)
+                    Button("Stop and Save", action: stopCapture)
+                        .disabled(!isCapturing)
+                    Button("Copy Summary") {
+                        if let summary { copySummary(summary.text) }
+                    }
+                    .disabled(summary == nil || isCapturing)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Button("Start Recording", action: startCapture)
+                        .disabled(isCapturing)
+                    Button("Stop and Save", action: stopCapture)
+                        .disabled(!isCapturing)
+                    Button("Copy Summary") {
+                        if let summary { copySummary(summary.text) }
+                    }
+                    .disabled(summary == nil || isCapturing)
+                }
+            }
+
+            HStack {
+                Button("Copy Folder Path") {
+                    if let summary { copyFolderPath(summary.directoryURL) }
+                }
+                .disabled(summary == nil || isCapturing)
+                Button("Reveal in Finder") {
+                    if let summary { revealFolder(summary.directoryURL) }
+                }
+                .disabled(summary == nil || isCapturing)
+            }
+
+            Text(status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: 32, alignment: .topLeading)
+
+            ScrollView {
+                Text(summary?.text ?? "Capture results will appear here.")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(summary == nil ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(height: 190)
+        }
+        // Kept as an exact fixed height (not minHeight) deliberately — this
+        // card sits above other live-updating cards in the same VStack
+        // (see `.timecodeInput` in `advancedSelectedSectionContent`), and an
+        // earlier fix pinned this height specifically so the Start Capture
+        // button can't drift as status/label content changes length. The
+        // stacked label-above-picker row added ~18pt versus the original
+        // inline layout, folded into this constant rather than left to grow.
+        .frame(height: 450, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(12)
+        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+#endif
+
 struct MacAnalyzerView: View {
     private static let babyScratchReplayModel = LiveNotationOverlayModel.replayNotation(
         from: ScratchNotation.babyScratchFull76BeatQuantized
@@ -405,6 +512,10 @@ struct MacAnalyzerView: View {
     /// Used by the Timecode Control card in the Advanced workspace sidebar.
     @StateObject private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
     @StateObject private var timecodeBridge = TimecodePlaybackBridge()
+    @State private var debugCaptureLabel = DebugTimecodeCapture.labels[0]
+    @State private var debugCaptureStatus = "Ready to capture raw pair 3/4."
+    @State private var debugCaptureSummary: DebugTimecodeCapture.Summary?
+    @State private var debugCaptureTask: Task<Void, Never>?
 
 #if ENABLE_TIMECODE_LIVE_TAP
     /// Periodic flush timer for the timecode decode accumulator.
@@ -471,6 +582,65 @@ struct MacAnalyzerView: View {
             Text(appliedLine).font(.caption).foregroundStyle(.secondary)
             Text(scheduleLine).font(.caption).foregroundStyle(.secondary)
             Text(engineLine).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var debugTimecodeCaptureCard: some View {
+        DebugTimecodeCaptureCard(
+            label: $debugCaptureLabel,
+            status: debugCaptureStatus,
+            summary: debugCaptureSummary,
+            isCapturing: debugCaptureTask != nil,
+            startCapture: startDebugTimecodeCapture,
+            stopCapture: finishDebugTimecodeCapture,
+            copySummary: { text in
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                debugCaptureStatus = "Summary copied."
+            },
+            copyFolderPath: { url in
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.path, forType: .string)
+                debugCaptureStatus = "Fixture folder path copied."
+            },
+            revealFolder: { url in
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        )
+    }
+
+    private func startDebugTimecodeCapture() {
+        guard debugCaptureTask == nil else { return }
+        guard DebugTimecodeCapture.begin(label: debugCaptureLabel) else {
+            debugCaptureStatus = "Unable to start capture: \(DebugTimecodeCapture.lastStartError ?? "recorder is already active")"
+            return
+        }
+        debugCaptureSummary = nil
+        debugCaptureStatus = "Recording \(debugCaptureLabel)… perform only the labelled platter motion, then Stop and Save."
+        debugCaptureTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(DebugTimecodeCapture.maxDuration), clock: .continuous)
+            guard !Task.isCancelled else { return }
+            finishDebugTimecodeCapture()
+        }
+    }
+
+    private func finishDebugTimecodeCapture() {
+        guard debugCaptureTask != nil || DebugTimecodeCapture.isCapturing else { return }
+        debugCaptureTask?.cancel()
+        debugCaptureTask = nil
+        debugCaptureStatus = "Finishing fixture files…"
+        let summary = DebugTimecodeCapture.finish()
+        debugCaptureSummary = summary
+        guard let summary else {
+            debugCaptureStatus = "Capture stopped without an active fixture session."
+            return
+        }
+        if summary.sampleCount == 0 {
+            debugCaptureStatus = "Fixture folder created, but no four-channel audio reached the recorder. Check the Rane input and pair routing."
+        } else if summary.errors.isEmpty {
+            debugCaptureStatus = "Saved \(summary.label): \(String(format: "%.1f", summary.duration))s, \(summary.sourceChannelCount) channels."
+        } else {
+            debugCaptureStatus = "Saved with errors: \(summary.errors.joined(separator: " | "))"
         }
     }
     #endif
@@ -1773,6 +1943,10 @@ struct MacAnalyzerView: View {
             }
         case .timecodeInput:
             VStack(alignment: .leading, spacing: 22) {
+                // Keep capture controls ahead of live-resizing diagnostic
+                // panels so signal updates cannot move the button under the
+                // pointer while a user is trying to start a capture.
+                debugTimecodeCaptureCard
                 DVSControlVinylPanel(pipeline: timecodePipeline)
                 TimecodeControlCard(pipeline: timecodePipeline, bridge: timecodeBridge)
                 dvsPlaybackDriveDiagnosticText
