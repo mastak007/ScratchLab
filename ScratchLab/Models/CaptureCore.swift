@@ -5140,6 +5140,65 @@ enum CaptureCore {
                 capturedAt: capturedAt
             )
         }
+
+        /// Corrects `detectionSources` provenance to say `"timecode_live"`
+        /// instead of `"video"` when `recordMovementEvents` actually came
+        /// from a trusted DVS timeline rather than camera hand-tracking.
+        ///
+        /// `RoutineNotationFusionEngine.snapshot(...)` always labels
+        /// non-empty movement events `"video"`, since historically camera
+        /// tracking was their only possible source. Rather than teach that
+        /// already-shipping fusion logic about a second source, this is
+        /// called immediately afterward — a pure post-processing step,
+        /// mirroring `withMixerMidiEvents`'s "return a corrected copy"
+        /// shape — only on takes where
+        /// `TimecodeNotationCapturePrecedence.resolvedMovementEvents`
+        /// actually selected the DVS-authoritative path. A no-op when
+        /// `recordMovementEvents` is empty.
+        func withTimecodeLiveMovementProvenance() -> DetectedNotationSnapshot {
+            guard !recordMovementEvents.isEmpty else { return self }
+            var updatedDetectionSources = detectionSources.filter { $0 != "video" }
+            updatedDetectionSources.append("timecode_live")
+            // RoutineNotationFusionEngine rebuilds every motion event it
+            // emits with a hardcoded source ("video" for unmatched events,
+            // "fused" when paired with a burst audio event) regardless of
+            // what source the input event actually carried — a
+            // pre-existing assumption from when camera was the only
+            // possible motion source. This method's only call site
+            // (MacCaptureEngine.finalizeRoutineRecording) invokes it
+            // exactly when notation routing is enabled AND a trusted DVS
+            // timeline was drained, which — per
+            // TimecodeNotationCapturePrecedence — guarantees every event
+            // in recordMovementEvents originated from DVS, never camera.
+            // So it's correct to retag all of them here, not just the
+            // top-level detectionSources label.
+            let correctedEvents = recordMovementEvents.map { event in
+                DetectedNotationRecordMovementEvent(
+                    startTime: event.startTime,
+                    endTime: event.endTime,
+                    startPosition: event.startPosition,
+                    endPosition: event.endPosition,
+                    direction: event.direction,
+                    movementKind: event.movementKind,
+                    speed: event.speed,
+                    confidence: event.confidence,
+                    source: "timecode_live"
+                )
+            }
+            return DetectedNotationSnapshot(
+                notationSource: notationSource,
+                notationConfidence: notationConfidence,
+                detectedLabel: detectedLabel,
+                labelSource: labelSource,
+                labelConfidence: labelConfidence,
+                detectionSources: updatedDetectionSources,
+                recordMovementEvents: correctedEvents,
+                audioEvents: audioEvents,
+                faderEvents: faderEvents,
+                mixerMidiEvents: mixerMidiEvents,
+                capturedAt: capturedAt
+            )
+        }
     }
 
     static func deriveDetectedNotationFaderEvents(

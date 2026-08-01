@@ -90,6 +90,14 @@
 		TCA000019TCA019TCA00001 /* TimecodePlaybackBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000019TCR019TCR00001 /* TimecodePlaybackBridge.swift */; };
 		TCB000017TCB017TCB00001 /* TimecodeMotionStabilityFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000017TCR017TCR00001 /* TimecodeMotionStabilityFilter.swift */; };
 		TCB000019TCB019TCB00001 /* TimecodePlaybackBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000019TCR019TCR00001 /* TimecodePlaybackBridge.swift */; };
+		TNTGA001TNTGA001TNTGA001 /* TimecodeNotationTrustGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNTGR001TNTGR001TNTGR001 /* TimecodeNotationTrustGate.swift */; };
+		TNTGB001TNTGB001TNTGB001 /* TimecodeNotationTrustGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNTGR001TNTGR001TNTGR001 /* TimecodeNotationTrustGate.swift */; };
+		TNTAA001TNTAA001TNTAA001 /* TimecodeNotationTimelineAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNTAR001TNTAR001TNTAR001 /* TimecodeNotationTimelineAccumulator.swift */; };
+		TNTAB001TNTAB001TNTAB001 /* TimecodeNotationTimelineAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNTAR001TNTAR001TNTAR001 /* TimecodeNotationTimelineAccumulator.swift */; };
+		TNEAA001TNEAA001TNEAA001 /* TimecodeNotationEventAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNEAR001TNEAR001TNEAR001 /* TimecodeNotationEventAdapter.swift */; };
+		TNEAB001TNEAB001TNEAB001 /* TimecodeNotationEventAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNEAR001TNEAR001TNEAR001 /* TimecodeNotationEventAdapter.swift */; };
+		TNCPA001TNCPA001TNCPA001 /* TimecodeNotationCapturePrecedence.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNCPR001TNCPR001TNCPR001 /* TimecodeNotationCapturePrecedence.swift */; };
+		TNCPB001TNCPB001TNCPB001 /* TimecodeNotationCapturePrecedence.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNCPR001TNCPR001TNCPR001 /* TimecodeNotationCapturePrecedence.swift */; };
 		TCT000006TCT006TCT00001 /* TimecodeStabilityFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000018TCR018TCR00001 /* TimecodeStabilityFilterTests.swift */; };
 		TCT000007TCT007TCT00001 /* TimecodePlaybackBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000020TCR020TCR00001 /* TimecodePlaybackBridgeTests.swift */; };
 		TCA000021TCA021TCA00001 /* TimecodeFixtureValidationReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */; };
@@ -190,6 +198,7 @@
 		SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */; };
 		SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0001FREF /* ScratchSamplePlaybackController.swift */; };
 		SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */; };
+		TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNRT0002FREF /* TimecodeNotationRoutingTests.swift */; };
 		SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
 		SPTR0001MAC /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
 		SPTR0001TST /* ScratchPlatterTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0002FREF /* ScratchPlatterTrackerTests.swift */; };
@@ -638,6 +647,7 @@
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SSPC0001FREF /* ScratchSamplePlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackController.swift; sourceTree = "<group>"; };
 		SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerTests.swift; sourceTree = "<group>"; };
+		TNRT0002FREF /* TimecodeNotationRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeNotationRoutingTests.swift; sourceTree = "<group>"; };
 		SPTR0001FREF /* ScratchPlatterTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTracker.swift; sourceTree = "<group>"; };
 		SPTR0002FREF /* ScratchPlatterTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTrackerTests.swift; sourceTree = "<group>"; };
 		SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankMIDIPreviewGateTests.swift; sourceTree = "<group>"; };
@@ -716,6 +726,10 @@
 		TCR000007TCR007TCR00001 /* TimecodeControlMode.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeControlMode.swift; path = TimecodeControlMode.swift; sourceTree = "<group>"; };
 		TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeControlPipeline.swift; path = TimecodeControlPipeline.swift; sourceTree = "<group>"; };
 		TCR000019TCR019TCR00001 /* TimecodePlaybackBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePlaybackBridge.swift; path = TimecodePlaybackBridge.swift; sourceTree = "<group>"; };
+		TNTGR001TNTGR001TNTGR001 /* TimecodeNotationTrustGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeNotationTrustGate.swift; path = TimecodeNotationTrustGate.swift; sourceTree = "<group>"; };
+		TNTAR001TNTAR001TNTAR001 /* TimecodeNotationTimelineAccumulator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeNotationTimelineAccumulator.swift; path = TimecodeNotationTimelineAccumulator.swift; sourceTree = "<group>"; };
+		TNEAR001TNEAR001TNEAR001 /* TimecodeNotationEventAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeNotationEventAdapter.swift; path = TimecodeNotationEventAdapter.swift; sourceTree = "<group>"; };
+		TNCPR001TNCPR001TNCPR001 /* TimecodeNotationCapturePrecedence.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeNotationCapturePrecedence.swift; path = TimecodeNotationCapturePrecedence.swift; sourceTree = "<group>"; };
 		TCR000009TCR009TCR00001 /* TimecodeControlCard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeControlCard.swift; path = TimecodeControlCard.swift; sourceTree = "<group>"; };
 		TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeLiveIntegrationTests.swift; path = TimecodeLiveIntegrationTests.swift; sourceTree = "<group>"; };
 		TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeCMSampleBufferAdapter.swift; path = TimecodeCMSampleBufferAdapter.swift; sourceTree = "<group>"; };
@@ -991,6 +1005,7 @@
 				SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */,
 				SPTR0002FREF /* ScratchPlatterTrackerTests.swift */,
 				SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */,
+				TNRT0002FREF /* TimecodeNotationRoutingTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
 				CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */,
@@ -1263,6 +1278,10 @@
 				TCR000007TCR007TCR00001 /* TimecodeControlMode.swift */,
 				TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */,
 				TCR000019TCR019TCR00001 /* TimecodePlaybackBridge.swift */,
+				TNTGR001TNTGR001TNTGR001 /* TimecodeNotationTrustGate.swift */,
+				TNTAR001TNTAR001TNTAR001 /* TimecodeNotationTimelineAccumulator.swift */,
+				TNEAR001TNEAR001TNEAR001 /* TimecodeNotationEventAdapter.swift */,
+				TNCPR001TNCPR001TNCPR001 /* TimecodeNotationCapturePrecedence.swift */,
 				TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */,
 				TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */,
 				TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */,
@@ -1907,6 +1926,10 @@
 				TCA000015TCA015TCA00001 /* TimecodeValidationSnapshot.swift in Sources */,
 				TCA000017TCA017TCA00001 /* TimecodeMotionStabilityFilter.swift in Sources */,
 				TCA000019TCA019TCA00001 /* TimecodePlaybackBridge.swift in Sources */,
+				TNTGA001TNTGA001TNTGA001 /* TimecodeNotationTrustGate.swift in Sources */,
+				TNTAA001TNTAA001TNTAA001 /* TimecodeNotationTimelineAccumulator.swift in Sources */,
+				TNEAA001TNEAA001TNEAA001 /* TimecodeNotationEventAdapter.swift in Sources */,
+				TNCPA001TNCPA001TNCPA001 /* TimecodeNotationCapturePrecedence.swift in Sources */,
 				TCA000021TCA021TCA00001 /* TimecodeFixtureValidationReport.swift in Sources */,
 				TCA000022TCA022TCA00001 /* TimecodeFixtureLoader.swift in Sources */,
 			TCA000023TCA023TCA00001 /* TimecodePrototypeProfile.swift in Sources */,
@@ -2074,6 +2097,10 @@
 				TCB000015TCB015TCB00001 /* TimecodeValidationSnapshot.swift in Sources */,
 				TCB000017TCB017TCB00001 /* TimecodeMotionStabilityFilter.swift in Sources */,
 				TCB000019TCB019TCB00001 /* TimecodePlaybackBridge.swift in Sources */,
+				TNTGB001TNTGB001TNTGB001 /* TimecodeNotationTrustGate.swift in Sources */,
+				TNTAB001TNTAB001TNTAB001 /* TimecodeNotationTimelineAccumulator.swift in Sources */,
+				TNEAB001TNEAB001TNEAB001 /* TimecodeNotationEventAdapter.swift in Sources */,
+				TNCPB001TNCPB001TNCPB001 /* TimecodeNotationCapturePrecedence.swift in Sources */,
 				TCB000021TCB021TCB00001 /* TimecodeFixtureValidationReport.swift in Sources */,
 				TCB000022TCB022TCB00001 /* TimecodeFixtureLoader.swift in Sources */,
 			TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */,
@@ -2165,6 +2192,7 @@
 				SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */,
 				SPTR0001TST /* ScratchPlatterTrackerTests.swift in Sources */,
 				SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */,
+				TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,
 				CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */,
