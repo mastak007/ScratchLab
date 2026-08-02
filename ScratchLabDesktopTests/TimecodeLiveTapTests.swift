@@ -707,6 +707,158 @@ final class TimecodeLiveTapTests: XCTestCase {
     }
 #endif
 
+#if ENABLE_TIMECODE_LIVE_TAP
+
+    func testLowLatencyTapUsesExplicitHardwareFormatWhenPreStartOutputIsUnavailable() {
+        XCTAssertEqual(
+            lowLatencyTimecodeTapFormatChoice(
+                hardwareChannelCount: 14,
+                hardwareSampleRate: 48_000,
+                outputChannelCount: 0,
+                outputSampleRate: 0
+            ),
+            .explicitHardwareInput
+        )
+        XCTAssertEqual(
+            lowLatencyTimecodeTapFormatChoice(
+                hardwareChannelCount: 14,
+                hardwareSampleRate: 48_000,
+                outputChannelCount: 14,
+                outputSampleRate: 48_000
+            ),
+            .explicitOutput
+        )
+        XCTAssertEqual(
+            lowLatencyTimecodeTapFormatChoice(
+                hardwareChannelCount: 14,
+                hardwareSampleRate: 48_000,
+                outputChannelCount: 2,
+                outputSampleRate: 48_000
+            ),
+            .explicitHardwareInput,
+            "A stereo client output must not discard the Rane's physical pair 3/4"
+        )
+        XCTAssertEqual(
+            lowLatencyTimecodeTapFormatChoice(
+                hardwareChannelCount: 1,
+                hardwareSampleRate: 48_000,
+                outputChannelCount: 0,
+                outputSampleRate: 0
+            ),
+            .unavailable
+        )
+    }
+
+    func testLowLatencyTapHeartbeatRequiresFreshObservedCallbackAndRecovers() {
+        var heartbeat = LowLatencyTimecodeTapHeartbeat()
+        heartbeat.markInstalled(deviceUID: "rane")
+
+        XCTAssertFalse(
+            heartbeat.isFresh(at: 10),
+            "Engine startup alone must not suppress the working AVCapture fallback"
+        )
+        XCTAssertTrue(heartbeat.diagnostic(at: 10).contains("route=AVCapture fallback"))
+        XCTAssertTrue(heartbeat.diagnostic(at: 10).contains("age=never"))
+
+        heartbeat.recordCallback(
+            uptime: 10,
+            channelCount: 14,
+            frameCount: 256,
+            sampleRate: 48_000,
+            format: "Float32 non-interleaved"
+        )
+        XCTAssertTrue(heartbeat.isFresh(at: 10.05))
+        XCTAssertTrue(heartbeat.diagnostic(at: 10.05).contains("route=AVAudioEngine"))
+        XCTAssertTrue(
+            heartbeat.diagnostic(at: 10.05)
+                .contains("Float32 non-interleaved,14ch,256f@48000Hz")
+        )
+
+        XCTAssertFalse(
+            heartbeat.isFresh(at: 10.101),
+            "An expired low-latency callback must immediately restore fallback routing"
+        )
+
+        heartbeat.recordCallback(
+            uptime: 10.2,
+            channelCount: 14,
+            frameCount: 256,
+            sampleRate: 48_000,
+            format: "Float32 non-interleaved"
+        )
+        XCTAssertTrue(
+            heartbeat.isFresh(at: 10.21),
+            "A resumed valid callback must recover low-latency routing without stale state"
+        )
+        XCTAssertEqual(heartbeat.callbackCount, 2)
+    }
+
+    func testLowLatencyTapHeartbeatAllowsJitterAroundRaneCallbackDuration() {
+        var heartbeat = LowLatencyTimecodeTapHeartbeat()
+        heartbeat.markInstalled(deviceUID: "rane")
+        heartbeat.recordCallback(
+            uptime: 10,
+            channelCount: 14,
+            frameCount: 4_800,
+            sampleRate: 48_000,
+            format: "Float32 non-interleaved"
+        )
+
+        XCTAssertEqual(heartbeat.freshnessInterval, 0.25, accuracy: 0.000_001)
+        XCTAssertTrue(
+            heartbeat.isFresh(at: 10.101),
+            "A nominal 100 ms Rane callback must not race fallback at its next-callback boundary"
+        )
+        XCTAssertTrue(heartbeat.isFresh(at: 10.249))
+        XCTAssertFalse(
+            heartbeat.isFresh(at: 10.251),
+            "A stopped Rane tap must still restore fallback within a bounded interval"
+        )
+        XCTAssertTrue(heartbeat.diagnostic(at: 10.101).contains("budget=250.0ms"))
+    }
+
+    func testLowLatencyTapHeartbeatResetAndRejectionRemainTruthful() {
+        var heartbeat = LowLatencyTimecodeTapHeartbeat()
+        heartbeat.markInstalled(deviceUID: "rane")
+        heartbeat.recordRejection("1ch insufficient for 3/4")
+
+        XCTAssertTrue(
+            heartbeat.diagnostic(at: 1).contains("rejection=1ch insufficient for 3/4")
+        )
+        heartbeat.reset()
+        XCTAssertFalse(heartbeat.isInstalled)
+        XCTAssertFalse(heartbeat.isFresh(at: 1))
+        XCTAssertTrue(heartbeat.diagnostic(at: 1).contains("installed=false"))
+    }
+
+    func testLowLatencyTapRequiresTheSelectedPhysicalPairToExist() {
+        XCTAssertTrue(
+            lowLatencyTimecodeTapHasRequiredChannels(
+                actualChannelCount: 14,
+                selection: .pair(startChannel: 2)
+            )
+        )
+        XCTAssertFalse(
+            lowLatencyTimecodeTapHasRequiredChannels(
+                actualChannelCount: 1,
+                selection: .pair(startChannel: 2)
+            )
+        )
+        XCTAssertTrue(
+            lowLatencyTimecodeTapHasRequiredChannels(
+                actualChannelCount: 2,
+                selection: .auto
+            )
+        )
+        XCTAssertFalse(
+            lowLatencyTimecodeTapHasRequiredChannels(
+                actualChannelCount: 1,
+                selection: .auto
+            )
+        )
+    }
+#endif
+
     // MARK: - Test: replay trust isolation
 
     /// 12. RANE/replay source labels remain unaffected by timecode live tap.

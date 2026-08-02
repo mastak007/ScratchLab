@@ -64,6 +64,130 @@ struct TimecodeDriveStepConverter {
     }
 }
 
+enum LowLatencyTimecodeTapFormatChoice: Equatable {
+    case unavailable
+    case explicitOutput
+    case explicitHardwareInput
+}
+
+func lowLatencyTimecodeTapFormatChoice(
+    hardwareChannelCount: Int,
+    hardwareSampleRate: Double,
+    outputChannelCount: Int,
+    outputSampleRate: Double
+) -> LowLatencyTimecodeTapFormatChoice {
+    guard hardwareChannelCount >= 2,
+          hardwareSampleRate.isFinite,
+          hardwareSampleRate > 0 else {
+        return .unavailable
+    }
+    if outputChannelCount >= hardwareChannelCount,
+       outputSampleRate.isFinite,
+       outputSampleRate > 0 {
+        return .explicitOutput
+    }
+    return .explicitHardwareInput
+}
+
+func lowLatencyTimecodeTapHasRequiredChannels(
+    actualChannelCount: Int,
+    selection: TimecodeCMSampleBufferAdapter.ChannelPairSelection
+) -> Bool {
+    let requiredChannelCount: Int
+    switch selection {
+    case .auto:
+        requiredChannelCount = 2
+    case .pair(let startChannel):
+        requiredChannelCount = startChannel + 2
+    }
+    return actualChannelCount >= requiredChannelCount
+}
+
+struct LowLatencyTimecodeTapHeartbeat: Equatable {
+    static let minimumFreshnessInterval: TimeInterval = 0.10
+    static let maximumFreshnessInterval: TimeInterval = 0.30
+    static let callbackDurationTolerance = 2.5
+
+    private(set) var isInstalled = false
+    private(set) var deviceUID = ""
+    private(set) var lastCallbackUptime: TimeInterval?
+    private(set) var callbackCount = 0
+    private(set) var observedChannelCount = 0
+    private(set) var observedFrameCount = 0
+    private(set) var observedSampleRate: Double = 0
+    private(set) var observedFormat = "none"
+    private(set) var lastRejection = ""
+
+    mutating func markInstalled(deviceUID: String) {
+        isInstalled = true
+        self.deviceUID = deviceUID
+        lastCallbackUptime = nil
+        callbackCount = 0
+        observedChannelCount = 0
+        observedFrameCount = 0
+        observedSampleRate = 0
+        observedFormat = "awaiting callback"
+        lastRejection = ""
+    }
+
+    mutating func recordCallback(
+        uptime: TimeInterval,
+        channelCount: Int,
+        frameCount: Int,
+        sampleRate: Double,
+        format: String
+    ) {
+        lastCallbackUptime = uptime
+        callbackCount += 1
+        observedChannelCount = channelCount
+        observedFrameCount = frameCount
+        observedSampleRate = sampleRate
+        observedFormat = format
+        lastRejection = ""
+    }
+
+    mutating func recordRejection(_ reason: String) {
+        lastRejection = reason
+    }
+
+    mutating func reset() {
+        self = LowLatencyTimecodeTapHeartbeat()
+    }
+
+    var freshnessInterval: TimeInterval {
+        guard observedFrameCount > 0, observedSampleRate > 0 else {
+            return Self.minimumFreshnessInterval
+        }
+        let observedCallbackDuration =
+            TimeInterval(observedFrameCount) / observedSampleRate
+        return min(
+            Self.maximumFreshnessInterval,
+            max(
+                Self.minimumFreshnessInterval,
+                observedCallbackDuration * Self.callbackDurationTolerance
+            )
+        )
+    }
+
+    func isFresh(at uptime: TimeInterval) -> Bool {
+        guard isInstalled, let lastCallbackUptime else { return false }
+        let age = max(0, uptime - lastCallbackUptime)
+        return age <= freshnessInterval
+    }
+
+    func diagnostic(at uptime: TimeInterval) -> String {
+        let ageText = lastCallbackUptime.map {
+            String(format: "%.1fms", max(0, uptime - $0) * 1_000)
+        } ?? "never"
+        let freshnessText = String(format: "%.1fms", freshnessInterval * 1_000)
+        let route = isFresh(at: uptime) ? "AVAudioEngine" : "AVCapture fallback"
+        let rejection = lastRejection.isEmpty ? "" : " rejection=\(lastRejection)"
+        return "route=\(route) installed=\(isInstalled) callbacks=\(callbackCount)" +
+            " age=\(ageText) budget=\(freshnessText)" +
+            " observed=\(observedFormat),\(observedChannelCount)ch," +
+            "\(observedFrameCount)f@\(Int(observedSampleRate))Hz\(rejection)"
+    }
+}
 final class MacCaptureEngine: NSObject, ObservableObject {
     enum LiveRecordDirection: String, Equatable {
         case forward
