@@ -8,17 +8,21 @@
 // Owned by MacCaptureEngine. Output = system default audio device.
 // No MIDI routing. No scoring. No Rane audio device routing.
 //
-// Thread model: all public methods are safe to call from any thread, including
-// the CoreMIDI callback thread. They enqueue work on a private serial audioQueue
-// and return immediately so the CoreMIDI callback thread is never blocked by
-// file I/O, engine startup, buffer scheduling, or playerNode mutation.
+// Thread model: load, ensureLoadedForDVSDrive, pausePlayback, resumePlayback,
+// unload, and setCrossfader are safe to call from any thread, including the
+// CoreMIDI callback thread — they enqueue work on a private serial audioQueue
+// and return immediately. positionDidChange is different: it runs its
+// complete trace + scheduling transaction synchronously on audioQueue (via
+// runSynchronouslyOnAudioQueue), serialized with the async work above, so the
+// caller blocks for a bounded scheduling operation instead of racing it.
 
 import AVFoundation
 import Foundation
 
 /// Drives sample playback from a `ScratchPlatterTracker` position.
 /// - Hot cue press: loads the corresponding bundled WAV (async, off CoreMIDI thread).
-/// - Platter CC6 movement: updates playback position and schedules audio (async).
+/// - Platter CC6 movement: updates playback position and schedules audio, as a
+///   bounded synchronous transaction on `audioQueue` (caller blocks).
 /// - No motion: audio stops after the current short segment plays out.
 final class ScratchSamplePlaybackController {
 
@@ -37,6 +41,10 @@ final class ScratchSamplePlaybackController {
         label: "com.scratchlab.samplePlayback",
         qos: .userInteractive
     )
+    /// Marks `audioQueue` so `runSynchronouslyOnAudioQueue` can tell whether
+    /// it is already executing there and avoid a self-deadlocking `sync`.
+    private let audioQueueKey = DispatchSpecificKey<Void>()
+    private let schedulingClock: () -> TimeInterval
 
     // MARK: - Loaded sample state (access confined to audioQueue)
 
@@ -56,6 +64,62 @@ final class ScratchSamplePlaybackController {
     private(set) var lastScheduleSkippedReason: String?
     private(set) var lastEffectiveFrameDelta: Int?
     private(set) var lastReversalCompensated: Bool = false
+    private var forwardScheduleCount = 0
+    private var backwardScheduleCount = 0
+    private(set) var pendingDVSControlWindow: TimeInterval = 0
+    private(set) var estimatedDVSQueuedDuration: TimeInterval = 0
+    private var lastDVSQueueEstimateAt: TimeInterval?
+    private(set) var lastDVSConsumedControlWindow: TimeInterval?
+    private(set) var lastDVSScheduledOutputWindow: TimeInterval?
+
+#if DEBUG
+    /// CACurrentMediaTime of the most recent `positionDidChange` entry — for measuring
+    /// elapsed between consecutive calls at this layer. Read by [DVS-TRACE:4].
+    private var _lastPositionDidChangeTime: TimeInterval = 0
+
+    /// Whether the player node is currently playing. Exposed for cross-module trace
+    /// logging (MacCaptureEngine reads it for [DVS-TRACE:3]).
+    var isPlaying: Bool { playerNode.isPlaying }
+
+    /// One real scheduled grain exactly as queued onto `playerNode` — the
+    /// PCM (post edge-fade, post time-stretch) plus the timing metadata
+    /// needed to reconstruct actual output-time placement offline, without a
+    /// running AVAudioEngine/device.
+    struct ScheduledGrainSnapshot {
+        let direction: ScratchPlatterDirection
+        let interrupts: Bool
+        let nodeRate: Float
+        let scheduledOutputWindow: TimeInterval
+        let sourceFrame: Int
+        let sampleRate: Double
+        let channelData: [[Float]]
+        /// Whether this grain went through `copyTimeStretched` — the sub-0.25x
+        /// software time-stretch path used when the physical rate falls below
+        /// `AVAudioUnitVarispeed`'s floor. Lets offline diagnosis separate
+        /// software-stretched grain boundaries from normal-varispeed ones.
+        let usesSoftwareSlowGrain: Bool
+        /// Raw source-frame count feeding `copyTimeStretched` before
+        /// stretching (i.e. `segmentFrames`) — how few real samples were
+        /// available to reconstruct the grain's full output window.
+        let rawSourceFrameCount: Int
+    }
+
+    /// Test/diagnostic-only hook: invoked synchronously on the audio queue
+    /// immediately before `scheduleBuffer`, with the exact buffer and timing
+    /// that was queued. `nil` by default; production and hardware code paths
+    /// never set it, and setting it does not change what gets scheduled.
+    /// Used by the offline scheduled-grain renderer to reconstruct real
+    /// playback in a WAV for discontinuity/overlap/underrun diagnosis.
+    var scheduledGrainObserver: ((ScheduledGrainSnapshot) -> Void)?
+
+    private func channelData(of buffer: AVAudioPCMBuffer) -> [[Float]] {
+        guard let channels = buffer.floatChannelData else { return [] }
+        let frameCount = Int(buffer.frameLength)
+        return (0..<Int(buffer.format.channelCount)).map { channel in
+            Array(UnsafeBufferPointer(start: channels[channel], count: frameCount))
+        }
+    }
+#endif
 
     /// Set when the most recent `loadOnQueue` attempt failed after the
     /// synchronous URL-resolution check passed (file open error, unreadable
@@ -98,6 +162,19 @@ final class ScratchSamplePlaybackController {
     private let minVarispeedRate: Float = 0.25
     private let maxVarispeedRate: Float = 4.0
 
+    /// A small output-time reserve maintained by DVS grains. The control
+    /// worker and the audio device are independent clocks; scheduling exactly
+    /// one elapsed control window on every timer callback leaves no protection
+    /// against ordinary sub-millisecond timer jitter and produces underruns.
+    ///
+    /// The reserve is restored only when the estimate falls below this target,
+    /// so it remains bounded instead of adding latency on every grain.
+    private let dvsQueueCushion: TimeInterval = 0.004
+
+    /// Matches the control pipeline's maximum trusted elapsed interval. It also
+    /// bounds accumulated zero-step/early-tick time after a scheduling stall.
+    private let maximumDVSControlWindow: TimeInterval = 0.25
+
     /// PCM frames ramped from/to zero at the leading and trailing edge of each
     /// scheduled scratch grain. The ramp smooths the hard PCM cut that would
     /// otherwise cause a click when the waveform value at the cut point is non-zero.
@@ -120,7 +197,9 @@ final class ScratchSamplePlaybackController {
 
     // MARK: - Lifecycle
 
-    init() {
+    init(schedulingClock: @escaping () -> TimeInterval = { CACurrentMediaTime() }) {
+        self.schedulingClock = schedulingClock
+        audioQueue.setSpecific(key: audioQueueKey, value: ())
         engine.attach(playerNode)
         engine.attach(varispeedNode)
         engine.connect(playerNode, to: varispeedNode, format: nil)
@@ -261,9 +340,12 @@ final class ScratchSamplePlaybackController {
         lastScheduledSourceFrame = nil
         lastScheduledSegmentFrames = nil
         lastScheduledRate = nil
+        forwardScheduleCount = 0
+        backwardScheduleCount = 0
         lastScheduleSkippedReason = nil
         lastEffectiveFrameDelta = nil
         lastReversalCompensated = false
+        resetDVSGrainTiming()
         varispeedNode.rate = 1.0
 
         ensureEngineRunning()
@@ -311,32 +393,114 @@ final class ScratchSamplePlaybackController {
 
     // MARK: - Position-driven playback
 
-    /// Called when platter position changes. Dispatches audio scheduling to
-    /// the audio queue and returns immediately from the CoreMIDI callback thread.
-    func positionDidChange(steps: Int, direction: ScratchPlatterDirection?) {
-        audioQueue.async { [weak self] in
-            self?.positionDidChangeOnQueue(steps: steps, direction: direction)
+    /// Called when platter position changes. Runs the complete trace +
+    /// scheduling transaction synchronously on `audioQueue`, serialized with
+    /// load/unload/pause/resume/crossfader work, so the caller (CoreMIDI
+    /// callback thread or the DVS worker) blocks until this tick's
+    /// scheduling transaction is fully applied — no stale DVS scheduling
+    /// backlog, and no interleaving with the other queue-confined mutations.
+    /// `runSynchronouslyOnAudioQueue` avoids a self-deadlock if this is ever
+    /// reached while already running on `audioQueue`.
+    func positionDidChange(steps: Int, direction: ScratchPlatterDirection?, segmentWindow: TimeInterval? = nil) {
+        runSynchronouslyOnAudioQueue {
+            #if DEBUG
+            let _ts = DVSTrace.current
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            let _dt = (_tm - self._lastPositionDidChangeTime) * 1000
+            let _swStr = segmentWindow.map { sw in String(format: "%.3f", sw) }
+            let _dirStr = direction.map { d in "\(d)" } ?? "nil"
+            let _swDisplay = _swStr ?? "nil"
+            DVSTrace.log("[DVS-TRACE:4] playbackController positionDidChange seq=\(_ts) monotonic=\(_tm) dt=\(_dt)ms steps=\(steps) dir=\(_dirStr) segmentWindow=\(_swDisplay) thread=\(_thr)")
+            self._lastPositionDidChangeTime = _tm
+            #endif
+            self.positionDidChangeOnQueue(steps: steps, direction: direction, segmentWindow: segmentWindow)
         }
     }
 
-    private func positionDidChangeOnQueue(steps: Int, direction: ScratchPlatterDirection?) {
-        let now = CACurrentMediaTime()
+    /// Runs `work` on `audioQueue`, executing it directly when already
+    /// running there (instead of a self-deadlocking `audioQueue.sync`) and
+    /// otherwise dispatching via `sync` so the caller blocks until `work`
+    /// completes. Direct execution is safe because `audioQueue` is serial —
+    /// nothing else can be interleaved either way.
+    private func runSynchronouslyOnAudioQueue(_ work: () -> Void) {
+        if DispatchQueue.getSpecific(key: audioQueueKey) != nil {
+            work()
+        } else {
+            audioQueue.sync(execute: work)
+        }
+    }
 
-        // Rate-limit to ~60 Hz.
-        guard now - lastScheduleTime >= minScheduleInterval else { return }
+    private func positionDidChangeOnQueue(steps: Int, direction: ScratchPlatterDirection?, segmentWindow: TimeInterval? = nil) {
+        let now = schedulingClock()
+#if DEBUG
+        let tScheduleEntry = now
+#endif
 
-        guard let direction else {
-            lastScheduleSkippedReason = "noDirection"
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=noDirection steps=\(steps)")
+        let dvsWindow: TimeInterval?
+        if let segmentWindow, segmentWindow.isFinite {
+            let sanitized = min(max(segmentWindow, 0), maximumDVSControlWindow)
+            pendingDVSControlWindow = min(
+                maximumDVSControlWindow,
+                pendingDVSControlWindow + sanitized
+            )
+            dvsWindow = sanitized
+        } else {
+            dvsWindow = nil
+        }
+
+        // MIDI can arrive much faster than the grain cadence and retains its
+        // existing ~60 Hz limiter. DVS already comes from a coalescing 60 Hz
+        // serial worker; applying the same exact boundary a second time makes
+        // harmless timer jitter discard alternating grains. Crucially, the
+        // rejected tick's platter steps still accumulate, while its elapsed
+        // window does not, inflating the next rate and leaving an audio hole.
+        guard dvsWindow != nil || now - lastScheduleTime >= minScheduleInterval else {
+            #if DEBUG
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            let _elapsed = now - lastScheduleTime
+            let _minInt = minScheduleInterval
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(CACurrentMediaTime()) reason=rateLimit steps=\(steps) elapsed=\(_elapsed)s min=\(_minInt)s thread=\(_thr)")
+            #endif
             return
         }
 
-        guard let forward = forwardBuffer, totalFrames > 0 else { return }
+        guard direction != nil else {
+            resetDVSGrainTiming()
+            lastScheduleSkippedReason = "noDirection"
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=noDirection steps=\(steps)")
+            #endif
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=noDirection steps=\(steps) thread=\(_thr)")
+            #endif
+            return
+        }
+
+        guard let forward = forwardBuffer, totalFrames > 0 else {
+            resetDVSGrainTiming()
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=noBuffer steps=\(steps) hasBuffer=\(forwardBuffer != nil) totalFrames=\(totalFrames) thread=\(_thr)")
+            #endif
+            return
+        }
 
         guard let previousSteps = lastPlatterSteps else {
             lastPlatterSteps = steps
+            resetDVSGrainTiming()
             lastScheduleSkippedReason = "priming"
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=priming steps=\(steps)")
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=priming steps=\(steps)")
+            #endif
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=priming steps=\(steps) thread=\(_thr)")
+            #endif
             return
         }
 
@@ -350,7 +514,14 @@ final class ScratchSamplePlaybackController {
         }
         guard deltaStepMagnitude > 0 else {
             lastScheduleSkippedReason = "noMotion"
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=noMotion steps=\(steps)")
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=noMotion steps=\(steps)")
+            #endif
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=noMotion steps=\(steps) thread=\(_thr)")
+            #endif
             return
         }
 
@@ -372,7 +543,12 @@ final class ScratchSamplePlaybackController {
         let sourceTotalFrames = Int(forward.frameLength)
         let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
         let frameDelta = max(1, Int(frameDeltaDouble))
-        let requestedFrames = Int(forward.format.sampleRate * segmentDuration)
+        let consumedControlWindow = dvsWindow == nil
+            ? segmentDuration
+            : max(pendingDVSControlWindow, 0.001)
+        let requestedFrames = Int(
+            forward.format.sampleRate * consumedControlWindow
+        )
 
         // Skip pathologically tiny grains (a single PCM sample), which would
         // produce an audible click. This guard catches literal single-sample
@@ -382,17 +558,25 @@ final class ScratchSamplePlaybackController {
         guard frameDelta >= minimumGrainFrames else {
             lastScheduleSkippedReason = "tinyGrain"
             lastPlatterSteps = steps
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=tinyGrain steps=\(steps) frameDelta=\(frameDelta) minimum=\(minimumGrainFrames)")
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=tinyGrain steps=\(steps) frameDelta=\(frameDelta) minimum=\(minimumGrainFrames)")
+            #endif
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=tinyGrain steps=\(steps) frameDelta=\(frameDelta) minimum=\(minimumGrainFrames) thread=\(_thr)")
+            #endif
             return
         }
 
-        // Near-stop gate: when the platter moves too slowly, the varispeed
-        // floor (0.25) cannot stretch the grain to fill the 16.7 ms scheduling
-        // slot. Scheduling the grain would produce a rapid on/off/on sputter
-        // ("farting"). Suppress scheduling but advance the needle position
-        // silently so the virtual stylus stays in sync with the physical platter.
+        // Near-stop gate for the MIDI path: when the platter moves too slowly,
+        // the varispeed floor (0.25) cannot stretch the grain to fill the
+        // scheduling slot. DVS calls provide an explicit `segmentWindow`; those
+        // grains use deterministic software stretching below the varispeed floor
+        // later in this method, preserving slow captured motion without gaps.
         let minAudibleFrameDelta = max(1, Int(Double(minAudibleDeltaSteps) * framesPerStep))
-        guard frameDelta >= minAudibleFrameDelta else {
+        let permitsSoftwareSlowGrain = dvsWindow != nil
+        guard frameDelta >= minAudibleFrameDelta || permitsSoftwareSlowGrain else {
             switch schedulingDirection {
             case .forward:
                 currentSampleFrame = wrappedSampleFrame(currentSampleFrame + frameDelta)
@@ -402,7 +586,14 @@ final class ScratchSamplePlaybackController {
             lastScheduleSkippedReason = "nearStop"
             lastPlatterSteps = steps
             lastScheduleTime = now
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=nearStop deltaSteps=\(deltaSteps) threshold=\(minAudibleFrameDelta) frameDelta=\(frameDelta)")
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=nearStop deltaSteps=\(deltaSteps) threshold=\(minAudibleFrameDelta) frameDelta=\(frameDelta)")
+            #endif
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=nearStop deltaSteps=\(deltaSteps) threshold=\(minAudibleFrameDelta) frameDelta=\(frameDelta) thread=\(_thr)")
+            #endif
             return
         }
 
@@ -416,9 +607,10 @@ final class ScratchSamplePlaybackController {
         // Compensate by borrowing the last direction's effective frameDelta,
         // capped so a very fast push doesn't produce a pathological jump on
         // the matching return stroke.
+        let isDirectionChange = schedulingDirection != lastScheduledDirection
         let reversalCompensated: Bool
         let effectiveFrameDelta: Int
-        if schedulingDirection != lastScheduledDirection,
+        if isDirectionChange,
            let lastEff = lastEffectiveFrameDelta {
             let borrowed = min(lastEff, reversalSymmetryCapFrames)
             if borrowed > frameDelta {
@@ -433,24 +625,59 @@ final class ScratchSamplePlaybackController {
             reversalCompensated = false
         }
 
+        #if DEBUG
+        let _tsEntry = DVSTrace.current
+        let _tEntry = tScheduleEntry
+        let _thr = Thread.current.isMainThread ? "main" : "bg"
+        DVSTrace.log("[DVS-TRACE:5] playbackController scheduleEntry seq=\(_tsEntry) monotonic=\(_tEntry) steps=\(steps) deltaSteps=\(deltaSteps) schedulingDir=\(directionDescription(schedulingDirection)) frameDelta=\(frameDelta) effectiveFrameDelta=\(effectiveFrameDelta) requestedFrames=\(requestedFrames) currentFrame=\(currentSampleFrame) reversalCompensated=\(reversalCompensated) playerNodePlaying=\(playerNode.isPlaying) thread=\(_thr)")
+#endif
+
+        // DVS maintains only a small bounded queue reserve. On reversal,
+        // preserve that tail and enqueue the opposite-direction grain after it:
+        // interrupting would discard valid PCM and turn every direction change
+        // into an audible truncation. The resulting direction latency is
+        // bounded by the reserve (normally about 4 ms). MIDI retains its
+        // existing immediate interrupt behavior.
+        let interruptsQueuedAudio = dvsWindow == nil && isDirectionChange
+        let outputTiming = dvsWindow.map { _ in
+            dvsOutputTiming(
+                controlWindow: consumedControlWindow,
+                now: now,
+                interruptsQueuedAudio: interruptsQueuedAudio
+            )
+        }
+        let scheduledOutputWindow = outputTiming?.outputWindow ?? consumedControlWindow
+        let scheduledOutputFrames = Int(
+            forward.format.sampleRate * scheduledOutputWindow
+        )
+
         // Varispeed rate = platter-driven frame displacement / output window size.
         // A grain of effectiveFrameDelta frames played at this rate consumes exactly
-        // segmentDuration seconds of real time → one grain per scheduling slot,
-        // no queue buildup. Fast platter → rate>1 → higher pitch. Slow → rate<1 → lower.
-        let rawRate = Double(effectiveFrameDelta) / Double(requestedFrames)
-        let rate = Float(max(Double(minVarispeedRate), min(Double(maxVarispeedRate), rawRate)))
-        varispeedNode.rate = rate
+        // its scheduled output window. DVS reports the physical rate against
+        // the matching accumulated control window; a one-time/bounded cushion
+        // may make the actual node rate slightly lower while the queue reserve
+        // is replenished.
+        let physicalRawRate = Double(effectiveFrameDelta) / Double(requestedFrames)
+        let scheduledRawRate = Double(effectiveFrameDelta) / Double(scheduledOutputFrames)
+        let usesSoftwareSlowGrain = permitsSoftwareSlowGrain &&
+            scheduledRawRate < Double(minVarispeedRate)
+        let nodeRate = usesSoftwareSlowGrain
+            ? Float(1)
+            : Float(max(Double(minVarispeedRate), min(Double(maxVarispeedRate), scheduledRawRate)))
+        let reportedRate = permitsSoftwareSlowGrain
+            ? Float(max(0, min(Double(maxVarispeedRate), physicalRawRate)))
+            : nodeRate
+        varispeedNode.rate = nodeRate
 
         let sourceFrame: Int
         let segmentFrames: Int
-        let segment: AVAudioPCMBuffer?
+        var segment: AVAudioPCMBuffer?
 
         switch schedulingDirection {
         case .forward:
             sourceFrame = currentSampleFrame
-            let remainingFrames = sourceTotalFrames - sourceFrame
-            segmentFrames = min(effectiveFrameDelta, remainingFrames)
-            segment = copySegment(
+            segmentFrames = effectiveFrameDelta
+            segment = copyWrappedForwardSegment(
                 from: forward,
                 startFrame: sourceFrame,
                 frameCount: segmentFrames
@@ -458,19 +685,24 @@ final class ScratchSamplePlaybackController {
             currentSampleFrame = wrappedSampleFrame(currentSampleFrame + effectiveFrameDelta)
         case .backward:
             sourceFrame = currentSampleFrame
-            let availableFrames = sourceFrame + 1
-            segmentFrames = min(effectiveFrameDelta, availableFrames)
-            segment = copyReversedSegmentEnding(
+            segmentFrames = effectiveFrameDelta
+            segment = copyWrappedReversedSegmentEnding(
                 at: sourceFrame,
                 frameCount: segmentFrames,
                 from: forward
             )
             currentSampleFrame = wrappedSampleFrame(currentSampleFrame - effectiveFrameDelta)
         }
+        if usesSoftwareSlowGrain, let sourceSegment = segment {
+            segment = copyTimeStretched(
+                sourceSegment,
+                outputFrameCount: scheduledOutputFrames
+            )
+        }
 
         #if DEBUG
-        print("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(schedulingDirection)) currentFrame=\(currentSampleFrame) effectiveFrameDelta=\(effectiveFrameDelta) totalFrames=\(sourceTotalFrames)")
-        print("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(schedulingDirection)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) rate=\(String(format: "%.3f", rate)) totalFrames=\(sourceTotalFrames)")
+        DVSTrace.log("[ScratchSamplePlaybackController] platter state · steps=\(steps) deltaSteps=\(deltaSteps) direction=\(directionDescription(schedulingDirection)) currentFrame=\(currentSampleFrame) effectiveFrameDelta=\(effectiveFrameDelta) totalFrames=\(sourceTotalFrames)")
+        DVSTrace.log("[ScratchSamplePlaybackController] schedule input · steps=\(steps) direction=\(directionDescription(schedulingDirection)) sourceFrame=\(sourceFrame) segmentFrames=\(segmentFrames) rate=\(String(format: "%.3f", reportedRate)) nodeRate=\(String(format: "%.3f", nodeRate)) softwareSlow=\(usesSoftwareSlowGrain) totalFrames=\(sourceTotalFrames)")
         #endif
 
         let isValidSegment: Bool
@@ -479,16 +711,23 @@ final class ScratchSamplePlaybackController {
             isValidSegment = sourceFrame >= 0 &&
                 sourceFrame < sourceTotalFrames &&
                 segmentFrames > 0 &&
-                sourceFrame + segmentFrames <= sourceTotalFrames
+                segmentFrames <= sourceTotalFrames
         case .backward:
             isValidSegment = sourceFrame >= 0 &&
                 sourceFrame < sourceTotalFrames &&
                 segmentFrames > 0 &&
-                segmentFrames <= sourceFrame + 1
+                segmentFrames <= sourceTotalFrames
         }
 
         guard isValidSegment else {
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=invalidSegment sourceFrame=\(sourceFrame) frames=\(segmentFrames) totalFrames=\(sourceTotalFrames)")
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=invalidSegment sourceFrame=\(sourceFrame) frames=\(segmentFrames) totalFrames=\(sourceTotalFrames)")
+            #endif
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=invalidSegment sourceFrame=\(sourceFrame) frames=\(segmentFrames) totalFrames=\(sourceTotalFrames) thread=\(_thr)")
+            #endif
             lastScheduleSkippedReason = "invalidSegment"
             lastPlatterSteps = steps
             lastScheduleTime = now
@@ -497,19 +736,47 @@ final class ScratchSamplePlaybackController {
 
         guard let segment else {
             lastScheduleSkippedReason = "copyFailed"
+            #if DEBUG
+            let _tm = CACurrentMediaTime()
+            let _thr = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=copyFailed sourceFrame=\(sourceFrame) frames=\(segmentFrames) thread=\(_thr)")
+            #endif
             lastPlatterSteps = steps
             lastScheduleTime = now
             return
         }
 
-        // Smooth PCM boundary discontinuities before scheduling.
-        // Not applied to the diagnostic preview (which calls copySegment directly).
-        applyEdgeFade(to: segment)
+        // Contiguous queued source segments meet at adjacent PCM frames and
+        // must not be faded to zero: doing so amplitude-modulates playback at
+        // the scheduler rate. Only the legacy MIDI reversal path interrupts
+        // the node and therefore retains its edge fade.
+        if interruptsQueuedAudio {
+            applyEdgeFade(to: segment)
+        }
 
-        // Interrupt only on direction change; same-direction grains queue smoothly.
-        // Avoid interrupting every tiny platter update, because that can cancel audio
-        // before the scheduled segment becomes audible.
-        let opts: AVAudioPlayerNodeBufferOptions = (schedulingDirection != lastScheduledDirection) ? .interrupts : []
+        let opts: AVAudioPlayerNodeBufferOptions = interruptsQueuedAudio ? .interrupts : []
+#if DEBUG
+        let _scheduleThread = Thread.current.isMainThread ? "main" : "bg"
+        let _optsStr = opts == .interrupts ? "interrupts" : "none"
+        DVSTrace.log("[DVS-TRACE:6] playbackController scheduleBuffer seq=\(DVSTrace.current) monotonic=\(CACurrentMediaTime()) dir=\(directionDescription(schedulingDirection)) rate=\(reportedRate) nodeRate=\(nodeRate) softwareSlow=\(usesSoftwareSlowGrain) segmentFrames=\(segmentFrames) segmentWindow=\(segmentWindow ?? segmentDuration) opts=\(_optsStr) playerNodePlaying=\(playerNode.isPlaying) sourceFrame=\(sourceFrame) currentFrame=\(currentSampleFrame) thread=\(_scheduleThread)")
+#endif
+#if DEBUG
+        if let observer = scheduledGrainObserver {
+            observer(
+                ScheduledGrainSnapshot(
+                    direction: schedulingDirection,
+                    interrupts: opts == .interrupts,
+                    nodeRate: nodeRate,
+                    scheduledOutputWindow: scheduledOutputWindow,
+                    sourceFrame: sourceFrame,
+                    sampleRate: forward.format.sampleRate,
+                    channelData: channelData(of: segment),
+                    usesSoftwareSlowGrain: usesSoftwareSlowGrain,
+                    rawSourceFrameCount: segmentFrames
+                )
+            )
+        }
+#endif
         playerNode.scheduleBuffer(
             segment,
             at: nil,
@@ -523,14 +790,56 @@ final class ScratchSamplePlaybackController {
 
         lastScheduledSteps = steps
         lastScheduledDirection = schedulingDirection
+        if schedulingDirection == .forward {
+            forwardScheduleCount += 1
+        } else {
+            backwardScheduleCount += 1
+        }
         lastScheduleTime = now
         lastPlatterSteps = steps
         lastScheduledSourceFrame = sourceFrame
         lastScheduledSegmentFrames = segmentFrames
-        lastScheduledRate = rate
+        lastScheduledRate = reportedRate
         lastScheduleSkippedReason = nil
         lastEffectiveFrameDelta = effectiveFrameDelta
         lastReversalCompensated = reversalCompensated
+        if let outputTiming {
+            estimatedDVSQueuedDuration = outputTiming.estimatedQueuedDuration
+            lastDVSQueueEstimateAt = now
+            lastDVSConsumedControlWindow = consumedControlWindow
+            lastDVSScheduledOutputWindow = scheduledOutputWindow
+            pendingDVSControlWindow = 0
+        }
+    }
+
+    private func dvsOutputTiming(
+        controlWindow: TimeInterval,
+        now: TimeInterval,
+        interruptsQueuedAudio: Bool
+    ) -> (outputWindow: TimeInterval, estimatedQueuedDuration: TimeInterval) {
+        let elapsedSinceEstimate = lastDVSQueueEstimateAt.map {
+            max(0, now - $0)
+        } ?? .infinity
+        let remainingQueue = interruptsQueuedAudio
+            ? 0
+            : max(0, estimatedDVSQueuedDuration - elapsedSinceEstimate)
+        let cushionTopUp = max(0, dvsQueueCushion - remainingQueue)
+        let outputWindow = controlWindow + cushionTopUp
+        return (
+            outputWindow,
+            min(
+                controlWindow + dvsQueueCushion,
+                remainingQueue + outputWindow
+            )
+        )
+    }
+
+    private func resetDVSGrainTiming() {
+        pendingDVSControlWindow = 0
+        estimatedDVSQueuedDuration = 0
+        lastDVSQueueEstimateAt = nil
+        lastDVSConsumedControlWindow = nil
+        lastDVSScheduledOutputWindow = nil
     }
 
     /// Stop playback (e.g. when platter is idle).
@@ -571,9 +880,12 @@ final class ScratchSamplePlaybackController {
             self.lastScheduledSourceFrame = nil
             self.lastScheduledSegmentFrames = nil
             self.lastScheduledRate = nil
+            self.forwardScheduleCount = 0
+            self.backwardScheduleCount = 0
             self.lastScheduleSkippedReason = nil
             self.lastEffectiveFrameDelta = nil
             self.lastReversalCompensated = false
+            self.resetDVSGrainTiming()
             print("[ScratchSamplePlaybackController] unloaded")
             self.debugPublishOnMainAsync(field: "unload") { [weak self] in
                 self?.statusLabel = "idle"
@@ -630,6 +942,9 @@ final class ScratchSamplePlaybackController {
         let lastScheduleSkippedReason: String?
         let lastScheduledRate: Float?
         let lastScheduledSourceFrame: Int?
+        let lastScheduledDirection: ScratchPlatterDirection?
+        let forwardScheduleCount: Int
+        let backwardScheduleCount: Int
     }
 
     /// Reads all fields together on `audioQueue` so the snapshot is
@@ -647,7 +962,10 @@ final class ScratchSamplePlaybackController {
                 currentSampleFrame: currentSampleFrame,
                 lastScheduleSkippedReason: lastScheduleSkippedReason,
                 lastScheduledRate: lastScheduledRate,
-                lastScheduledSourceFrame: lastScheduledSourceFrame
+                lastScheduledSourceFrame: lastScheduledSourceFrame,
+                lastScheduledDirection: lastScheduledDirection,
+                forwardScheduleCount: forwardScheduleCount,
+                backwardScheduleCount: backwardScheduleCount
             )
         }
     }
@@ -709,6 +1027,7 @@ final class ScratchSamplePlaybackController {
 
     private static let sampleFileNames: [String: String] = [
         "ahhh":          "ahhh.wav",
+        "dvs_ahhh":      "VirtualPlatter/ahhh.wav",
         "fresh":         "fresh.wav",
         "ah_yeah":       "ah_yeah.wav",
         "check_it_out":  "check_it_out.wav",
@@ -784,6 +1103,98 @@ final class ScratchSamplePlaybackController {
         return reversed
     }
 
+    /// Expands a sub-varispeed-floor DVS grain to its complete control-tick
+    /// window. Interpolation keeps the exact source-frame displacement (and
+    /// therefore needle position) while producing continuous audio for the
+    /// whole window; the player node then runs this prepared grain at 1×.
+    ///
+    /// With at least 4 raw source frames, adjacent output samples are
+    /// reconstructed with Catmull-Rom cubic interpolation instead of a
+    /// straight line between the two surrounding raw samples. Plain linear
+    /// interpolation collapses a grain's true waveform curvature into a flat
+    /// ramp between control points — measured (offline, against the saved
+    /// `slow_reversals`/`fast_reversals` hardware captures) to roughly halve
+    /// the grain's oscillation/high-frequency content relative to a normal
+    /// (non-stretched) grain of the same source. Slow scratch motion spends a
+    /// large fraction of its grains on this path (as high as ~38% observed in
+    /// `slow_reversals`), so that quality gap dominates the audible character
+    /// of slow playback specifically, rather than showing up as a single
+    /// isolated boundary click — matching the reported "static-like" texture.
+    /// Cubic interpolation uses the same two raw samples the grain would
+    /// already interpolate between, plus one real sample of context on each
+    /// side (clamped to the segment's own edges), so it recovers more of the
+    /// true waveform shape without reading beyond the segment already copied
+    /// for this grain and without changing needle position/frame accounting
+    /// at all. Grains with only 2-3 raw source frames fall back to the
+    /// original linear method — there is no additional real information to
+    /// use, and Catmull-Rom degenerates to it in that regime anyway.
+    private func copyTimeStretched(
+        _ source: AVAudioPCMBuffer,
+        outputFrameCount: Int
+    ) -> AVAudioPCMBuffer? {
+        let inputFrameCount = Int(source.frameLength)
+        let format = source.format
+        guard inputFrameCount >= 2,
+              outputFrameCount >= inputFrameCount,
+              format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved,
+              let inputChannels = source.floatChannelData,
+              let output = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(outputFrameCount)
+              ),
+              let outputChannels = output.floatChannelData else {
+            return nil
+        }
+        output.frameLength = AVAudioFrameCount(outputFrameCount)
+
+        let inputSpan = Double(inputFrameCount - 1)
+        let outputSpan = Double(max(1, outputFrameCount - 1))
+        let useCubicInterpolation = inputFrameCount >= 4
+        for channel in 0..<Int(format.channelCount) {
+            let input = inputChannels[channel]
+            let destination = outputChannels[channel]
+            for outputIndex in 0..<outputFrameCount {
+                let inputPosition = Double(outputIndex) * inputSpan / outputSpan
+                let lowerIndex = Int(inputPosition)
+                let upperIndex = min(lowerIndex + 1, inputFrameCount - 1)
+                let fraction = Float(inputPosition - Double(lowerIndex))
+                if useCubicInterpolation {
+                    let beforeIndex = max(0, lowerIndex - 1)
+                    let afterIndex = min(inputFrameCount - 1, upperIndex + 1)
+                    destination[outputIndex] = Self.catmullRomInterpolate(
+                        p0: input[beforeIndex],
+                        p1: input[lowerIndex],
+                        p2: input[upperIndex],
+                        p3: input[afterIndex],
+                        t: fraction
+                    )
+                } else {
+                    destination[outputIndex] =
+                        input[lowerIndex] +
+                        ((input[upperIndex] - input[lowerIndex]) * fraction)
+                }
+            }
+        }
+        return output
+    }
+
+    /// Standard Catmull-Rom cubic spline: passes exactly through `p1` at
+    /// `t == 0` and `p2` at `t == 1`, using `p0`/`p3` only to shape the
+    /// tangent between them — unlike linear interpolation, the curve's slope
+    /// is continuous with its neighbors instead of kinking at every raw
+    /// sample.
+    private static func catmullRomInterpolate(p0: Float, p1: Float, p2: Float, p3: Float, t: Float) -> Float {
+        let t2 = t * t
+        let t3 = t2 * t
+        return 0.5 * (
+            (2 * p1) +
+            (-p0 + p2) * t +
+            (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+            (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+        )
+    }
+
     private func copySegment(
         from source: AVAudioPCMBuffer,
         startFrame: Int,
@@ -826,7 +1237,49 @@ final class ScratchSamplePlaybackController {
         return segment
     }
 
-    private func copyReversedSegmentEnding(
+    /// Copies a complete forward grain from the loop. If the requested
+    /// displacement reaches the WAV end, the remainder continues at frame
+    /// zero instead of returning a shortened buffer.
+    private func copyWrappedForwardSegment(
+        from source: AVAudioPCMBuffer,
+        startFrame: Int,
+        frameCount: Int
+    ) -> AVAudioPCMBuffer? {
+        let format = source.format
+        let sourceFrames = Int(source.frameLength)
+        guard startFrame >= 0,
+              startFrame < sourceFrames,
+              frameCount > 0,
+              frameCount <= sourceFrames,
+              let segment = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(frameCount)
+              ) else {
+            return nil
+        }
+        segment.frameLength = AVAudioFrameCount(frameCount)
+
+        guard format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved,
+              let srcChannels = source.floatChannelData,
+              let dstChannels = segment.floatChannelData else {
+            return nil
+        }
+
+        for channel in 0..<Int(format.channelCount) {
+            let sourceChannel = srcChannels[channel]
+            let destination = dstChannels[channel]
+            for offset in 0..<frameCount {
+                destination[offset] = sourceChannel[(startFrame + offset) % sourceFrames]
+            }
+        }
+        return segment
+    }
+
+    /// Copies a complete backward grain from the loop. If the requested
+    /// displacement reaches frame zero, the remainder continues backward
+    /// from the WAV's final frame instead of returning a shortened buffer.
+    private func copyWrappedReversedSegmentEnding(
         at endFrame: Int,
         frameCount: Int,
         from source: AVAudioPCMBuffer
@@ -835,37 +1288,31 @@ final class ScratchSamplePlaybackController {
         let sourceFrames = Int(source.frameLength)
         guard endFrame >= 0,
               endFrame < sourceFrames,
-              frameCount > 0 else {
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=invalidSegment sourceFrame=\(endFrame) frames=\(frameCount) totalFrames=\(sourceFrames)")
-            return nil
-        }
-
-        let actualCount = min(frameCount, endFrame + 1)
-        let startFrame = endFrame - actualCount + 1
-        guard startFrame >= 0,
-              actualCount > 0,
+              frameCount > 0,
+              frameCount <= sourceFrames,
               let segment = AVAudioPCMBuffer(
                 pcmFormat: format,
-                frameCapacity: AVAudioFrameCount(actualCount)
+                frameCapacity: AVAudioFrameCount(frameCount)
               ) else {
             return nil
         }
-        segment.frameLength = AVAudioFrameCount(actualCount)
+        segment.frameLength = AVAudioFrameCount(frameCount)
 
         guard format.commonFormat == .pcmFormatFloat32,
               !format.isInterleaved,
               let srcChannels = source.floatChannelData,
               let dstChannels = segment.floatChannelData else {
-            print("[ScratchSamplePlaybackController] schedule skipped · reason=unsupportedFormat sourceFrame=\(endFrame) frames=\(actualCount) totalFrames=\(sourceFrames)")
             return nil
         }
 
-        let channelCount = Int(format.channelCount)
-        for ch in 0..<channelCount {
-            let src = srcChannels[ch]
-            let dst = dstChannels[ch]
-            for i in 0..<actualCount {
-                dst[i] = src[endFrame - i]
+        for channel in 0..<Int(format.channelCount) {
+            let sourceChannel = srcChannels[channel]
+            let destination = dstChannels[channel]
+            for offset in 0..<frameCount {
+                let index = (endFrame - offset) % sourceFrames
+                destination[offset] = sourceChannel[
+                    index < 0 ? index + sourceFrames : index
+                ]
             }
         }
         return segment

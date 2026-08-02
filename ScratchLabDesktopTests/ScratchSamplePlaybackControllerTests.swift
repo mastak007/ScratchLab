@@ -35,10 +35,34 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     func testKnownSampleIDsContainsExpected() {
         let ids = ScratchSamplePlaybackController.knownSampleIDs
         XCTAssertTrue(ids.contains("ahhh"))
+        XCTAssertTrue(ids.contains("dvs_ahhh"))
         XCTAssertTrue(ids.contains("fresh"))
         XCTAssertTrue(ids.contains("ah_yeah"))
         XCTAssertTrue(ids.contains("check_it_out"))
-        XCTAssertEqual(ids.count, 4)
+        XCTAssertEqual(ids.count, 5)
+    }
+
+    func testDVSUsesContinuousVirtualPlatterAhhh() throws {
+        let cleanURL = try XCTUnwrap(
+            Bundle.main.resourceURL?
+                .appendingPathComponent("VirtualPlatter", isDirectory: true)
+                .appendingPathComponent("ahhh.wav")
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cleanURL.path))
+
+        let file = try AVAudioFile(forReading: cleanURL)
+        let duration = Double(file.length) / file.processingFormat.sampleRate
+        XCTAssertGreaterThan(duration, 0.9)
+        XCTAssertLessThan(
+            duration,
+            1.2,
+            "DVS must use the continuous clean Ahhh, not the 4.47s pad sample with trailing silence"
+        )
+
+        let controller = ScratchSamplePlaybackController()
+        XCTAssertTrue(controller.ensureLoadedForDVSDrive(sampleID: "dvs_ahhh"))
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.loadedSampleID, "dvs_ahhh")
     }
 
     // MARK: - Load missing sample (safe no-op)
@@ -186,6 +210,9 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertNil(snapshot.lastScheduleSkippedReason)
         XCTAssertNil(snapshot.lastScheduledRate)
         XCTAssertNil(snapshot.lastScheduledSourceFrame)
+        XCTAssertNil(snapshot.lastScheduledDirection)
+        XCTAssertEqual(snapshot.forwardScheduleCount, 0)
+        XCTAssertEqual(snapshot.backwardScheduleCount, 0)
     }
 
     func testDiagnosticsSnapshotReflectsSuccessfulLoad() {
@@ -247,6 +274,9 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "A schedule that actually ran must clear the skipped reason so diagnostics don't show a stale gate")
         XCTAssertNotNil(snapshot.lastScheduledRate)
         XCTAssertNotNil(snapshot.lastScheduledSourceFrame)
+        XCTAssertEqual(snapshot.lastScheduledDirection, .forward)
+        XCTAssertEqual(snapshot.forwardScheduleCount, 1)
+        XCTAssertEqual(snapshot.backwardScheduleCount, 0)
         XCTAssertTrue(snapshot.playerIsPlaying,
             "Once a grain is scheduled, the player node must actually be playing — false here would point at an output-path problem rather than a scheduling gate")
     }
@@ -338,6 +368,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         XCTAssertLessThan(controller.currentSampleFrame, nearEndFrame,
             "Forward motion past the loop end must wrap to near the loop origin, not stick at the last frame")
+        XCTAssertEqual(
+            controller.lastScheduledSegmentFrames,
+            controller.lastEffectiveFrameDelta,
+            "A forward boundary crossing must queue the complete grain by continuing at frame zero"
+        )
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryEnd",
             "boundaryEnd no longer exists now that the sample loops")
     }
@@ -546,7 +581,76 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
         controller.unload()
         controller.waitForAudioQueue()
-        XCTAssertTrue(true, "Concurrent dispatch to audioQueue must not crash")
+
+        // unload() is itself serialized on audioQueue behind every load/
+        // positionDidChange/setCrossfader call above (positionDidChange now
+        // blocks its caller until its scheduling transaction completes on
+        // audioQueue, and waitForAudioQueue drains the rest) — so the
+        // post-unload snapshot must be fully clean, not merely non-crashing.
+        // A torn/raced final state (e.g. a stale scheduled-rate or a
+        // lingering loadedSampleID) would mean the stress above raced past
+        // unload's reset instead of being serialized behind it.
+        let diagnostics = controller.diagnosticsSnapshot()
+        XCTAssertNil(diagnostics.loadedSampleID,
+            "unload() must be serialized after every concurrent load/positionDidChange/setCrossfader call, leaving nothing loaded")
+        XCTAssertFalse(diagnostics.playerIsPlaying)
+        XCTAssertEqual(diagnostics.currentSampleFrame, 0)
+        XCTAssertNil(diagnostics.lastScheduleSkippedReason)
+        XCTAssertNil(diagnostics.lastScheduledRate)
+        XCTAssertNil(diagnostics.lastScheduledSourceFrame)
+        XCTAssertNil(diagnostics.lastScheduledDirection)
+        XCTAssertEqual(diagnostics.forwardScheduleCount, 0)
+        XCTAssertEqual(diagnostics.backwardScheduleCount, 0)
+    }
+
+    /// Deterministic proof that `positionDidChange` serializes its complete
+    /// scheduling transaction on `audioQueue` rather than racing other
+    /// callers. Uses the `schedulingClock` injection seam (called exactly
+    /// once, at the top of every transaction) to bracket a short hold with a
+    /// concurrency counter: if `audioQueue` genuinely serializes, no two
+    /// transactions can ever be inside that bracket at once, regardless of
+    /// scheduling/timing — a property TSan can flag as absent but cannot
+    /// itself positively prove.
+    func testConcurrentPositionDidChangeCallsAreSerialized() {
+        let concurrencyLock = NSLock()
+        var inFlight = 0
+        var maxObservedConcurrency = 0
+        let controller = ScratchSamplePlaybackController(schedulingClock: {
+            concurrencyLock.lock()
+            inFlight += 1
+            maxObservedConcurrency = max(maxObservedConcurrency, inFlight)
+            concurrencyLock.unlock()
+
+            // Hold audioQueue briefly so genuinely concurrent callers have a
+            // real window to race into if serialization were broken.
+            Thread.sleep(forTimeInterval: 0.002)
+
+            concurrencyLock.lock()
+            inFlight -= 1
+            concurrencyLock.unlock()
+
+            return CACurrentMediaTime()
+        })
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        let group = DispatchGroup()
+        let callers = DispatchQueue(label: "test.concurrent.positionDidChange", attributes: .concurrent)
+        for i in 0..<30 {
+            group.enter()
+            callers.async {
+                controller.positionDidChange(
+                    steps: i * 23,
+                    direction: i % 2 == 0 ? .forward : .backward
+                )
+                group.leave()
+            }
+        }
+        group.wait()
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(maxObservedConcurrency, 1,
+            "positionDidChange must serialize its whole trace+scheduling transaction on audioQueue; concurrent callers must never overlap inside it")
     }
 
     /// Simulates a pad press (load) overlapping with rapid platter movement
@@ -600,6 +704,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         XCTAssertGreaterThan(controller.currentSampleFrame, frameAfterForward,
             "Backward motion past the loop origin must wrap to near the loop end, not stick at frame 0")
+        XCTAssertEqual(
+            controller.lastScheduledSegmentFrames,
+            controller.lastEffectiveFrameDelta,
+            "A backward boundary crossing must queue the complete grain by continuing from the loop end"
+        )
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "boundaryStart",
             "boundaryStart no longer exists now that the sample loops")
     }
@@ -930,6 +1039,330 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "5-step delta (frameDelta≈101) below threshold must skip as nearStop")
         XCTAssertNil(controller.lastScheduledRate,
             "Near-stop skip must not schedule a grain")
+    }
+
+    func testDVSSegmentWindowSoftwareStretchesBelowVarispeedFloor() {
+        var now: TimeInterval = 1
+        let controller = ScratchSamplePlaybackController(
+            schedulingClock: { now }
+        )
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+        now += 1.0 / 60.0 + 0.000_001
+        controller.positionDidChange(
+            steps: 5,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+
+        XCTAssertNil(controller.lastScheduleSkippedReason)
+        XCTAssertEqual(controller.diagnosticsSnapshot().lastScheduledDirection, .forward)
+        XCTAssertEqual(
+            controller.lastScheduledRate ?? 0,
+            101.0 / 735.0,
+            accuracy: 0.01,
+            "DVS must report the captured sub-0.25x motion rate, not the varispeed floor"
+        )
+        XCTAssertEqual(controller.currentSampleFrame, 101)
+    }
+
+    func testDVSEarlySixtyHertzTickSchedulesWithoutInflatedCatchUpRate() {
+        var now: TimeInterval = 1
+        let controller = ScratchSamplePlaybackController(
+            schedulingClock: { now }
+        )
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+
+        // Dispatch timers legitimately arrive slightly either side of their
+        // nominal deadline. This first moving tick is earlier than the MIDI
+        // path's exact 1/60 second limiter and must still schedule for DVS.
+        now += 0.016
+        controller.positionDidChange(
+            steps: 35,
+            direction: .forward,
+            segmentWindow: 0.016
+        )
+        let first = controller.diagnosticsSnapshot()
+
+        XCTAssertEqual(first.forwardScheduleCount, 1)
+        XCTAssertEqual(first.lastScheduledRate ?? 0, 1.0, accuracy: 0.12)
+
+        // A slightly late next tick must remain near the physical rate; it
+        // must not contain two ticks of displacement divided by one window.
+        now += 0.018
+        controller.positionDidChange(
+            steps: 74,
+            direction: .forward,
+            segmentWindow: 0.018
+        )
+        let second = controller.diagnosticsSnapshot()
+
+        XCTAssertEqual(second.forwardScheduleCount, 2)
+        XCTAssertEqual(second.lastScheduledRate ?? 0, 1.0, accuracy: 0.12)
+        XCTAssertNil(second.lastScheduleSkippedReason)
+    }
+
+    func testDVSSteadyOneXRemainsContinuousAcrossAlternatingTimerJitter() {
+        var now: TimeInterval = 1
+        let controller = ScratchSamplePlaybackController(
+            schedulingClock: { now }
+        )
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        var converter = TimecodeDriveStepConverter()
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+
+        var observedRates: [Float] = []
+        for index in 0..<120 {
+            let elapsed = index.isMultiple(of: 2) ? 0.015_5 : 0.017_8
+            now += elapsed
+            let (steps, direction) = converter.steps(
+                forRate: 1,
+                direction: .forward,
+                elapsed: elapsed
+            )
+            controller.positionDidChange(
+                steps: steps,
+                direction: direction,
+                segmentWindow: elapsed
+            )
+            if let rate = controller.lastScheduledRate {
+                observedRates.append(rate)
+            }
+        }
+
+        let snapshot = controller.diagnosticsSnapshot()
+        XCTAssertEqual(
+            snapshot.forwardScheduleCount,
+            120,
+            "Every coalesced DVS worker update with motion should schedule; timer jitter must not discard alternate grains"
+        )
+        XCTAssertEqual(observedRates.count, 120)
+        XCTAssertLessThan(
+            observedRates.map { abs($0 - 1) }.max() ?? .infinity,
+            0.04,
+            "A steady physical 1x stream must not produce inflated catch-up pitch spikes"
+        )
+        XCTAssertEqual(controller.pendingDVSControlWindow, 0, accuracy: 0.000_001)
+    }
+
+    func testDVSZeroStepTickAccumulatesMatchingControlWindow() {
+        var now: TimeInterval = 1
+        let controller = ScratchSamplePlaybackController(
+            schedulingClock: { now }
+        )
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+
+        now += 0.005
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: 0.005
+        )
+        XCTAssertEqual(controller.pendingDVSControlWindow, 0.005, accuracy: 0.000_001)
+
+        now += 0.011_667
+        controller.positionDidChange(
+            steps: 36,
+            direction: .forward,
+            segmentWindow: 0.011_667
+        )
+
+        XCTAssertEqual(
+            controller.lastDVSConsumedControlWindow ?? 0,
+            0.016_667,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(controller.lastScheduledRate ?? 0, 1.0, accuracy: 0.08)
+        XCTAssertEqual(controller.pendingDVSControlWindow, 0, accuracy: 0.000_001)
+    }
+
+    func testDVSQueueCushionIsRestoredOnceWithoutGrowingEveryTick() {
+        var now: TimeInterval = 1
+        let controller = ScratchSamplePlaybackController(
+            schedulingClock: { now }
+        )
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        let tick = 1.0 / 60.0
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: tick
+        )
+
+        now += tick
+        controller.positionDidChange(
+            steps: 36,
+            direction: .forward,
+            segmentWindow: tick
+        )
+        let firstOutput = controller.lastDVSScheduledOutputWindow ?? 0
+        XCTAssertEqual(firstOutput, tick + 0.004, accuracy: 0.000_001)
+
+        now += tick
+        controller.positionDidChange(
+            steps: 72,
+            direction: .forward,
+            segmentWindow: tick
+        )
+        let secondOutput = controller.lastDVSScheduledOutputWindow ?? 0
+
+        XCTAssertEqual(secondOutput, tick, accuracy: 0.000_001)
+        XCTAssertEqual(
+            controller.estimatedDVSQueuedDuration,
+            tick + 0.004,
+            accuracy: 0.000_001,
+            "The reserve must remain bounded instead of adding four milliseconds every grain"
+        )
+    }
+
+    func testDVSReversalPreservesTheBoundedQueueCushion() {
+        var now: TimeInterval = 1
+        let controller = ScratchSamplePlaybackController(
+            schedulingClock: { now }
+        )
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        let tick = 1.0 / 60.0
+        controller.positionDidChange(steps: 0, direction: .forward, segmentWindow: tick)
+        now += tick
+        controller.positionDidChange(steps: 36, direction: .forward, segmentWindow: tick)
+        now += tick
+        controller.positionDidChange(steps: 72, direction: .forward, segmentWindow: tick)
+
+        now += tick
+        controller.positionDidChange(steps: 36, direction: .backward, segmentWindow: tick)
+
+        XCTAssertEqual(controller.diagnosticsSnapshot().lastScheduledDirection, .backward)
+        XCTAssertEqual(
+            controller.lastDVSScheduledOutputWindow ?? 0,
+            tick,
+            accuracy: 0.000_001,
+            "A DVS reversal must preserve the queued tail instead of discarding and rebuilding it"
+        )
+        XCTAssertEqual(
+            controller.estimatedDVSQueuedDuration,
+            tick + 0.004,
+            accuracy: 0.000_001,
+            "The preserved reserve must remain bounded through a reversal"
+        )
+        XCTAssertEqual(controller.pendingDVSControlWindow, 0, accuracy: 0.000_001)
+    }
+
+    /// Karl's listening check found the saved `slow_reversals` hardware
+    /// capture sounding static-like/clicking while `steady_normal` and
+    /// `fast_reversals` were clean, even after the reversal-queue-handoff
+    /// fix above. Offline measurement against those captures found no
+    /// single boundary-click defect, but did find the sub-0.25x
+    /// `copyTimeStretched` software time-stretch path retaining
+    /// measurably less real waveform detail than normal grains — and
+    /// `slow_reversals` spends far more of its grains on that path than
+    /// the other two captures. This pins the fix (Catmull-Rom cubic
+    /// interpolation instead of plain linear interpolation between the
+    /// two raw samples surrounding each output position) directly against
+    /// the real bundled `ahhh.wav` asset, independent of any fixture.
+    func testDVSSoftwareTimeStretchUsesCubicInterpolationNotPlainLinear() throws {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        var captured: ScratchSamplePlaybackController.ScheduledGrainSnapshot?
+        controller.scheduledGrainObserver = { snapshot in
+            if captured == nil, snapshot.usesSoftwareSlowGrain, snapshot.rawSourceFrameCount >= 4 {
+                captured = snapshot
+            }
+        }
+
+        let tick = 1.0 / 60.0
+        // A 1-step delta (~20 raw frames for this sample) stretched across
+        // a full ~735-frame control window is far below the varispeed
+        // floor (0.25x), forcing the software time-stretch path, with
+        // enough raw frames for cubic interpolation to differ from linear.
+        controller.positionDidChange(steps: 0, direction: .forward, segmentWindow: tick)
+        controller.waitForAudioQueue()
+        controller.positionDidChange(steps: 1, direction: .forward, segmentWindow: tick)
+        controller.waitForAudioQueue()
+        controller.scheduledGrainObserver = nil
+
+        guard let snapshot = captured else {
+            XCTFail("Expected a software time-stretched grain with >= 4 raw source frames")
+            return
+        }
+        XCTAssertTrue(snapshot.usesSoftwareSlowGrain)
+        XCTAssertEqual(snapshot.direction, .forward)
+
+        guard let url = Bundle.main.url(forResource: "ahhh", withExtension: "wav") else {
+            throw XCTSkip("ahhh.wav not present in the test host bundle")
+        }
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))
+        )
+        try file.read(into: buffer)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        let totalFrames = Int(buffer.frameLength)
+
+        let rawCount = snapshot.rawSourceFrameCount
+        let startFrame = snapshot.sourceFrame
+        try XCTSkipIf(
+            rawCount < 4 || startFrame + rawCount > totalFrames,
+            "Scenario didn't land a clean non-wrapping segment with >= 4 raw frames on this asset"
+        )
+        let rawSegment = (0..<rawCount).map { channels[0][startFrame + $0] }
+
+        // Independently re-derive what plain linear interpolation (the
+        // pre-fix behavior) would have produced for this exact segment and
+        // output length, using the same index/fraction mapping as
+        // `copyTimeStretched`.
+        let outputCount = try XCTUnwrap(snapshot.channelData.first?.count)
+        let observed = snapshot.channelData[0]
+        let inputSpan = Double(rawCount - 1)
+        let outputSpan = Double(max(1, outputCount - 1))
+        var maxDifferenceFromLinear: Float = 0
+        for outputIndex in 0..<outputCount {
+            let inputPosition = Double(outputIndex) * inputSpan / outputSpan
+            let lowerIndex = Int(inputPosition)
+            let upperIndex = min(lowerIndex + 1, rawCount - 1)
+            let fraction = Float(inputPosition - Double(lowerIndex))
+            let linearValue = rawSegment[lowerIndex] +
+                (rawSegment[upperIndex] - rawSegment[lowerIndex]) * fraction
+            maxDifferenceFromLinear = max(maxDifferenceFromLinear, abs(observed[outputIndex] - linearValue))
+        }
+
+        XCTAssertGreaterThan(
+            maxDifferenceFromLinear,
+            0.000_001,
+            "Software time-stretched output must differ from plain linear interpolation " +
+            "between the two raw samples — cubic interpolation is expected to be in use"
+        )
     }
 
     func testNearStopGateSchedulesAtThreshold() {
@@ -1335,6 +1768,32 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Rate must be set after a successfully faded backward grain")
         XCTAssertLessThan(controller.currentSampleFrame, frameAfterForward,
             "currentSampleFrame must retreat after a faded backward grain")
+    }
+
+    func testMeasuredSlowDVSRateSchedulesAtSixtyHertzWithoutNearStopSkip() {
+        let controller = ScratchSamplePlaybackController()
+        guard controller.load(sampleID: "ahhh") else { return }
+        controller.waitForAudioQueue()
+
+        controller.positionDidChange(
+            steps: 0,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+        controller.waitForAudioQueue()
+
+        // A measured 0.38x Rane movement advances about 14 CC6-domain
+        // steps per 60 Hz tick. It must schedule a continuous low-rate grain,
+        // not hit the near-stop suppression path.
+        controller.positionDidChange(
+            steps: 14,
+            direction: .forward,
+            segmentWindow: 1.0 / 60.0
+        )
+        controller.waitForAudioQueue()
+
+        XCTAssertNil(controller.lastScheduleSkippedReason)
+        XCTAssertEqual(controller.lastScheduledRate ?? 0, 0.38, accuracy: 0.04)
     }
 
     // MARK: - TimecodeDriveStepConverter (DVS → CC6-step domain adapter)

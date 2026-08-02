@@ -507,6 +507,7 @@
 		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */; };
 		VPRESB01VPRESB01VPRESB01 /* VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* VirtualPlatter */; };
+		VPRESMACVPRESMACVPRESMAC /* VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* VirtualPlatter */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1700,6 +1701,7 @@
 				B9AF9ED7370241CF8BEFDB7C /* CoachDemoMotion in Resources */,
 				B9AF9ED8370241CF8BEFDB7C /* Notation in Resources */,
 				B9AF9EDA370241CF8BEFDB7C /* PracticeReelAudio in Resources */,
+				VPRESMACVPRESMACVPRESMAC /* VirtualPlatter in Resources */,
 				SSSAHMAC /* ahhh.wav in Resources */,
 				SSSFRMAC /* fresh.wav in Resources */,
 				SSSAYMAC /* ah_yeah.wav in Resources */,
