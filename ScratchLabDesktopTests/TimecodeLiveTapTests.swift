@@ -857,6 +857,191 @@ final class TimecodeLiveTapTests: XCTestCase {
             )
         )
     }
+
+    /// `installTap(bufferSize:)` is only a request — this diagnostic exists
+    /// to surface what the device's real HAL configuration is. Confirms the
+    /// formatter renders every populated field, matching the real-hardware
+    /// values observed on a Rane ONE MKII (4800-frame callbacks).
+    func testAudioDeviceBufferDiagnosticFormatsAllFieldsWhenAvailable() {
+        let diagnostic = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+        let text = formatAudioDeviceBufferDiagnostic(diagnostic)
+
+        XCTAssertTrue(text.contains("bufferFrameSize=4800"))
+        XCTAssertTrue(text.contains("range=[32...4800]"))
+        XCTAssertTrue(text.contains("nominalSampleRate=48000.0"))
+        XCTAssertTrue(text.contains("safetyOffset=144"))
+        XCTAssertTrue(text.contains("deviceLatency=26"))
+    }
+
+    /// A device may not answer every property (some report no explicit
+    /// range, some don't expose a nominal sample rate via this call) —
+    /// every field must degrade to "unavailable" independently, never a
+    /// crash and never silently dropping the whole diagnostic.
+    func testAudioDeviceBufferDiagnosticReportsUnavailableFieldsWithoutCrashing() {
+        let diagnostic = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: nil,
+            minimumBufferFrameSize: nil,
+            maximumBufferFrameSize: nil,
+            nominalSampleRate: nil,
+            safetyOffsetFrames: nil,
+            deviceLatencyFrames: nil
+        )
+        let text = formatAudioDeviceBufferDiagnostic(diagnostic)
+
+        XCTAssertTrue(text.contains("bufferFrameSize=unavailable"))
+        XCTAssertTrue(text.contains("range=[unavailable...unavailable]"))
+        XCTAssertTrue(text.contains("nominalSampleRate=unavailable"))
+        XCTAssertTrue(text.contains("safetyOffset=unavailable"))
+        XCTAssertTrue(text.contains("deviceLatency=unavailable"))
+    }
+
+    /// Cheap regression against a field silently being dropped from
+    /// `Equatable` conformance in a future edit.
+    func testAudioDeviceBufferDiagnosticEquality() {
+        let base = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+        let identical = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+        let differsByOneField = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 27
+        )
+
+        XCTAssertEqual(base, identical)
+        XCTAssertNotEqual(base, differsByOneField)
+    }
+
+    /// A real device can report some properties (e.g. buffer size) while
+    /// lacking others (e.g. a virtual/aggregate device with no meaningful
+    /// safety offset) — the formatter must handle a mix, not just all-set
+    /// or all-nil.
+    func testAudioDeviceBufferDiagnosticFormatsPartialValues() {
+        let diagnostic = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: nil,
+            maximumBufferFrameSize: nil,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: nil,
+            deviceLatencyFrames: 26
+        )
+        let text = formatAudioDeviceBufferDiagnostic(diagnostic)
+
+        XCTAssertTrue(text.contains("bufferFrameSize=4800"))
+        XCTAssertTrue(text.contains("range=[unavailable...unavailable]"))
+        XCTAssertTrue(text.contains("nominalSampleRate=48000.0"))
+        XCTAssertTrue(text.contains("safetyOffset=unavailable"))
+        XCTAssertTrue(text.contains("deviceLatency=26"))
+    }
+
+    func testSafeFrameCountAcceptsValidValues() {
+        XCTAssertEqual(safeFrameCount(0), 0)
+        XCTAssertEqual(safeFrameCount(32), 32)
+        XCTAssertEqual(safeFrameCount(Double(UInt32.max)), UInt32.max)
+    }
+
+    /// `UInt32(Double)` traps on exactly these inputs — this is the
+    /// defensive conversion that keeps a hostile/misbehaving
+    /// `AudioValueRange` from crashing the capture engine.
+    func testSafeFrameCountRejectsNonFiniteAndOutOfRangeValues() {
+        XCTAssertNil(safeFrameCount(.nan))
+        XCTAssertNil(safeFrameCount(.infinity))
+        XCTAssertNil(safeFrameCount(-.infinity))
+        XCTAssertNil(safeFrameCount(-1))
+        XCTAssertNil(safeFrameCount(Double(UInt32.max) + 1))
+    }
+
+    func testApplyingAudioDeviceBufferDiagnosticAppendsWhenAbsent() {
+        let base = "route=AVAudioEngine installed=true"
+        let diagnostic = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+
+        let result = applyingAudioDeviceBufferDiagnostic(to: base, diagnostic: diagnostic)
+
+        XCTAssertTrue(result.hasPrefix(base))
+        XCTAssertTrue(result.contains("bufferFrameSize=4800"))
+    }
+
+    /// The explicit "marker replacement without duplication" requirement:
+    /// republishing over an existing diagnostic must replace it in place,
+    /// never append a second copy.
+    func testApplyingAudioDeviceBufferDiagnosticReplacesWithoutDuplicating() {
+        let base = "route=AVAudioEngine installed=true"
+        let first = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+        let second = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 256,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+
+        let afterFirst = applyingAudioDeviceBufferDiagnostic(to: base, diagnostic: first)
+        let afterSecond = applyingAudioDeviceBufferDiagnostic(to: afterFirst, diagnostic: second)
+
+        XCTAssertEqual(
+            afterSecond.components(separatedBy: " | HAL buffer: ").count, 2,
+            "expected exactly one marker occurrence, not an appended duplicate"
+        )
+        XCTAssertTrue(afterSecond.contains("bufferFrameSize=256"))
+        XCTAssertFalse(afterSecond.contains("bufferFrameSize=4800"))
+    }
+
+    /// A failed bind or device switch passes `nil` — the stale text from a
+    /// previous successful bind must be stripped, not left dangling.
+    func testApplyingAudioDeviceBufferDiagnosticStripsMarkerWhenNil() {
+        let base = "route=AVAudioEngine installed=true"
+        let diagnostic = AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: 4_800,
+            minimumBufferFrameSize: 32,
+            maximumBufferFrameSize: 4_800,
+            nominalSampleRate: 48_000,
+            safetyOffsetFrames: 144,
+            deviceLatencyFrames: 26
+        )
+        let withDiagnostic = applyingAudioDeviceBufferDiagnostic(to: base, diagnostic: diagnostic)
+
+        let stripped = applyingAudioDeviceBufferDiagnostic(to: withDiagnostic, diagnostic: nil)
+
+        XCTAssertEqual(stripped, base)
+        XCTAssertFalse(stripped.contains("HAL buffer"))
+    }
 #endif
 
     // MARK: - Test: replay trust isolation

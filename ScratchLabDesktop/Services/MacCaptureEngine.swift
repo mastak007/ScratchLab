@@ -188,6 +188,66 @@ struct LowLatencyTimecodeTapHeartbeat: Equatable {
             "\(observedFrameCount)f@\(Int(observedSampleRate))Hz\(rejection)"
     }
 }
+
+/// Read-only snapshot of the CoreAudio properties that govern the real I/O
+/// buffer size an `AVAudioEngine` tap actually receives from a device —
+/// `installTap(bufferSize:)` is only a request; the true delivered frame
+/// count is whatever the HAL's current buffer configuration produces. Every
+/// field is optional because a given device may not support every property
+/// (some report no explicit range, some don't expose a nominal sample rate
+/// via this call); `nil` means "device didn't answer", never a crash.
+struct AudioDeviceBufferFrameSizeDiagnostic: Equatable {
+    let currentBufferFrameSize: UInt32?
+    let minimumBufferFrameSize: UInt32?
+    let maximumBufferFrameSize: UInt32?
+    let nominalSampleRate: Double?
+    let safetyOffsetFrames: UInt32?
+    let deviceLatencyFrames: UInt32?
+}
+
+/// Pure formatter — no CoreAudio calls, no state, safe to unit test with
+/// hand-constructed values including the all-`nil` "device answered nothing"
+/// case.
+func formatAudioDeviceBufferDiagnostic(_ diagnostic: AudioDeviceBufferFrameSizeDiagnostic) -> String {
+    func describe<T>(_ value: T?) -> String {
+        value.map { "\($0)" } ?? "unavailable"
+    }
+    return "bufferFrameSize=\(describe(diagnostic.currentBufferFrameSize))" +
+        " range=[\(describe(diagnostic.minimumBufferFrameSize))...\(describe(diagnostic.maximumBufferFrameSize))]" +
+        " nominalSampleRate=\(describe(diagnostic.nominalSampleRate))" +
+        " safetyOffset=\(describe(diagnostic.safetyOffsetFrames))" +
+        " deviceLatency=\(describe(diagnostic.deviceLatencyFrames))"
+}
+
+/// Defensive `Double` → `UInt32` conversion for `AudioValueRange` bounds.
+/// CoreAudio can in principle report a NaN, infinite, negative, or
+/// out-of-`UInt32`-range bound for a frame-count property; Swift's
+/// `UInt32(Double)` traps on any of those rather than returning an error,
+/// so every bound must be checked before converting — never assumed valid
+/// just because the property read itself reported `noErr`.
+func safeFrameCount(_ value: Double) -> UInt32? {
+    guard value.isFinite, value >= 0, value <= Double(UInt32.max) else { return nil }
+    return UInt32(value)
+}
+
+/// Pure marker replace-or-strip helper — no CoreAudio calls, no shared
+/// state, safe to unit test directly against hand-built debug-info strings.
+/// Strips any existing `" | HAL buffer: "` segment from `debugInfo` and,
+/// only if `diagnostic` is non-`nil`, appends a freshly formatted one — so
+/// repeated calls never duplicate the marker, and a `nil` diagnostic
+/// (device switched, tap stopped/reset, or a bind that never completed)
+/// correctly removes any stale prior device's numbers instead of leaving
+/// them attached to debug info that no longer describes that device.
+func applyingAudioDeviceBufferDiagnostic(
+    to debugInfo: String,
+    diagnostic: AudioDeviceBufferFrameSizeDiagnostic?
+) -> String {
+    let marker = " | HAL buffer: "
+    let base = debugInfo.components(separatedBy: marker).first ?? debugInfo
+    guard let diagnostic else { return base }
+    return base + marker + formatAudioDeviceBufferDiagnostic(diagnostic)
+}
+
 final class MacCaptureEngine: NSObject, ObservableObject {
     enum LiveRecordDirection: String, Equatable {
         case forward
@@ -2233,6 +2293,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let timecodeInputEngine = AVAudioEngine()
     private let timecodeInputStateLock = NSLock()
     private var timecodeInputTapHeartbeat = LowLatencyTimecodeTapHeartbeat()
+    /// Read once per bind in `refreshLowLatencyTimecodeInput()` — the
+    /// device's own buffer-size/latency configuration doesn't change
+    /// per-callback the way the heartbeat does, so this is captured once
+    /// and republished alongside the heartbeat text on every diagnostic
+    /// update rather than re-queried on every callback.
+    private var timecodeInputBufferDiagnostic: AudioDeviceBufferFrameSizeDiagnostic?
 #endif
     private let performerMonitorCIContext = CIContext()
     private let seratoBundleIdentifiers = ["com.serato.seratodj"]
@@ -3257,6 +3323,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             NSLog("[DVS] Low-latency input could not resolve selected device UID; retaining AVCapture fallback.")
             return
         }
+        // Read-only — queried before any AUHAL mutation so it reflects the
+        // device's own configuration, not anything this bind is about to
+        // change. `installTap(bufferSize:)` below is only a request; this
+        // is what actually answers what frame count the device delivers.
+        // Not stored yet: `stopLowLatencyTimecodeInput()` above already
+        // cleared any previous diagnostic, and this one is only published
+        // once the bind below is confirmed to succeed — a failed bind must
+        // not leave a diagnostic attributed to a device that never bound.
+        let bufferDiagnostic = Self.readAudioDeviceBufferDiagnostic(deviceID: deviceID)
+        NSLog("[DVS] HAL buffer diagnostic: %@", formatAudioDeviceBufferDiagnostic(bufferDiagnostic))
 
         let inputNode = timecodeInputEngine.inputNode
         guard let audioUnit = inputNode.audioUnit else {
@@ -3406,6 +3482,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         do {
             timecodeInputStateLock.withLock {
                 timecodeInputTapHeartbeat.markInstalled(deviceUID: selectedUID)
+                timecodeInputBufferDiagnostic = bufferDiagnostic
             }
             try timecodeInputEngine.start()
             publishLowLatencyTimecodeTapDiagnostic()
@@ -3414,6 +3491,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             timecodeInputEngine.stop()
             timecodeInputStateLock.withLock {
                 timecodeInputTapHeartbeat.reset()
+                timecodeInputBufferDiagnostic = nil
             }
             publishLowLatencyTimecodeTapDiagnostic()
             NSLog("[DVS] Low-latency input failed to start (%@); retaining AVCapture fallback.", error.localizedDescription)
@@ -3433,6 +3511,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         timecodeInputEngine.reset()
         timecodeInputStateLock.withLock {
             timecodeInputTapHeartbeat.reset()
+            timecodeInputBufferDiagnostic = nil
             if let rejection {
                 timecodeInputTapHeartbeat.recordRejection(rejection)
             }
@@ -3451,6 +3530,142 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let base = existing.components(separatedBy: marker).first ?? existing
         TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo =
             base + marker + heartbeatText
+        publishAudioDeviceBufferDiagnosticIfAvailable()
+    }
+
+    /// Appends the once-per-bind HAL buffer diagnostic (see
+    /// `readAudioDeviceBufferDiagnostic(deviceID:)`) using the pure
+    /// `applyingAudioDeviceBufferDiagnostic(to:diagnostic:)` helper, so a
+    /// `nil` diagnostic (device switch, failed bind, or stop) actively
+    /// strips any stale marker text rather than leaving it in place.
+    private func publishAudioDeviceBufferDiagnosticIfAvailable() {
+        let diagnostic = timecodeInputStateLock.withLock { timecodeInputBufferDiagnostic }
+        TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo = applyingAudioDeviceBufferDiagnostic(
+            to: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
+            diagnostic: diagnostic
+        )
+    }
+
+    /// Read-only query of the properties that actually govern the frame
+    /// count an `AVAudioEngine` tap receives from this device.
+    /// `installTap(bufferSize:)` is a request, not a guarantee — this is
+    /// the diagnostic that answers what the device's real, currently
+    /// configured buffer size is, what range it supports, and whether the
+    /// requested size is even achievable on this hardware. Every property
+    /// read is independent and tolerant of the device not supporting it —
+    /// never fatal, never partial-fails the whole struct. No property is
+    /// ever written; this call has no side effects and needs no teardown.
+    /// Scopes verified against the installed CoreAudio SDK headers
+    /// (`AudioHardware.h`/`AudioHardwareBase.h`), not assumed:
+    /// `kAudioDevicePropertyBufferFrameSize`, its `...Range`, and
+    /// `kAudioDevicePropertyNominalSampleRate` are documented as properties
+    /// of the device as a whole (no input/output distinction in their
+    /// description) and are queried at `kAudioObjectPropertyScopeGlobal`.
+    /// `kAudioDevicePropertySafetyOffset` ("...ahead (for output) or behind
+    /// (for input...") and `kAudioDevicePropertyLatency` ("input and output
+    /// latency may differ") are explicitly documented as differing by
+    /// direction, so they are queried at `kAudioDevicePropertyScopeInput` —
+    /// this tap only ever cares about the input side.
+    private static func readAudioDeviceBufferDiagnostic(
+        deviceID: AudioDeviceID
+    ) -> AudioDeviceBufferFrameSizeDiagnostic {
+        /// Every read checks property availability and the actual reported
+        /// data size before touching the value — a property that exists
+        /// but reports an unexpected size is treated as unavailable rather
+        /// than trusting a partially/differently filled buffer.
+        func hasProperty(
+            _ selector: AudioObjectPropertySelector,
+            scope: AudioObjectPropertyScope
+        ) -> Bool {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain
+            )
+            return AudioObjectHasProperty(deviceID, &address)
+        }
+
+        func readUInt32(
+            _ selector: AudioObjectPropertySelector,
+            scope: AudioObjectPropertyScope
+        ) -> UInt32? {
+            guard hasProperty(selector, scope: scope) else { return nil }
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain
+            )
+            var actualSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &actualSize) == noErr,
+                  actualSize == UInt32(MemoryLayout<UInt32>.size) else { return nil }
+            var value: UInt32 = 0
+            var size = actualSize
+            guard AudioObjectGetPropertyData(
+                deviceID, &address, 0, nil, &size, &value
+            ) == noErr else { return nil }
+            return value
+        }
+
+        func readDouble(
+            _ selector: AudioObjectPropertySelector,
+            scope: AudioObjectPropertyScope
+        ) -> Double? {
+            guard hasProperty(selector, scope: scope) else { return nil }
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain
+            )
+            var actualSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &actualSize) == noErr,
+                  actualSize == UInt32(MemoryLayout<Float64>.size) else { return nil }
+            var value: Float64 = 0
+            var size = actualSize
+            guard AudioObjectGetPropertyData(
+                deviceID, &address, 0, nil, &size, &value
+            ) == noErr else { return nil }
+            return Double(value)
+        }
+
+        func readFrameRange(
+            _ selector: AudioObjectPropertySelector,
+            scope: AudioObjectPropertyScope
+        ) -> (minimum: UInt32, maximum: UInt32)? {
+            guard hasProperty(selector, scope: scope) else { return nil }
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain
+            )
+            var actualSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &actualSize) == noErr,
+                  actualSize == UInt32(MemoryLayout<AudioValueRange>.size) else { return nil }
+            var range = AudioValueRange(mMinimum: 0, mMaximum: 0)
+            var size = actualSize
+            guard AudioObjectGetPropertyData(
+                deviceID, &address, 0, nil, &size, &range
+            ) == noErr else { return nil }
+            // Defensive: a device could in principle report a NaN,
+            // infinite, negative, or out-of-UInt32 bound. Never assume the
+            // call succeeding means the value is safe to convert.
+            guard let minimum = safeFrameCount(range.mMinimum),
+                  let maximum = safeFrameCount(range.mMaximum) else { return nil }
+            return (minimum, maximum)
+        }
+
+        let frameRange = readFrameRange(
+            kAudioDevicePropertyBufferFrameSizeRange,
+            scope: kAudioObjectPropertyScopeGlobal
+        )
+
+        return AudioDeviceBufferFrameSizeDiagnostic(
+            currentBufferFrameSize: readUInt32(
+                kAudioDevicePropertyBufferFrameSize, scope: kAudioObjectPropertyScopeGlobal
+            ),
+            minimumBufferFrameSize: frameRange?.minimum,
+            maximumBufferFrameSize: frameRange?.maximum,
+            nominalSampleRate: readDouble(
+                kAudioDevicePropertyNominalSampleRate, scope: kAudioObjectPropertyScopeGlobal
+            ),
+            safetyOffsetFrames: readUInt32(
+                kAudioDevicePropertySafetyOffset, scope: kAudioDevicePropertyScopeInput
+            ),
+            deviceLatencyFrames: readUInt32(
+                kAudioDevicePropertyLatency, scope: kAudioDevicePropertyScopeInput
+            )
+        )
     }
 
     private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
