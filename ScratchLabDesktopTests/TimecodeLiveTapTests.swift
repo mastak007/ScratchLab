@@ -16,6 +16,7 @@
 import XCTest
 import CoreMedia
 import AVFoundation
+import Combine
 @testable import ScratchLab
 
 final class TimecodeLiveTapTests: XCTestCase {
@@ -60,7 +61,7 @@ final class TimecodeLiveTapTests: XCTestCase {
             let absoluteFrame = startFrame + frameOffset
             let phase = 2.0 * Float.pi * carrierFrequency * Float(absoluteFrame) / Float(sampleRate)
             left.append(amplitude * sin(phase))
-            right.append(amplitude * sin(phase + Float.pi / 2.0))
+            right.append(amplitude * sin(phase - Float.pi / 2.0))
         }
 
         return (left, right)
@@ -412,7 +413,7 @@ final class TimecodeLiveTapTests: XCTestCase {
                              "counters must track accepted motion samples")
     }
 
-    func testControlPrototypeConstantQuadratureProducesNearZeroRateWithDeterministicAudioTime() {
+    func testControlPrototypeNormalForwardQuadratureProducesUnitRateWithDeterministicAudioTime() {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.liveTapEnabled = true
         let localFramesPerBuffer = 1024
@@ -444,13 +445,10 @@ final class TimecodeLiveTapTests: XCTestCase {
         XCTAssertEqual(snapshot.droppedLowConfidence, 0)
         XCTAssertLessThanOrEqual(snapshot.rejectedSpikeCount, 1)
         XCTAssertLessThan(snapshot.directionChanges, 2)
-        XCTAssertLessThan(abs(snapshot.decodedRate), 0.05)
-        XCTAssertLessThan(snapshot.maxAbsRate, 0.05)
-        XCTAssertLessThan(snapshot.maxAbsSmoothedRate, 0.05)
-        XCTAssertTrue(
-            snapshot.decodedDirection == TimecodeDirection.unknown.rawValue,
-            "Constant quadrature should stay idle/unknown, got \(snapshot.decodedDirection)"
-        )
+        XCTAssertEqual(snapshot.decodedRate, 1.0, accuracy: 0.05)
+        XCTAssertEqual(snapshot.maxAbsRate, 1.0, accuracy: 0.05)
+        XCTAssertEqual(snapshot.maxAbsSmoothedRate, 1.0, accuracy: 0.05)
+        XCTAssertEqual(snapshot.decodedDirection, TimecodeDirection.forward.rawValue)
     }
 
     // MARK: - Test: signal health fail-closed
@@ -919,4 +917,1019 @@ final class TimecodeLiveTapTests: XCTestCase {
     }
 
 #endif
+
+    // MARK: - Pipeline output/configuration synchronization (required decoder-core landing)
+
+    func testRepeatedIdenticalEmptyFlushDoesNotRepublishCounters() {
+        let pipeline = TimecodeControlPipeline(sampleRate: 48_000, channelCount: 2)
+        pipeline.mode = .controlPrototype
+        let flushTime = Date(timeIntervalSinceReferenceDate: 50_000)
+
+        pipeline.flushDecode(now: flushTime)
+
+        var publicationCount = 0
+        let observation = pipeline.objectWillChange.sink {
+            publicationCount += 1
+        }
+        pipeline.flushDecode(now: flushTime)
+
+        XCTAssertEqual(
+            publicationCount,
+            0,
+            "an unchanged empty control tick must not invalidate SwiftUI"
+        )
+        withExtendedLifetime(observation) {}
+    }
+
+    func testDecodeFlushPublishesOneCoherentOutputChange() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(
+            startFrame: 0,
+            frameCount: framesPerBuffer * 8
+        )
+        pipeline.enqueueLiveStereoBuffer(
+            left: buffer.left,
+            right: buffer.right,
+            sampleRate: sampleRate,
+            frameCount: buffer.left.count,
+            receivedAt: Date(timeIntervalSinceReferenceDate: 50_000)
+        )
+
+        var publicationCount = 0
+        let observation = pipeline.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        pipeline.flushDecode(now: Date(timeIntervalSinceReferenceDate: 50_000))
+
+        XCTAssertEqual(
+            publicationCount,
+            1,
+            "one decode flush must expose its related outputs through one SwiftUI invalidation"
+        )
+        XCTAssertGreaterThan(pipeline.counters.decodedFrameCount, 0)
+        XCTAssertNotNil(pipeline.latestDiagnosis)
+        withExtendedLifetime(observation) {}
+    }
+
+    // MARK: - Test: output-state race safety
+    //
+    // `TimecodeControlPipeline`'s ten decoded-output properties
+    // (`latestPlatterTimeline`, `latestDecodeResult`, `latestDiagnosis`,
+    // `latestClassification`, `counters`, `currentDirection`, `currentRate`,
+    // `lastDropReason`, `signalHealth`, `lastBufferReceivedAt`) are read by
+    // SwiftUI view bodies on the main thread while the app's dedicated
+    // serial DVS worker queue (`com.scratchlab.dvsControl`) mutates them
+    // from a background thread via
+    // `pushStereoBuffer`/`flushDecode`/`reset`/`resetCounters`.
+    //
+    // The pipeline publishes all ten as one atomic `OutputState` snapshot,
+    // computed locally by a transaction and swapped in only once processing
+    // has fully finished — the transaction never notifies mid-flight and a
+    // reader never observes a partially-applied one. A busy-loop reader
+    // racing a writer and hoping to *catch* a torn read in a bounded number
+    // of iterations is inherently probabilistic (absence of a violation
+    // proves nothing if the window was simply never hit), so these tests
+    // instead use `debugPrePublishHook` — a DEBUG-only seam invoked once per
+    // transaction immediately before publish, i.e. while `processingLock` is
+    // held but before `outputLock` is ever touched — to deterministically
+    // pause a transaction mid-flight and control the exact interleaving.
+
+    /// Readers only ever observe the complete pre-transaction snapshot or
+    /// the complete post-transaction snapshot, never a partial one — proven
+    /// deterministically, not by racing and hoping to catch a torn read.
+    /// Pauses a `flushDecode()` transaction (via `debugPrePublishHook`,
+    /// which fires after all decode/filter/adapt work has produced a new
+    /// `OutputState` but before it is published) and repeatedly samples
+    /// `counters`/`currentDirection`/`latestPlatterTimeline` from another
+    /// thread while paused — every sample must equal the known pre-flush
+    /// values. Releasing the hook must make the very next sample equal the
+    /// known post-flush values, never a hybrid of the two.
+    func testReaderDuringInFlightFlushObservesOnlyPreOrPostTransactionSnapshot() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.enqueueLiveStereoBuffer(
+            left: buffer.left,
+            right: buffer.right,
+            sampleRate: sampleRate,
+            frameCount: buffer.left.count,
+            receivedAt: Date(timeIntervalSinceReferenceDate: 60_000)
+        )
+
+        let preFlushCounters = pipeline.counters
+        let preFlushDirection = pipeline.currentDirection
+        let preFlushTimeline = pipeline.latestPlatterTimeline
+        XCTAssertNil(preFlushTimeline, "setup must not have decoded anything yet")
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let writerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode(now: Date(timeIntervalSinceReferenceDate: 60_000))
+            writerDone.signal()
+        }
+
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "writer must reach the pre-publish pause")
+
+        let sampleCount = 200
+        var sawOnlyPreFlushValues = true
+        for _ in 0..<sampleCount {
+            if pipeline.counters != preFlushCounters
+                || pipeline.currentDirection != preFlushDirection
+                || pipeline.latestPlatterTimeline != preFlushTimeline {
+                sawOnlyPreFlushValues = false
+                break
+            }
+        }
+        XCTAssertTrue(sawOnlyPreFlushValues, "a paused (unpublished) transaction must never be visible to readers")
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerDone.wait(timeout: .now() + 5), .success, "writer must finish promptly once released")
+
+        XCTAssertGreaterThan(pipeline.counters.decodedFrameCount, 0, "flush must have actually decoded frames")
+        XCTAssertNotEqual(pipeline.currentDirection, .unknown, "flush must have produced a decoded direction")
+        XCTAssertNotNil(pipeline.latestPlatterTimeline, "flush must have produced a trusted timeline")
+        pipeline.debugPrePublishHook = nil
+    }
+
+    /// Output getters do not block while a transaction is paused mid-flight:
+    /// they only ever acquire `outputLock`, which is never held during
+    /// decode/diagnostics/filter/adapt work, so a getter call must return
+    /// almost immediately even while a writer is deliberately paused for a
+    /// long synthetic window holding `processingLock`. This is the
+    /// regression check for the exact 0.4–2.1s UI-stall bug the coarse
+    /// whole-body `outputLock` design would have reintroduced.
+    func testOutputGettersReturnImmediatelyWhileTransactionIsPaused() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let writerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode()
+            writerDone.signal()
+        }
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "writer must reach the pre-publish pause")
+
+        let readerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.counters
+            _ = pipeline.currentDirection
+            _ = pipeline.latestPlatterTimeline
+            readerDone.signal()
+        }
+        XCTAssertEqual(
+            readerDone.wait(timeout: .now() + 0.5),
+            .success,
+            "output getters must not block on a transaction paused before publish"
+        )
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerDone.wait(timeout: .now() + 5), .success, "writer must finish promptly once released")
+        pipeline.debugPrePublishHook = nil
+    }
+
+    /// `makeValidationSnapshot` cannot mix transaction generations: it must
+    /// capture the published output once and derive every field from that
+    /// single value, never re-reading the pipeline's live getters
+    /// mid-computation. Pauses a second, distinctly-different flush and
+    /// calls `makeValidationSnapshot` repeatedly from another thread while
+    /// paused — every result must match the first flush's generation as a
+    /// coherent whole (direction, accepted-sample count, and raw decode
+    /// trace all from the same transaction), never partially the second
+    /// flush's values.
+    func testMakeValidationSnapshotNeverMixesTransactionGenerations() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        let firstBuffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 4)
+        pipeline.pushStereoBuffer(left: firstBuffer.left, right: firstBuffer.right, sampleRate: sampleRate)
+        pipeline.flushDecode()
+        let firstSnapshot = pipeline.makeValidationSnapshot()
+        XCTAssertNotEqual(firstSnapshot.decodedDirection, TimecodeDirection.unknown.rawValue)
+
+        // Swapped channels reverse the quadrature phase relationship, so this
+        // flush decodes the opposite direction from the first — a
+        // distinctly different generation, not just a different sample
+        // range of the same forward motion.
+        let secondBuffer = continuousQuadratureBuffer(startFrame: 100_000, frameCount: framesPerBuffer * 4)
+        pipeline.pushStereoBuffer(left: secondBuffer.right, right: secondBuffer.left, sampleRate: sampleRate)
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let writerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode()
+            writerDone.signal()
+        }
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "writer must reach the pre-publish pause")
+
+        for _ in 0..<50 {
+            let snapshot = pipeline.makeValidationSnapshot()
+            XCTAssertEqual(
+                snapshot.acceptedMotionSamples,
+                firstSnapshot.acceptedMotionSamples,
+                "while the second flush is paused, every field must agree with the first flush's generation"
+            )
+            XCTAssertEqual(snapshot.decodedDirection, firstSnapshot.decodedDirection)
+            XCTAssertEqual(snapshot.rawDecodeTrace, firstSnapshot.rawDecodeTrace)
+        }
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerDone.wait(timeout: .now() + 5), .success, "writer must finish promptly once released")
+
+        let secondSnapshot = pipeline.makeValidationSnapshot()
+        XCTAssertNotEqual(
+            secondSnapshot.decodedDirection,
+            firstSnapshot.decodedDirection,
+            "the second (distinct, reversed) flush's own generation must now be visible as a whole"
+        )
+        XCTAssertNotEqual(
+            secondSnapshot.rawDecodeTrace,
+            firstSnapshot.rawDecodeTrace,
+            "the second (distinct) flush's own generation must now be visible as a whole"
+        )
+        pipeline.debugPrePublishHook = nil
+    }
+
+    /// `reset()` publishes one complete state, not a partial one: a reader
+    /// paused during `reset()`'s pre-publish window must still see the
+    /// exact pre-reset generation across every one of the ten outputs, and
+    /// the instant the hook releases, every output must be simultaneously
+    /// at its default — never some fields reset and others still stale.
+    func testResetPublishesOneCompleteStateNotPartial() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+        pipeline.flushDecode()
+
+        // All ten decoded outputs, sampled before reset — the pre-publish
+        // pause below must show every one of these unchanged, not just a
+        // convenient subset.
+        let preResetTimeline = pipeline.latestPlatterTimeline
+        let preResetDecodeResult = pipeline.latestDecodeResult
+        let preResetDiagnosis = pipeline.latestDiagnosis
+        let preResetClassification = pipeline.latestClassification
+        let preResetCounters = pipeline.counters
+        let preResetDirection = pipeline.currentDirection
+        let preResetRate = pipeline.currentRate
+        let preResetDropReason = pipeline.lastDropReason
+        let preResetSignalHealth = pipeline.signalHealth
+        let preResetBufferReceivedAt = pipeline.lastBufferReceivedAt
+        XCTAssertNotEqual(preResetDirection, .unknown, "setup must reach a non-default direction before reset")
+        XCTAssertNotNil(preResetTimeline, "setup must produce a trusted timeline before reset")
+        XCTAssertNotNil(preResetDecodeResult, "setup must produce a decode result before reset")
+        XCTAssertNotNil(preResetDiagnosis, "setup must produce a diagnosis before reset")
+        XCTAssertNotNil(preResetBufferReceivedAt, "setup must record a buffer-received time before reset")
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let writerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.reset()
+            writerDone.signal()
+        }
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "reset must reach the pre-publish pause")
+
+        XCTAssertEqual(pipeline.latestPlatterTimeline, preResetTimeline, "reset must not be visible before it publishes")
+        XCTAssertEqual(pipeline.latestDecodeResult, preResetDecodeResult)
+        XCTAssertEqual(pipeline.latestDiagnosis, preResetDiagnosis)
+        XCTAssertEqual(pipeline.latestClassification, preResetClassification)
+        XCTAssertEqual(pipeline.counters, preResetCounters)
+        XCTAssertEqual(pipeline.currentDirection, preResetDirection)
+        XCTAssertEqual(pipeline.currentRate, preResetRate)
+        XCTAssertEqual(pipeline.lastDropReason, preResetDropReason)
+        XCTAssertEqual(pipeline.signalHealth, preResetSignalHealth)
+        XCTAssertEqual(pipeline.lastBufferReceivedAt, preResetBufferReceivedAt)
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerDone.wait(timeout: .now() + 5), .success, "reset must finish promptly once released")
+
+        XCTAssertNil(pipeline.latestPlatterTimeline)
+        XCTAssertNil(pipeline.latestDecodeResult)
+        XCTAssertNil(pipeline.latestDiagnosis)
+        XCTAssertNil(pipeline.latestClassification)
+        XCTAssertEqual(pipeline.currentDirection, .unknown)
+        XCTAssertEqual(pipeline.currentRate, 0)
+        XCTAssertNil(pipeline.lastDropReason)
+        XCTAssertEqual(pipeline.signalHealth, .noSignal)
+        XCTAssertNil(pipeline.lastBufferReceivedAt)
+        XCTAssertEqual(pipeline.counters, TimecodeControlCounters())
+        pipeline.debugPrePublishHook = nil
+    }
+
+    /// `resetCounters()` publishes `counters` and `lastDropReason` as one
+    /// atomic pair: a reader paused during its pre-publish window must see
+    /// both still at their pre-reset values, and the instant it releases,
+    /// both must be simultaneously default — never one cleared while the
+    /// other lags — while the eight untouched outputs never change at all.
+    func testResetCountersPublishesCountersAndDropReasonAtomically() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+        pipeline.flushDecode()
+
+        // A successful decode always clears lastDropReason to nil, so
+        // establish a real non-nil value here — otherwise the "must stay
+        // paired" check below only ever proves "nil stays nil", which is
+        // true but uninteresting.
+        feedSilence(into: pipeline, count: 4)
+        pipeline.flushDecode()
+
+        let preResetCounters = pipeline.counters
+        let preResetDropReason = pipeline.lastDropReason
+        let preResetDirection = pipeline.currentDirection
+        let preResetTimeline = pipeline.latestPlatterTimeline
+        XCTAssertNotNil(preResetDropReason, "setup must reach a non-nil lastDropReason before testing the reset pair")
+        XCTAssertNotEqual(preResetCounters, TimecodeControlCounters())
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let writerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.resetCounters()
+            writerDone.signal()
+        }
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "resetCounters must reach the pre-publish pause")
+
+        XCTAssertEqual(pipeline.counters, preResetCounters, "must not be visible before it publishes")
+        XCTAssertEqual(pipeline.lastDropReason, preResetDropReason, "counters and lastDropReason must stay paired, not one reset ahead of the other")
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerDone.wait(timeout: .now() + 5), .success, "resetCounters must finish promptly once released")
+
+        XCTAssertEqual(pipeline.counters, TimecodeControlCounters())
+        XCTAssertNil(pipeline.lastDropReason)
+        XCTAssertEqual(pipeline.currentDirection, preResetDirection, "resetCounters must not touch the other eight outputs")
+        XCTAssertEqual(pipeline.latestPlatterTimeline, preResetTimeline)
+        pipeline.debugPrePublishHook = nil
+    }
+
+    // MARK: - Test: configuration-state race safety
+    //
+    // `TimecodeControlPipeline`'s eight configuration properties
+    // (`liveTapEnabled`, `mode`, `invertDirection`, `rateScale`,
+    // `inputChannel`, `minConfidence`, `maxRate`, `signalThresholdRMS`) are
+    // written from the main thread (SwiftUI bindings, preset application)
+    // while `pushStereoBuffer`/`flushDecode`/`enqueueLiveStereoBuffer`/
+    // `makeValidationSnapshot` read them from the DVS worker queue. They
+    // are published as one atomic `ConfigurationState` snapshot, captured
+    // once per operation at its boundary and used for that operation's
+    // entire body — mirroring `OutputState`'s race-safety design above.
+    // These tests use `debugPostConfigurationCaptureHook` (fires
+    // immediately after an operation captures its configuration snapshot,
+    // before any decode/diagnostics work) to deterministically pause an
+    // operation right after its capture and install a new configuration
+    // generation from another thread while paused — the same "pause and
+    // control the interleaving" technique the output-state tests above
+    // use via `debugPrePublishHook`.
+
+    /// A `flushDecode()` transaction paused immediately after it captures
+    /// its configuration snapshot continues to use that one complete old
+    /// generation for its entire body, even after a concurrent thread
+    /// installs a complete new generation while it's paused. The very
+    /// next transaction, started only after the new generation is
+    /// installed, uses the new generation.
+    func testFlushPausedAfterConfigurationCaptureUsesOldGenerationThenNextFlushUsesNewGeneration() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.minConfidence = 0.2
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+
+        let capturePaused = DispatchSemaphore(value: 0)
+        let releaseCapture = DispatchSemaphore(value: 0)
+        pipeline.debugPostConfigurationCaptureHook = {
+            capturePaused.signal()
+            releaseCapture.wait()
+        }
+
+        let flushDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode()
+            flushDone.signal()
+        }
+        XCTAssertEqual(capturePaused.wait(timeout: .now() + 5), .success, "flush must reach the post-capture pause")
+
+        // Install a completely different configuration generation while
+        // the flush is paused right after capturing the old one.
+        pipeline.minConfidence = 0.85
+
+        releaseCapture.signal()
+        XCTAssertEqual(flushDone.wait(timeout: .now() + 5), .success, "flush must finish promptly once released")
+
+        XCTAssertEqual(
+            pipeline.counters.minConfidenceRuntime,
+            0.2,
+            "the paused flush must have used its own captured (old) minConfidence throughout, not the value installed mid-flight"
+        )
+
+        // The live property itself changed immediately — the write to
+        // `minConfidence` was never blocked by the paused flush, since
+        // `configurationLock` is independent of `processingLock`.
+        XCTAssertEqual(pipeline.minConfidence, 0.85)
+
+        // A fresh flush, started only now, must observe the new generation.
+        pipeline.debugPostConfigurationCaptureHook = nil
+        let secondBuffer = continuousQuadratureBuffer(startFrame: 100_000, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: secondBuffer.left, right: secondBuffer.right, sampleRate: sampleRate)
+        pipeline.flushDecode()
+        XCTAssertEqual(
+            pipeline.counters.minConfidenceRuntime,
+            0.85,
+            "a transaction started after the update must observe the new generation"
+        )
+    }
+
+    /// `TimecodePrototypeProfile.apply(to:)`/`applyCalibrationBatch` write
+    /// all five calibration fields as one atomic configuration swap, not
+    /// five sequential property writes. A `flushDecode()` transaction
+    /// paused immediately after capturing its configuration snapshot must
+    /// see every calibration field it actually uses agree with ONE
+    /// profile as a coherent whole — never one profile's `minConfidence`
+    /// paired with another profile's `invertDirection`.
+    func testProfileApplicationIsAtomicNotObservablePartiallyApplied() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        TimecodePrototypeProfile.scratchLabPrototype().apply(to: pipeline)
+        // scratchLabPrototype: invertDirection=false, rateScale=1.0, minConfidence=0.3
+
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+
+        let capturePaused = DispatchSemaphore(value: 0)
+        let releaseCapture = DispatchSemaphore(value: 0)
+        pipeline.debugPostConfigurationCaptureHook = {
+            capturePaused.signal()
+            releaseCapture.wait()
+        }
+
+        let flushDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode()
+            flushDone.signal()
+        }
+        XCTAssertEqual(capturePaused.wait(timeout: .now() + 5), .success, "flush must reach the post-capture pause")
+
+        // Apply a deliberately different, fully-correlated profile while
+        // the flush is paused right after capturing the first one. This
+        // only needs to be *some* genuinely different profile to prove
+        // atomicity — applied via `.manual(...)` with the measured Rane
+        // ONE MKII fixture calibration values rather than the separately
+        // developed hardware preset, which intentionally isolates the
+        // atomic-batch behavior this test proves from that separate
+        // preset/UI feature.
+        TimecodePrototypeProfile.manual(
+            inputChannel: .stereo,
+            invertDirection: true,
+            rateScale: 1.0,
+            minConfidence: 0.10,
+            maxRate: 5.0,
+            smoothingConfig: .conservative
+        ).apply(to: pipeline)
+        // invertDirection=true, rateScale=1.0, minConfidence=0.10
+
+        releaseCapture.signal()
+        XCTAssertEqual(flushDone.wait(timeout: .now() + 5), .success, "flush must finish promptly once released")
+
+        // Everything the paused flush actually computed with must agree
+        // with the FIRST profile as a whole, never a mixture.
+        XCTAssertFalse(pipeline.counters.rawDecodeTrace.isEmpty, "setup must actually decode frames for this proof to be meaningful")
+        XCTAssertEqual(
+            pipeline.counters.minConfidenceRuntime,
+            0.3,
+            "must have used the pre-pause profile's minConfidence throughout"
+        )
+        XCTAssertEqual(
+            pipeline.counters.calibratedTrace,
+            pipeline.counters.rawDecodeTrace,
+            "must have used the pre-pause profile's invertDirection=false (a no-op calibration) throughout — a leaked invertDirection=true would flip every direction letter"
+        )
+
+        // The live properties changed immediately once released.
+        XCTAssertEqual(pipeline.invertDirection, true)
+        XCTAssertEqual(pipeline.minConfidence, 0.10)
+        pipeline.debugPostConfigurationCaptureHook = nil
+    }
+
+    /// A `mode` transition is fully serialized behind an in-flight
+    /// `flushDecode()` transaction, not just its cleanup: the transition's
+    /// entire write-plus-cleanup happens inside one `processingLock`
+    /// critical section, so `mode` must still read its *old* value the
+    /// whole time it is blocked — this is the direct regression check for
+    /// the ordering bug where a transition used to publish its new value
+    /// immediately (independent of `processingLock`) and only serialize
+    /// the cleanup that followed, leaving a window where the new mode was
+    /// visible before the cleanup that was supposed to accompany it had
+    /// actually run.
+    func testModeTransitionIsFullySerializedBehindInFlightFlushNotJustItsCleanup() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+        pipeline.flushDecode()
+        XCTAssertNotEqual(pipeline.currentDirection, .unknown, "setup must reach a decoded direction")
+
+        let secondBuffer = continuousQuadratureBuffer(startFrame: 100_000, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: secondBuffer.left, right: secondBuffer.right, sampleRate: sampleRate)
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let flushDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode()
+            flushDone.signal()
+        }
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "flush must reach the pre-publish pause")
+
+        let modeChangeDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.mode = .disabled
+            modeChangeDone.signal()
+        }
+
+        XCTAssertEqual(
+            modeChangeDone.wait(timeout: .now() + 0.3),
+            .timedOut,
+            "the mode transition must serialize behind an in-flight flush via processingLock, not race its internal-state clear"
+        )
+
+        // Unlike a design where the value publishes independently of
+        // `processingLock`, `mode` must still read the OLD value here —
+        // the transition cannot even write the new value until it
+        // acquires `processingLock`, which the paused flush still holds.
+        XCTAssertEqual(pipeline.mode, .controlPrototype, "mode must not change until the blocked transition actually acquires processingLock")
+
+        releaseWriter.signal()
+        XCTAssertEqual(flushDone.wait(timeout: .now() + 5), .success, "flush must finish promptly once released")
+        XCTAssertEqual(
+            modeChangeDone.wait(timeout: .now() + 5),
+            .success,
+            "mode transition must complete once the in-flight flush releases processingLock"
+        )
+        XCTAssertEqual(pipeline.mode, .disabled)
+
+        pipeline.debugPrePublishHook = nil
+    }
+
+    /// A `pushStereoBuffer` transaction paused immediately after it
+    /// captures its configuration (still holding `processingLock`, per
+    /// `captureConfigurationForOperation()`'s new ordering) cannot append
+    /// its buffer into the accumulator after a concurrent `mode = .disabled`
+    /// has cleared it — because that transition cannot even acquire
+    /// `processingLock`, let alone publish and clean up, until the push
+    /// releases it. The direct regression check for the first ordering bug
+    /// described on `mode`'s setter doc comment: a delayed operation
+    /// leaking stale audio into a session that was supposed to be cleared.
+    func testPausedPushStereoBufferWithOldControlConfigCannotAppendAfterDisableCleanup() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        let pushPaused = DispatchSemaphore(value: 0)
+        let releasePush = DispatchSemaphore(value: 0)
+        pipeline.debugPostConfigurationCaptureHook = {
+            pushPaused.signal()
+            releasePush.wait()
+        }
+
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        let pushDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: self.sampleRate)
+            pushDone.signal()
+        }
+        XCTAssertEqual(pushPaused.wait(timeout: .now() + 5), .success, "push must reach the post-capture pause, still holding processingLock")
+
+        // Clear the hook now, before starting the concurrent mode
+        // transition below — `mode`'s setter fires this same shared hook
+        // too (see its doc comment), and it must not re-invoke the
+        // already-consumed push-pause closure once it eventually runs
+        // (after push releases `processingLock`). Clearing the property
+        // here does not affect the push call currently blocked inside its
+        // own already-executing closure instance.
+        pipeline.debugPostConfigurationCaptureHook = nil
+
+        let disableDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.mode = .disabled
+            disableDone.signal()
+        }
+        XCTAssertEqual(
+            disableDone.wait(timeout: .now() + 0.3),
+            .timedOut,
+            "disable must block behind the paused push's processingLock, not race past it"
+        )
+        XCTAssertEqual(pipeline.mode, .controlPrototype, "disable must not have published yet")
+
+        releasePush.signal()
+        XCTAssertEqual(pushDone.wait(timeout: .now() + 5), .success, "push must finish once released")
+        XCTAssertEqual(disableDone.wait(timeout: .now() + 5), .success, "disable must complete once processingLock is free")
+        XCTAssertEqual(pipeline.mode, .disabled)
+
+        // Re-enable and flush with no new push: if the paused push's
+        // audio had leaked past the disable cleanup, this flush would
+        // decode it.
+        pipeline.mode = .controlPrototype
+        pipeline.flushDecode()
+        XCTAssertEqual(
+            pipeline.counters.decodedFrameCount,
+            0,
+            "the disable cleanup must have discarded the paused push's audio — nothing should be left to decode"
+        )
+        XCTAssertEqual(pipeline.currentDirection, .unknown)
+    }
+
+    /// The `enqueueLiveStereoBuffer` analog of the test above: a callback
+    /// paused immediately after it captures its configuration (still
+    /// holding `configurationLock`, per that method's doc comment) cannot
+    /// append into the live-ingress queue after a concurrent
+    /// `mode = .disabled` has cleared it, because that transition cannot
+    /// acquire `configurationLock` for its own write until the callback
+    /// releases it.
+    func testPausedEnqueueLiveStereoBufferWithOldControlConfigCannotAppendAfterDisableCleanup() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        let enqueuePaused = DispatchSemaphore(value: 0)
+        let releaseEnqueue = DispatchSemaphore(value: 0)
+        pipeline.debugPostConfigurationCaptureHook = {
+            enqueuePaused.signal()
+            releaseEnqueue.wait()
+        }
+
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        let enqueueDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.enqueueLiveStereoBuffer(
+                left: buffer.left,
+                right: buffer.right,
+                sampleRate: self.sampleRate,
+                frameCount: buffer.left.count,
+                receivedAt: Date(timeIntervalSinceReferenceDate: 70_000)
+            )
+            enqueueDone.signal()
+        }
+        XCTAssertEqual(enqueuePaused.wait(timeout: .now() + 5), .success, "enqueue must reach the post-capture pause, still holding configurationLock")
+
+        // Clear the hook now, before starting the concurrent mode
+        // transition below — see the matching comment in the
+        // pushStereoBuffer analog above for why this must happen before
+        // (not after) the transition starts.
+        pipeline.debugPostConfigurationCaptureHook = nil
+
+        let disableDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.mode = .disabled
+            disableDone.signal()
+        }
+        XCTAssertEqual(
+            disableDone.wait(timeout: .now() + 0.3),
+            .timedOut,
+            "disable must block behind the paused enqueue's configurationLock, not race past it"
+        )
+        // Note: unlike the pushStereoBuffer analog above, `pipeline.mode`
+        // cannot be safely read here — the paused enqueue is deliberately
+        // still holding `configurationLock` itself (per its doc comment),
+        // so a getter call would block on this same thread until
+        // `releaseEnqueue` is signaled below, deadlocking the test. The
+        // `disableDone` timeout above is already sufficient proof that
+        // disable has not published.
+
+        releaseEnqueue.signal()
+        XCTAssertEqual(enqueueDone.wait(timeout: .now() + 5), .success, "enqueue must finish once released")
+        XCTAssertEqual(disableDone.wait(timeout: .now() + 5), .success, "disable must complete once configurationLock is free")
+        XCTAssertEqual(pipeline.mode, .disabled)
+
+        // Re-enable and flush with no new push: if the paused enqueue's
+        // audio had leaked past the disable cleanup, this flush would
+        // decode it.
+        pipeline.mode = .controlPrototype
+        pipeline.flushDecode()
+        XCTAssertEqual(
+            pipeline.counters.decodedFrameCount,
+            0,
+            "the disable cleanup must have discarded the paused live-enqueue audio — nothing should be left to decode"
+        )
+    }
+
+    /// The second ordering bug described on `mode`'s setter doc comment:
+    /// a disable transition paused between its configuration write and its
+    /// ingestion-lock cleanup (simulating a slow/delayed cleanup) must
+    /// still block a concurrent re-enable attempt from even publishing its
+    /// own mode value — the whole write-plus-cleanup is one
+    /// `processingLock` critical section, so there is no window for a
+    /// second transition to complete in between and have the first
+    /// transition's delayed cleanup run afterward against the new session.
+    func testDisableImmediatelyFollowedByReenableDoesNotClearTheNewSession() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let oldBuffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: oldBuffer.left, right: oldBuffer.right, sampleRate: sampleRate)
+
+        let disablePaused = DispatchSemaphore(value: 0)
+        let releaseDisable = DispatchSemaphore(value: 0)
+        pipeline.debugPostConfigurationCaptureHook = {
+            disablePaused.signal()
+            releaseDisable.wait()
+        }
+
+        let disableDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.mode = .disabled
+            disableDone.signal()
+        }
+        XCTAssertEqual(disablePaused.wait(timeout: .now() + 5), .success, "disable must reach the post-write pause, still holding processingLock")
+
+        pipeline.debugPostConfigurationCaptureHook = nil
+
+        let reenableDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            pipeline.mode = .controlPrototype
+            reenableDone.signal()
+        }
+        XCTAssertEqual(
+            reenableDone.wait(timeout: .now() + 0.3),
+            .timedOut,
+            "a concurrent re-enable must block behind the paused disable's still-in-progress transition, not interleave with it"
+        )
+        XCTAssertEqual(pipeline.mode, .disabled, "mode must still read the value disable already wrote — no interleaved second transition has run")
+
+        releaseDisable.signal()
+        XCTAssertEqual(disableDone.wait(timeout: .now() + 5), .success, "disable's cleanup must complete once released")
+        XCTAssertEqual(
+            reenableDone.wait(timeout: .now() + 5),
+            .success,
+            "re-enable must complete only after disable's entire transition (write + cleanup) has finished"
+        )
+        XCTAssertEqual(pipeline.mode, .controlPrototype)
+
+        // The new session's own data must decode normally — disable's
+        // cleanup already fully completed before re-enable even started,
+        // so there is nothing left to race against it.
+        let newBuffer = continuousQuadratureBuffer(startFrame: 200_000, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: newBuffer.left, right: newBuffer.right, sampleRate: sampleRate)
+        pipeline.flushDecode()
+        XCTAssertGreaterThan(pipeline.counters.decodedFrameCount, 0, "the new session's own pushed audio must decode normally")
+        XCTAssertNotEqual(pipeline.currentDirection, .unknown)
+    }
+
+    /// General deadlock-freedom stress check: concurrent `mode` transitions,
+    /// `pushStereoBuffer` calls, `enqueueLiveStereoBuffer` callbacks, and
+    /// `flushDecode` transactions — the four call paths that now share
+    /// `processingLock`/`configurationLock`/the ingestion `lock` in
+    /// different combinations — must all complete without ever blocking
+    /// forever, regardless of interleaving.
+    func testConcurrentModeTransitionsPushEnqueueAndFlushDoNotDeadlock() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let iterations = 200
+        let group = DispatchGroup()
+
+        group.enter()
+        DispatchQueue.global().async {
+            for i in 0..<iterations {
+                pipeline.mode = (i % 2 == 0) ? .disabled : .controlPrototype
+            }
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global().async {
+            let buffer = self.continuousQuadratureBuffer(startFrame: 0, frameCount: self.framesPerBuffer)
+            for _ in 0..<iterations {
+                pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: self.sampleRate)
+            }
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global().async {
+            let buffer = self.continuousQuadratureBuffer(startFrame: 50_000, frameCount: self.framesPerBuffer)
+            for i in 0..<iterations {
+                pipeline.enqueueLiveStereoBuffer(
+                    left: buffer.left,
+                    right: buffer.right,
+                    sampleRate: self.sampleRate,
+                    frameCount: buffer.left.count,
+                    receivedAt: Date(timeIntervalSinceReferenceDate: 80_000 + Double(i))
+                )
+            }
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global().async {
+            for _ in 0..<iterations {
+                _ = pipeline.flushDecode()
+            }
+            group.leave()
+        }
+
+        XCTAssertEqual(
+            group.wait(timeout: .now() + 15),
+            .success,
+            "concurrent mode transitions, pushes, live enqueues, and flushes must all complete without deadlock"
+        )
+    }
+
+    /// Configuration getters do not block while a transaction is paused
+    /// mid-flight: they only ever acquire the independent
+    /// `configurationLock`, never `processingLock`, so a getter call must
+    /// return almost immediately even while a writer is deliberately
+    /// paused holding `processingLock`.
+    func testConfigurationGettersReturnImmediatelyWhileTransactionIsPaused() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer * 8)
+        pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: sampleRate)
+
+        let writerPaused = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        pipeline.debugPrePublishHook = {
+            writerPaused.signal()
+            releaseWriter.wait()
+        }
+
+        let writerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.flushDecode()
+            writerDone.signal()
+        }
+        XCTAssertEqual(writerPaused.wait(timeout: .now() + 5), .success, "writer must reach the pre-publish pause")
+
+        let readerDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = pipeline.mode
+            _ = pipeline.liveTapEnabled
+            _ = pipeline.invertDirection
+            _ = pipeline.rateScale
+            _ = pipeline.inputChannel
+            _ = pipeline.minConfidence
+            _ = pipeline.maxRate
+            _ = pipeline.signalThresholdRMS
+            readerDone.signal()
+        }
+        XCTAssertEqual(
+            readerDone.wait(timeout: .now() + 0.5),
+            .success,
+            "configuration getters must not block on a transaction paused before publish"
+        )
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerDone.wait(timeout: .now() + 5), .success, "writer must finish promptly once released")
+        pipeline.debugPrePublishHook = nil
+    }
+
+    /// Assigning a configuration property the value it already has must
+    /// not trigger `objectWillChange` — `updateConfiguration` compares
+    /// against the previous snapshot under the same lock acquisition and
+    /// skips the swap-and-notify when nothing actually changed.
+    func testUnchangedConfigurationAssignmentDoesNotNotify() {
+        let pipeline = makePipeline(mode: .disabled)
+        pipeline.rateScale = 2.0
+        pipeline.minConfidence = 0.42
+        pipeline.invertDirection = true
+
+        var notifications = 0
+        let observation = pipeline.objectWillChange.sink { notifications += 1 }
+
+        pipeline.rateScale = 2.0
+        pipeline.minConfidence = 0.42
+        pipeline.invertDirection = true
+        pipeline.mode = .disabled
+
+        XCTAssertEqual(notifications, 0, "assigning the same value must not trigger objectWillChange")
+
+        pipeline.rateScale = 3.0
+        XCTAssertEqual(notifications, 1, "a real change must still notify")
+        withExtendedLifetime(observation) {}
+    }
+
+    /// A real change to an individual configuration property notifies
+    /// exactly once, and `applyCalibrationBatch` — which mutates five
+    /// fields in one `updateConfiguration` call — also notifies exactly
+    /// once, not once per field. A batch identical to the current
+    /// configuration does not notify at all.
+    func testChangedIndividualAndBatchConfigurationUpdatesNotifyExactlyOnce() {
+        let pipeline = makePipeline(mode: .disabled)
+
+        var notifications = 0
+        let observation = pipeline.objectWillChange.sink { notifications += 1 }
+
+        pipeline.rateScale = 2.5
+        XCTAssertEqual(notifications, 1, "an individual changed property must notify exactly once")
+
+        pipeline.applyCalibrationBatch(
+            inputChannel: .left,
+            invertDirection: true,
+            rateScale: 4.0,
+            minConfidence: 0.6,
+            maxRate: 9.0
+        )
+        XCTAssertEqual(notifications, 2, "a changed batch update must notify exactly once, not once per field")
+        XCTAssertEqual(pipeline.inputChannel, .left)
+        XCTAssertEqual(pipeline.invertDirection, true)
+        XCTAssertEqual(pipeline.rateScale, 4.0)
+        XCTAssertEqual(pipeline.minConfidence, 0.6)
+        XCTAssertEqual(pipeline.maxRate, 9.0)
+
+        pipeline.applyCalibrationBatch(
+            inputChannel: .left,
+            invertDirection: true,
+            rateScale: 4.0,
+            minConfidence: 0.6,
+            maxRate: 9.0
+        )
+        XCTAssertEqual(notifications, 2, "a batch update identical to the current configuration must not notify")
+
+        withExtendedLifetime(observation) {}
+    }
+
+    /// Concurrent writers do not lose counters: two threads call
+    /// `pushStereoBuffer`/`flushDecode` on the same pipeline at once
+    /// (standing in for a DEBUG main-thread self-test racing the real DVS
+    /// worker queue). This assertion is deterministic regardless of thread
+    /// scheduling — `processingLock` fully serializes the two threads'
+    /// transactions, so the final `totalBuffersReceived` must equal the
+    /// exact expected sum on every run; it does not depend on winning a
+    /// timing race to catch a lost update, only correct locking to prevent
+    /// one from ever happening.
+    func testConcurrentDebugMainThreadAndDVSWorkerMutationSerializeSafely() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        let buffersPerThread = 60
+        let group = DispatchGroup()
+
+        let debugSelfTestQueue = DispatchQueue(label: "test.debug.selftest")
+        let dvsWorkerQueue = DispatchQueue(label: "test.dvs.worker")
+
+        group.enter()
+        debugSelfTestQueue.async {
+            for i in 0..<buffersPerThread {
+                let buffer = self.continuousQuadratureBuffer(
+                    startFrame: i * self.framesPerBuffer,
+                    frameCount: self.framesPerBuffer
+                )
+                pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: self.sampleRate)
+                if i % 5 == 0 { pipeline.flushDecode() }
+            }
+            group.leave()
+        }
+
+        group.enter()
+        dvsWorkerQueue.async {
+            for i in 0..<buffersPerThread {
+                let buffer = self.continuousQuadratureBuffer(
+                    startFrame: (i + 10_000) * self.framesPerBuffer,
+                    frameCount: self.framesPerBuffer
+                )
+                pipeline.pushStereoBuffer(left: buffer.left, right: buffer.right, sampleRate: self.sampleRate)
+                if i % 5 == 0 { pipeline.flushDecode() }
+            }
+            group.leave()
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 30), .success, "two concurrent mutators must not deadlock")
+
+        pipeline.flushDecode()
+
+        XCTAssertEqual(
+            pipeline.counters.totalBuffersReceived,
+            buffersPerThread * 2,
+            "every buffer pushed from both threads must be counted exactly once, with no lost update from a torn read-modify-write"
+        )
+        XCTAssertEqual(
+            pipeline.counters.currentDirection,
+            pipeline.currentDirection.rawValue,
+            "final state must be internally coherent after concurrent mutation"
+        )
+        XCTAssertEqual(
+            pipeline.counters.currentRate,
+            pipeline.currentRate,
+            "final state must be internally coherent after concurrent mutation"
+        )
+    }
+
 }

@@ -39,7 +39,8 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
     }
 
     /// Push a sequence of stereo buffers with linearly advancing phase
-    /// offset on the right channel (positive = forward, negative = backward).
+    /// offset on the right channel. Hardware captures establish negative as
+    /// forward and positive as backward.
     private func feedPhaseProgression(
         into pipeline: TimecodeControlPipeline,
         bufferCount: Int,
@@ -100,7 +101,7 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
     func testDisabledModeEmitsNoMotion() {
         let pipeline = makePipeline(mode: .disabled)
 
-        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: 0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: -0.3)
         pipeline.flushDecode()
 
         // No diagnostics should have run either
@@ -132,7 +133,7 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
     func testControlModeEmitsForwardMotion() {
         let pipeline = makePipeline(mode: .controlPrototype)
 
-        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: 0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: -0.3)
         pipeline.flushDecode()
 
         XCTAssertNotNil(pipeline.latestPlatterTimeline,
@@ -157,7 +158,7 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
     func testControlModeEmitsBackwardMotion() {
         let pipeline = makePipeline(mode: .controlPrototype)
 
-        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: -0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: 0.3)
         pipeline.flushDecode()
 
         XCTAssertNotNil(pipeline.latestPlatterTimeline,
@@ -248,7 +249,7 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
         pipeline.invertDirection = false
 
         // First pass: normal direction
-        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: 0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: -0.3)
         pipeline.flushDecode()
 
         guard let normalTimeline = pipeline.latestPlatterTimeline,
@@ -264,7 +265,7 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
         pipeline.mode = .controlPrototype
         pipeline.invertDirection = true
 
-        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: 0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: -0.3)
         pipeline.flushDecode()
 
         guard let invertedTimeline = pipeline.latestPlatterTimeline,
@@ -278,6 +279,133 @@ final class TimecodeLiveIntegrationTests: XCTestCase {
         // Verify the magnitudes are roughly equal
         XCTAssertEqual(abs(normalDelta), abs(invertedDelta), accuracy: abs(normalDelta) * 0.5,
                        "Invert should preserve delta magnitude, flipping only sign")
+    }
+
+    // MARK: - 9b. Stage trace exposes raw decode vs. calibrated (invert) frames
+
+    /// `rawDecodeTrace`/`calibratedTrace` exist to let a live hardware
+    /// snapshot distinguish "decoder never saw the reversal" from "decoder
+    /// saw it but calibration/smoothing lost it" — see the investigation
+    /// this was added for. This locks the two traces' actual contract:
+    /// `rawDecodeTrace` reflects the decoder's direction before invert;
+    /// `calibratedTrace` reflects it after invert flips the sign.
+    func testStageTraceShowsRawThenInvertedDirection() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = true
+
+        // Negative phase step == physically forward per the established
+        // hardware convention (see feedPhaseProgression's doc comment).
+        feedPhaseProgression(into: pipeline, bufferCount: 3, phaseStep: -0.3)
+        pipeline.flushDecode()
+
+        XCTAssertFalse(pipeline.counters.rawDecodeTrace.isEmpty,
+            "Raw decode trace must be populated when the decoder forms frames")
+        // Small per-buffer phase steps land inside the decoder's ±30° dead-band
+        // (see TimecodePhaseDecoder.phaseDeadBand) and decode as "unknown" —
+        // only the later, larger accumulated offsets clear it. `contains`
+        // rather than `hasPrefix` tolerates those leading unknown frames.
+        XCTAssertTrue(pipeline.counters.rawDecodeTrace.contains("f/"),
+            "Raw (pre-invert) trace must show forward for negative-phase input: \(pipeline.counters.rawDecodeTrace)")
+        XCTAssertTrue(pipeline.counters.calibratedTrace.contains("b/"),
+            "Calibrated (post-invert) trace must show backward once inverted: \(pipeline.counters.calibratedTrace)")
+        XCTAssertFalse(pipeline.counters.rawDecodeTrace.contains("b/"),
+            "Raw (pre-invert) trace must not show backward for negative-phase input: \(pipeline.counters.rawDecodeTrace)")
+        XCTAssertFalse(pipeline.counters.calibratedTrace.contains("f/"),
+            "Calibrated (post-invert) trace must not show forward once inverted: \(pipeline.counters.calibratedTrace)")
+    }
+
+    /// The decoder itself (stage 1–2, before the EMA) must resolve a genuine
+    /// mid-flush reversal frame-by-frame — proving any reversal that goes
+    /// missing further downstream is lost in calibration/smoothing, not in
+    /// decode. This directly answers "does the raw phase decode reverse
+    /// correctly" independent of the stability filter's EMA lag.
+    func testRawDecodeTraceShowsReversalWithinOneFlush() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = false
+
+        // Forward buffers, then backward buffers, accumulated into the SAME
+        // flush window (no flushDecode() call between them).
+        feedPhaseProgression(into: pipeline, bufferCount: 4, phaseStep: -0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 4, phaseStep: 0.3)
+        pipeline.flushDecode()
+
+        let trace = pipeline.counters.rawDecodeTrace
+        XCTAssertTrue(trace.contains("f/"), "Raw decode must show forward frames: \(trace)")
+        XCTAssertTrue(trace.contains("b/"), "Raw decode must show backward frames after the reversal: \(trace)")
+    }
+
+    // MARK: - 9c. currentDirection trusts a confirmed trailing reversal run
+    // immediately, instead of only the EMA-smoothed rate crossing zero
+
+    /// Live hardware evidence (see AI_HANDOFF) showed `currentDirection`
+    /// only updates once per flush from the EMA's *final* state — a fast
+    /// back-stroke completing within one flush's batch could be entirely
+    /// invisible, and even a single reversing flush shows the reported rate
+    /// visibly coasting through zero over several frames before the smoothed
+    /// sign actually flips. A strong established forward EMA needs many
+    /// consecutive backward frames to pull the smoothed rate across zero on
+    /// its own; this proves a short but sustained trailing run of backward
+    /// frames flips `currentDirection` immediately instead of waiting for
+    /// that convergence.
+    func testConfirmedTrailingReversalFlipsDirectionImmediately() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = false
+
+        // Establish a strong, well-converged forward EMA. bufferCount/
+        // phaseStep chosen to stay under the ±180° phase wrap (matches the
+        // proven-safe pattern used elsewhere in this file/TimecodeStability-
+        // FilterTests): offsets 0°...-100° across 8 buffers, i=0/1 land in
+        // the decoder's ±30° dead-band (unknown), i=2-7 are clearly forward.
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        pipeline.flushDecode()
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+            "Setup must establish a stable, well-converged forward direction")
+        let establishedRate = pipeline.currentRate
+        XCTAssertGreaterThan(establishedRate, 0)
+
+        // 3 buffers, phaseStep 0.9: offsets 0°(i=0, dead-band, unknown),
+        // 51.6°(i=1, backward), 103.1°(i=2, backward) — exactly 2 confirmed
+        // trailing backward frames. With alpha=0.3, 2 frames alone are
+        // nowhere near enough to pull a well-converged EMA across zero.
+        feedPhaseProgression(into: pipeline, bufferCount: 3, phaseStep: 0.9)
+        pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .backward,
+            "A short but confirmed (≥2-frame) trailing backward run must flip currentDirection immediately, not wait for the EMA to cross zero from \(establishedRate)")
+        // currentRate's SIGN — not currentDirection — is what actually drives
+        // playback scheduling (TimecodeDriveStepConverter's accumulated
+        // steps, and ScratchSamplePlaybackController's schedulingDirection,
+        // both derive from the step delta's sign, which comes from rate).
+        // Flipping only the label without also snapping the rate would not
+        // change what actually gets scheduled.
+        XCTAssertLessThan(pipeline.currentRate, 0,
+            "A confirmed reversal must also flip currentRate's sign immediately, since that (not currentDirection) is what actually drives playback scheduling")
+    }
+
+    /// The confirmation threshold exists specifically so a single noisy
+    /// reversal-direction frame cannot flip `currentDirection` on its own —
+    /// this is the same guarantee `testTrailingNoisyReversalFrameDoesNotFlip
+    /// {Forward,Backward}Direction` protect, exercised here with a batch
+    /// that actually contains one genuine opposite-sign frame (unlike those
+    /// two tests' synthetic setup, where the "blip" never truly flips sign).
+    func testSingleTrailingReversalFrameDoesNotFlipDirection() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.invertDirection = false
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        pipeline.flushDecode()
+        XCTAssertEqual(pipeline.currentDirection, .forward)
+
+        // 2 buffers, phaseStep 0.9: offsets 0°(i=0, dead-band, unknown),
+        // 51.6°(i=1, backward) — exactly 1 confirmed trailing backward
+        // frame, below reversalConfirmFrameCount.
+        feedPhaseProgression(into: pipeline, bufferCount: 2, phaseStep: 0.9)
+        pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+            "A single trailing backward frame must not flip currentDirection on its own")
+        XCTAssertGreaterThan(pipeline.currentRate, 0,
+            "A single trailing backward frame must not flip currentRate's sign either")
     }
 
     // MARK: - 10. Rate scale affects motion magnitude

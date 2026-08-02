@@ -347,15 +347,19 @@ extension TimecodePrototypeProfile {
     /// Apply this profile's calibration values to a pipeline.
     ///
     /// Sets input channel, invert direction, rate scale, min confidence,
-    /// and max rate atomically. Does NOT change the pipeline mode or
-    /// live tap state.
+    /// and max rate atomically, via `TimecodeControlPipeline.
+    /// applyCalibrationBatch(_:...)` — a single configuration swap, not
+    /// five sequential property writes. Does NOT change the pipeline mode
+    /// or live tap state.
     ///
     /// - Parameter pipeline: The pipeline to configure.
     public func apply(to pipeline: TimecodeControlPipeline) {
-        pipeline.inputChannel = inputChannel
-        pipeline.invertDirection = invertDirection
-        pipeline.rateScale = rateScale
-        pipeline.minConfidence = minConfidence
-        pipeline.maxRate = maxRate
+        pipeline.applyCalibrationBatch(
+            inputChannel: inputChannel,
+            invertDirection: invertDirection,
+            rateScale: rateScale,
+            minConfidence: minConfidence,
+            maxRate: maxRate
+        )
     }
 }

@@ -99,8 +99,9 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
     private func makeTrustedPipeline() -> TimecodeControlPipeline {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.liveTapEnabled = true  // Batch 10: live tap must be on for bridge
-        // Feed phase-progressing buffers to produce forward motion
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25, amplitude: 0.5)
+        // Hardware captures establish negative right-minus-left phase as
+        // forward (about -70° to -83° with the corrected RCA wiring).
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25, amplitude: 0.5)
         _ = pipeline.flushDecode()
         return pipeline
     }

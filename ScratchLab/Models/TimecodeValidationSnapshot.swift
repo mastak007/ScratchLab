@@ -288,6 +288,17 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
     /// flush.
     public var firstRejectReasonThisFlush: String
 
+    // MARK: - Per-frame stage trace (DEBUG investigation aid)
+
+    /// Compact "direction/velocity" trace for every frame the decoder formed
+    /// this flush, before calibration (invert/rateScale) or the stability
+    /// filter's EMA — see `TimecodeControlCounters.rawDecodeTrace`.
+    public var rawDecodeTrace: String
+
+    /// Same trace after calibration (invert/rateScale), still before the
+    /// EMA — see `TimecodeControlCounters.calibratedTrace`.
+    public var calibratedTrace: String
+
     // MARK: - Classification
 
     /// High-level validation status derived from the other fields.
@@ -354,6 +365,8 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         lowConfidenceRejectCount: Int = 0,
         rateSpikeRejectCount: Int = 0,
         firstRejectReasonThisFlush: String = "",
+        rawDecodeTrace: String = "",
+        calibratedTrace: String = "",
         validationStatus: TimecodeValidationStatus
     ) {
         self.mode = mode
@@ -414,6 +427,8 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         self.lowConfidenceRejectCount = lowConfidenceRejectCount
         self.rateSpikeRejectCount = rateSpikeRejectCount
         self.firstRejectReasonThisFlush = firstRejectReasonThisFlush
+        self.rawDecodeTrace = rawDecodeTrace
+        self.calibratedTrace = calibratedTrace
         self.validationStatus = validationStatus
     }
 
@@ -504,6 +519,8 @@ public struct TimecodeValidationSnapshot: Equatable, Sendable {
         Frames above/below minConf: \(framesAboveMinConfidence) / \(framesBelowMinConfidence)
         Low-conf/spike rejects (session): \(lowConfidenceRejectCount) / \(rateSpikeRejectCount)
         First reject reason (this flush): \(firstRejectReasonThisFlush.isEmpty ? "(none)" : firstRejectReasonThisFlush)
+        Raw decode (dir/vel):  \(rawDecodeTrace.isEmpty ? "(no frames this flush)" : rawDecodeTrace)
+        Calibrated (dir/vel):  \(calibratedTrace.isEmpty ? "(no frames this flush)" : calibratedTrace)
         Accepted:        \(acceptedMotionSamples)
         Recorded:        \(recordedSamples)
         Dropped silence: \(droppedSilence)

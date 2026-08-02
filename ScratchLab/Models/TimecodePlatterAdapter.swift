@@ -59,17 +59,23 @@ struct TimecodePlatterAdapter: Sendable {
 
     /// Convert a decode result into a platter position timeline.
     ///
-    /// - Parameter result: The output from `TimecodePhaseDecoder.decode(_:)`.
+    /// - Parameters:
+    ///   - result: The output from `TimecodePhaseDecoder.decode(_:)`.
+    ///   - startingPosition: Position carried from the prior decode window.
+    ///     Defaults to zero for standalone/fixture adaptation.
     /// - Returns: A `PlatterPositionTimeline` with `.timecodeFixture` source,
     ///   or `nil` if no frames survived confidence filtering.
-    func adapt(_ result: TimecodeDecodeResult) -> PlatterPositionTimeline? {
+    func adapt(
+        _ result: TimecodeDecodeResult,
+        startingPosition: Double = 0
+    ) -> PlatterPositionTimeline? {
         // Filter by confidence
         let trusted = result.frames.filter { $0.confidence >= minConfidence }
 
         guard !trusted.isEmpty else { return nil }
 
         // Clamp velocity and integrate position
-        var cumulativePosition: Double = 0
+        var cumulativePosition = startingPosition
         var samples: [PlatterPositionSample] = []
         var previousTime: TimeInterval?
 

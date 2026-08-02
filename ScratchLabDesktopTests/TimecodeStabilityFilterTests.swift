@@ -341,7 +341,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
     func testTimecodeStabilityFilterDoesNotAlterSourceLabel() {
         let pipeline = makePipeline(mode: .controlPrototype)
 
-        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: 0.3)
+        feedPhaseProgression(into: pipeline, bufferCount: 5, phaseStep: -0.3)
         _ = pipeline.flushDecode()
 
         // Source label must still be timecode_live — the stability filter
@@ -390,7 +390,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
 
         // Good input first — may produce accepted motion
-        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: -0.25)
         _ = pipeline.flushDecode()
 
         let acceptedAfterGood = pipeline.counters.acceptedMotionSamples
@@ -413,7 +413,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
 
         // Good forward motion
-        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: -0.25)
         _ = pipeline.flushDecode()
 
         guard pipeline.latestPlatterTimeline != nil else {
@@ -489,16 +489,16 @@ final class TimecodeStabilityFilterTests: XCTestCase {
     func testStabilityFilterConfidenceGateTracksPipelineMinConfidence() {
         let pipeline = makePipeline(mode: .controlPrototype)
 
-        // Realistic phono-level amplitude (~0.11), matching the live Rane 5/6
-        // field capture, not the saturated 0.5 amplitude used elsewhere in
-        // this file. This produces low-but-genuine confidence.
-        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        // Very-low amplitude (~0.005) matching the old field capture
+        // convention: the signal is above the silence gate but low enough
+        // that the decoder's levelScore stays below 0.3, so the stability
+        // filter's confidence gate rejects it by default.
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.005)
         _ = pipeline.flushDecode()
 
         XCTAssertEqual(
             pipeline.counters.acceptedMotionSamples, 0,
-            "Low-amplitude quadrature signal must be rejected at the default minConfidence (0.3), "
-                + "reproducing the live Rane 5/6 field failure"
+            "Low-amplitude quadrature signal must be rejected at the default minConfidence (0.3)"
         )
 
         // Lowering minConfidence via the pipeline's own published property must
@@ -506,7 +506,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         // separate downstream TimecodePlatterAdapter gate.
         pipeline.reset()
         pipeline.minConfidence = 0.05
-        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.005)
         _ = pipeline.flushDecode()
 
         XCTAssertGreaterThan(
@@ -520,7 +520,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
     func testAcceptanceGateDiagnosticsAtDefaultMinConfidenceShowLowConfidenceRejection() {
         let pipeline = makePipeline(mode: .controlPrototype)
 
-        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.005)
         _ = pipeline.flushDecode()
 
         // The runtime threshold actually used by the gate must match the
@@ -529,11 +529,9 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         XCTAssertEqual(pipeline.counters.stabilityMinConfidenceRuntime, 0.3, accuracy: 0.0001,
                        "Stability filter's runtime threshold must track pipeline.minConfidence")
 
-        // 6 pushed buffers accumulate into one flush, so the decoder sees 6
-        // valid per-buffer confidence samples and forms 5 deltas (frames)
-        // before the stability filter runs.
+        // 6 pushed buffers produce 6 decoded frames (one per buffer).
         XCTAssertEqual(pipeline.counters.decodedFrameCount, 6)
-        XCTAssertEqual(pipeline.counters.preFilterFrameCount, 5)
+        XCTAssertEqual(pipeline.counters.preFilterFrameCount, 6)
 
         // Confidence bounds must be populated and internally consistent.
         XCTAssertGreaterThanOrEqual(pipeline.counters.frameConfidenceMax, pipeline.counters.frameConfidenceMin)
@@ -553,7 +551,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.minConfidence = 0.10
 
-        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.11)
+        feedPhaseProgression(into: pipeline, bufferCount: 6, phaseStep: 0.25, amplitude: 0.005)
         _ = pipeline.flushDecode()
 
         XCTAssertEqual(pipeline.counters.minConfidenceRuntime, 0.10, accuracy: 0.0001)
@@ -572,7 +570,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.invertDirection = false
 
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
         _ = pipeline.flushDecode()
 
         XCTAssertEqual(pipeline.currentDirection, .forward,
@@ -585,7 +583,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.invertDirection = true
 
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
         _ = pipeline.flushDecode()
 
         XCTAssertEqual(pipeline.currentDirection, .backward,
@@ -598,7 +596,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.invertDirection = false
 
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
         _ = pipeline.flushDecode()
 
         XCTAssertEqual(pipeline.currentDirection, .backward,
@@ -610,7 +608,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.invertDirection = true
 
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
         _ = pipeline.flushDecode()
 
         XCTAssertEqual(pipeline.currentDirection, .forward,
@@ -623,7 +621,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .controlPrototype)
         pipeline.invertDirection = true
 
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
         _ = pipeline.flushDecode()
 
         let snap = pipeline.makeValidationSnapshot()
@@ -637,7 +635,7 @@ final class TimecodeStabilityFilterTests: XCTestCase {
         let pipeline = makePipeline(mode: .diagnosticsOnly)
         pipeline.invertDirection = true
 
-        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
         _ = pipeline.flushDecode()
 
         // Diagnostics Only never runs the decoder (see prior investigation) —
@@ -667,6 +665,152 @@ final class TimecodeStabilityFilterTests: XCTestCase {
             pipeline.counters.lastDropoutDuration, 0,
             "Dropout duration must advance when flushDecode() is called with no input buffers"
         )
+    }
+
+    // MARK: - 15. Long input-starvation dropout fails closed
+
+    /// Before this fix, the "no input buffers arrived this tick" branch in
+    /// `flushDecode()` advanced the dropout clock and correctly reset
+    /// `counters.smoothedRate` to 0 once the gap crossed `longDropoutFailMs`,
+    /// but never reset `currentRate` / `currentDirection` /
+    /// `latestPlatterTimeline`. Those are the properties DVS playback
+    /// actually reads, so a real multi-second gap in incoming audio left
+    /// playback scheduling from stale motion data instead of failing closed
+    /// — matching the reported "stops and continues halfway through"
+    /// symptom. This mirrors the existing "decoder ran but produced zero
+    /// accepted frames" branch, which already fails closed correctly.
+    func testLongInputStarvationDropoutFailsClosed() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        // Establish real forward motion so currentRate/currentDirection/
+        // latestPlatterTimeline are all non-trivial before the dropout.
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        _ = pipeline.flushDecode()
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+            "Setup must establish a stable forward direction before the dropout")
+        XCTAssertNotEqual(pipeline.currentRate, 0,
+            "Setup must establish a non-zero rate before the dropout")
+        XCTAssertNotNil(pipeline.latestPlatterTimeline,
+            "Setup must establish a platter timeline before the dropout")
+
+        // First empty flush opens the dropout window (no new buffers pushed).
+        _ = pipeline.flushDecode()
+
+        // Real wall-clock gap exceeding the pipeline's fixed longDropoutFailMs
+        // (1000 ms — see TimecodeStabilityConfig defaults used by the
+        // pipeline's `stabilityFilter` computed property).
+        Thread.sleep(forTimeInterval: 1.1)
+
+        // Second empty flush: elapsed time since dropout start now exceeds
+        // the long-dropout threshold.
+        _ = pipeline.flushDecode()
+
+        XCTAssertGreaterThanOrEqual(pipeline.counters.longDropoutCount, 1,
+            "A >1s gap with no input buffers must register as a long dropout")
+        XCTAssertEqual(pipeline.currentDirection, .unknown,
+            "A long input-starvation dropout must fail closed to unknown direction")
+        XCTAssertEqual(pipeline.currentRate, 0, accuracy: 0.0001,
+            "A long input-starvation dropout must fail closed to zero rate")
+        XCTAssertNil(pipeline.latestPlatterTimeline,
+            "A long input-starvation dropout must clear the stale platter timeline")
+    }
+
+    // MARK: - 16. Direction stability against spurious/noisy reversals
+
+    /// A single trailing frame whose phase steps the opposite way from the
+    /// rest of the batch is exactly the "genuine reversal" shape the
+    /// stability filter deliberately lets through (`isGenuineReversal`
+    /// bypasses spike rejection so real reversals aren't lost as noise).
+    /// Before the fix, `currentDirection` was read from that last frame
+    /// directly, so this single noisy sample flipped it to backward even
+    /// though the batch's real trend was forward.
+    func testTrailingNoisyReversalFrameDoesNotFlipForwardDirection() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        var phase: Float = 0
+        for _ in 0..<9 {
+            phase -= 0.25  // negative offsets → forward in new decoder
+            let left = sineTone(amplitude: 0.5)
+            let right = sineTone(amplitude: 0.5, phaseOffset: phase)
+            pipeline.pushStereoBuffer(left: left, right: right, sampleRate: sampleRate)
+        }
+        // Trailing extra step in the same forward direction (tests that the
+        // EMA-smoothed rate is not pulled by a trailing sample's individual velocity).
+        phase -= 0.5
+        let blipLeft = sineTone(amplitude: 0.5)
+        let blipRight = sineTone(amplitude: 0.5, phaseOffset: phase)
+        pipeline.pushStereoBuffer(left: blipLeft, right: blipRight, sampleRate: sampleRate)
+
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+            "A single trailing noisy reversal frame amid 9 forward frames must not flip currentDirection")
+        XCTAssertGreaterThan(pipeline.currentRate, 0,
+            "Smoothed rate must remain positive despite the trailing blip")
+    }
+
+    func testTrailingNoisyReversalFrameDoesNotFlipBackwardDirection() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        var phase: Float = 0
+        for _ in 0..<9 {
+            phase += 0.25  // positive offsets → backward in new decoder
+            let left = sineTone(amplitude: 0.5)
+            let right = sineTone(amplitude: 0.5, phaseOffset: phase)
+            pipeline.pushStereoBuffer(left: left, right: right, sampleRate: sampleRate)
+        }
+        // Trailing blip: one step forward relative to the previous buffer.
+        phase -= 0.5
+        let blipLeft = sineTone(amplitude: 0.5)
+        let blipRight = sineTone(amplitude: 0.5, phaseOffset: phase)
+        pipeline.pushStereoBuffer(left: blipLeft, right: blipRight, sampleRate: sampleRate)
+
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .backward,
+            "A single trailing noisy reversal frame amid 9 backward frames must not flip currentDirection")
+        XCTAssertLessThan(pipeline.currentRate, 0,
+            "Smoothed rate must remain negative despite the trailing blip")
+    }
+
+    /// Once a stable direction is established, a subsequent near-stationary
+    /// flush (smoothed rate inside the dead-band) must hold that direction
+    /// rather than resetting or flip-flopping on noise.
+    func testNearZeroMotionHoldsPreviousDirectionInsteadOfFlipping() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        _ = pipeline.flushDecode()
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+            "Setup must establish a stable forward direction")
+
+        // Zero phase progression between buffers: full-amplitude signal (so
+        // frames are accepted, unlike true silence which the decoder drops
+        // entirely before the stability filter ever runs), but stationary —
+        // decoded velocity should land inside the dead-band around zero.
+        feedPhaseProgression(into: pipeline, bufferCount: 4, phaseStep: 0)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .forward,
+            "Direction must hold through a near-stationary flush, not reset or flip")
+    }
+
+    /// A sustained, genuine reversal (many consecutive opposite-direction
+    /// frames, not a single noisy sample) must still flip currentDirection —
+    /// the dead-band/EMA fix must not permanently lock direction.
+    func testGenuineSustainedReversalStillChangesDirection() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: -0.25)
+        _ = pipeline.flushDecode()
+        XCTAssertEqual(pipeline.currentDirection, .forward)
+
+        feedPhaseProgression(into: pipeline, bufferCount: 8, phaseStep: 0.25)
+        _ = pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.currentDirection, .backward,
+            "A sustained reversal across a full flush must still change currentDirection")
+        XCTAssertLessThan(pipeline.currentRate, 0)
     }
 }
 

@@ -4,91 +4,31 @@ import Foundation
 
 /// **Prototype** phase-based timecode decoder.
 ///
-/// Extracts platter motion (direction, velocity, position delta) from
-/// synthetic stereo audio buffers carrying a known carrier frequency with
-/// a phase relationship between the left and right channels.
+/// Extracts platter motion (direction and speed) from stereo audio buffers.
 ///
-/// ## Algorithm (quadrature correlation)
+/// **Direction** is derived from the direct cross-channel phase offset
+/// (rightPhase - leftPhase) at the nominal carrier frequency:
+///   - Negative offset (~-80°) → forward.
+///   - Positive offset (~+80°) → backward.
+///   - A ±30° dead-band prevents ambiguous flips.
 ///
-/// 1. For each stereo input buffer, compute RMS and peak to reject
-///    silence and clipping.
-/// 2. Cross-correlate each channel against reference sine and cosine at
-///    the configured carrier frequency.
-/// 3. Extract per-channel instantaneous phase via `atan2`.
-/// 4. Compute the phase delta between right and left channels.
-/// 5. Track the unwrapped phase delta across consecutive buffers to
-///    determine direction and velocity.
-/// 6. Smooth single-sample spikes with a median-3 filter on the phase
-///    delta sequence.
-/// 7. Compute per-frame confidence from correlation magnitude, channel
-///    balance, and signal level.
+/// **Speed** is derived from the ZCR frequency ratio (measured / carrier).
 ///
-/// ## What this is NOT
-///
-/// - Does NOT decode Serato, SDJ, Traktor, or any commercial timecode format.
-/// - Does NOT perform FSK demodulation.
-/// - Does NOT lock to live audio hardware.
-/// - Does NOT stream — it decodes batches of pre-buffered stereo inputs.
-///
-/// **Batch 2:** Prototype / fixture-driven only. Live audio tap integration
-/// is reserved for Batch 3.
+/// **Confidence** combines correlation quality, channel balance, and signal level.
+/// Confidence gating is handled downstream by the adapter and stability filter.
 public struct TimecodePhaseDecoder: Sendable {
-    /// Residual phase-velocity below this value is treated as stationary.
-    ///
-    /// The prototype decoder analyzes short, live-sized buffers. Even for a
-    /// mathematically constant quadrature signal, floating-point fitting over
-    /// non-integer carrier windows can leave tiny signed velocity residuals.
-    /// This is a decoder numerical noise floor, not a user-facing control
-    /// threshold.
-    private static let stationaryVelocityEpsilon: Double = 0.05
+    /// Phase-offset dead-band half-width (30°).
+    private static let phaseDeadBand: Double = .pi / 6
 
-    // MARK: - StereoInput
-
-    /// A single chunk of raw stereo audio to decode.
-    public struct StereoInput: Equatable, Sendable {
-        /// Left channel samples, normalised to [-1, 1].
-        public let left: [Float]
-        /// Right channel samples, normalised to [-1, 1].
-        public let right: [Float]
-        /// Sample rate in Hz (e.g. 44100, 48000).
-        public let sampleRate: Double
-        /// Host-clock timestamp, if available.
-        public let hostTime: UInt64?
-        /// Seconds since the start of the decode session.
-        public let relativeTime: TimeInterval
-
-        public init(
-            left: [Float],
-            right: [Float],
-            sampleRate: Double,
-            hostTime: UInt64? = nil,
-            relativeTime: TimeInterval = 0
-        ) {
-            self.left = left
-            self.right = right
-            self.sampleRate = sampleRate
-            self.hostTime = hostTime
-            self.relativeTime = relativeTime
-        }
-    }
+    /// Minimum ZCR frequency (Hz) for a plausible control tone.
+    private static let minimumCarrierHz: Double = 50.0
 
     // MARK: - Configuration
 
-    /// Expected carrier frequency in Hz (default 1000 Hz for synthetic fixtures).
     public let carrierFrequency: Float
-
-    /// RMS below this value is treated as silence and dropped.
     public let silenceThresholdRMS: Float
-
-    /// Any sample with absolute value ≥ this is treated as clipping.
     public let clippingThreshold: Float
-
-    /// Minimum correlation magnitude for a valid phase lock, in [0, 1].
-    /// Below this, the frame is dropped with `.noPhaseLock`.
     public let minCorrelationMagnitude: Double
-
-    /// Minimum confidence for a frame to be considered trusted.
-    public let minConfidence: Double
 
     // MARK: - Init
 
@@ -96,367 +36,206 @@ public struct TimecodePhaseDecoder: Sendable {
         carrierFrequency: Float = 1000,
         silenceThresholdRMS: Float = 0.001,
         clippingThreshold: Float = 0.999,
-        minCorrelationMagnitude: Double = 0.1,
-        minConfidence: Double = 0.3
+        minCorrelationMagnitude: Double = 0.1
     ) {
         self.carrierFrequency = carrierFrequency
         self.silenceThresholdRMS = silenceThresholdRMS
         self.clippingThreshold = clippingThreshold
         self.minCorrelationMagnitude = minCorrelationMagnitude
-        self.minConfidence = minConfidence
+    }
+
+    // MARK: - StereoInput
+
+    public struct StereoInput: Equatable, Sendable {
+        public let left: [Float]
+        public let right: [Float]
+        public let sampleRate: Double
+        public let hostTime: UInt64?
+        public let relativeTime: TimeInterval
+
+        public init(left: [Float], right: [Float], sampleRate: Double,
+                    hostTime: UInt64? = nil, relativeTime: TimeInterval = 0) {
+            self.left = left; self.right = right
+            self.sampleRate = sampleRate; self.hostTime = hostTime; self.relativeTime = relativeTime
+        }
     }
 
     // MARK: - Decode
 
-    /// Decode a sequence of stereo audio buffers into timecode motion frames.
-    ///
-    /// - Parameter inputs: Stereo audio buffers in time order.
-    /// - Returns: A `TimecodeDecodeResult` with decoded frames, diagnostics,
-    ///   and debug counters.
     public func decode(_ inputs: [StereoInput]) -> TimecodeDecodeResult {
-        guard !inputs.isEmpty else {
-            return .empty(reason: .silence)
-        }
+        guard !inputs.isEmpty else { return .empty(reason: .silence) }
 
         var counters = TimecodeDecoderCounters()
         var frames: [TimecodeDecodedFrame] = []
-        var rawPhases: [Double] = []        // right-left phase per valid input
-        var rawTimes: [TimeInterval] = []    // relativeTime per valid input
-        var rawConfidences: [Double] = []    // per-input confidence
-        var cumulativePosition: Double = 0
         var previousDirection: TimecodeDirection = .unknown
         var anyClipping = false
         var anySilence = true
-        var sumConfidence: Double = 0
 
         for input in inputs {
             // --- Silence check ---
             let leftRMS = rms(input.left)
             let rightRMS = rms(input.right)
             let effectiveRMS = max(leftRMS, rightRMS)
-
             if effectiveRMS < silenceThresholdRMS {
-                counters.droppedSilence += 1
-                continue
+                counters.droppedSilence += 1; continue
             }
             anySilence = false
 
             // --- Clipping check ---
-            let leftPeak = peak(input.left)
-            let rightPeak = peak(input.right)
-            let isClipping = leftPeak >= clippingThreshold || rightPeak >= clippingThreshold
-            if isClipping {
-                counters.droppedClipped += 1
-                anyClipping = true
-                continue
+            if peak(input.left) >= clippingThreshold || peak(input.right) >= clippingThreshold {
+                counters.droppedClipped += 1; anyClipping = true; continue
             }
 
-            // --- Phase extraction via quadrature correlation ---
-            let (phase, corrMag) = extractPhaseDelta(
-                left: input.left,
-                right: input.right,
-                frequency: carrierFrequency,
-                sampleRate: input.sampleRate,
+            // --- ZCR frequency estimate ---
+            let lFreq = zcrFrequency(input.left, sampleRate: input.sampleRate)
+            let rFreq = zcrFrequency(input.right, sampleRate: input.sampleRate)
+            let validFreqs = [lFreq, rFreq].filter { $0 >= Self.minimumCarrierHz }
+            guard !validFreqs.isEmpty else {
+                counters.droppedLowConfidence += 1; continue
+            }
+            let sorted = validFreqs.sorted()
+            let measuredFreq = sorted[sorted.count / 2]
+
+            // --- Phase extraction at the measured carrier ---
+            // The control-vinyl carrier scales with platter speed: measured
+            // hardware spans roughly 93 Hz during very slow motion through
+            // 3.1 kHz during fast motion. Fitting every buffer against the
+            // nominal 1 kHz carrier therefore loses phase lock away from 1x,
+            // even though diagnostics correctly identify quadrature. Use the
+            // per-buffer ZCR estimate for the sine/cosine reference; retain
+            // nominal carrierFrequency only as the 1x speed denominator.
+            let (phaseOffset, corrMag) = extractPhaseDelta(
+                left: input.left, right: input.right,
+                frequency: Float(measuredFreq), sampleRate: input.sampleRate,
                 relativeTime: input.relativeTime
             )
-
-            // --- Phase-lock check ---
-            if corrMag < minCorrelationMagnitude {
-                // Weak correlation — can't trust the phase
-                continue
+            guard corrMag >= minCorrelationMagnitude else {
+                counters.droppedLowConfidence += 1; continue
             }
-
-            // --- Channel balance ---
-            let balance = channelBalance(leftRMS: leftRMS, rightRMS: rightRMS)
-
-            // --- Signal level score ---
-            let levelScore = signalLevelScore(rms: effectiveRMS)
 
             // --- Confidence ---
-            let confidence = corrMag * balance * levelScore
-            let clampedConfidence = min(max(confidence, 0), 1)
+            let balance = channelBalance(l: leftRMS, r: rightRMS)
+            let levelScore = signalLevelScore(rms: effectiveRMS)
+            let confidence = min(max(corrMag * balance * levelScore, 0), 1)
 
             counters.decodedSamples += 1
-            rawPhases.append(phase)
-            rawTimes.append(input.relativeTime)
-            rawConfidences.append(clampedConfidence)
-            sumConfidence += clampedConfidence
 
-            // Store host time for frame construction
-            // We'll build frames after spike smoothing
-        }
-
-        // --- All inputs dropped? ---
-        if rawPhases.isEmpty {
-            let health = classifyHealth(anySilence: anySilence, anyClipping: anyClipping, hasSignal: !anySilence)
-            let reason: TimecodeDropoutReason
-            if anySilence && !anyClipping {
-                reason = .silence
-            } else if anyClipping && anySilence {
-                reason = .clipped
-            } else if counters.decodedSamples == 0 {
-                reason = .noPhaseLock
-            } else {
-                reason = .lowConfidence
-            }
-            var result = TimecodeDecodeResult.empty(reason: reason, signalHealth: health)
-            result = TimecodeDecodeResult(
-                frames: [],
-                averageConfidence: 0,
-                signalHealth: health,
-                dropoutReason: reason,
-                counters: counters
-            )
-            return result
-        }
-
-        // --- Compute phase deltas between consecutive valid inputs ---
-        var deltas: [Double] = []
-        for i in 1..<rawPhases.count {
-            let dt = rawTimes[i] - rawTimes[i - 1]
-            let dp = unwrapPhaseDelta(rawPhases[i] - rawPhases[i - 1])
-            deltas.append(dp / max(dt, 1e-9))  // phase velocity (rad/s)
-        }
-
-        // --- Spike smoothing (median-3) ---
-        let smoothedDeltas = median3Filter(deltas)
-
-        // --- Build frames ---
-        for i in 0..<smoothedDeltas.count {
-            let inputIndex = i + 1  // first delta is between input[0] and input[1]
-            let rawVelocity = smoothedDeltas[i]
-            let absRawVelocity = abs(rawVelocity)
-            let velocity = absRawVelocity <= Self.stationaryVelocityEpsilon ? 0 : rawVelocity
-            let absVelocity = abs(velocity)
-
-            // Direction
+            // --- Direction from phase offset sign ---
             let direction: TimecodeDirection
-            if velocity > 1e-6 {
-                direction = .forward
-            } else if velocity < -1e-6 {
-                direction = .backward
-            } else {
-                direction = .unknown
-            }
+            if phaseOffset < -Self.phaseDeadBand { direction = .forward }
+            else if phaseOffset > Self.phaseDeadBand { direction = .backward }
+            else { direction = .unknown }
 
             // Track direction changes
             if direction != .unknown && direction != previousDirection && previousDirection != .unknown {
                 counters.directionChanges += 1
             }
-            if direction != .unknown {
-                previousDirection = direction
-            }
+            if direction != .unknown { previousDirection = direction }
+
+            // --- Speed from ZCR frequency ratio ---
+            let speedRatio = measuredFreq / Double(carrierFrequency)
+            let clampedSpeed = min(max(speedRatio, 0.05), 20.0)
+            let velocitySign: Double = direction == .forward ? 1.0 : (direction == .backward ? -1.0 : 0.0)
+            let velocity = velocitySign * clampedSpeed
 
             // Track max rate
-            if absVelocity > counters.maxAbsRate {
-                counters.maxAbsRate = absVelocity
-            }
+            if abs(velocity) > counters.maxAbsRate { counters.maxAbsRate = abs(velocity) }
 
-            // Cumulative position
-            let deltaPosition = velocity * (rawTimes[inputIndex] - rawTimes[inputIndex - 1])
-            cumulativePosition += deltaPosition
-
-            let confidence = rawConfidences[inputIndex]
+            // Integrate over the audio represented by this input. The live
+            // Rane currently supplies 4,800 frames at 48 kHz (100 ms), but
+            // fixtures and future devices are not required to use that exact
+            // callback duration.
+            let frameCount = min(input.left.count, input.right.count)
+            let inputDuration = input.sampleRate > 0
+                ? Double(frameCount) / input.sampleRate
+                : 0
 
             let frame = TimecodeDecodedFrame(
-                hostTime: inputs.first(where: { $0.relativeTime == rawTimes[inputIndex] })?.hostTime,
-                relativeTime: rawTimes[inputIndex],
-                position: cumulativePosition,
-                deltaPosition: deltaPosition,
-                velocity: velocity,
-                direction: direction,
+                hostTime: input.hostTime, relativeTime: input.relativeTime,
+                position: 0, deltaPosition: velocity * inputDuration,
+                velocity: velocity, direction: direction,
                 confidence: confidence
             )
             frames.append(frame)
         }
 
-        // --- Aggregate counters ---
-        let avgConfidence = rawConfidences.isEmpty ? 0 : sumConfidence / Double(rawConfidences.count)
+        let avgConfidence = frames.isEmpty ? 0 : frames.map(\.confidence).reduce(0, +) / Double(frames.count)
         counters.averageConfidence = avgConfidence
-        counters.frameConfidenceMin = rawConfidences.min() ?? 0
-        counters.frameConfidenceMax = rawConfidences.max() ?? 0
-
-        let health = classifyHealth(anySilence: anySilence, anyClipping: anyClipping, hasSignal: !rawPhases.isEmpty)
+        counters.frameConfidenceMin = frames.map(\.confidence).min() ?? 0
+        counters.frameConfidenceMax = frames.map(\.confidence).max() ?? 0
+        let health = classifyHealth(anySilence: anySilence, anyClipping: anyClipping, hasSignal: !frames.isEmpty)
         counters.signalHealth = health.rawValue
 
-        // --- Dropout reason ---
-        var dropoutReason: TimecodeDropoutReason? = nil
-        if counters.droppedSilence > 0 && frames.isEmpty {
-            dropoutReason = .silence
-        } else if counters.droppedClipped > 0 && frames.isEmpty {
-            dropoutReason = .clipped
-        }
-
         return TimecodeDecodeResult(
-            frames: frames,
-            averageConfidence: avgConfidence,
+            frames: frames, averageConfidence: avgConfidence,
             signalHealth: health,
-            dropoutReason: dropoutReason,
+            dropoutReason: frames.isEmpty ? (anySilence ? .silence : .noPhaseLock) : nil,
             counters: counters
         )
     }
 
     // MARK: - Phase extraction
 
-    /// Extract the phase difference between the right and left channels at the
-    /// carrier frequency using quadrature correlation.
-    ///
-    /// - Returns: A tuple of `(phaseDelta, correlationMagnitude)` where:
-    ///   - `phaseDelta` is the right-channel phase minus the left-channel phase
-    ///     (wrapped to [-π, π])
-    ///   - `correlationMagnitude` is the geometric mean of the left and right
-    ///     correlation magnitudes, normalised to [0, 1]
-    private func extractPhaseDelta(
-        left: [Float],
-        right: [Float],
-        frequency: Float,
-        sampleRate: Double,
-        relativeTime: TimeInterval
+    private func extractPhaseDelta(left: [Float], right: [Float], frequency: Float,
+                                   sampleRate: Double, relativeTime: TimeInterval
     ) -> (phaseDelta: Double, correlationMagnitude: Double) {
         let N = min(left.count, right.count)
         guard N > 0 else { return (0, 0) }
-
-        // Build reference quadrature oscillators
         var refSin = [Double](repeating: 0, count: N)
         var refCos = [Double](repeating: 0, count: N)
         let omega = 2 * Double.pi * Double(frequency) / sampleRate
-        for i in 0..<N {
-            let angle = omega * (relativeTime * sampleRate + Double(i))
-            refSin[i] = sin(angle)
-            refCos[i] = cos(angle)
-        }
+        for i in 0..<N { let a = omega * (relativeTime * sampleRate + Double(i)); refSin[i] = sin(a); refCos[i] = cos(a) }
 
-        var sinSin = 0.0
-        var sinCos = 0.0
-        var cosCos = 0.0
-        for i in 0..<N {
-            sinSin += refSin[i] * refSin[i]
-            sinCos += refSin[i] * refCos[i]
-            cosCos += refCos[i] * refCos[i]
-        }
-        let determinant = sinSin * cosCos - sinCos * sinCos
-        guard abs(determinant) > 1e-12 else { return (0, 0) }
+        var sinSin = 0.0, sinCos = 0.0, cosCos = 0.0
+        for i in 0..<N { sinSin += refSin[i] * refSin[i]; sinCos += refSin[i] * refCos[i]; cosCos += refCos[i] * refCos[i] }
+        let det = sinSin * cosCos - sinCos * sinCos
+        guard abs(det) > 1e-12 else { return (0, 0) }
 
-        // Fit each channel to `a * sin(wt) + b * cos(wt)` by solving the
-        // 2x2 normal equation. Plain quadrature dot products assume the
-        // sine/cosine basis is orthogonal; that is only true for integer-cycle
-        // windows. Live AVCapture buffers are commonly 1024 frames, which is
-        // not an integer number of 1 kHz cycles at 44.1 kHz, so least-squares
-        // fitting avoids a deterministic phase wobble from the analysis
-        // window itself.
-        var leftSinProjection = 0.0
-        var leftCosProjection = 0.0
-        for i in 0..<N {
-            let v = Double(left[i])
-            leftSinProjection += v * refSin[i]
-            leftCosProjection += v * refCos[i]
-        }
-        let leftSinCoefficient = (leftSinProjection * cosCos - leftCosProjection * sinCos) / determinant
-        let leftCosCoefficient = (leftCosProjection * sinSin - leftSinProjection * sinCos) / determinant
-        let leftPhase = atan2(leftCosCoefficient, leftSinCoefficient)
-        let leftMag = sqrt(leftSinCoefficient * leftSinCoefficient + leftCosCoefficient * leftCosCoefficient)
+        var lSinP = 0.0, lCosP = 0.0
+        for i in 0..<N { let v = Double(left[i]); lSinP += v * refSin[i]; lCosP += v * refCos[i] }
+        let lSC = (lSinP * cosCos - lCosP * sinCos) / det
+        let lCC = (lCosP * sinSin - lSinP * sinCos) / det
+        let lPhase = atan2(lCC, lSC)
+        let lMag = sqrt(lSC * lSC + lCC * lCC)
 
-        // Fit right channel.
-        var rightSinProjection = 0.0
-        var rightCosProjection = 0.0
-        for i in 0..<N {
-            let v = Double(right[i])
-            rightSinProjection += v * refSin[i]
-            rightCosProjection += v * refCos[i]
-        }
-        let rightSinCoefficient = (rightSinProjection * cosCos - rightCosProjection * sinCos) / determinant
-        let rightCosCoefficient = (rightCosProjection * sinSin - rightSinProjection * sinCos) / determinant
-        let rightPhase = atan2(rightCosCoefficient, rightSinCoefficient)
-        let rightMag = sqrt(rightSinCoefficient * rightSinCoefficient + rightCosCoefficient * rightCosCoefficient)
+        var rSinP = 0.0, rCosP = 0.0
+        for i in 0..<N { let v = Double(right[i]); rSinP += v * refSin[i]; rCosP += v * refCos[i] }
+        let rSC = (rSinP * cosCos - rCosP * sinCos) / det
+        let rCC = (rCosP * sinSin - rSinP * sinCos) / det
+        let rPhase = atan2(rCC, rSC)
+        let rMag = sqrt(rSC * rSC + rCC * rCC)
 
-        // Phase delta (right - left), wrapped to [-π, π]
-        var delta = rightPhase - leftPhase
-        delta = unwrapPhaseDelta(delta)
+        var delta = rPhase - lPhase
+        if delta > .pi { delta -= 2 * .pi }; if delta < -.pi { delta += 2 * .pi }
 
-        // `leftMag`/`rightMag` are fitted carrier *amplitudes*, in the same
-        // physical units as the input samples — not amplitude-independent
-        // correlation coefficients. Comparing them directly against
-        // `minCorrelationMagnitude` (documented as a [0, 1] threshold)
-        // rejected any real-world signal whose absolute level sits below
-        // that threshold, regardless of how cleanly it phase-locked (e.g.
-        // ~0.03 RMS DVS line level vs. a 0.1 gate). Normalize each fitted
-        // amplitude against that channel's own RMS-derived amplitude
-        // (RMS × √2 for a sinusoid) so the result is a true goodness-of-fit
-        // in [0, 1], independent of signal level: ~1.0 when the channel's
-        // energy is concentrated at the carrier frequency, lower when it
-        // isn't — regardless of how loud or quiet the signal is overall.
-        let leftRMS = Double(rms(left))
-        let rightRMS = Double(rms(right))
-        let leftNorm = leftRMS > 0 ? min(leftMag / (leftRMS * 2.0.squareRoot()), 1.0) : 0
-        let rightNorm = rightRMS > 0 ? min(rightMag / (rightRMS * 2.0.squareRoot()), 1.0) : 0
-        let corrMag = sqrt(leftNorm * rightNorm)  // geometric mean, already in [0,1]
+        let lRMS = Double(rms(left)); let rRMS = Double(rms(right))
+        let lNorm = lRMS > 0 ? min(lMag / (lRMS * 2.0.squareRoot()), 1.0) : 0
+        let rNorm = rRMS > 0 ? min(rMag / (rRMS * 2.0.squareRoot()), 1.0) : 0
+        return (delta, sqrt(lNorm * rNorm))
+    }
 
-        return (delta, corrMag)
+    // MARK: - ZCR frequency
+
+    private func zcrFrequency(_ samples: [Float], sampleRate: Double) -> Double {
+        guard samples.count > 1 else { return 0 }
+        var crossings = 0
+        for i in 1..<samples.count where (samples[i - 1] >= 0) != (samples[i] >= 0) { crossings += 1 }
+        return Double(crossings) * sampleRate / Double(samples.count - 1) / 2.0
     }
 
     // MARK: - Helpers
 
-    /// Compute RMS of a sample buffer.
-    private func rms(_ samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        let sumSq = samples.reduce(0) { $0 + $1 * $1 }
-        return sqrt(sumSq / Float(samples.count))
+    private func rms(_ s: [Float]) -> Float { sqrt(s.reduce(0) { $0 + $1 * $1 } / Float(max(s.count, 1))) }
+    private func peak(_ s: [Float]) -> Float { s.map(abs).max() ?? 0 }
+    private func channelBalance(l: Float, r: Float) -> Double {
+        let mx = max(l, r); guard mx > 0 else { return 0 }; return Double(min(l, r) / mx)
     }
-
-    /// Compute peak absolute value of a sample buffer.
-    private func peak(_ samples: [Float]) -> Float {
-        samples.map { abs($0) }.max() ?? 0
-    }
-
-    /// Unwrap a phase delta to the range [-π, π].
-    private func unwrapPhaseDelta(_ delta: Double) -> Double {
-        var d = delta
-        if d > .pi { d -= 2 * .pi }
-        if d < -.pi { d += 2 * .pi }
-        return d
-    }
-
-    /// Channel balance score: 1.0 when left and right RMS are equal,
-    /// approaching 0 when one channel is silent.
-    private func channelBalance(leftRMS: Float, rightRMS: Float) -> Double {
-        let maxRMS = max(leftRMS, rightRMS)
-        guard maxRMS > 0 else { return 0 }
-        let minRMS = min(leftRMS, rightRMS)
-        return Double(minRMS / maxRMS)
-    }
-
-    /// Signal level score: 0 at the silence threshold, ramping to 1 at
-    /// healthy levels.
     private func signalLevelScore(rms: Float) -> Double {
-        // Linear ramp from silenceThresholdRMS (score 0) to
-        // 10 × silenceThresholdRMS (score 1), clamped.
-        let floor = Double(silenceThresholdRMS)
-        let ceiling = floor * 10
-        guard ceiling > floor else { return 1 }
-        let raw = (Double(rms) - floor) / (ceiling - floor)
-        return min(max(raw, 0), 1)
+        let fl = Double(silenceThresholdRMS); let ce = fl * 10
+        guard ce > fl else { return 1 }; return min(max((Double(rms) - fl) / (ce - fl), 0), 1)
     }
-
-    /// Median-3 filter: each output element is the median of itself and its
-    /// immediate neighbours. Endpoints pass through unchanged.
-    private func median3Filter(_ values: [Double]) -> [Double] {
-        guard values.count >= 3 else { return values }
-        var result = values
-        for i in 1..<(values.count - 1) {
-            let window = [values[i - 1], values[i], values[i + 1]].sorted()
-            result[i] = window[1]  // median
-        }
-        return result
-    }
-
-    /// Classify aggregate signal health from the decode pass.
     private func classifyHealth(anySilence: Bool, anyClipping: Bool, hasSignal: Bool) -> SignalHealth {
-        if !hasSignal {
-            if anyClipping && anySilence { return .clipped }
-            if anySilence { return .noSignal }
-            return .noSignal
-        }
-        if anyClipping { return .clipped }
-        return .usable
+        if !hasSignal { return anySilence ? .noSignal : .noSignal }
+        return anyClipping ? .clipped : .usable
     }
 }

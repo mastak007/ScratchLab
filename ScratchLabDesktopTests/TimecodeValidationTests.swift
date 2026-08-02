@@ -386,8 +386,8 @@ final class TimecodeValidationTests: XCTestCase {
 
     /// Full pipeline validation using synthetic 1 kHz stereo quadrature.
     ///
-    /// Generates the same signal as `scratchlab_quadrature_1khz_60s.wav` in
-    /// memory (left = sine, right = sine + 90°), feeds it through the
+    /// Generates a normal-speed forward signal in memory (left = sine,
+    /// right = sine - 90°), feeds it through the
     /// `TimecodeControlPipeline` in `.controlPrototype` mode, and asserts
     /// every metric that appears in the Copy Debug snapshot.
     ///
@@ -408,7 +408,7 @@ final class TimecodeValidationTests: XCTestCase {
         pipeline.mode = .controlPrototype
 
         // Generate and push continuous quadrature buffers.
-        // Left = sine(carrier), Right = sine(carrier + 90°).
+        // Left = sine(carrier), Right = sine(carrier - 90°).
         // Phase-continuous across buffer boundaries.
         for bufferIndex in 0..<bufferCount {
             let startFrame = bufferIndex * framesPerBuffer
@@ -419,7 +419,7 @@ final class TimecodeValidationTests: XCTestCase {
                 let absoluteFrame = startFrame + frameOffset
                 let phase = 2.0 * Float.pi * carrierFrequency * Float(absoluteFrame) / Float(sampleRate)
                 left[frameOffset] = amplitude * sin(phase)
-                right[frameOffset] = amplitude * sin(phase + Float.pi / 2.0)
+                right[frameOffset] = amplitude * sin(phase - Float.pi / 2.0)
             }
 
             pipeline.pushStereoBuffer(
@@ -460,17 +460,12 @@ final class TimecodeValidationTests: XCTestCase {
         XCTAssertGreaterThan(c.averageConfidence, 0.3,
                              "Average confidence must exceed 0.3, got \(c.averageConfidence)")
 
-        // ── Rate: near zero for constant quadrature ──
-        // Same tolerance the decoder uses internally for stationary detection.
+        // ── Rate: 1 kHz carrier is normal (1x) platter speed ──
         let rateEpsilon: Double = 0.05
-        XCTAssertLessThan(abs(c.currentRate), rateEpsilon,
-                          "Raw rate \(c.currentRate) must be near zero for stationary signal")
-        XCTAssertLessThan(abs(c.smoothedRate), rateEpsilon,
-                          "Smoothed rate \(c.smoothedRate) must be near zero")
-        XCTAssertLessThan(c.maxAbsRate, rateEpsilon,
-                          "maxAbsRate \(c.maxAbsRate) must be near zero")
-        XCTAssertLessThan(c.maxAbsSmoothedRate, rateEpsilon,
-                          "maxAbsSmoothedRate \(c.maxAbsSmoothedRate) must be near zero")
+        XCTAssertEqual(c.currentRate, 1.0, accuracy: rateEpsilon)
+        XCTAssertEqual(c.smoothedRate, 1.0, accuracy: rateEpsilon)
+        XCTAssertEqual(c.maxAbsRate, 1.0, accuracy: rateEpsilon)
+        XCTAssertEqual(c.maxAbsSmoothedRate, 1.0, accuracy: rateEpsilon)
 
         // ── Stability ──
         XCTAssertEqual(c.rejectedSpikeCount, 0,
@@ -482,11 +477,10 @@ final class TimecodeValidationTests: XCTestCase {
         XCTAssertEqual(c.lastDropoutDuration, 0,
                        "lastDropoutDuration must be 0 — no dropout window opened")
 
-        // ── Direction: unknown for stationary constant quadrature ──
+        // ── Direction: negative phase is forward on measured hardware ──
         XCTAssertEqual(c.directionChanges, 0,
                        "directionChanges must be 0 — no direction flips")
-        XCTAssertEqual(c.currentDirection, TimecodeDirection.unknown.rawValue,
-                       "Direction must be unknown for stationary signal, got \(c.currentDirection)")
+        XCTAssertEqual(c.currentDirection, TimecodeDirection.forward.rawValue)
 
         // ── Drop/spike reasons: empty ──
         XCTAssertTrue(c.lastDropReason.isEmpty,
@@ -511,9 +505,9 @@ final class TimecodeValidationTests: XCTestCase {
         XCTAssertLessThan(rmsRatio, 1.15, "L/R RMS ratio \(rmsRatio) must be near 1.0")
 
         // Snapshot direction / rate mirror pipeline counters
-        XCTAssertEqual(snap.decodedDirection, TimecodeDirection.unknown.rawValue)
+        XCTAssertEqual(snap.decodedDirection, TimecodeDirection.forward.rawValue)
         XCTAssertEqual(snap.directionChanges, 0)
-        XCTAssertLessThan(abs(snap.decodedRate), rateEpsilon)
+        XCTAssertEqual(snap.decodedRate, 1.0, accuracy: rateEpsilon)
 
         // Debug text sanity
         let debugText = snap.debugText
