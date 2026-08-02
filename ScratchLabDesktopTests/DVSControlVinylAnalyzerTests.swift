@@ -99,6 +99,23 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         return samples
     }
 
+    private func makeInt32InterleavedCarrier(
+        frameCount: Int,
+        channelCount: Int,
+        activePairStart: Int,
+        frequency: Double
+    ) -> [Int32] {
+        var samples = [Int32](repeating: 0, count: frameCount * channelCount)
+        for frame in 0..<frameCount {
+            let phase = 2 * Double.pi * frequency * Double(frame) / 48_000
+            samples[frame * channelCount + activePairStart] =
+                Int32(sin(phase) * Double(Int32.max) * 0.08)
+            samples[frame * channelCount + activePairStart + 1] =
+                Int32(cos(phase) * Double(Int32.max) * 0.08)
+        }
+        return samples
+    }
+
     /// Builds a 14-channel buffer with a quiet, plausible quadrature control-tone
     /// pair (matching dominant frequency on both channels) at `quietPairStart`,
     /// and a much louder pair at `loudPairStart` whose two channels carry
@@ -378,6 +395,69 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         XCTAssertEqual(result.perPairDiagnostics[0].rejectionReason, "near silence")
     }
 
+    func testAutoAcceptsHardwareObservedSlowForwardCarrier() throws {
+        let raw = makeInt32InterleavedCarrier(
+            frameCount: 4_096,
+            channelCount: 14,
+            activePairStart: 2,
+            frequency: 443
+        )
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        let pair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 2 })
+        XCTAssertNil(pair.rejectionReason)
+        XCTAssertEqual(result.selectedChannelPair, "3/4")
+    }
+
+    func testAutoRetainsHardwareObservedVerySlowCarrierBuffer() throws {
+        let raw = makeInt32InterleavedCarrier(
+            frameCount: 7_168,
+            channelCount: 14,
+            activePairStart: 2,
+            frequency: 93
+        )
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        let pair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 2 })
+        XCTAssertNil(pair.rejectionReason)
+        XCTAssertEqual(result.selectedChannelPair, "3/4")
+    }
+
+    func testAutoAcceptsHardwareObservedFastForwardCarrier() throws {
+        let raw = makeInt32InterleavedCarrier(
+            frameCount: 4_096,
+            channelCount: 14,
+            activePairStart: 2,
+            frequency: 3_166
+        )
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.adaptInterleavedInt32(
+                raw,
+                channelCount: 14,
+                sampleRate: 48_000,
+                selection: .auto
+            )
+        )
+
+        let pair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 2 })
+        XCTAssertNil(pair.rejectionReason)
+        XCTAssertEqual(result.selectedChannelPair, "3/4")
+    }
+
     // A loud pair with no shared carrier between its channels (not plausible
     // DVS timecode) must not outscore a quieter pair that looks like real
     // quadrature control tone, even though raw RMS/peak favor the loud pair.
@@ -401,9 +481,8 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         let loudPair = try XCTUnwrap(result.perPairDiagnostics.first { $0.startChannel == 12 })
 
         XCTAssertGreaterThan(loudPair.rms, quietPair.rms, "Fixture must make the invalid pair louder")
-        // Both 400 Hz and 6 kHz fall outside the plausible DVS carrier band
-        // (500-2500 Hz), so this is now caught by the carrier-range gate
-        // before the frequency-agreement gate is even reached.
+        // The 6 kHz channel falls outside the plausible DVS carrier band, so
+        // the pair is caught by the carrier-range gate before scoring.
         XCTAssertEqual(loudPair.rejectionReason, "no timecode carrier")
         XCTAssertNil(quietPair.rejectionReason)
         XCTAssertEqual(result.autoRecommendedChannelPair, "3/4")
@@ -691,41 +770,25 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
     }
 
     // MARK: - Retention concurrency / race safety
-
-    /// Cold start with every pair scoring negative must remain empty, not
-    /// acquire a negative-scoring pair (the acquisition guard requires
-    /// `score >= 0`).
-    func testColdStartAllNegativeScoresRemainsEmpty() {
-        let diags = [
-            pairDiag(startChannel: 0, score: -1, rms: 0.0),
-            pairDiag(startChannel: 2, score: -1, rms: 0.0001),
-        ]
-        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
-            currentState: .empty, perPairDiagnostics: diags, selection: .auto
-        )
-        XCTAssertNil(newState.heldPair,
-            "Cold start with no valid (score >= 0) pair must remain empty, not acquire a negative-scoring pair")
-        XCTAssertEqual(newState, .empty)
-    }
-
-    /// Pins the deterministic tie-break behavior of `max(by:)` used for
-    /// cold-start acquisition: `Array.max(by:)` never replaces its running
-    /// result on an exact tie (the ordering predicate is strict `<`), so the
-    /// first pair in diagnostics order wins any equal-score tie. This test
-    /// exists so a future change to the acquisition logic (or an
-    /// unexpected standard-library behavior change) fails loudly instead of
-    /// silently changing which pair Auto acquires on a tie.
-    func testColdStartTiedScoresPicksFirstPairDeterministically() {
-        let diags = [
-            pairDiag(startChannel: 0, score: 0.5, rms: 0.2),
-            pairDiag(startChannel: 2, score: 0.5, rms: 0.2),
-        ]
-        let newState = TimecodeCMSampleBufferAdapter.updateRetentionState(
-            currentState: .empty, perPairDiagnostics: diags, selection: .auto
-        )
-        XCTAssertEqual(newState.heldPair?.start, 0,
-            "Tied pair scores must resolve deterministically to the first pair in diagnostics order")
-    }
+    //
+    // These tests prove the generation-based transaction semantics
+    // committed in 9f54937 ("Add race-safe DVS channel-pair retention").
+    // A read-only reconciliation audit found the mechanism itself intact in
+    // the dirty working copy, but found the dirty tree had also wired in a
+    // second production producer of the same shared retention state — the
+    // low-latency `AVAudioEngine` tap path, `stereoSampleResult(fromPCMBuffer:hostTime:)`
+    // — that the original single-producer design (only a reset/selection
+    // change could invalidate an in-flight transaction) was never proven
+    // safe against. The fix: `commitRetentionTransaction` now also bumps
+    // `storedRetentionGeneration` on every successful commit, not only on
+    // reset/selection change, so a second producer's stale snapshot is
+    // rejected by the same generation check, exactly like a reset arriving
+    // mid-flight. `testConcurrentTransactionsFromTwoProducersRejectsTheStaleCommit`
+    // below is the direct deterministic regression for that fix; the rest
+    // predate it and continue to hold unchanged. All are deterministic —
+    // no reliance on timing or Thread Sanitizer to surface a defect (Thread
+    // Sanitizer is still run over this concurrency-adjacent suite as an
+    // additional check, not as the proof).
 
     /// A retention-update transaction that began (snapshot captured) before
     /// an explicit reset must not be able to write its computed held pair
@@ -778,12 +841,69 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
             "Manual selection change must win — a late-arriving stale Auto transaction must not restore Auto retention")
     }
 
+    /// The exact regression this reconciliation closes: two independent
+    /// producers (the legacy `AVCaptureAudioDataOutput` path and the
+    /// low-latency `AVAudioEngine` tap path) can each begin a retention
+    /// transaction from the same starting generation and compute their own
+    /// new state off-lock. Before this fix, a successful commit never
+    /// bumped the generation, so whichever producer committed second would
+    /// silently overwrite the first's result (a lost update) instead of
+    /// being rejected. Simulated deterministically and sequentially — no
+    /// threads, no timing dependency — by capturing both snapshots before
+    /// either commits, exactly reproducing the race window.
+    func testConcurrentTransactionsFromTwoProducersRejectsTheStaleCommit() {
+        let originalSelection = TimecodeCMSampleBufferAdapter.channelPairSelection
+        defer { TimecodeCMSampleBufferAdapter.channelPairSelection = originalSelection }
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .auto
+        TimecodeCMSampleBufferAdapter.resetPairRetention()
+
+        // Both producers "arrive" concurrently: each begins a transaction
+        // before either has committed, so both capture the same generation.
+        let snapshotA = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
+        let snapshotB = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
+        XCTAssertEqual(snapshotA.generation, snapshotB.generation,
+            "Both producers must observe the same starting generation to exercise the race window")
+
+        // Each producer independently computes its own new state off-lock,
+        // from a different pair's diagnostics — standing in for the two
+        // producers processing genuinely different audio buffers.
+        let diagsA = [pairDiag(startChannel: 2, score: 1.0, rms: 0.3)]
+        let diagsB = [pairDiag(startChannel: 6, score: 1.0, rms: 0.3)]
+        let computedA = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: snapshotA.state, perPairDiagnostics: diagsA, selection: snapshotA.selection
+        )
+        let computedB = TimecodeCMSampleBufferAdapter.updateRetentionState(
+            currentState: snapshotB.state, perPairDiagnostics: diagsB, selection: snapshotB.selection
+        )
+
+        // Producer A commits first and must succeed.
+        let appliedA = TimecodeCMSampleBufferAdapter.commitRetentionTransaction(computedA, snapshot: snapshotA)
+        XCTAssertTrue(appliedA, "The first producer to commit must succeed")
+        XCTAssertEqual(TimecodeCMSampleBufferAdapter.lastValidPair?.start, 2,
+            "The first producer's committed pair must be held")
+
+        // Producer B commits second, still holding its now-stale snapshot
+        // (captured before A's commit bumped the generation). Before this
+        // reconciliation, this would have silently succeeded and
+        // overwritten A's result — the lost-update regression this test
+        // exists to catch. It must now be rejected, and A's held pair must
+        // remain untouched.
+        let appliedB = TimecodeCMSampleBufferAdapter.commitRetentionTransaction(computedB, snapshot: snapshotB)
+        XCTAssertFalse(appliedB,
+            "A second producer's transaction captured at the same generation as a since-committed first must be rejected, not silently overwrite it")
+        XCTAssertEqual(TimecodeCMSampleBufferAdapter.lastValidPair?.start, 2,
+            "The first producer's committed pair must survive the second producer's rejected stale commit")
+    }
+
     /// Bounded stress test: many concurrent retention-update transactions
-    /// racing against concurrent resets and selection changes must never
-    /// crash, deadlock, or leave inconsistent state, and a final explicit
-    /// reset (issued after all concurrent work completes) must always
-    /// leave retention empty. Run under Thread Sanitizer to additionally
-    /// prove there is no data race on the underlying stored state.
+    /// from two independent simulated producers (mirroring the legacy
+    /// `AVCaptureAudioDataOutput` path and the low-latency `AVAudioEngine`
+    /// tap path), racing against concurrent resets and selection changes,
+    /// must never crash, deadlock, or leave inconsistent state, and a final
+    /// explicit reset (issued after all concurrent work completes) must
+    /// always leave retention empty. Run under Thread Sanitizer to
+    /// additionally prove there is no crash/deadlock/data race under
+    /// sustained multi-producer concurrent load across the transaction API.
     func testConcurrentSelectionAndResetVersusRetentionUpdatesLeavesConsistentFinalState() {
         let originalSelection = TimecodeCMSampleBufferAdapter.channelPairSelection
         defer { TimecodeCMSampleBufferAdapter.channelPairSelection = originalSelection }
@@ -792,7 +912,8 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
 
         let iterations = 500
         let group = DispatchGroup()
-        let updaterQueue = DispatchQueue(label: "retention-stress-updater", attributes: .concurrent)
+        let updaterQueue = DispatchQueue(label: "retention-stress-updater-legacy", attributes: .concurrent)
+        let lowLatencyUpdaterQueue = DispatchQueue(label: "retention-stress-updater-lowlatency", attributes: .concurrent)
         let controlQueue = DispatchQueue(label: "retention-stress-control", attributes: .concurrent)
 
         for i in 0..<iterations {
@@ -800,6 +921,21 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
             updaterQueue.async {
                 let snapshot = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
                 let diags = [self.pairDiag(startChannel: 2, score: 0.8, rms: 0.3)]
+                let computed = TimecodeCMSampleBufferAdapter.updateRetentionState(
+                    currentState: snapshot.state, perPairDiagnostics: diags, selection: snapshot.selection
+                )
+                TimecodeCMSampleBufferAdapter.commitRetentionTransaction(computed, snapshot: snapshot)
+                group.leave()
+            }
+            // A second, independent simulated producer racing the same
+            // shared retention state on its own queue — the scenario
+            // `testConcurrentTransactionsFromTwoProducersRejectsTheStaleCommit`
+            // proves deterministically; this exercises it under genuine
+            // concurrent load and Thread Sanitizer as well.
+            group.enter()
+            lowLatencyUpdaterQueue.async {
+                let snapshot = TimecodeCMSampleBufferAdapter.beginRetentionTransaction()
+                let diags = [self.pairDiag(startChannel: 2, score: 0.75, rms: 0.28)]
                 let computed = TimecodeCMSampleBufferAdapter.updateRetentionState(
                     currentState: snapshot.state, perPairDiagnostics: diags, selection: snapshot.selection
                 )

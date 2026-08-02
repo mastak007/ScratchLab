@@ -84,14 +84,23 @@ struct TimecodeCMSampleBufferAdapter {
     private nonisolated(unsafe) static var storedLastValidPair: (start: Int, rms: Float)?
     private nonisolated(unsafe) static var storedCandidatePair: Int?
     private nonisolated(unsafe) static var storedCandidateStreak: Int = 0
-    /// Bumped by `resetPairRetentionLocked()` — i.e. on every explicit
-    /// reset and every actual `channelPairSelection` change. A retention
-    /// transaction (`RetentionTransactionSnapshot`) captured before a bump
-    /// is stale once the bump happens, and `commitRetentionTransaction`
-    /// refuses to publish a stale transaction's result. This is what makes
-    /// a reset or selection change win over a slower, already-in-flight
-    /// audio callback that started computing its own retention update
-    /// before the reset/change occurred.
+    /// Bumped by `resetPairRetentionLocked()` (every explicit reset and
+    /// every actual `channelPairSelection` change) and, as of this
+    /// reconciliation, by every successful `commitRetentionTransaction(_:snapshot:)`
+    /// too. A retention transaction (`RetentionTransactionSnapshot`)
+    /// captured before a bump is stale once the bump happens, and
+    /// `commitRetentionTransaction` refuses to publish a stale
+    /// transaction's result. This is what makes a reset or selection
+    /// change win over a slower, already-in-flight audio callback that
+    /// started computing its own retention update before the reset/change
+    /// occurred — and, because a successful commit now bumps the
+    /// generation too, what makes two concurrently in-flight transactions
+    /// from independent producers (the legacy `AVCaptureAudioDataOutput`
+    /// path and the low-latency `AVAudioEngine` tap path) resolve safely:
+    /// only the first to commit succeeds, the second's now-stale snapshot
+    /// is rejected exactly like a post-reset stale commit, and only that
+    /// buffer's retention bookkeeping is dropped — its own selected audio
+    /// is still returned normally.
     private nonisolated(unsafe) static var storedRetentionGeneration: Int = 0
 
     /// Retention state used by the production `stereoSampleResult` path and
@@ -217,13 +226,21 @@ struct TimecodeCMSampleBufferAdapter {
     /// dropped, and the very next callback recomputes retention fresh from
     /// the current (post-reset) state.
     ///
-    /// Because a successful commit does not itself bump the generation,
-    /// this specifically protects against reset/selection-change races
-    /// (which run on other threads — UI, session reconfiguration). It
-    /// assumes retention-update transactions do not run concurrently with
-    /// each other, which holds today because `stereoSampleResult(from:)`
-    /// is only ever invoked serially, from the capture pipeline's own
-    /// delegate queue.
+    /// A successful commit now also bumps the generation (not just a
+    /// reset/selection change), which is what makes this safe against two
+    /// sources of concurrent invalidation, not just one: a reset/selection
+    /// change arriving from another thread (UI, session reconfiguration),
+    /// and a second retention-update transaction from an independent
+    /// producer committing first. Both the legacy `AVCaptureAudioDataOutput`
+    /// path (`stereoSampleResult(from:)`) and the low-latency
+    /// `AVAudioEngine` tap path (`stereoSampleResult(fromPCMBuffer:hostTime:)`)
+    /// use this same transaction API and can run concurrently on different
+    /// threads; whichever of two overlapping transactions commits first
+    /// wins, and the other's now-stale snapshot is rejected by the same
+    /// generation check used for reset/selection races — its own selected
+    /// audio is still returned normally, only its retention bookkeeping for
+    /// that one buffer is discarded, and the very next callback from either
+    /// producer recomputes retention fresh from the current state.
     struct RetentionTransactionSnapshot: Equatable {
         let selection: ChannelPairSelection
         let state: RetentionState
@@ -257,6 +274,13 @@ struct TimecodeCMSampleBufferAdapter {
             storedLastValidPair = newState.heldPair
             storedCandidatePair = newState.candidatePair
             storedCandidateStreak = newState.candidateStreak
+            // Bumping here too (not only in resetPairRetentionLocked) closes
+            // the producer-vs-producer race: if two transactions began from
+            // the same generation, only the first to reach this point can
+            // commit — the second's snapshot.generation is now stale, so its
+            // own commit attempt is correctly rejected by the guard above,
+            // exactly like a reset/selection change arriving mid-flight.
+            storedRetentionGeneration += 1
             return true
         }
     }
@@ -429,6 +453,9 @@ struct TimecodeCMSampleBufferAdapter {
         }()
         let retentionSnapshot = beginRetentionTransaction()
 
+        // DEBUG: capture raw pair 3/4 (startChannel=2) from deinterleaved
+        // channels before pair selection, so captures always record the
+        // target pair regardless of auto-selection fallback.
 #if DEBUG
         if DebugTimecodeCapture.isCapturing,
            channels.count > 3 {
@@ -464,18 +491,18 @@ struct TimecodeCMSampleBufferAdapter {
         // the retention bookkeeping for this one buffer is discarded, and
         // the next callback recomputes retention fresh from the current
         // state.
-        let newRetentionState = Self.updateRetentionState(
+        let newState = Self.updateRetentionState(
             currentState: retentionSnapshot.state,
             perPairDiagnostics: result.perPairDiagnostics,
             selection: retentionSnapshot.selection
         )
-        commitRetentionTransaction(newRetentionState, snapshot: retentionSnapshot)
+        commitRetentionTransaction(newState, snapshot: retentionSnapshot)
         // True when this buffer is being served from a held pair despite
         // its own score being negative this buffer (silence, a stop, a
         // reversal) — used below to report "holding" rather than
         // "defaulted" in diagnostics.
         let isHoldingThroughInvalidBuffer = retentionSnapshot.selection == .auto
-            && newRetentionState.heldPair?.start == result.perPairDiagnostics.first(where: {
+            && newState.heldPair?.start == result.perPairDiagnostics.first(where: {
                 $0.label == result.autoRecommendedChannelPair
             })?.startChannel
             && result.perPairDiagnostics.first(where: { $0.label == result.autoRecommendedChannelPair })?.rejectionReason != nil
@@ -524,6 +551,92 @@ struct TimecodeCMSampleBufferAdapter {
             perPairDiagnostics: result.perPairDiagnostics,
             warning: result.warning
         )
+        stateLock.withLock {
+            storedLastDiagnostic = diagnostic
+            storedDiagnostics = snapshot
+        }
+        return result
+    }
+
+    /// Low-latency AVAudioEngine entry point. AVCaptureAudioDataOutput on
+    /// the Rane delivers 7,168-frame (~149 ms) chunks; an input-node tap
+    /// supplies much smaller PCM buffers while preserving the same channel
+    /// selection, carrier validation, diagnostics, and retention behavior.
+    static func stereoSampleResult(
+        fromPCMBuffer buffer: AVAudioPCMBuffer,
+        hostTime: UInt64?
+    ) -> StereoResult? {
+        let frameCount = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frameCount > 0, channelCount > 0,
+              let floatChannels = buffer.floatChannelData else {
+            recordFailure("AVAudioEngine tap produced no Float32 channel data")
+            return nil
+        }
+
+        let channels = (0..<channelCount).map { channel in
+            Array(UnsafeBufferPointer(start: floatChannels[channel], count: frameCount))
+        }
+        let sampleRate = buffer.format.sampleRate
+        let formatSummary = "AVAudioEngine Float32 non-interleaved, \(channelCount)ch, \(frameCount)f"
+        let retentionSnapshot = beginRetentionTransaction()
+
+#if DEBUG
+        if DebugTimecodeCapture.isCapturing, channels.count > 3 {
+            DebugTimecodeCapture.record(
+                channels: channels,
+                sampleRate: sampleRate,
+                hostTime: hostTime,
+                formatSummary: formatSummary
+            )
+        }
+#endif
+
+        guard let result = makeStereoResult(
+            channels: channels,
+            rawMaxima: Array(repeating: [], count: channelCount),
+            sampleRate: sampleRate,
+            hostTime: hostTime,
+            formatSummary: formatSummary,
+            selection: retentionSnapshot.selection,
+            previousValidPair: retentionSnapshot.state.heldPair
+        ) else {
+            recordFailure("\(formatSummary) | Unable to select channel pair")
+            return nil
+        }
+
+        // Same transaction discipline as `stereoSampleResult(from:)`: a
+        // reset or selection change that lands after `retentionSnapshot`
+        // was captured makes the commit below a no-op, discarding only
+        // this buffer's retention bookkeeping, not its selected audio.
+        let newState = updateRetentionState(
+            currentState: retentionSnapshot.state,
+            perPairDiagnostics: result.perPairDiagnostics,
+            selection: retentionSnapshot.selection
+        )
+        let pairSummary = result.perPairDiagnostics.map { pair in
+            "\(pair.label):rms=\(String(format: "%.5f", pair.rms))"
+                + ",peak=\(String(format: "%.5f", pair.peak))"
+                + ",score=\(String(format: "%.3f", pair.score))"
+                + ",freqHzL=\(Int(pair.leftDominantFrequencyHz))"
+                + ",freqHzR=\(Int(pair.rightDominantFrequencyHz))"
+                + ",reject=\(pair.rejectionReason ?? "none")"
+        }.joined(separator: ";")
+        let diagnostic = "\(formatSummary) | sr=\(sampleRate)"
+            + " | selected=\(result.selectedChannelPair)"
+            + " | recommended=\(result.autoRecommendedChannelPair ?? "none")"
+            + " | pairs=[\(pairSummary)]"
+        let snapshot = DiagnosticsSnapshot(
+            formatSummary: result.formatSummary,
+            sampleRate: result.sampleRate,
+            sourceChannelCount: result.sourceChannelCount,
+            selectedChannelPair: result.selectedChannelPair,
+            autoRecommendedChannelPair: result.autoRecommendedChannelPair,
+            perChannelDiagnostics: result.perChannelDiagnostics,
+            perPairDiagnostics: result.perPairDiagnostics,
+            warning: result.warning
+        )
+        commitRetentionTransaction(newState, snapshot: retentionSnapshot)
         stateLock.withLock {
             storedLastDiagnostic = diagnostic
             storedDiagnostics = snapshot
@@ -659,12 +772,6 @@ struct TimecodeCMSampleBufferAdapter {
     ) -> StereoResult? {
         guard let first = channels.first, !first.isEmpty else { return nil }
         if channels.count == 1 {
-            let diagnostic = makeChannelDiagnostic(
-                samples: first,
-                rawSamples: rawMaxima.first ?? [],
-                channelIndex: 0,
-                sampleRate: sampleRate
-            )
             return StereoResult(
                 left: first,
                 right: first,
@@ -675,7 +782,10 @@ struct TimecodeCMSampleBufferAdapter {
                 sourceChannelCount: 1,
                 selectedChannelPair: "1/1",
                 autoRecommendedChannelPair: nil,
-                perChannelDiagnostics: [diagnostic],
+                perChannelDiagnostics: [makeChannelDiagnostic(
+                    samples: first, rawSamples: rawMaxima.first ?? [],
+                    channelIndex: 0, sampleRate: sampleRate
+                )],
                 perPairDiagnostics: [],
                 warning: nil
             )
@@ -702,20 +812,22 @@ struct TimecodeCMSampleBufferAdapter {
         }
         guard let best = pairDiagnostics.max(by: { $0.score < $1.score }) else { return nil }
 
-        // Determine the auto-recommended pair. Auto always prefers the
-        // currently-held pair (from `RetentionState`, threaded in here via
-        // `previousValidPair`), regardless of whether some other pair
-        // scores higher on this single buffer. Retention is held
-        // indefinitely — no time-based expiry and no consecutive-invalid-
-        // buffer counter — until a different pair earns the hold through a
-        // sustained, meaningfully-better score confirmed by
-        // `updateRetentionState` over multiple buffers, or an explicit
-        // reset occurs. This is deliberately not a per-buffer "whichever
-        // scores best right now" choice: a transient signal on another
-        // channel must not steal selection for one buffer while the held
-        // pair is still the validated one. When no pair is currently held
-        // (`previousValidPair` is nil — cold start, or freshly reset),
-        // fall back to the single best-scoring pair.
+        // Determine the auto-recommended pair. When auto-selecting and the
+        // best-scoring pair is negative (all pairs rejected), prefer a
+        // previous-valid pair — this prevents losing DVS lock during
+        // scratching when platter motion shifts the timecode carrier
+        // frequency outside the expected band. The caller bounds retention
+        // via a consecutive-invalid counter; the function does not need
+        // its own RMS gate here since `previousValidPair` is already nil
+        // when the caller decides retention should end.
+        // Auto always prefers the currently-held pair (from `RetentionState`
+        // via `previousValidPair`), regardless of whether some other pair
+        // scores higher on this single buffer. Switching pairs is a
+        // hysteresis-gated decision made by `updateRetentionState` over
+        // multiple sustained buffers, not a per-buffer "whichever scores
+        // best right now" choice — otherwise a transient signal on another
+        // channel could steal selection for one buffer even though the
+        // held pair is still the validated one.
         let recommended: PairDiagnostic
         if selection == .auto, let previous = previousValidPair,
            let held = pairDiagnostics.first(where: { $0.startChannel == previous.start }) {
@@ -792,7 +904,14 @@ struct TimecodeCMSampleBufferAdapter {
     /// dominant frequency falls outside this range (including 0 Hz — no
     /// oscillation at all) cannot be real quadrature timecode, regardless of
     /// how loud it is.
-    private static let carrierRangeHz: ClosedRange<Float> = 500...2_500
+    // Real Rane ONE MKII captures establish a wider valid motion range than
+    // the original stationary-tone estimate: a slow-forward 2 s capture
+    // averaged 332 Hz while an individual live buffer fell to 93 Hz, and
+    // fast forward measured about 3,166 Hz. Accept down to the decoder's
+    // own 50 Hz plausibility floor so Auto keeps pair 3/4 through genuinely
+    // slow hand motion, while DC (0 Hz) and the unrelated 14–15 kHz pair
+    // remain rejected.
+    private static let carrierRangeHz: ClosedRange<Float> = 50...4_000
 
     /// A channel with a zero-crossing rate at or below this floor is not
     /// oscillating in any meaningful sense (e.g. DC, silence, or a 0 Hz
@@ -881,7 +1000,6 @@ struct TimecodeCMSampleBufferAdapter {
         }
     }
 }
-
 
 // MARK: - DEBUG labelled capture for DVS signal analysis
 
