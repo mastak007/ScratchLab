@@ -18,6 +18,31 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
     /// Experimental only — not a compatibility claim.
     case genericDVS
 
+    /// Validated hardware profile for testing against a physical Rane ONE
+    /// MKII over its USB DVS input. Fixes the values confirmed against real
+    /// hardware across many hardware sessions: Invert direction ON, Min
+    /// confidence 0.10, and (applied separately by the caller — see
+    /// `TimecodeControlCard`, which has the `ENABLE_TIMECODE_LIVE_TAP`
+    /// availability this profile itself does not depend on) the USB channel
+    /// pair explicitly pinned to physical pair 3/4 instead of Auto, so pair
+    /// auto-selection instability during a stop/reversal (Auto losing
+    /// carrier and defaulting away from an already-validated pair) cannot
+    /// affect a DEBUG hardware test.
+    ///
+    /// **Invert direction ON is correct and final, not a stale intermediate
+    /// value.** Immediately after Karl physically corrected reversed RCA
+    /// wiring, the measured raw phase convention briefly suggested Invert
+    /// should be OFF. That was superseded once a real internal
+    /// sign-convention mismatch was found between the live diagnostic
+    /// classifier (`TimecodeSignalDiagnostics.estimatePhaseOffset`) and the
+    /// actual decoder (`TimecodePhaseDecoder.extractPhaseDelta`) — opposite
+    /// signs for the same physical quantity. Every hardware session since
+    /// has confirmed Invert ON produces correct audible forward playback;
+    /// audible motion is ground truth here, not either diagnostic's raw
+    /// phase-sign label. Do not "fix" this back to OFF without new,
+    /// audibly-confirmed hardware evidence.
+    case raneOneMkiiDebug
+
     /// Manual calibration — all fields user-adjustable.
     case manual
 
@@ -28,6 +53,7 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
         switch self {
         case .scratchLabPrototype:  return "ScratchLab Prototype"
         case .genericDVS:           return "Generic DVS Control Signal"
+        case .raneOneMkiiDebug:     return "Rane ONE MKII (DEBUG, pair 3/4 pinned)"
         case .manual:               return "Manual"
         }
     }
@@ -37,6 +63,7 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
         switch self {
         case .scratchLabPrototype:  return "ScratchLab"
         case .genericDVS:           return "DVS"
+        case .raneOneMkiiDebug:     return "Rane"
         case .manual:               return "Manual"
         }
     }
@@ -54,6 +81,23 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
         switch self {
         case .genericDVS:
             return "Experimental — not Serato/SDJ certified or compatible"
+        default:
+            return nil
+        }
+    }
+
+    /// Physical hardware setup reminder shown in the preset UI — the parts
+    /// of a validated hardware configuration a Swift preset's values can't
+    /// capture on their own (which physical USB pair to use, how to read an
+    /// apparent forward/backward mismatch). Keeps the full setup
+    /// reproducible from the app alone, without re-deriving it from
+    /// scattered hardware-session history.
+    public var setupNote: String? {
+        switch self {
+        case .raneOneMkiiDebug:
+            return "Rane ONE MKII: USB DVS input, physical pair 3/4 (pinned automatically). " +
+                "If forward/backward ever sounds swapped, trust what you hear — " +
+                "do not force Invert off to match a raw decoder label."
         default:
             return nil
         }
@@ -255,6 +299,41 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
         )
     }
 
+    /// Rane ONE MKII DEBUG hardware profile — validated against real
+    /// hardware this session.
+    ///
+    /// - Stereo input
+    /// - Invert direction ON (confirmed: audible forward playback matches
+    ///   Invert ON on this hardware — treat audible motion as ground truth,
+    ///   not the raw decoder's phase-sign label)
+    /// - 1.0× rate scale
+    /// - 0.10 min confidence
+    /// - 5.0 u/s max rate
+    /// - Conservative smoothing
+    /// - Validation required before playback bridge
+    /// - Playback bridge NOT allowed by default
+    ///
+    /// Does NOT itself pin the USB channel pair — `TimecodeCMSampleBuffer
+    /// Adapter` (the DEBUG live-tap channel router) is gated by
+    /// `ENABLE_TIMECODE_LIVE_TAP`, an availability this cross-platform model
+    /// file does not assume. The caller applying this profile in a build
+    /// that has that capability (see `TimecodeControlCard.applyPreset`)
+    /// pins physical pair 3/4 explicitly instead of Auto.
+    public static func raneOneMkiiDebug() -> TimecodePrototypeProfile {
+        TimecodePrototypeProfile(
+            preset: .raneOneMkiiDebug,
+            name: "Rane ONE MKII (DEBUG)",
+            inputChannel: .stereo,
+            invertDirection: true,
+            rateScale: 1.0,
+            minConfidence: 0.10,
+            maxRate: 5.0,
+            smoothingConfig: .conservative,
+            validationRequired: true,
+            playbackBridgeAllowed: false
+        )
+    }
+
     /// Manual profile — all fields user-adjustable.
     ///
     /// Starts from conservative defaults; the user is expected to tune
@@ -292,6 +371,8 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
             return .scratchLabPrototype()
         case .genericDVS:
             return .genericDVS()
+        case .raneOneMkiiDebug:
+            return .raneOneMkiiDebug()
         case .manual:
             return .manual(
                 inputChannel: pipeline.inputChannel,

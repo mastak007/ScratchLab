@@ -141,6 +141,50 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         XCTAssertLessThan(profile.smoothingConfig.emaAlpha, 0.5)
     }
 
+    /// 7. Rane DEBUG hardware profile launches explicitly configured for
+    /// real Rane ONE MKII hardware validated this session: Invert direction
+    /// ON, Min confidence 0.10. (The USB channel pair pin to 3/4 is applied
+    /// by the caller in `TimecodeControlCard.applyPreset`, gated behind
+    /// `ENABLE_TIMECODE_LIVE_TAP`, which this cross-platform model does not
+    /// depend on — see `TimecodeCMSampleBufferAdapterProfileTests` for that
+    /// half of this regression.)
+    func testRaneOneMkiiDebugProfileMatchesValidatedHardwareDefaults() {
+        let profile = TimecodePrototypeProfile.raneOneMkiiDebug()
+
+        XCTAssertEqual(profile.inputChannel, .stereo)
+        XCTAssertTrue(profile.invertDirection,
+            "Rane DEBUG profile must have Invert direction ON — confirmed hardware ground truth")
+        XCTAssertEqual(profile.rateScale, 1.0, accuracy: 0.001)
+        XCTAssertEqual(profile.minConfidence, 0.10, accuracy: 0.001,
+            "Rane DEBUG profile must use the validated Min confidence 0.10")
+        XCTAssertEqual(profile.preset, .raneOneMkiiDebug)
+        XCTAssertTrue(profile.validationRequired)
+        XCTAssertFalse(profile.playbackBridgeAllowed,
+            "Rane DEBUG profile must NOT allow playback bridge by default")
+
+        // .make(preset:pipeline:) must resolve to the same profile.
+        let pipeline = TimecodeControlPipeline()
+        let resolved = TimecodePrototypeProfile.make(preset: .raneOneMkiiDebug, pipeline: pipeline)
+        XCTAssertEqual(resolved, profile)
+    }
+
+    /// The Rane preset's Swift values alone can't capture "use physical USB
+    /// pair 3/4" or "if forward sounds swapped, trust your ears" — this
+    /// keeps that reproducible from the app itself rather than requiring a
+    /// search through hardware-session history.
+    func testRaneOneMkiiDebugPresetHasSetupNoteOtherPresetsDoNot() {
+        XCTAssertNotNil(
+            TimecodeControlPreset.raneOneMkiiDebug.setupNote,
+            "The validated Rane hardware setup must remain discoverable from the preset itself"
+        )
+        for preset in TimecodeControlPreset.allCases where preset != .raneOneMkiiDebug {
+            XCTAssertNil(
+                preset.setupNote,
+                "\(preset) should not carry the Rane-specific physical setup note"
+            )
+        }
+    }
+
     func testManualProfileDefaultsSafe() {
         let profile = TimecodePrototypeProfile.manual()
 
