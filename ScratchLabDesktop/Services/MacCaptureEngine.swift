@@ -2226,6 +2226,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let videoOutput = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
+#if ENABLE_TIMECODE_LIVE_TAP
+    /// Dedicated low-latency input path for control vinyl. The ordinary
+    /// AVCapture audio output remains authoritative for routine recording;
+    /// only the DEBUG DVS callback uses this smaller-buffer tap.
+    private let timecodeInputEngine = AVAudioEngine()
+    private let timecodeInputStateLock = NSLock()
+    private var timecodeInputTapHeartbeat = LowLatencyTimecodeTapHeartbeat()
+#endif
     private let performerMonitorCIContext = CIContext()
     private let seratoBundleIdentifiers = ["com.serato.seratodj"]
     private let seratoVirtualAudioDeviceName = "Serato Virtual Audio"
@@ -2242,7 +2250,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// data normalised to [-1, +1].
     ///
     /// **Batch 4:** DEBUG/prototype only. Stripped from Release builds.
-    var timecodeAudioCallback: ((_ left: [Float], _ right: [Float], _ sampleRate: Double, _ hostTime: UInt64?) -> Void)?
+    var timecodeAudioCallback: ((_ left: [Float], _ right: [Float], _ sampleRate: Double, _ hostTime: UInt64?) -> Void)? {
+        didSet {
+            sessionQueue.async { [weak self] in
+                self?.refreshLowLatencyTimecodeInput()
+            }
+        }
+    }
 #endif
 
     private var isRunning = false
@@ -2428,6 +2442,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     deinit {
         audioSignalDecayTimer?.cancel()
+#if ENABLE_TIMECODE_LIVE_TAP
+        stopLowLatencyTimecodeInput()
+#endif
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         destroySeratoDirectCapture()
         if midiInputPort != 0 { MIDIPortDispose(midiInputPort) }
@@ -2468,6 +2485,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         debugLastRawDirection = .idle
         #endif
         resetAudioSignalLevel()
+#if ENABLE_TIMECODE_LIVE_TAP
+        stopLowLatencyTimecodeInput()
+#endif
         videoQueue.async {
             self.clearFixedRigLayout()
             self.resetPublishedVideoState()
@@ -3215,6 +3235,270 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return uid as String?
     }
 
+#if ENABLE_TIMECODE_LIVE_TAP
+    /// Starts (or rebinds) the DEBUG DVS input tap to the explicitly selected
+    /// capture device. A 256-frame request is ~5.3 ms at 48 kHz, removing the
+    /// 149 ms AVCapture chunk floor from the motion-control path.
+    private func refreshLowLatencyTimecodeInput() {
+        guard timecodeAudioCallback != nil,
+              !selectedAudioDeviceUniqueID.isEmpty else {
+            stopLowLatencyTimecodeInput()
+            return
+        }
+        let selectedUID = selectedAudioDeviceUniqueID
+        let alreadyRunning = timecodeInputStateLock.withLock {
+            timecodeInputTapHeartbeat.isInstalled &&
+                timecodeInputTapHeartbeat.deviceUID == selectedUID
+        }
+        guard !alreadyRunning else { return }
+
+        stopLowLatencyTimecodeInput()
+        guard let deviceID = Self.audioDeviceID(forUID: selectedUID) else {
+            NSLog("[DVS] Low-latency input could not resolve selected device UID; retaining AVCapture fallback.")
+            return
+        }
+
+        let inputNode = timecodeInputEngine.inputNode
+        guard let audioUnit = inputNode.audioUnit else {
+            NSLog("[DVS] Low-latency input node has no AudioUnit; retaining AVCapture fallback.")
+            return
+        }
+        // AUHAL requires input I/O to be enabled before assigning its
+        // current device. Assigning first can return noErr while the unit
+        // continues rendering the system-default mono input.
+        var enableInput: UInt32 = 1
+        let enableStatus = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_EnableIO,
+            kAudioUnitScope_Input,
+            1,
+            &enableInput,
+            UInt32(MemoryLayout<UInt32>.size)
+        )
+        guard enableStatus == noErr else {
+            NSLog("[DVS] Low-latency input enable failed (%d); retaining AVCapture fallback.", enableStatus)
+            return
+        }
+        var mutableDeviceID = deviceID
+        let deviceStatus = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableDeviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        guard deviceStatus == noErr else {
+            NSLog("[DVS] Low-latency input device binding failed (%d); retaining AVCapture fallback.", deviceStatus)
+            return
+        }
+        var boundDeviceID = AudioDeviceID(kAudioObjectUnknown)
+        var boundDeviceSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let readbackStatus = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &boundDeviceID,
+            &boundDeviceSize
+        )
+        guard readbackStatus == noErr, boundDeviceID == deviceID else {
+            NSLog(
+                "[DVS] Low-latency input device read-back mismatch (status %d, requested %u, actual %u); retaining AVCapture fallback.",
+                readbackStatus,
+                deviceID,
+                boundDeviceID
+            )
+            return
+        }
+
+        // Apple's input-node contract identifies `inputFormat` as the
+        // hardware format to inspect when deciding whether input is enabled.
+        // Immediately after rebinding an AUHAL device, `outputFormat` can
+        // still be the pre-start 0 Hz / 0-channel placeholder even though the
+        // newly-bound hardware input is valid. Treating that placeholder as
+        // fatal caused the Rane tap to fall back to 7,168-frame AVCapture
+        // buffers every time. In that state use the explicit hardware format.
+        // A nil/inherited format was observed to render a default mono stream
+        // on this 14-channel Rane even after successful device binding.
+        let hardwareFormat = inputNode.inputFormat(forBus: 0)
+        let outputFormat = inputNode.outputFormat(forBus: 0)
+        let formatChoice = lowLatencyTimecodeTapFormatChoice(
+            hardwareChannelCount: Int(hardwareFormat.channelCount),
+            hardwareSampleRate: hardwareFormat.sampleRate,
+            outputChannelCount: Int(outputFormat.channelCount),
+            outputSampleRate: outputFormat.sampleRate
+        )
+        guard formatChoice != .unavailable else {
+            NSLog(
+                "[DVS] Low-latency hardware input is unusable (hardware %.0fHz/%uch, output %.0fHz/%uch); retaining AVCapture fallback.",
+                hardwareFormat.sampleRate,
+                hardwareFormat.channelCount,
+                outputFormat.sampleRate,
+                outputFormat.channelCount
+            )
+            return
+        }
+        let tapFormat: AVAudioFormat = formatChoice == .explicitOutput
+            ? outputFormat
+            : hardwareFormat
+        inputNode.installTap(onBus: 0, bufferSize: 256, format: tapFormat) { [weak self] buffer, time in
+            guard let self else { return }
+            let actualChannelCount = Int(buffer.format.channelCount)
+            let selection = TimecodeCMSampleBufferAdapter.channelPairSelection
+            guard lowLatencyTimecodeTapHasRequiredChannels(
+                actualChannelCount: actualChannelCount,
+                selection: selection
+            ) else {
+                let rejection =
+                    "\(actualChannelCount)ch insufficient for \(selection.label)"
+                let shouldStop = self.timecodeInputStateLock.withLock { () -> Bool in
+                    guard self.timecodeInputTapHeartbeat.isInstalled else { return false }
+                    self.timecodeInputTapHeartbeat.recordRejection(rejection)
+                    return true
+                }
+                self.publishLowLatencyTimecodeTapDiagnostic()
+                if shouldStop {
+                    NSLog(
+                        "[DVS] Low-latency tap delivered only %d channel(s), insufficient for %@; restoring AVCapture fallback.",
+                        actualChannelCount,
+                        selection.label
+                    )
+                    self.sessionQueue.async { [weak self] in
+                        self?.stopLowLatencyTimecodeInput(
+                            preservingRejection: rejection
+                        )
+                    }
+                }
+                return
+            }
+            guard let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(
+                    fromPCMBuffer: buffer,
+                    hostTime: time.hostTime == 0 ? nil : time.hostTime
+                  ),
+                  let callback = self.timecodeAudioCallback else { return }
+            let callbackUptime = CACurrentMediaTime()
+            let formatDescription =
+                "\(buffer.format.commonFormat == .pcmFormatFloat32 ? "Float32" : "\(buffer.format.commonFormat)")" +
+                (buffer.format.isInterleaved ? " interleaved" : " non-interleaved")
+            let shouldPublishDiagnostic = self.timecodeInputStateLock.withLock { () -> Bool in
+                let firstCallback = self.timecodeInputTapHeartbeat.callbackCount == 0
+                let observedFormatChanged =
+                    self.timecodeInputTapHeartbeat.observedChannelCount != actualChannelCount ||
+                    self.timecodeInputTapHeartbeat.observedFrameCount != Int(buffer.frameLength) ||
+                    self.timecodeInputTapHeartbeat.observedSampleRate != buffer.format.sampleRate ||
+                    self.timecodeInputTapHeartbeat.observedFormat != formatDescription
+                self.timecodeInputTapHeartbeat.recordCallback(
+                    uptime: callbackUptime,
+                    channelCount: actualChannelCount,
+                    frameCount: Int(buffer.frameLength),
+                    sampleRate: buffer.format.sampleRate,
+                    format: formatDescription
+                )
+                return firstCallback || observedFormatChanged
+            }
+            if shouldPublishDiagnostic {
+                self.publishLowLatencyTimecodeTapDiagnostic(now: callbackUptime)
+            }
+            callback(result.left, result.right, result.sampleRate, result.hostTime)
+        }
+        timecodeInputEngine.prepare()
+        do {
+            timecodeInputStateLock.withLock {
+                timecodeInputTapHeartbeat.markInstalled(deviceUID: selectedUID)
+            }
+            try timecodeInputEngine.start()
+            publishLowLatencyTimecodeTapDiagnostic()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            timecodeInputEngine.stop()
+            timecodeInputStateLock.withLock {
+                timecodeInputTapHeartbeat.reset()
+            }
+            publishLowLatencyTimecodeTapDiagnostic()
+            NSLog("[DVS] Low-latency input failed to start (%@); retaining AVCapture fallback.", error.localizedDescription)
+        }
+    }
+
+    private func stopLowLatencyTimecodeInput(
+        preservingRejection rejection: String? = nil
+    ) {
+        let wasInstalled = timecodeInputStateLock.withLock {
+            timecodeInputTapHeartbeat.isInstalled
+        }
+        if wasInstalled {
+            timecodeInputEngine.inputNode.removeTap(onBus: 0)
+        }
+        timecodeInputEngine.stop()
+        timecodeInputEngine.reset()
+        timecodeInputStateLock.withLock {
+            timecodeInputTapHeartbeat.reset()
+            if let rejection {
+                timecodeInputTapHeartbeat.recordRejection(rejection)
+            }
+        }
+        publishLowLatencyTimecodeTapDiagnostic()
+    }
+
+    private func publishLowLatencyTimecodeTapDiagnostic(
+        now: TimeInterval = CACurrentMediaTime()
+    ) {
+        let heartbeatText = timecodeInputStateLock.withLock {
+            timecodeInputTapHeartbeat.diagnostic(at: now)
+        }
+        let marker = " | DVS tap heartbeat: "
+        let existing = TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo
+        let base = existing.components(separatedBy: marker).first ?? existing
+        TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo =
+            base + marker + heartbeatText
+    }
+
+    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else { return nil }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize,
+            &devices
+        ) == noErr else { return nil }
+
+        return devices.first { deviceID in
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<CFString?>.size)
+            var uid: CFString?
+            let status = AudioObjectGetPropertyData(
+                deviceID,
+                &uidAddress,
+                0,
+                nil,
+                &uidSize,
+                &uid
+            )
+            return status == noErr && (uid as String?) == requestedUID
+        }
+    }
+#endif
+
     private static func audioChoice(from device: AVCaptureDevice) -> AudioInputDeviceChoice {
         AudioInputDeviceChoice(uniqueID: device.uniqueID, name: device.localizedName)
     }
@@ -3476,6 +3760,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if !captureSession.isRunning {
             captureSession.startRunning()
         }
+#if ENABLE_TIMECODE_LIVE_TAP
+        refreshLowLatencyTimecodeInput()
+#endif
         Task { @MainActor in
             self.isCameraActive = self.captureSession.isRunning
             self.activeCaptureAudioDeviceUniqueID = attachedAudioUniqueID
@@ -4130,7 +4417,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
 #if ENABLE_TIMECODE_LIVE_TAP
         // Forward stereo audio to the timecode live tap, if enabled.
-        if let callback = timecodeAudioCallback,
+        // Suppress the legacy 7,168-frame source only while a recently
+        // observed, valid multichannel AVAudioEngine callback proves the
+        // low-latency path is actually alive. Engine startup alone is not
+        // sufficient: the Rane can bind successfully and then stop rendering,
+        // which previously left DVS with no source until the bridge went stale.
+        let heartbeatNow = CACurrentMediaTime()
+        let lowLatencyTapFresh = timecodeInputStateLock.withLock {
+            timecodeInputTapHeartbeat.isFresh(at: heartbeatNow)
+        }
+        publishLowLatencyTimecodeTapDiagnostic(now: heartbeatNow)
+        if !lowLatencyTapFresh,
+           let callback = timecodeAudioCallback,
            let stereoResult = TimecodeCMSampleBufferAdapter.stereoSampleResult(from: sampleBuffer) {
             callback(stereoResult.left, stereoResult.right, stereoResult.sampleRate, stereoResult.hostTime)
         }
