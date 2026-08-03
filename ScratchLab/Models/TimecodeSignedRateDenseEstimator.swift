@@ -19,8 +19,11 @@ public struct TimecodeSignedRateDenseEstimatorConfiguration: Equatable, Sendable
     /// `.unknown` rather than guessing a near-zero rate.
     public var minimumCarrierFrequency: Double
 
-    /// Upper clamp on normalized speed magnitude, guarding against a single
-    /// spurious short interval producing an implausible rate spike.
+    /// Plausibility bound on normalized speed magnitude. A crossing interval
+    /// whose implied speed would exceed this bound is classified `.unknown`
+    /// (ambiguous), not reported as an `.available` spike pinned to the bound —
+    /// a single spurious short interval amid weak carrier must not look like
+    /// real motion. Genuine speed at or below the bound is reported unchanged.
     public var maximumNormalizedSpeed: Double
 
     /// RMS floor below which both channels are considered to carry no
@@ -461,10 +464,13 @@ public struct TimecodeSignedRateDenseEstimator: Sendable, Equatable {
             )
         }
 
-        let normalizedSpeed = min(
-            frequency / configuration.nominalCarrierFrequency,
-            configuration.maximumNormalizedSpeed
-        )
+        let rawNormalizedSpeed = frequency / configuration.nominalCarrierFrequency
+        guard rawNormalizedSpeed <= configuration.maximumNormalizedSpeed else {
+            return TimecodeSignedRateSample(
+                timestamp: crossingTime, signedRate: 0, signalState: .unknown
+            )
+        }
+        let normalizedSpeed = rawNormalizedSpeed
         let otherSign: Double = otherChannelValue > 0 ? 1 : -1
         let directionSign = edgeSign * otherSign * directionCalibration
         let signedRate = directionSign * normalizedSpeed

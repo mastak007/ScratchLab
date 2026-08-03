@@ -674,4 +674,130 @@ final class TimecodeSignedRateDenseEstimatorTests: XCTestCase {
         XCTAssertEqual(oneCallSamples.count, 1)
         XCTAssertEqual(firstHalf.count + secondHalf.count, 2)
     }
+
+    // MARK: - 17. Over-bound crossings are `.unknown`, never clamped `.available`
+    //
+    // Task 13/14 (exit-pack evidence): at dropout-resume edges with a
+    // noise-floor carrier, a single spurious short crossing interval used to
+    // surface as an `.available` sample pinned to `maximumNormalizedSpeed`
+    // (measured ±20 on 33/36 start_stop and 2/3 needle_lift resume edges).
+    // An interval whose implied speed exceeds the plausibility bound is
+    // ambiguous noise, not motion — it must be `.unknown`.
+
+    func testOverBoundCrossingReportsUnknownInsteadOfClampedAvailable() {
+        // 1 kHz quadrature carrier with a single 1-sample double-crossing
+        // blip injected mid-stream. The blip's half-period is ~1 sample
+        // (≈ 22 kHz → normalized ≈ 22× > maximumNormalizedSpeed 20), which
+        // the old code reported as `.available` pinned at exactly ±20.
+        let omega = constantOmega(frequency: 1_000)
+        let frameCount = 4_410 // 0.1 s
+        var (left, right) = synthesize(frameCount: frameCount) { _ in omega }
+        let blip = 2_000
+        left[blip - 1] = 0.7
+        left[blip] = -0.7
+        left[blip + 1] = 0.7
+
+        var estimator = makeEstimator()
+        let samples = blocks(left: left, right: right, chunkSize: 512)
+            .flatMap { estimator.consume($0).samples }
+        let available = samples.filter { $0.signalState == .available }
+
+        // The spurious interval must never surface as a clamped spike.
+        XCTAssertFalse(
+            available.contains { abs($0.signedRate) > 19.9 },
+            "An over-bound spurious crossing must not appear as an .available rate pinned to the clamp"
+        )
+        // Genuine 1× motion around the blip must remain available.
+        XCTAssertTrue(available.contains { abs($0.signedRate - 1.0) < 0.05 })
+        // The blip itself must be reported as ambiguous, not as motion.
+        XCTAssertTrue(samples.contains { $0.signalState == .unknown })
+    }
+
+    func testSustainedHighSpeedBelowBoundRemainsAvailable() {
+        // Genuine 8× content (8 kHz carrier at 44.1 kHz — resolvable at this
+        // sample rate) is plausible and must keep its real rate: the bound is
+        // a plausibility gate, not a speed cap that hides legitimate fast
+        // motion.
+        let omega = constantOmega(frequency: 8_000)
+        let (left, right) = synthesize(frameCount: 4_410) { _ in omega }
+
+        var estimator = makeEstimator()
+        let samples = blocks(left: left, right: right, chunkSize: 512)
+            .flatMap { estimator.consume($0).samples }
+        let available = samples.filter { $0.signalState == .available }
+        XCTAssertFalse(available.isEmpty)
+        for sample in available {
+            XCTAssertEqual(sample.signedRate, 8.0, accuracy: 1.0)
+        }
+    }
+
+    func testSustainedOverBoundSpeedReportsUnknownNotAvailable() {
+        // 4.1× carrier with a 4.0× plausibility bound: every crossing is
+        // implausible and must be `.unknown` — no `.available` sample at any
+        // rate (the old code emitted them pinned to 4.0).
+        let omega = constantOmega(frequency: 4_100)
+        let (left, right) = synthesize(frameCount: 4_410) { _ in omega }
+
+        var estimator = makeEstimator(maximumNormalizedSpeed: 4.0)
+        let samples = blocks(left: left, right: right, chunkSize: 512)
+            .flatMap { estimator.consume($0).samples }
+        XCTAssertTrue(samples.contains { $0.signalState == .unknown })
+        XCTAssertFalse(
+            samples.contains { $0.signalState == .available },
+            "Sustained over-bound speed must not produce .available samples"
+        )
+    }
+
+    func testSpeedAtBoundaryRemainsAvailable() {
+        // 3.9× with a 4.0× bound (2.5% margin below, deterministic): speed
+        // at/under the bound stays `.available` with its true rate — the
+        // boundary is inclusive on the plausible side.
+        let omega = constantOmega(frequency: 3_900)
+        let (left, right) = synthesize(frameCount: 4_410) { _ in omega }
+
+        var estimator = makeEstimator(maximumNormalizedSpeed: 4.0)
+        let available = blocks(left: left, right: right, chunkSize: 512)
+            .flatMap { estimator.consume($0).samples }
+            .filter { $0.signalState == .available }
+        XCTAssertFalse(available.isEmpty)
+        for sample in available {
+            XCTAssertEqual(sample.signedRate, 3.9, accuracy: 0.3)
+        }
+    }
+
+    func testDropoutResumeEdgeSpuriousIntervalDoesNotFabricateMotion() {
+        // Reproduces the exit-pack finding: steady carrier → dropout
+        // (amplitude below the silence floor) → resume, with a spurious
+        // short crossing at the resume edge. The resume-edge blip must be
+        // `.unknown`; no motion may be fabricated right after the dropout.
+        let omega = constantOmega(frequency: 1_000)
+        let steadyFrames = Int(0.05 * sampleRate)
+        let silenceFrames = Int(0.10 * sampleRate)
+        let resumeFrames = Int(0.05 * sampleRate)
+        let (steadyLeft, steadyRight) = synthesize(frameCount: steadyFrames) { _ in omega }
+        let silence = (left: [Float](repeating: 0, count: silenceFrames), right: [Float](repeating: 0, count: silenceFrames))
+        var (resumeLeft, resumeRight) = synthesize(frameCount: resumeFrames) { _ in omega }
+        // Spurious double-crossing blip in the first resumed samples.
+        resumeLeft[5] = 0.7
+        resumeLeft[6] = -0.7
+        resumeLeft[7] = 0.7
+
+        var left = steadyLeft + silence.left + resumeLeft
+        var right = steadyRight + silence.right + resumeRight
+
+        var estimator = makeEstimator()
+        let samples = blocks(left: left, right: right, chunkSize: 512)
+            .flatMap { estimator.consume($0).samples }
+        let available = samples.filter { $0.signalState == .available }
+
+        // The dropout itself must be honest silence, and nothing around the
+        // resume may carry an implausible clamped rate.
+        XCTAssertTrue(samples.contains { $0.signalState == .noSignal })
+        XCTAssertFalse(
+            available.contains { abs($0.signedRate) > 19.9 },
+            "The resume-edge spurious interval must not surface as a clamped .available spike"
+        )
+        // Genuine motion returns once the envelope recovers.
+        XCTAssertTrue(available.contains { abs($0.signedRate - 1.0) < 0.05 })
+    }
 }
