@@ -248,6 +248,391 @@ func applyingAudioDeviceBufferDiagnostic(
     return base + marker + formatAudioDeviceBufferDiagnostic(diagnostic)
 }
 
+// MARK: - Low-latency DVS sink-node ingress (Slice 2)
+//
+// Replaces `AVAudioNode.installTap` for the feature-gated low-latency DVS
+// route with an `AVAudioSinkNode` render-quantum ingress path feeding the
+// committed `TimecodeRealtimeIngressRing`/`TimecodeRealtimeIngressWorker`
+// (Slice 1, `TimecodeRealtimeIngressRing.swift`). The ordinary
+// `AVCaptureAudioDataOutput` capture path is untouched by any of this.
+
+/// Every possible outcome of validating the audio format about to be used
+/// for `AVAudioEngine.connect(_:to:format:)` between the input node and the
+/// low-latency DVS sink node. Pure — no `AVAudioEngine`/hardware access — so
+/// every case is directly testable. Checked once, at bind time, against
+/// exactly what `TimecodeRealtimeIngressRing.publish` requires: Float32
+/// samples, one non-interleaved buffer per channel, a finite positive
+/// sample rate, and a channel count the ring's fixed configuration can
+/// actually hold. Fails closed (any non-`.valid` case) rather than starting
+/// the engine and discovering the mismatch per-callback.
+enum LowLatencySinkFormatValidationOutcome: Equatable {
+    case valid
+    case rejectedUnsupportedCommonFormat
+    case rejectedInterleavedFormat
+    case rejectedInvalidSampleRate
+    case rejectedChannelCountOutOfRange
+}
+
+func validateLowLatencySinkFormat(
+    commonFormat: AVAudioCommonFormat,
+    isInterleaved: Bool,
+    sampleRate: Double,
+    channelCount: Int,
+    ringConfiguration: TimecodeRealtimeIngressRingConfiguration
+) -> LowLatencySinkFormatValidationOutcome {
+    guard commonFormat == .pcmFormatFloat32 else {
+        return .rejectedUnsupportedCommonFormat
+    }
+    guard !isInterleaved else {
+        return .rejectedInterleavedFormat
+    }
+    guard sampleRate.isFinite, sampleRate > 0 else {
+        return .rejectedInvalidSampleRate
+    }
+    guard channelCount > 0,
+          channelCount <= ringConfiguration.maximumChannelCount,
+          channelCount <= Int(Int32.max) else {
+        return .rejectedChannelCountOutOfRange
+    }
+    return .valid
+}
+
+/// Realtime-safe, allocation-free `Float64` → `Int64` conversion for
+/// `AudioTimeStamp.mSampleTime`. `AudioTimeStampFlags.sampleTimeValid` only
+/// promises the render call populated the field — it does not guarantee the
+/// value is finite or exactly representable as `Int64`. Swift's
+/// `Int64(Double)` initializer traps if the value is NaN, infinite, or
+/// rounds (towards zero) outside `Int64`'s range, so every value must be
+/// checked before converting, exactly like `safeFrameCount(_:)` above.
+/// `9_223_372_036_854_775_808.0` is `2^63`, exactly representable as
+/// `Double`; anything in `[-2^63, 2^63)` truncates to a value inside
+/// `Int64`'s representable range. Returns `nil` — never traps — for
+/// anything outside that range.
+func safeSampleTime(_ value: Float64) -> Int64? {
+    guard value.isFinite,
+          value >= -9_223_372_036_854_775_808.0,
+          value < 9_223_372_036_854_775_808.0 else {
+        return nil
+    }
+    return Int64(value)
+}
+
+/// Monotonically increasing across one `MacCaptureEngine` instance's
+/// lifetime — never reused. Identifies one low-latency DVS sink-node
+/// session (one bind-to-teardown cycle of `refreshLowLatencyTimecodeInput`/
+/// `stopLowLatencyTimecodeInput`).
+typealias LowLatencySinkSessionGeneration = UInt64
+
+/// Bundles one low-latency DVS sink-node session's ring + worker + identity.
+/// Deliberately holds no `AVAudioEngine`/`AVAudioSinkNode` reference — those
+/// require real hardware to meaningfully exercise, so this type isolates
+/// exactly the part of "session lifecycle" Slice 2 can prove
+/// deterministically in a plain XCTest, with no hardware dependency:
+///
+/// - each session gets its own freshly allocated ring and worker;
+/// - tearing a session down closes its ring to new writes and guarantees no
+///   further consumer delivery once `tearDown()` returns (via
+///   `TimecodeRealtimeIngressWorker.stop()`'s existing barrier);
+/// - a stale, already-closed session's ring can never be confused with a
+///   later session's ring, because they are always genuinely distinct
+///   object instances tagged with distinct generations.
+///
+/// `MacCaptureEngine` is the only production caller; it additionally owns
+/// the real `AVAudioSinkNode` whose realtime receiver block captures only
+/// this session's `ring` directly (never `self`, never any other mutable
+/// property) — so even a render callback somehow still in flight after this
+/// session's `tearDown()` has begun can only ever publish into (or be
+/// rejected by) *this* session's own ring, never a replacement session's.
+final class LowLatencySinkSession {
+    let generation: LowLatencySinkSessionGeneration
+    let ring: TimecodeRealtimeIngressRing
+    let worker: TimecodeRealtimeIngressWorker
+
+    /// Fails only if `drainInterval` is invalid — see
+    /// `TimecodeRealtimeIngressWorker.init?`. Never partially constructs: if
+    /// the worker fails to initialize, the ring this session would have
+    /// owned is simply discarded — never started, never referenced by any
+    /// realtime callback.
+    init?(
+        generation: LowLatencySinkSessionGeneration,
+        ringConfiguration: TimecodeRealtimeIngressRingConfiguration = .production,
+        drainInterval: TimeInterval = 0.005,
+        consumer: @escaping @Sendable (TimecodeRealtimeIngressSlotView) -> Void
+    ) {
+        let ring = TimecodeRealtimeIngressRing(configuration: ringConfiguration)
+        guard let worker = TimecodeRealtimeIngressWorker(
+            ring: ring,
+            drainInterval: drainInterval,
+            consumer: consumer
+        ) else {
+            return nil
+        }
+        self.generation = generation
+        self.ring = ring
+        self.worker = worker
+    }
+
+    /// Truthful, deterministic, idempotent teardown: closes the ring to new
+    /// writes and synchronously guarantees no further consumer delivery once
+    /// this call returns. Safe to call more than once.
+    func tearDown() {
+        worker.stop()
+    }
+}
+
+/// Snapshot of the low-latency DVS sink ring's own producer/consumer
+/// counters at the moment of a diagnostic publish — surfaces ring-full
+/// drop-newest behavior honestly instead of silently discarding it.
+struct LowLatencySinkRingDiagnostic: Equatable {
+    let publishedCount: UInt64
+    let droppedCount: UInt64
+    let rejectedCount: UInt64
+}
+
+func formatLowLatencySinkRingDiagnostic(_ diagnostic: LowLatencySinkRingDiagnostic) -> String {
+    "published=\(diagnostic.publishedCount) dropped=\(diagnostic.droppedCount)" +
+        " rejected=\(diagnostic.rejectedCount)"
+}
+
+/// Pure marker replace-or-strip helper — mirrors
+/// `applyingAudioDeviceBufferDiagnostic`'s pattern exactly, so repeated
+/// publishes never duplicate the marker, and a `nil` diagnostic (no active
+/// session) strips any stale prior session's counters.
+func applyingLowLatencySinkRingDiagnostic(
+    to debugInfo: String,
+    diagnostic: LowLatencySinkRingDiagnostic?
+) -> String {
+    let marker = " | DVS sink ring: "
+    let base = debugInfo.components(separatedBy: marker).first ?? debugInfo
+    guard let diagnostic else { return base }
+    return base + marker + formatLowLatencySinkRingDiagnostic(diagnostic)
+}
+
+/// Raw evidence of what the worker actually drained from the ring for the
+/// most recent slot — updated on *every* delivery, whether or not adapter
+/// conversion below succeeds. This exists specifically so real hardware
+/// frame-count evidence stays visible even while adapter conversion is
+/// failing (e.g. before the `AVAudioPCMBuffer`-construction fix landed,
+/// `callbacks=0`/`observed=awaiting callback` left zero visibility into
+/// what the sink node itself was actually receiving). Deliberately
+/// independent of `LowLatencyTimecodeTapHeartbeat`: recording this must
+/// never be confused with — or substitute for — the heartbeat's
+/// `recordCallback`, which is the only thing allowed to mark the low-latency
+/// route "fresh" and suppress the AVCapture fallback, and which must only
+/// fire once full adapter conversion has actually succeeded.
+struct LowLatencySinkWorkerObservationDiagnostic: Equatable {
+    let frameCount: Int
+    let channelCount: Int
+    let sampleRate: Double
+}
+
+func formatLowLatencySinkWorkerObservationDiagnostic(
+    _ diagnostic: LowLatencySinkWorkerObservationDiagnostic
+) -> String {
+    "\(diagnostic.frameCount)f@\(Int(diagnostic.sampleRate))Hz,\(diagnostic.channelCount)ch"
+}
+
+/// Pure marker replace-or-strip helper — mirrors the other diagnostic
+/// helpers' pattern exactly.
+func applyingLowLatencySinkWorkerObservationDiagnostic(
+    to debugInfo: String,
+    diagnostic: LowLatencySinkWorkerObservationDiagnostic?
+) -> String {
+    let marker = " | DVS sink observed: "
+    let base = debugInfo.components(separatedBy: marker).first ?? debugInfo
+    guard let diagnostic else { return base }
+    return base + marker + formatLowLatencySinkWorkerObservationDiagnostic(diagnostic)
+}
+
+/// Every stage at which converting a drained ring slot into an
+/// `AVAudioPCMBuffer` (for the existing, unmodified
+/// `TimecodeCMSampleBufferAdapter.stereoSampleResult(fromPCMBuffer:hostTime:)`
+/// entry point) can fail. Distinguishing these mattered in practice: the
+/// first sink-node implementation reconstructed a *generic*
+/// `AVAudioFormat(commonFormat:sampleRate:channels:interleaved:)` from only
+/// sample rate and channel count, which returns `nil` for channel counts
+/// with no standard layout (reproduced deterministically for 14 channels —
+/// confirmed via a standalone script, not guessed) — the buffer allocation
+/// step was never actually reached on real Rane hardware. The fix passes
+/// the exact, already-validated sink connection format (which — like every
+/// real `AVAudioIONode` format — carries a proper channel layout) straight
+/// through instead of reconstructing one, eliminating that failure mode by
+/// construction; the remaining stages stay as defensive fail-closed checks.
+enum LowLatencySinkAdapterConversionFailureStage: String {
+    case channelCountMismatch
+    case bufferAllocation
+    case channelDataUnavailable
+}
+
+enum LowLatencySinkAdapterConversionOutcome {
+    case succeeded(AVAudioPCMBuffer)
+    case failed(stage: LowLatencySinkAdapterConversionFailureStage)
+}
+
+/// Synthesizes an `AVAudioPCMBuffer` from one drained ring slot, using the
+/// exact immutable format the sink connection was validated and bound with
+/// — never a freshly reconstructed one. Copies each of the slot's planar
+/// Float32 channels verbatim, preserving all original channel indices (so
+/// the existing channel-pair selection, including physical pair 3/4, keeps
+/// operating on exactly the channels it always has). Does not perform or
+/// duplicate any channel-pair selection itself — that remains entirely
+/// `TimecodeCMSampleBufferAdapter`'s job, called separately by the caller
+/// with the buffer this function returns. Runs on the worker's queue, never
+/// the realtime callback: allocation here is expected and safe.
+func makeLowLatencySinkPCMBuffer(
+    fromSlot slot: TimecodeRealtimeIngressSlotView,
+    format: AVAudioFormat
+) -> LowLatencySinkAdapterConversionOutcome {
+    guard slot.channelCount == Int(format.channelCount) else {
+        return .failed(stage: .channelCountMismatch)
+    }
+    guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(slot.frameCount)) else {
+        return .failed(stage: .bufferAllocation)
+    }
+    guard let floatChannelData = pcmBuffer.floatChannelData else {
+        return .failed(stage: .channelDataUnavailable)
+    }
+    pcmBuffer.frameLength = AVAudioFrameCount(slot.frameCount)
+    for channel in 0..<slot.channelCount {
+        let source = slot.samples(forChannel: channel)
+        if let base = source.baseAddress, source.count > 0 {
+            floatChannelData[channel].update(from: base, count: source.count)
+        }
+    }
+    return .succeeded(pcmBuffer)
+}
+
+/// Every side-effecting action the low-latency DVS sink-node lifecycle
+/// needs to perform against the real audio graph and heartbeat state,
+/// extracted as closures. This is the smallest seam necessary to prove the
+/// *sequencing* around Slice 2's start/catch/stop path (state transitions,
+/// teardown order, idempotency, failed-start cleanup completeness) in a
+/// plain XCTest, with no real `AVAudioEngine`/`AVAudioSinkNode`/hardware
+/// anywhere in the test. It is not a fake or model of `AVAudioEngine`'s own
+/// behavior — whether the Rane ONE MKII actually delivers sub-4,800-frame
+/// callbacks through a real graph still requires the hardware acceptance
+/// run described in `AI_HANDOFF.md`; this seam only proves
+/// `MacCaptureEngine`'s own start/catch/stop code is sequenced correctly.
+/// `MacCaptureEngine` supplies real closures wrapping `timecodeInputEngine`
+/// and `timecodeInputTapHeartbeat`; tests supply closures that only record
+/// what was called, in what order, or simulate failure.
+struct LowLatencySinkLifecycleActions {
+    /// Attaches the sink node to the engine graph and connects it to the
+    /// input node, given this session's ring. Called once, before
+    /// `startEngine`.
+    var attachAndConnect: (TimecodeRealtimeIngressRing) -> Void
+    /// Prepares and starts the engine. Throwing means the start failed —
+    /// `LowLatencySinkLifecycle.start` fully unwinds everything
+    /// `attachAndConnect` did before returning.
+    var startEngine: () throws -> Void
+    /// Stops the engine's producer path (safe to call even if the engine
+    /// was never successfully started).
+    var stopEngine: () -> Void
+    /// Disconnects and detaches the sink node from the engine graph. Called
+    /// only if `attachAndConnect` actually ran for the session being torn
+    /// down.
+    var disconnectAndDetach: () -> Void
+    /// Resets the engine after it has been stopped.
+    var resetEngine: () -> Void
+    /// Marks the heartbeat installed for this session's device.
+    var markHeartbeatInstalled: () -> Void
+    /// Resets the heartbeat and clears any stored buffer diagnostic.
+    var resetHeartbeat: () -> Void
+}
+
+/// Pure sequencing/state-machine layer for one low-latency DVS sink-node
+/// session's start → running → stop lifecycle. Owns exactly the state that
+/// must be kept consistent across that lifecycle — the current
+/// `LowLatencySinkSession` (ring + worker + generation), whether a sink node
+/// is currently considered attached, and whether the heartbeat is
+/// considered installed — and drives it through
+/// `LowLatencySinkLifecycleActions`'s closures for every side effect that
+/// touches the real graph or heartbeat. `MacCaptureEngine` is the only
+/// production caller; its `refreshLowLatencyTimecodeInput()`/
+/// `stopLowLatencyTimecodeInput()` are thin wrappers that build real
+/// `LowLatencySinkLifecycleActions` and call `start`/`stop` here — the exact
+/// same sequencing code runs in production and in tests, only the closures
+/// differ. No `AVAudioEngine`/`AVAudioSinkNode` reference is held by this
+/// type itself, so it is fully constructible and drivable in a plain
+/// XCTest.
+final class LowLatencySinkLifecycle {
+    enum StartOutcome: Equatable {
+        case started(generation: LowLatencySinkSessionGeneration)
+        case sessionConstructionFailed
+        case engineStartFailed
+    }
+
+    private(set) var currentSession: LowLatencySinkSession?
+    private(set) var isSinkAttached = false
+    private(set) var isHeartbeatInstalled = false
+    private var nextGeneration: LowLatencySinkSessionGeneration = 0
+
+    /// Runs the full start sequence: allocate a new generation + session,
+    /// attach/connect, mark the heartbeat installed, then prepare+start the
+    /// engine. On any failure (session construction or engine start), fully
+    /// unwinds via `stop(actions:)` before returning — a partially-started
+    /// session can never remain attached, accepting writes, heartbeat-
+    /// installed, or published as `currentSession`.
+    @discardableResult
+    func start(
+        actions: LowLatencySinkLifecycleActions,
+        drainInterval: TimeInterval = 0.005,
+        consumer: @escaping @Sendable (TimecodeRealtimeIngressSlotView) -> Void
+    ) -> StartOutcome {
+        let generation = nextGeneration + 1
+        nextGeneration = generation
+        guard let session = LowLatencySinkSession(
+            generation: generation,
+            drainInterval: drainInterval,
+            consumer: consumer
+        ) else {
+            return .sessionConstructionFailed
+        }
+
+        actions.attachAndConnect(session.ring)
+        isSinkAttached = true
+        currentSession = session
+        actions.markHeartbeatInstalled()
+        isHeartbeatInstalled = true
+
+        do {
+            try actions.startEngine()
+            return .started(generation: generation)
+        } catch {
+            stop(actions: actions)
+            return .engineStartFailed
+        }
+    }
+
+    /// Truthful, deterministic, idempotent teardown, in the required order:
+    /// (1) close producer acceptance — a `publish` call that had already
+    /// passed the ring's accept-writes check before this step may still
+    /// complete and write one final slot; this step only guarantees that
+    /// any call which *observes* the closed flag afterward is rejected, not
+    /// that every racing producer call is (see
+    /// `TimecodeRealtimeIngressRing.closeForWriting()`'s own documented
+    /// guarantee); (2) stop the engine's producer path; (3) disconnect and
+    /// detach the sink node; (4) synchronously stop the worker/consumer —
+    /// guarantees no further consumer delivery once this call returns; (5)
+    /// clear published session state. Safe to call when nothing is running,
+    /// and safe to call more than once.
+    func stop(actions: LowLatencySinkLifecycleActions) {
+        let session = currentSession
+        session?.ring.closeForWriting()
+        actions.stopEngine()
+        if isSinkAttached {
+            actions.disconnectAndDetach()
+        }
+        session?.tearDown()
+        actions.resetEngine()
+        actions.resetHeartbeat()
+
+        isSinkAttached = false
+        isHeartbeatInstalled = false
+        currentSession = nil
+    }
+}
+
 final class MacCaptureEngine: NSObject, ObservableObject {
     enum LiveRecordDirection: String, Equatable {
         case forward
@@ -2289,7 +2674,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 #if ENABLE_TIMECODE_LIVE_TAP
     /// Dedicated low-latency input path for control vinyl. The ordinary
     /// AVCapture audio output remains authoritative for routine recording;
-    /// only the DEBUG DVS callback uses this smaller-buffer tap.
+    /// only the DEBUG DVS callback uses this `AVAudioSinkNode`-based path.
     private let timecodeInputEngine = AVAudioEngine()
     private let timecodeInputStateLock = NSLock()
     private var timecodeInputTapHeartbeat = LowLatencyTimecodeTapHeartbeat()
@@ -2299,6 +2684,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// and republished alongside the heartbeat text on every diagnostic
     /// update rather than re-queried on every callback.
     private var timecodeInputBufferDiagnostic: AudioDeviceBufferFrameSizeDiagnostic?
+    /// Owns the pure start/stop sequencing (generation tracking, sink-
+    /// attached/heartbeat-installed/current-session bookkeeping) for the
+    /// low-latency DVS sink-node path — see `LowLatencySinkLifecycle`. Only
+    /// ever driven from `sessionQueue` (`refreshLowLatencyTimecodeInput()`/
+    /// `stopLowLatencyTimecodeInput()`), matching `timecodeInputEngine`'s own
+    /// access discipline.
+    private let lowLatencySinkLifecycle = LowLatencySinkLifecycle()
+    /// Thread-safe mirror of `lowLatencySinkLifecycle.currentSession`,
+    /// updated immediately after every `start`/`stop` call on `sessionQueue`.
+    /// Always accessed under `timecodeInputStateLock`: read from the
+    /// worker's own private queue (`handleLowLatencySinkDelivery`'s
+    /// diagnostic publish) and from the legacy capture path's queue
+    /// (`processAudioSampleBuffer`'s heartbeat freshness check, which also
+    /// republishes this diagnostic).
+    private var currentLowLatencySinkSession: LowLatencySinkSession?
+    /// The real `AVAudioSinkNode` currently attached to `timecodeInputEngine`,
+    /// or `nil`. Torn down together with the lifecycle's session in
+    /// `stopLowLatencyTimecodeInput()`. Only ever touched from `sessionQueue`
+    /// — the same access discipline `timecodeInputEngine` itself already
+    /// has — never from the worker queue or the realtime callback.
+    private var currentLowLatencySinkNode: AVAudioSinkNode?
+    /// Raw worker-observed evidence (frame/channel count, sample rate) for
+    /// the most recently drained slot — updated on every delivery from
+    /// `handleLowLatencySinkDelivery`, regardless of whether adapter
+    /// conversion succeeds. Always accessed under `timecodeInputStateLock`.
+    private var timecodeInputWorkerObservationDiagnostic: LowLatencySinkWorkerObservationDiagnostic?
 #endif
     private let performerMonitorCIContext = CIContext()
     private let seratoBundleIdentifiers = ["com.serato.seratodj"]
@@ -3302,9 +3713,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
 #if ENABLE_TIMECODE_LIVE_TAP
-    /// Starts (or rebinds) the DEBUG DVS input tap to the explicitly selected
-    /// capture device. A 256-frame request is ~5.3 ms at 48 kHz, removing the
-    /// 149 ms AVCapture chunk floor from the motion-control path.
+    /// Starts (or rebinds) the DEBUG DVS input path to the explicitly
+    /// selected capture device, using an `AVAudioSinkNode` connected as the
+    /// terminal input-render consumer (Slice 2) instead of
+    /// `AVAudioNode.installTap` (Slice 2's predecessor). The sink node's
+    /// realtime receiver block performs only validation/copy into a fresh
+    /// `TimecodeRealtimeIngressRing` (Slice 1); a dedicated
+    /// `TimecodeRealtimeIngressWorker` drains that ring off the realtime
+    /// thread and performs the adapter conversion, heartbeat updates, and
+    /// diagnostics that previously ran inline in the tap callback (see
+    /// `handleLowLatencySinkDelivery(_:)`).
     private func refreshLowLatencyTimecodeInput() {
         guard timecodeAudioCallback != nil,
               !selectedAudioDeviceUniqueID.isEmpty else {
@@ -3325,8 +3743,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
         // Read-only — queried before any AUHAL mutation so it reflects the
         // device's own configuration, not anything this bind is about to
-        // change. `installTap(bufferSize:)` below is only a request; this
-        // is what actually answers what frame count the device delivers.
+        // change. The sink node below has no fixed buffer-size request (it
+        // is driven by whatever render quantum the engine schedules); this
+        // diagnostic is what answers the device's own real buffer-size
+        // configuration and range regardless of that.
         // Not stored yet: `stopLowLatencyTimecodeInput()` above already
         // cleared any previous diagnostic, and this one is only published
         // once the bind below is confirmed to succeed — a failed bind must
@@ -3418,100 +3838,295 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let tapFormat: AVAudioFormat = formatChoice == .explicitOutput
             ? outputFormat
             : hardwareFormat
-        inputNode.installTap(onBus: 0, bufferSize: 256, format: tapFormat) { [weak self] buffer, time in
-            guard let self else { return }
-            let actualChannelCount = Int(buffer.format.channelCount)
-            let selection = TimecodeCMSampleBufferAdapter.channelPairSelection
-            guard lowLatencyTimecodeTapHasRequiredChannels(
-                actualChannelCount: actualChannelCount,
-                selection: selection
-            ) else {
-                let rejection =
-                    "\(actualChannelCount)ch insufficient for \(selection.label)"
-                let shouldStop = self.timecodeInputStateLock.withLock { () -> Bool in
-                    guard self.timecodeInputTapHeartbeat.isInstalled else { return false }
-                    self.timecodeInputTapHeartbeat.recordRejection(rejection)
-                    return true
-                }
-                self.publishLowLatencyTimecodeTapDiagnostic()
-                if shouldStop {
-                    NSLog(
-                        "[DVS] Low-latency tap delivered only %d channel(s), insufficient for %@; restoring AVCapture fallback.",
-                        actualChannelCount,
-                        selection.label
-                    )
-                    self.sessionQueue.async { [weak self] in
-                        self?.stopLowLatencyTimecodeInput(
-                            preservingRejection: rejection
-                        )
-                    }
-                }
-                return
-            }
-            guard let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(
-                    fromPCMBuffer: buffer,
-                    hostTime: time.hostTime == 0 ? nil : time.hostTime
-                  ),
-                  let callback = self.timecodeAudioCallback else { return }
-            let callbackUptime = CACurrentMediaTime()
-            let formatDescription =
-                "\(buffer.format.commonFormat == .pcmFormatFloat32 ? "Float32" : "\(buffer.format.commonFormat)")" +
-                (buffer.format.isInterleaved ? " interleaved" : " non-interleaved")
-            let shouldPublishDiagnostic = self.timecodeInputStateLock.withLock { () -> Bool in
-                let firstCallback = self.timecodeInputTapHeartbeat.callbackCount == 0
-                let observedFormatChanged =
-                    self.timecodeInputTapHeartbeat.observedChannelCount != actualChannelCount ||
-                    self.timecodeInputTapHeartbeat.observedFrameCount != Int(buffer.frameLength) ||
-                    self.timecodeInputTapHeartbeat.observedSampleRate != buffer.format.sampleRate ||
-                    self.timecodeInputTapHeartbeat.observedFormat != formatDescription
-                self.timecodeInputTapHeartbeat.recordCallback(
-                    uptime: callbackUptime,
-                    channelCount: actualChannelCount,
-                    frameCount: Int(buffer.frameLength),
-                    sampleRate: buffer.format.sampleRate,
-                    format: formatDescription
-                )
-                return firstCallback || observedFormatChanged
-            }
-            if shouldPublishDiagnostic {
-                self.publishLowLatencyTimecodeTapDiagnostic(now: callbackUptime)
-            }
-            callback(result.left, result.right, result.sampleRate, result.hostTime)
+
+        let formatValidation = validateLowLatencySinkFormat(
+            commonFormat: tapFormat.commonFormat,
+            isInterleaved: tapFormat.isInterleaved,
+            sampleRate: tapFormat.sampleRate,
+            channelCount: Int(tapFormat.channelCount),
+            ringConfiguration: .production
+        )
+        guard formatValidation == .valid else {
+            NSLog(
+                "[DVS] Low-latency sink format rejected (%@); retaining AVCapture fallback.",
+                String(describing: formatValidation)
+            )
+            return
         }
-        timecodeInputEngine.prepare()
-        do {
-            timecodeInputStateLock.withLock {
-                timecodeInputTapHeartbeat.markInstalled(deviceUID: selectedUID)
-                timecodeInputBufferDiagnostic = bufferDiagnostic
+
+        // The realtime receiver block below must capture only this
+        // session's own `ring` and the two fixed values below — never
+        // `self`, never any mutable engine-wide property. A stale render
+        // call from a superseded session can therefore only ever publish
+        // into (or be rejected by) *that* session's own closed ring; it can
+        // never reach a replacement session's ring, regardless of teardown
+        // timing. `LowLatencySinkLifecycle.start` constructs the session
+        // (with its own fresh ring) and passes it to `attachAndConnect`
+        // below — the production sequencing that guarantees this is the
+        // same sequencing exercised, with recording/no-op closures, in
+        // `LowLatencySinkLifecycleTests`.
+        let expectedChannelCount = Int(tapFormat.channelCount)
+        let sinkSampleRate = tapFormat.sampleRate
+        var startError: Error?
+        var actions = teardownActions()
+        // These 3 closures are used and discarded synchronously, entirely
+        // within this call to `lowLatencySinkLifecycle.start(actions:...)`
+        // below — they never escape or persist beyond it, so capturing
+        // `self` strongly here creates no retain cycle. This matters beyond
+        // style: `stopLowLatencyTimecodeInput()` (which builds the
+        // equivalent teardown closures via `teardownActions()`) is also
+        // called from `deinit`, and forming a *new* `[weak self]` capture
+        // while `self` is being deallocated is what the ObjC runtime flags
+        // as "Cannot form weak reference ... in the process of
+        // deallocation" — using `self` directly here is both safe and
+        // avoids that entirely, exactly like calling `self.method()`
+        // directly from `deinit` already does elsewhere in this class.
+        actions.attachAndConnect = { ring in
+            let sinkNode = AVAudioSinkNode { timestamp, frameCount, audioBufferList -> OSStatus in
+                let flags = timestamp.pointee.mFlags
+                let hostTime: UInt64 = flags.contains(.hostTimeValid) ? timestamp.pointee.mHostTime : 0
+                let sampleTime: Int64 = flags.contains(.sampleTimeValid)
+                    ? (safeSampleTime(timestamp.pointee.mSampleTime) ?? 0)
+                    : 0
+                // Realtime-safe: no allocation, no locks, no dispatch, no
+                // logging, no `AVAudioPCMBuffer` construction, no adapter/
+                // heartbeat/fixture/playback/notation/UI work. `publish`'s
+                // result is intentionally not inspected here — the ring
+                // already tracks published/dropped/rejected atomically;
+                // surfacing that is the worker/diagnostic path's job, not
+                // the realtime callback's.
+                ring.publish(
+                    bufferList: audioBufferList,
+                    frameCount: Int(frameCount),
+                    expectedChannelCount: expectedChannelCount,
+                    sampleRate: sinkSampleRate,
+                    hostTime: hostTime,
+                    sampleTime: sampleTime
+                )
+                return noErr
             }
-            try timecodeInputEngine.start()
-            publishLowLatencyTimecodeTapDiagnostic()
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            timecodeInputEngine.stop()
-            timecodeInputStateLock.withLock {
-                timecodeInputTapHeartbeat.reset()
-                timecodeInputBufferDiagnostic = nil
+            self.currentLowLatencySinkNode = sinkNode
+            self.timecodeInputEngine.attach(sinkNode)
+            self.timecodeInputEngine.connect(inputNode, to: sinkNode, format: tapFormat)
+        }
+        actions.startEngine = {
+            self.timecodeInputEngine.prepare()
+            do {
+                try self.timecodeInputEngine.start()
+            } catch {
+                startError = error
+                throw error
             }
+        }
+        actions.markHeartbeatInstalled = {
+            self.timecodeInputStateLock.withLock {
+                self.timecodeInputTapHeartbeat.markInstalled(deviceUID: selectedUID)
+                self.timecodeInputBufferDiagnostic = bufferDiagnostic
+            }
+        }
+
+        let outcome = lowLatencySinkLifecycle.start(
+            actions: actions,
+            // Captures the exact, already-validated `tapFormat` — never a
+            // freshly reconstructed one — so `handleLowLatencySinkDelivery`
+            // can hand it straight to `AVAudioPCMBuffer(pcmFormat:...)`.
+            // This closure runs on the worker's own queue, not the realtime
+            // callback, so capturing an extra immutable value here is fine.
+            consumer: { [weak self] slot in
+                self?.handleLowLatencySinkDelivery(slot, format: tapFormat)
+            }
+        )
+
+        timecodeInputStateLock.withLock {
+            currentLowLatencySinkSession = lowLatencySinkLifecycle.currentSession
+        }
+        if lowLatencySinkLifecycle.currentSession == nil {
+            currentLowLatencySinkNode = nil
+        }
+
+        switch outcome {
+        case .started:
             publishLowLatencyTimecodeTapDiagnostic()
-            NSLog("[DVS] Low-latency input failed to start (%@); retaining AVCapture fallback.", error.localizedDescription)
+        case .sessionConstructionFailed:
+            NSLog("[DVS] Low-latency sink session failed to construct; retaining AVCapture fallback.")
+        case .engineStartFailed:
+            NSLog(
+                "[DVS] Low-latency input failed to start (%@); retaining AVCapture fallback.",
+                startError?.localizedDescription ?? "unknown error"
+            )
+            publishLowLatencyTimecodeTapDiagnostic()
         }
     }
 
+    /// Builds the 4 teardown-only closures shared by
+    /// `stopLowLatencyTimecodeInput()` and (via
+    /// `refreshLowLatencyTimecodeInput()`'s override of the other 3 fields)
+    /// `LowLatencySinkLifecycle.start`'s internal failure-path cleanup. The
+    /// 3 start-only fields are placeholder no-ops here — safe because
+    /// `LowLatencySinkLifecycle.stop` never invokes them, and
+    /// `refreshLowLatencyTimecodeInput()` always overrides them before
+    /// calling `start`.
+    ///
+    /// Deliberately captures `self` directly (no `[weak self]`): every
+    /// closure here is invoked synchronously, within the same call to
+    /// `LowLatencySinkLifecycle.start`/`.stop` that constructed it, and
+    /// never escapes beyond that — so there is no retain cycle to guard
+    /// against. This matters beyond style: `stopLowLatencyTimecodeInput()`
+    /// (which calls this method) is also called from `deinit`, and forming
+    /// a *new* `[weak self]` capture while `self` is already being
+    /// deallocated is exactly what the ObjC runtime flags as "Cannot form
+    /// weak reference ... in the process of deallocation" — using `self`
+    /// directly is both safe and avoids that, identically to how plain
+    /// property/method access on `self` already works elsewhere in this
+    /// class's own `deinit`.
+    private func teardownActions() -> LowLatencySinkLifecycleActions {
+        LowLatencySinkLifecycleActions(
+            attachAndConnect: { _ in },
+            startEngine: {},
+            stopEngine: { self.timecodeInputEngine.stop() },
+            disconnectAndDetach: {
+                guard let sinkNode = self.currentLowLatencySinkNode else { return }
+                self.timecodeInputEngine.disconnectNodeInput(sinkNode)
+                self.timecodeInputEngine.detach(sinkNode)
+            },
+            resetEngine: { self.timecodeInputEngine.reset() },
+            markHeartbeatInstalled: {},
+            resetHeartbeat: {
+                self.timecodeInputStateLock.withLock {
+                    self.timecodeInputTapHeartbeat.reset()
+                    self.timecodeInputBufferDiagnostic = nil
+                    self.timecodeInputWorkerObservationDiagnostic = nil
+                }
+            }
+        )
+    }
+
+    /// Runs on `TimecodeRealtimeIngressWorker`'s own private serial queue —
+    /// never the realtime audio thread. Safe to allocate, lock, log, and
+    /// call the adapter here; this is exactly the work the old
+    /// `installTap` callback used to perform inline on the tap's thread.
+    /// `format` is the exact, already-validated sink connection format
+    /// (`tapFormat`, captured once by the caller) — never reconstructed
+    /// here. Synthesizes an `AVAudioPCMBuffer` from the drained slot via
+    /// `makeLowLatencySinkPCMBuffer(fromSlot:format:)` so the existing,
+    /// unmodified `TimecodeCMSampleBufferAdapter.stereoSampleResult
+    /// (fromPCMBuffer:hostTime:)` entry point — and therefore the existing
+    /// channel-selection/retention/diagnostics behavior — is reused exactly
+    /// as-is; no Rane-specific channel pinning or preset behavior is added.
+    private func handleLowLatencySinkDelivery(_ slot: TimecodeRealtimeIngressSlotView, format: AVAudioFormat) {
+        let actualChannelCount = slot.channelCount
+
+        // Hardware evidence must stay visible even if adapter conversion
+        // fails below — recorded on every delivery, never gated on success,
+        // and never fed into the heartbeat (which alone controls AVCapture
+        // fallback suppression).
+        timecodeInputStateLock.withLock {
+            timecodeInputWorkerObservationDiagnostic = LowLatencySinkWorkerObservationDiagnostic(
+                frameCount: slot.frameCount,
+                channelCount: actualChannelCount,
+                sampleRate: slot.sampleRate
+            )
+        }
+
+        let selection = TimecodeCMSampleBufferAdapter.channelPairSelection
+        guard lowLatencyTimecodeTapHasRequiredChannels(
+            actualChannelCount: actualChannelCount,
+            selection: selection
+        ) else {
+            let rejection = "\(actualChannelCount)ch insufficient for \(selection.label)"
+            let shouldStop = timecodeInputStateLock.withLock { () -> Bool in
+                guard timecodeInputTapHeartbeat.isInstalled else { return false }
+                timecodeInputTapHeartbeat.recordRejection(rejection)
+                return true
+            }
+            publishLowLatencyTimecodeTapDiagnostic()
+            if shouldStop {
+                NSLog(
+                    "[DVS] Low-latency sink delivered only %d channel(s), insufficient for %@; restoring AVCapture fallback.",
+                    actualChannelCount,
+                    selection.label
+                )
+                sessionQueue.async { [weak self] in
+                    self?.stopLowLatencyTimecodeInput(preservingRejection: rejection)
+                }
+            }
+            return
+        }
+
+        let pcmBuffer: AVAudioPCMBuffer
+        switch makeLowLatencySinkPCMBuffer(fromSlot: slot, format: format) {
+        case .succeeded(let buffer):
+            pcmBuffer = buffer
+        case .failed(let stage):
+            // Includes actual slot metadata (not just a generic message) so
+            // a real-hardware rejection is diagnosable without a debugger:
+            // channel count, frame count, sample rate, and exactly which
+            // conversion stage failed.
+            let rejection = "adapter conversion failed (\(stage.rawValue)):" +
+                " \(actualChannelCount)ch \(slot.frameCount)f@\(Int(slot.sampleRate))Hz"
+            timecodeInputStateLock.withLock {
+                timecodeInputTapHeartbeat.recordRejection(rejection)
+            }
+            publishLowLatencyTimecodeTapDiagnostic()
+            return
+        }
+
+        guard let result = TimecodeCMSampleBufferAdapter.stereoSampleResult(
+                fromPCMBuffer: pcmBuffer,
+                hostTime: slot.hostTime == 0 ? nil : slot.hostTime
+              ),
+              let callback = timecodeAudioCallback else { return }
+        let callbackUptime = CACurrentMediaTime()
+        let formatDescription = "Float32 non-interleaved"
+        let shouldPublishDiagnostic = timecodeInputStateLock.withLock { () -> Bool in
+            let firstCallback = timecodeInputTapHeartbeat.callbackCount == 0
+            let observedFormatChanged =
+                timecodeInputTapHeartbeat.observedChannelCount != actualChannelCount ||
+                timecodeInputTapHeartbeat.observedFrameCount != slot.frameCount ||
+                timecodeInputTapHeartbeat.observedSampleRate != slot.sampleRate ||
+                timecodeInputTapHeartbeat.observedFormat != formatDescription
+            timecodeInputTapHeartbeat.recordCallback(
+                uptime: callbackUptime,
+                channelCount: actualChannelCount,
+                frameCount: slot.frameCount,
+                sampleRate: slot.sampleRate,
+                format: formatDescription
+            )
+            return firstCallback || observedFormatChanged
+        }
+        if shouldPublishDiagnostic {
+            publishLowLatencyTimecodeTapDiagnostic(now: callbackUptime)
+        }
+        callback(result.left, result.right, result.sampleRate, result.hostTime)
+    }
+
+    /// Truthful, deterministic, idempotent teardown of the current
+    /// low-latency DVS sink-node session — a thin wrapper delegating the
+    /// actual sequencing to `LowLatencySinkLifecycle.stop`, in the required
+    /// order: (1) close producer acceptance first — a `publish` call that
+    /// had already passed the ring's accept-writes check *before* this step
+    /// may still complete and write one final slot; this step only
+    /// guarantees that a call which *observes* the flag as already closed
+    /// afterward is rejected, not that every racing producer call is (see
+    /// `TimecodeRealtimeIngressRing.closeForWriting()`'s own documented
+    /// guarantee) — that in-flight slot is still safe because the ring
+    /// object itself is kept alive by the sink node's own closure capture,
+    /// independent of this function's local bindings; (2) stop the engine's
+    /// producer path; (3) disconnect and detach the sink node; (4)
+    /// synchronously stop the worker/consumer — guarantees no further
+    /// consumer delivery once this call returns; (5) clear published
+    /// session state. `currentLowLatencySinkNode` is only cleared after
+    /// `lowLatencySinkLifecycle.stop` returns, so producer retirement is
+    /// provably complete first. Safe to call when nothing is running, and
+    /// safe to call more than once.
     private func stopLowLatencyTimecodeInput(
         preservingRejection rejection: String? = nil
     ) {
-        let wasInstalled = timecodeInputStateLock.withLock {
-            timecodeInputTapHeartbeat.isInstalled
-        }
-        if wasInstalled {
-            timecodeInputEngine.inputNode.removeTap(onBus: 0)
-        }
-        timecodeInputEngine.stop()
-        timecodeInputEngine.reset()
+        lowLatencySinkLifecycle.stop(actions: teardownActions())
+        currentLowLatencySinkNode = nil
+
         timecodeInputStateLock.withLock {
-            timecodeInputTapHeartbeat.reset()
-            timecodeInputBufferDiagnostic = nil
+            currentLowLatencySinkSession = nil
             if let rejection {
                 timecodeInputTapHeartbeat.recordRejection(rejection)
             }
@@ -3531,6 +4146,41 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo =
             base + marker + heartbeatText
         publishAudioDeviceBufferDiagnosticIfAvailable()
+        publishLowLatencySinkRingDiagnosticIfAvailable()
+        publishLowLatencySinkWorkerObservationDiagnosticIfAvailable()
+    }
+
+    /// Appends the low-latency sink ring's live published/dropped/rejected
+    /// counters (see `LowLatencySinkRingDiagnostic`), using the pure
+    /// `applyingLowLatencySinkRingDiagnostic(to:diagnostic:)` helper so a
+    /// `nil` diagnostic (no active session) strips any stale marker text
+    /// rather than leaving a previous session's counters in place.
+    private func publishLowLatencySinkRingDiagnosticIfAvailable() {
+        let session = timecodeInputStateLock.withLock { currentLowLatencySinkSession }
+        let diagnostic = session.map {
+            LowLatencySinkRingDiagnostic(
+                publishedCount: $0.ring.publishedCount,
+                droppedCount: $0.ring.droppedCount,
+                rejectedCount: $0.ring.rejectedCount
+            )
+        }
+        TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo = applyingLowLatencySinkRingDiagnostic(
+            to: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
+            diagnostic: diagnostic
+        )
+    }
+
+    /// Appends the worker's raw observed frame/channel/sample-rate evidence
+    /// for the most recent slot (see `LowLatencySinkWorkerObservationDiagnostic`)
+    /// — visible even while adapter conversion is failing, distinct from and
+    /// never a substitute for the heartbeat's own `observed=`/freshness
+    /// state, which only updates once conversion actually succeeds.
+    private func publishLowLatencySinkWorkerObservationDiagnosticIfAvailable() {
+        let diagnostic = timecodeInputStateLock.withLock { timecodeInputWorkerObservationDiagnostic }
+        TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo = applyingLowLatencySinkWorkerObservationDiagnostic(
+            to: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
+            diagnostic: diagnostic
+        )
     }
 
     /// Appends the once-per-bind HAL buffer diagnostic (see
@@ -3544,6 +4194,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             to: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
             diagnostic: diagnostic
         )
+    }
+
+    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else { return nil }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize,
+            &devices
+        ) == noErr else { return nil }
+
+        return devices.first { deviceID in
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<CFString?>.size)
+            var uid: CFString?
+            let status = AudioObjectGetPropertyData(
+                deviceID,
+                &uidAddress,
+                0,
+                nil,
+                &uidSize,
+                &uid
+            )
+            return status == noErr && (uid as String?) == requestedUID
+        }
     }
 
     /// Read-only query of the properties that actually govern the frame
@@ -3666,51 +4361,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 kAudioDevicePropertyLatency, scope: kAudioDevicePropertyScopeInput
             )
         )
-    }
-
-    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
-        var devicesAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize
-        ) == noErr else { return nil }
-        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-        var devices = Array(repeating: AudioDeviceID(0), count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize,
-            &devices
-        ) == noErr else { return nil }
-
-        return devices.first { deviceID in
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidSize = UInt32(MemoryLayout<CFString?>.size)
-            var uid: CFString?
-            let status = AudioObjectGetPropertyData(
-                deviceID,
-                &uidAddress,
-                0,
-                nil,
-                &uidSize,
-                &uid
-            )
-            return status == noErr && (uid as String?) == requestedUID
-        }
     }
 #endif
 
