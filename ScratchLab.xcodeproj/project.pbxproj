@@ -80,6 +80,7 @@
 		TCA000010TCA010TCA00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */; };
 		TCB000010TCB010TCB00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */; };
 		TCT000003TCT003TCT00001 /* TimecodeLiveTapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */; };
+		TRIR0000003TRIR0BUILDTEST /* TimecodeRealtimeIngressRingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRIR0000002TRIR0FILETEST /* TimecodeRealtimeIngressRingTests.swift */; };
 		TCA000013TCA013TCA00001 /* TimecodePrototypeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */; };
 		TCB000013TCB013TCB00001 /* TimecodePrototypeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */; };
 		TCT000004TCT004TCT00001 /* TimecodePrototypeRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */; };
@@ -206,6 +207,7 @@
 		SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */; };
 		SDTR0001TST /* ScratchLabDesktopTestResourceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */; };
 		B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000005 /* MacCaptureEngine.swift */; };
+		TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */; };
 		B5AA0001A1B2C3D4E5F60709 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
 		B5AA0002A1B2C3D4E5F60709 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
 		B5AA0003A1B2C3D4E5F60709 /* ProgressManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* ProgressManager.swift */; };
@@ -644,6 +646,7 @@
 		B2000003 /* MacCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewView.swift; sourceTree = "<group>"; };
 		B2000004 /* HandMotionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandMotionOverlay.swift; sourceTree = "<group>"; };
 		B2000005 /* MacCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCaptureEngine.swift; sourceTree = "<group>"; };
+		TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeRealtimeIngressRing.swift; sourceTree = "<group>"; };
 		SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayer.swift; sourceTree = "<group>"; };
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SSPC0001FREF /* ScratchSamplePlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackController.swift; sourceTree = "<group>"; };
@@ -735,6 +738,7 @@
 		TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeLiveIntegrationTests.swift; path = TimecodeLiveIntegrationTests.swift; sourceTree = "<group>"; };
 		TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeCMSampleBufferAdapter.swift; path = TimecodeCMSampleBufferAdapter.swift; sourceTree = "<group>"; };
 		TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeLiveTapTests.swift; path = TimecodeLiveTapTests.swift; sourceTree = "<group>"; };
+		TRIR0000002TRIR0FILETEST /* TimecodeRealtimeIngressRingTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeRealtimeIngressRingTests.swift; path = TimecodeRealtimeIngressRingTests.swift; sourceTree = "<group>"; };
 		TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeRecorder.swift; path = TimecodePrototypeRecorder.swift; sourceTree = "<group>"; };
 		TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodePrototypeRecorderTests.swift; path = TimecodePrototypeRecorderTests.swift; sourceTree = "<group>"; };
 		TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimecodeValidationSnapshot.swift; path = TimecodeValidationSnapshot.swift; sourceTree = "<group>"; };
@@ -1060,6 +1064,7 @@
 				TCR000006TCR006TCR00001 /* TimecodeDecoderTests.swift */,
 				TCR000010TCR010TCR00001 /* TimecodeLiveIntegrationTests.swift */,
 				TCR000012TCR012TCR00001 /* TimecodeLiveTapTests.swift */,
+				TRIR0000002TRIR0FILETEST /* TimecodeRealtimeIngressRingTests.swift */,
 				TCR000014TCR014TCR00001 /* TimecodePrototypeRecorderTests.swift */,
 				TCR000016TCR016TCR00001 /* TimecodeValidationTests.swift */,
 				TCR000018TCR018TCR00001 /* TimecodeStabilityFilterTests.swift */,
@@ -1417,6 +1422,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000005 /* MacCaptureEngine.swift */,
+				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
 				SSPC0001FREF /* ScratchSamplePlaybackController.swift */,
 				B2000006 /* MacScratchDetector.swift */,
@@ -1770,6 +1776,7 @@
 				DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */,
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
 				B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */,
+				TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */,
 				SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */,
 				SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */,
 				D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */,
@@ -2226,6 +2233,7 @@
 				TCT000001TCT001TCT00001 /* TimecodeDecoderTests.swift in Sources */,
 			TCT000002TCT002TCT00001 /* TimecodeLiveIntegrationTests.swift in Sources */,
 				TCT000003TCT003TCT00001 /* TimecodeLiveTapTests.swift in Sources */,
+				TRIR0000003TRIR0BUILDTEST /* TimecodeRealtimeIngressRingTests.swift in Sources */,
 				TCT000004TCT004TCT00001 /* TimecodePrototypeRecorderTests.swift in Sources */,
 				TCT000005TCT005TCT00001 /* TimecodeValidationTests.swift in Sources */,
 				TCT000006TCT006TCT00001 /* TimecodeStabilityFilterTests.swift in Sources */,
