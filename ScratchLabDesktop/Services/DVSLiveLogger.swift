@@ -140,5 +140,9 @@ struct DVSLogEntry: Encodable {
     let perPairPeak: [Float]
     let adapterFormat: String
     let adapterWarning: String?
+    let rawDecodeTrace: String
+    let calibratedTrace: String
+    let heldDropoutCount: Int
+    let longDropoutCount: Int
 }
 #endif

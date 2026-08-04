@@ -396,7 +396,11 @@ struct DVSControlVinylPanel: View {
             perPairRMS: perPairRMS,
             perPairPeak: perPairPeak,
             adapterFormat: adapterFormat,
-            adapterWarning: adapterWarning
+            adapterWarning: adapterWarning,
+            rawDecodeTrace: c.rawDecodeTrace,
+            calibratedTrace: c.calibratedTrace,
+            heldDropoutCount: c.heldDropoutCount,
+            longDropoutCount: c.longDropoutCount
         )
     }
 

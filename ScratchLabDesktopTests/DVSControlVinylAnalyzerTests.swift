@@ -78,7 +78,11 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
             perPairRMS: [],
             perPairPeak: [],
             adapterFormat: "test",
-            adapterWarning: nil
+            adapterWarning: nil,
+            rawDecodeTrace: "",
+            calibratedTrace: "",
+            heldDropoutCount: 0,
+            longDropoutCount: 0
         )
     }
 
