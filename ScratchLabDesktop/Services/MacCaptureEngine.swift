@@ -1125,10 +1125,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
             }
 
-            guard let format = AVAudioFormat(
+            guard let format = pcmFormat(
                 commonFormat: commonFormat,
                 sampleRate: asbd.mSampleRate,
-                channels: AVAudioChannelCount(channelCount),
+                channelCount: AVAudioChannelCount(channelCount),
                 interleaved: !isNonInterleaved
             ) else {
                 throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
@@ -1186,7 +1186,59 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             return buffer
         }
+
+        private static func pcmFormat(
+            commonFormat: AVAudioCommonFormat,
+            sampleRate: Double,
+            channelCount: AVAudioChannelCount,
+            interleaved: Bool
+        ) -> AVAudioFormat? {
+            if let format = AVAudioFormat(
+                commonFormat: commonFormat,
+                sampleRate: sampleRate,
+                channels: channelCount,
+                interleaved: interleaved
+            ) {
+                return format
+            }
+
+            guard let channelLayout = AVAudioChannelLayout(
+                layoutTag: AudioChannelLayoutTag(
+                    kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channelCount)
+                )
+            ) else {
+                return nil
+            }
+            return AVAudioFormat(
+                commonFormat: commonFormat,
+                sampleRate: sampleRate,
+                interleaved: interleaved,
+                channelLayout: channelLayout
+            )
+        }
     }
+
+#if DEBUG
+    static func writeRoutineAudioSampleBufferForTesting(
+        _ sampleBuffer: CMSampleBuffer,
+        to destinationURL: URL
+    ) -> (
+        buffersReceived: Int,
+        buffersAppended: Int,
+        buffersSkipped: Int,
+        lastErrorMessage: String?
+    ) {
+        let writer = RoutineAudioCaptureWriter(destinationURL: destinationURL)
+        writer.append(sampleBuffer)
+        let diagnostics = writer.diagnosticsSnapshot()
+        return (
+            diagnostics.buffersReceived,
+            diagnostics.buffersAppended,
+            diagnostics.buffersSkipped,
+            diagnostics.lastErrorMessage
+        )
+    }
+#endif
 
     final class RoutineDetectedNotationBuilder {
         /// Minimum raw-movement position delta before a movement event is emitted.
@@ -5849,27 +5901,44 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private struct AudioPacket {
+    struct AudioPacket {
         let samples: [Float]
         let sampleRate: Double
     }
 
-    private static func audioPacket(from sampleBuffer: CMSampleBuffer) -> AudioPacket? {
+    static func audioPacket(from sampleBuffer: CMSampleBuffer) -> AudioPacket? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
             return nil
         }
 
         let asbd = asbdPointer.pointee
-        var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList(mNumberBuffers: 1,
-                                              mBuffers: AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil))
+        guard asbd.mFormatID == kAudioFormatLinearPCM else { return nil }
 
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bitsPerChannel = Int(asbd.mBitsPerChannel)
+        let channelCount = max(1, Int(asbd.mChannelsPerFrame))
+        let maximumBufferCount = isNonInterleaved ? channelCount : 1
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+            + max(0, maximumBufferCount - 1) * MemoryLayout<AudioBuffer>.size
+        let rawPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: audioBufferListSize,
+            alignment: max(16, MemoryLayout<AudioBufferList>.alignment)
+        )
+        defer { rawPointer.deallocate() }
+        let audioBufferListPointer = rawPointer.bindMemory(to: AudioBufferList.self, capacity: 1)
+        audioBufferListPointer.pointee = AudioBufferList(
+            mNumberBuffers: UInt32(maximumBufferCount),
+            mBuffers: AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil)
+        )
+
+        var blockBuffer: CMBlockBuffer?
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            bufferListOut: audioBufferListPointer,
+            bufferListSize: audioBufferListSize,
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
             flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
@@ -5878,11 +5947,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         guard status == noErr else { return nil }
 
-        let buffers = UnsafeMutableAudioBufferListPointer(&audioBufferList)
-        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
-        let bitsPerChannel = Int(asbd.mBitsPerChannel)
-        let channelCount = max(1, Int(asbd.mChannelsPerFrame))
+        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferListPointer)
+        guard !buffers.isEmpty, buffers.count <= maximumBufferCount else { return nil }
         var channelSamples: [[Float]] = []
 
         for buffer in buffers {

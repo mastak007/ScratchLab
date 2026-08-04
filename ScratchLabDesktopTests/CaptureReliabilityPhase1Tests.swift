@@ -1812,6 +1812,229 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(MacCaptureEngine.formattedAudioPercent(for: 0.4, hasPublishedAudioLevel: false), "0%")
     }
 
+    func testMacCaptureEngineAudioPacketSafelyDownmixesNonInterleavedStereo() throws {
+        let left: [Float] = [0.25, 0.50, -0.25, -0.50]
+        let right: [Float] = [0.75, -0.50, 0.25, 0.50]
+        let sampleBuffer = try makeNonInterleavedFloatSampleBuffer(
+            channels: [left, right],
+            sampleRate: 48_000
+        )
+
+        let packet = try XCTUnwrap(MacCaptureEngine.audioPacket(from: sampleBuffer))
+
+        XCTAssertEqual(packet.sampleRate, 48_000)
+        XCTAssertEqual(packet.samples, [0.50, 0.0, 0.0, 0.0])
+    }
+
+    func testRoutineAudioCaptureWriterCreatesWAVForRaneMultichannelPCM() throws {
+        let frameCount = 32
+        let channelCount = 14
+        let samples = (0..<(frameCount * channelCount)).map { Int32($0 * 100) }
+        let sampleBuffer = try makeInterleavedInt32SampleBuffer(
+            samples: samples,
+            channelCount: channelCount,
+            sampleRate: 48_000
+        )
+        let directory = try makeTemporaryDirectory()
+        let destinationURL = directory.appendingPathComponent("rane_multichannel.wav")
+        let diagnostics = MacCaptureEngine.writeRoutineAudioSampleBufferForTesting(
+            sampleBuffer,
+            to: destinationURL
+        )
+        XCTAssertEqual(diagnostics.buffersReceived, 1)
+        XCTAssertEqual(diagnostics.buffersAppended, 1)
+        XCTAssertEqual(diagnostics.buffersSkipped, 0)
+        XCTAssertNil(diagnostics.lastErrorMessage)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destinationURL.path))
+
+        let audioFile = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(audioFile.fileFormat.channelCount, AVAudioChannelCount(channelCount))
+        XCTAssertEqual(audioFile.fileFormat.sampleRate, 48_000)
+        XCTAssertEqual(audioFile.length, AVAudioFramePosition(frameCount))
+    }
+
+    private func makeNonInterleavedFloatSampleBuffer(
+        channels: [[Float]],
+        sampleRate: Double
+    ) throws -> CMSampleBuffer {
+        let frameCount = try XCTUnwrap(channels.first?.count)
+        XCTAssertGreaterThan(frameCount, 0)
+        XCTAssertTrue(channels.allSatisfy { $0.count == frameCount })
+
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: sampleRate,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat
+                | kAudioFormatFlagIsPacked
+                | kAudioFormatFlagIsNonInterleaved,
+            mBytesPerPacket: UInt32(MemoryLayout<Float>.size),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(MemoryLayout<Float>.size),
+            mChannelsPerFrame: UInt32(channels.count),
+            mBitsPerChannel: UInt32(MemoryLayout<Float>.size * 8),
+            mReserved: 0
+        )
+        var formatDescription: CMAudioFormatDescription?
+        XCTAssertEqual(
+            CMAudioFormatDescriptionCreate(
+                allocator: kCFAllocatorDefault,
+                asbd: &asbd,
+                layoutSize: 0,
+                layout: nil,
+                magicCookieSize: 0,
+                magicCookie: nil,
+                extensions: nil,
+                formatDescriptionOut: &formatDescription
+            ),
+            noErr
+        )
+
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: .zero,
+            decodeTimeStamp: .invalid
+        )
+        var sampleBuffer: CMSampleBuffer?
+        XCTAssertEqual(
+            CMSampleBufferCreateReady(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: nil,
+                formatDescription: try XCTUnwrap(formatDescription),
+                sampleCount: frameCount,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timing,
+                sampleSizeEntryCount: 0,
+                sampleSizeArray: nil,
+                sampleBufferOut: &sampleBuffer
+            ),
+            noErr
+        )
+        let resolvedSampleBuffer = try XCTUnwrap(sampleBuffer)
+
+        let bufferList = AudioBufferList.allocate(maximumBuffers: channels.count)
+        bufferList.count = channels.count
+        var channelPointers: [UnsafeMutablePointer<Float>] = []
+        defer {
+            channelPointers.forEach {
+                $0.deinitialize(count: frameCount)
+                $0.deallocate()
+            }
+            bufferList.unsafeMutablePointer.deallocate()
+        }
+
+        for (index, channel) in channels.enumerated() {
+            let pointer = UnsafeMutablePointer<Float>.allocate(capacity: frameCount)
+            channel.withUnsafeBufferPointer {
+                pointer.initialize(from: $0.baseAddress!, count: frameCount)
+            }
+            channelPointers.append(pointer)
+            bufferList[index] = AudioBuffer(
+                mNumberChannels: 1,
+                mDataByteSize: UInt32(frameCount * MemoryLayout<Float>.size),
+                mData: pointer
+            )
+        }
+
+        XCTAssertEqual(
+            CMSampleBufferSetDataBufferFromAudioBufferList(
+                resolvedSampleBuffer,
+                blockBufferAllocator: kCFAllocatorDefault,
+                blockBufferMemoryAllocator: kCFAllocatorDefault,
+                flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
+                bufferList: bufferList.unsafePointer
+            ),
+            noErr
+        )
+        return resolvedSampleBuffer
+    }
+
+    private func makeInterleavedInt32SampleBuffer(
+        samples: [Int32],
+        channelCount: Int,
+        sampleRate: Double
+    ) throws -> CMSampleBuffer {
+        XCTAssertGreaterThan(channelCount, 0)
+        XCTAssertEqual(samples.count % channelCount, 0)
+        let frameCount = samples.count / channelCount
+        XCTAssertGreaterThan(frameCount, 0)
+        let bytesPerFrame = MemoryLayout<Int32>.size * channelCount
+
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: sampleRate,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: UInt32(bytesPerFrame),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(bytesPerFrame),
+            mChannelsPerFrame: UInt32(channelCount),
+            mBitsPerChannel: UInt32(MemoryLayout<Int32>.size * 8),
+            mReserved: 0
+        )
+        var formatDescription: CMAudioFormatDescription?
+        XCTAssertEqual(
+            CMAudioFormatDescriptionCreate(
+                allocator: kCFAllocatorDefault,
+                asbd: &asbd,
+                layoutSize: 0,
+                layout: nil,
+                magicCookieSize: 0,
+                magicCookie: nil,
+                extensions: nil,
+                formatDescriptionOut: &formatDescription
+            ),
+            noErr
+        )
+
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: .zero,
+            decodeTimeStamp: .invalid
+        )
+        var sampleBuffer: CMSampleBuffer?
+        XCTAssertEqual(
+            CMSampleBufferCreateReady(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: nil,
+                formatDescription: try XCTUnwrap(formatDescription),
+                sampleCount: frameCount,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timing,
+                sampleSizeEntryCount: 0,
+                sampleSizeArray: nil,
+                sampleBufferOut: &sampleBuffer
+            ),
+            noErr
+        )
+        let resolvedSampleBuffer = try XCTUnwrap(sampleBuffer)
+        let pointer = UnsafeMutablePointer<Int32>.allocate(capacity: samples.count)
+        defer {
+            pointer.deinitialize(count: samples.count)
+            pointer.deallocate()
+        }
+        samples.withUnsafeBufferPointer {
+            pointer.initialize(from: $0.baseAddress!, count: samples.count)
+        }
+        var bufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(
+                mNumberChannels: UInt32(channelCount),
+                mDataByteSize: UInt32(samples.count * MemoryLayout<Int32>.size),
+                mData: pointer
+            )
+        )
+        XCTAssertEqual(
+            CMSampleBufferSetDataBufferFromAudioBufferList(
+                resolvedSampleBuffer,
+                blockBufferAllocator: kCFAllocatorDefault,
+                blockBufferMemoryAllocator: kCFAllocatorDefault,
+                flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
+                bufferList: &bufferList
+            ),
+            noErr
+        )
+        return resolvedSampleBuffer
+    }
+
     func testMacCaptureEnginePracticeAudioStatusTextUsesSafeUnavailableStates() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.selectedAudioDeviceUniqueID = ""

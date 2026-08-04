@@ -2293,4 +2293,43 @@ final class TimecodeLiveTapTests: XCTestCase {
             )
         }
     }
+    func testLowLatencyPCMBufferAdapterPreservesStereoAndSmallFrameCount() throws {
+        let originalSelection = TimecodeCMSampleBufferAdapter.channelPairSelection
+        defer { TimecodeCMSampleBufferAdapter.channelPairSelection = originalSelection }
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .pair(startChannel: 0)
+
+        let frameCount = 256
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(frameCount)
+        ))
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let channelData = try XCTUnwrap(buffer.floatChannelData)
+        for frame in 0..<frameCount {
+            let phase = 2 * Float.pi * 1_000 * Float(frame) / 48_000
+            channelData[0][frame] = 0.4 * sin(phase)
+            channelData[1][frame] = 0.4 * sin(phase - .pi / 2)
+        }
+
+        let result = try XCTUnwrap(
+            TimecodeCMSampleBufferAdapter.stereoSampleResult(
+                fromPCMBuffer: buffer,
+                hostTime: 123
+            )
+        )
+        XCTAssertEqual(result.frameCount, 256)
+        XCTAssertEqual(result.sourceChannelCount, 2)
+        XCTAssertEqual(result.selectedChannelPair, "1/2")
+        XCTAssertEqual(result.sampleRate, 48_000)
+        XCTAssertEqual(result.hostTime, 123)
+        XCTAssertEqual(result.left[12], channelData[0][12], accuracy: 0.000_001)
+        XCTAssertEqual(result.right[12], channelData[1][12], accuracy: 0.000_001)
+        XCTAssertTrue(result.formatSummary.contains("AVAudioEngine"))
+    }
 }
