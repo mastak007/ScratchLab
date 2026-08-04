@@ -696,6 +696,10 @@ struct MacAnalyzerView: View {
         let scheduleCountsLine = "Scheduled grains: forward \(diagnostics?.forwardScheduleCount ?? 0) · backward \(diagnostics?.backwardScheduleCount ?? 0)"
         let bridgeGateLine = "Bridge gate: \(timecodeBridge.lastDecision.label)"
         let bridgeGateCountsLine = "Bridge blocks: \(timecodeBridge.blockingDecisionSummary)"
+        let notationDiagnostics = captureEngine.timecodeNotationDiagnostics
+        let notationGateLine = "Notation gate: \(notationDiagnostics.lastDecision?.label ?? "Not evaluated")"
+        let notationGateCountsLine = "Notation decisions: \(notationDiagnostics.decisionCountsDescription())"
+        let notationOutputLine = "Notation samples: accumulated \(notationDiagnostics.accumulatedSampleCount) · finalized \(notationDiagnostics.finalizedSampleCount) · events \(notationDiagnostics.finalizedEventCount)"
         let engineLine: String
         if let diagnostics {
             let frame = diagnostics.currentSampleFrame
@@ -709,6 +713,9 @@ struct MacAnalyzerView: View {
             Text(appliedLine).font(.caption).foregroundStyle(.secondary)
             Text(bridgeGateLine).font(.caption).foregroundStyle(.secondary)
             Text(bridgeGateCountsLine).font(.caption).foregroundStyle(.secondary)
+            Text(notationGateLine).font(.caption).foregroundStyle(.secondary)
+            Text(notationGateCountsLine).font(.caption).foregroundStyle(.secondary)
+            Text(notationOutputLine).font(.caption).foregroundStyle(.secondary)
             Text(scheduleLine).font(.caption).foregroundStyle(.secondary)
             Text(scheduleCountsLine).font(.caption).foregroundStyle(.secondary)
             Text(engineLine).font(.caption).foregroundStyle(.secondary)
@@ -1023,6 +1030,18 @@ struct MacAnalyzerView: View {
             now: now,
             flushStart: flushStart,
             elapsed: elapsed
+        )
+#endif
+#if DEBUG
+        // Independent of any playback drive: this only ever accumulates
+        // into notation when `captureEngine.notationRoutingEnabled` is
+        // explicitly set (no UI sets it yet — see TASKS.md's DVS notation
+        // slice 2) and a routine take is actively recording. Evaluating it
+        // here never reads `timecodeBridge`/`playbackDrive`, and never
+        // affects them.
+        captureEngine.forwardTimecodeNotationWindow(
+            pipeline: timecodePipeline,
+            minConfidence: timecodePipeline.minConfidence
         )
 #endif
 #if DEBUG

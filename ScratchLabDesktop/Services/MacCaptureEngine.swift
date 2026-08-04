@@ -2138,6 +2138,46 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         scratchPlaybackController.positionDidChange(steps: steps, direction: direction)
         lastTimecodeDriveAppliedAt = Date()
     }
+#if DEBUG
+    /// Evaluates the independent DVS notation trust gate against `pipeline`
+    /// and, only when trusted and a routine take is actively recording with
+    /// notation routing enabled, appends the trusted window to the
+    /// in-progress accumulator.
+    ///
+    /// Entirely independent of `dvsPlaybackDriveActive`/
+    /// `forwardTimecodeDrive`: this method never reads or writes any
+    /// playback-related property, and nothing in `forwardTimecodeDrive`
+    /// reads or writes anything this method touches. `validationRequired`
+    /// is always `true` with no override parameter exposed here — per the
+    /// recorded plan, notation routing must never auto-enable a validation
+    /// override the way a user-facing playback control might.
+    func forwardTimecodeNotationWindow(pipeline: TimecodeControlPipeline, minConfidence: Double) {
+        guard notationRoutingEnabled, isRoutineRecording else { return }
+        let result = TimecodeNotationTrustGate.evaluate(
+            pipeline: pipeline,
+            notationRoutingEnabled: notationRoutingEnabled,
+            isReplayActive: false,
+            minConfidence: minConfidence,
+            validationRequired: true,
+            validationOverride: false
+        )
+
+        timecodeNotationLock.lock()
+        defer { timecodeNotationLock.unlock() }
+        timecodeNotationDiagnosticsStorage.record(result.decision)
+        guard result.decision == .trusted,
+              let timeline = result.timeline,
+              let firstSampleTime = timeline.samples.first?.time else { return }
+        if timecodeNotationAccumulator == nil {
+            timecodeNotationAccumulator = TimecodeNotationTimelineAccumulator(takeStartTime: firstSampleTime)
+        }
+        timecodeNotationAccumulator?.append(window: timeline)
+        timecodeNotationDiagnosticsStorage.updateAccumulatedSampleCount(
+            timecodeNotationAccumulator?.samples.count ?? 0
+        )
+    }
+#endif
+
     @Published var selectedAudioDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedAudioDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceUniqueID)
@@ -2719,6 +2759,62 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// AVCaptureFileOutput delegate queue (drain). Mirrors the
     /// `midiCaptureLock` pattern already used for raw MIDI events.
     private let platterRecorderLock = NSLock()
+
+#if DEBUG
+    // MARK: - DVS notation slice 2 (implementation plan, planning-only slice
+    // recorded in TASKS.md/AI_HANDOFF.md) — accumulates trusted decoded DVS
+    // motion into notation during a routine take, entirely independent of
+    // DVS playback (`dvsPlaybackDriveActive`/`forwardTimecodeDrive`). No UI
+    // control sets `notationRoutingEnabled` yet — it exists so this wiring
+    // can be exercised ahead of any user-facing toggle, matching "keep
+    // playback override and notation routing off until explicitly
+    // approved." `DetectedNotationSnapshot`/the v4 export schema are NOT
+    // touched here — that is a later slice's explicit scope.
+
+    /// Whether decoded DVS motion should be accumulated into notation
+    /// during routine take recording. Defaults to `false`. Deliberately a
+    /// separate stored property from `dvsPlaybackDriveActive` — there is no
+    /// code path connecting the two, so enabling one can never enable the
+    /// other. `TimecodeNotationTrustGate.evaluate` never reads or sets
+    /// playback state either (proven in `TimecodeNotationRoutingTests
+    /// .testTrustGateNeverReadsOrTouchesPlaybackBridgeState`), so this
+    /// independence holds end to end, not just at this single flag.
+    var notationRoutingEnabled = false
+
+    /// Accumulates trusted DVS timeline windows for the duration of one
+    /// routine take. `nil` when not recording, notation routing is off, or
+    /// no trusted window has arrived yet this take. Lazily anchored to the
+    /// first trusted window's own sample time (the pipeline's decode clock
+    /// domain, not `CACurrentMediaTime()` — DVS timestamps come from audio
+    /// buffer decode timing, a different clock than the camera-based
+    /// `platterPositionRecorder` uses) rather than a fixed start-of-take
+    /// timestamp, so rebasing stays correct regardless of when the first
+    /// trusted window happens to land within the take.
+    private var timecodeNotationAccumulator: TimecodeNotationTimelineAccumulator?
+
+    /// Funnels every accumulator access through a single lock, mirroring
+    /// `platterRecorderLock` — the accumulator is touched by whichever
+    /// queue the DVS control loop's tick handler runs on and drained on
+    /// the AVCaptureFileOutput delegate queue.
+    private let timecodeNotationLock = NSLock()
+
+    /// Protected by `timecodeNotationLock`; exposed to the live panel only
+    /// through the immutable snapshot below.
+    private var timecodeNotationDiagnosticsStorage = TimecodeNotationDiagnostics()
+
+    var timecodeNotationDiagnostics: TimecodeNotationDiagnostics {
+        timecodeNotationLock.lock()
+        defer { timecodeNotationLock.unlock() }
+        return timecodeNotationDiagnosticsStorage
+    }
+
+    /// Most recently drained DVS notation timeline. In-memory diagnostic
+    /// only, mirroring `lastDrainedPlatterPositionTimeline`'s role for the
+    /// camera-based recorder — not wired into `DetectedNotationSnapshot`
+    /// or export (a later slice's scope). Cleared at the start of each new
+    /// routine recording so a stale value never lingers.
+    private(set) var lastDrainedTimecodeNotationTimeline: PlatterPositionTimeline?
+#endif
 
     private let videoOutput = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -3387,6 +3483,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.platterRecordingStartTime = CACurrentMediaTime()
                 self.platterPositionRecorder.startRecording(at: 0)
                 self.platterRecorderLock.unlock()
+                #if DEBUG
+                self.timecodeNotationLock.lock()
+                self.lastDrainedTimecodeNotationTimeline = nil
+                self.timecodeNotationAccumulator = nil
+                self.timecodeNotationDiagnosticsStorage = TimecodeNotationDiagnostics()
+                self.timecodeNotationLock.unlock()
+                #endif
                 #if DEBUG
                 // Reset per-take Vision counters so Review diagnostics
                 // compare against this take only, not the whole session.
@@ -4819,20 +4922,64 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             .finishRecording(at: platterEndRelative)
         platterRecordingStartTime = 0
         platterRecorderLock.unlock()
+        #if DEBUG
+        // Drain the DVS notation accumulator the same way — in-memory
+        // only, `DetectedNotationSnapshot`/the v4 export schema are NOT
+        // modified here. `finalizedTimeline()` returns nil when nothing
+        // was ever accumulated (routing off, or no trusted window arrived
+        // this take), matching `lastDrainedPlatterPositionTimeline`'s nil
+        // case for an equivalent reason.
+        timecodeNotationLock.lock()
+        lastDrainedTimecodeNotationTimeline = timecodeNotationAccumulator?.finalizedTimeline()
+        timecodeNotationDiagnosticsStorage.finalize(
+            sampleCount: lastDrainedTimecodeNotationTimeline?.samples.count ?? 0,
+            eventCount: 0
+        )
+        timecodeNotationAccumulator = nil
+        timecodeNotationLock.unlock()
+        #endif
         let normalizeID = ScratchLabPerformanceSignpost.begin("MovementNormalize")
 #if DEBUG
         let fusingDebugSession = activeRoutineMovementDebugSession
 #else
         let fusingDebugSession: RoutineMovementDebugSession? = nil
 #endif
-        let notationSnapshot = RoutineNotationFusionEngine().snapshot(
+        // DVS notation slice 3 (see TASKS.md/AI_HANDOFF.md): when notation
+        // routing is enabled and a trusted DVS timeline exists, DVS becomes
+        // authoritative for `recordMovementEvents` — never merged with
+        // camera-tracked `motionEvents`. `RoutineNotationFusionEngine`
+        // itself is unchanged; only which array it receives as
+        // `motionEvents` differs. In Release builds (no `notationRoutingEnabled`
+        // property at all) this is always exactly `motionEvents`, so
+        // behavior there is byte-identical to before this slice.
+        #if DEBUG
+        let resolvedMotionEvents = TimecodeNotationCapturePrecedence.resolvedMovementEvents(
+            notationRoutingEnabled: notationRoutingEnabled,
+            cameraMovementEvents: motionEvents,
+            drainedTimecodeNotationTimeline: lastDrainedTimecodeNotationTimeline
+        )
+        timecodeNotationLock.lock()
+        timecodeNotationDiagnosticsStorage.finalize(
+            sampleCount: lastDrainedTimecodeNotationTimeline?.samples.count ?? 0,
+            eventCount: notationRoutingEnabled ? resolvedMotionEvents.count : 0
+        )
+        timecodeNotationLock.unlock()
+        #else
+        let resolvedMotionEvents = motionEvents
+        #endif
+        var notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
-            motionEvents: motionEvents,
+            motionEvents: resolvedMotionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
             labelConfidence: lastScratchDetection?.confidence,
             debugSession: fusingDebugSession
         ).withMixerMidiEvents(capturedMidi)
+        #if DEBUG
+        if notationRoutingEnabled, lastDrainedTimecodeNotationTimeline != nil {
+            notationSnapshot = notationSnapshot.withTimecodeLiveMovementProvenance()
+        }
+        #endif
         ScratchLabPerformanceSignpost.end("MovementNormalize", normalizeID)
         ScratchLabPerformanceSignpost.eventNotationSnapshot(
             movement: notationSnapshot.recordMovementEvents.count,
@@ -7176,6 +7323,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let rawDrops = diag?.rawDropReasons ?? [:]
         let normDrops = diag?.normalizedDropReasons ?? [:]
         let trustDrops = diag?.trustDropReasons ?? [:]
+        let dvsNotationDiagnostics = timecodeNotationDiagnostics
         func dropStr(_ d: [String: Int]) -> String {
             d.isEmpty ? "none" : d.sorted(by: { $0.value > $1.value }).map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
         }
@@ -7195,6 +7343,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             "[rawDrops=\(dropStr(rawDrops))]",
             "[normDrops=\(dropStr(normDrops))]",
             "[trustDrops=\(dropStr(trustDrops))]",
+            "[dvsNotation] lastDecision=\(dvsNotationDiagnostics.lastDecision?.rawValue ?? "notEvaluated") decisions=\(dvsNotationDiagnostics.totalDecisionCount) accumulatedSamples=\(dvsNotationDiagnostics.accumulatedSampleCount) finalizedSamples=\(dvsNotationDiagnostics.finalizedSampleCount) finalizedEvents=\(dvsNotationDiagnostics.finalizedEventCount)",
+            "[dvsNotationDecisionCounts] \(dvsNotationDiagnostics.decisionCountsDescription(includingZeros: true))",
             "replay_source_label=\(label)",
         ]
         let text = lines.joined(separator: "\n")
