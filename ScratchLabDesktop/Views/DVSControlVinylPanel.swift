@@ -51,6 +51,15 @@ struct DVSControlVinylPanel: View {
 #if ENABLE_TIMECODE_LIVE_TAP
                 Picker("USB channel pair", selection: channelPairSelectionBinding) {
                     Text("Auto").tag(TimecodeCMSampleBufferAdapter.ChannelPairSelection.auto)
+                    if case let .pair(startChannel) = TimecodeCMSampleBufferAdapter.channelPairSelection,
+                       !pairOptions.contains(startChannel) {
+                        Text("\(startChannel + 1)/\(startChannel + 2)")
+                            .tag(
+                                TimecodeCMSampleBufferAdapter.ChannelPairSelection.pair(
+                                    startChannel: startChannel
+                                )
+                            )
+                    }
                     ForEach(pairOptions, id: \.self) { startChannel in
                         Text("\(startChannel + 1)/\(startChannel + 2)")
                             .tag(

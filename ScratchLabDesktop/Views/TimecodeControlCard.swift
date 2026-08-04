@@ -114,7 +114,28 @@ struct TimecodeControlCard: View {
         profile.apply(to: pipeline)
         bridge.validationRequired = profile.validationRequired
         bridge.validationOverride = false
+        #if ENABLE_TIMECODE_LIVE_TAP
+        TimecodeCMSampleBufferAdapter.channelPairSelection = Self.channelPairSelection(for: preset)
+        #endif
     }
+
+    #if ENABLE_TIMECODE_LIVE_TAP
+    /// Pure mapping from control preset to the USB channel pair the Rane
+    /// DEBUG hardware profile requires — extracted from `applyPreset` so
+    /// this specific, validated hardware setup detail (physical pair 3/4)
+    /// is directly regression-tested instead of only exercised by hand
+    /// during a live hardware session. The Rane preset pins the pair
+    /// explicitly to 3/4 instead of Auto, so pair auto-selection
+    /// instability during a stop/reversal (Auto losing carrier and
+    /// defaulting away from an already-validated pair) cannot affect a
+    /// hardware test. Any other preset restores Auto so the picker stays
+    /// consistent with what's shown.
+    static func channelPairSelection(
+        for preset: TimecodeControlPreset
+    ) -> TimecodeCMSampleBufferAdapter.ChannelPairSelection {
+        preset == .raneOneMkiiDebug ? .pair(startChannel: 2) : .auto
+    }
+    #endif
 
     /// Wraps `pipeline.invertDirection` so a direct user toggle (and only a
     /// direct user toggle — `applyPreset` writes `pipeline.invertDirection`

@@ -2269,4 +2269,28 @@ final class TimecodeLiveTapTests: XCTestCase {
         )
     }
 
+    // MARK: - Test: Rane preset pins physical pair 3/4, others restore Auto
+
+    /// Regression for the "preserve the validated Rane setup" task: the
+    /// physical pair pin was previously only exercised by hand during a
+    /// live hardware session, via the inline ternary in
+    /// `TimecodeControlCard.applyPreset`. Extracted to a pure static
+    /// function specifically so this detail can't silently regress.
+    func testRaneOneMkiiDebugPresetPinsPhysicalPair3And4() {
+        XCTAssertEqual(
+            TimecodeControlCard.channelPairSelection(for: .raneOneMkiiDebug),
+            .pair(startChannel: 2),
+            "The validated Rane hardware setup must keep pinning physical pair 3/4"
+        )
+    }
+
+    func testNonRanePresetsRestoreAutoPairSelection() {
+        for preset in TimecodeControlPreset.allCases where preset != .raneOneMkiiDebug {
+            XCTAssertEqual(
+                TimecodeControlCard.channelPairSelection(for: preset),
+                .auto,
+                "\(preset) must restore Auto pair selection so the picker matches what's shown"
+            )
+        }
+    }
 }
