@@ -201,6 +201,7 @@
 		SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */; };
 		SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0001FREF /* ScratchSamplePlaybackController.swift */; };
 		SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */; };
+		DOGR0001TST /* DVSOfflineGrainRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */; };
 		TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNRT0002FREF /* TimecodeNotationRoutingTests.swift */; };
 		SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
 		SPTR0001MAC /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
@@ -653,6 +654,7 @@
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SSPC0001FREF /* ScratchSamplePlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackController.swift; sourceTree = "<group>"; };
 		SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerTests.swift; sourceTree = "<group>"; };
+		DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSOfflineGrainRendererTests.swift; sourceTree = "<group>"; };
 		TNRT0002FREF /* TimecodeNotationRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeNotationRoutingTests.swift; sourceTree = "<group>"; };
 		SPTR0001FREF /* ScratchPlatterTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTracker.swift; sourceTree = "<group>"; };
 		SPTR0002FREF /* ScratchPlatterTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTrackerTests.swift; sourceTree = "<group>"; };
@@ -1014,6 +1016,7 @@
 				SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */,
 				SPTR0002FREF /* ScratchPlatterTrackerTests.swift */,
 				SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */,
+				DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */,
 				TNRT0002FREF /* TimecodeNotationRoutingTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
 				PCE2010000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift */,
@@ -2207,6 +2210,7 @@
 				SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */,
 				SPTR0001TST /* ScratchPlatterTrackerTests.swift in Sources */,
 				SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */,
+				DOGR0001TST /* DVSOfflineGrainRendererTests.swift in Sources */,
 				TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
 				PCE2011000PCE002PCE00001 /* PhraseCoachingEvaluatorTests.swift in Sources */,

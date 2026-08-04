@@ -1016,6 +1016,40 @@ final class ScratchSamplePlaybackController {
         }
     }
 
+    // MARK: - Pure gap-aware edge fades (offline render path)
+
+    /// Pure linear fade-out of the trailing `fadeFrames` samples of a grain
+    /// channel, used by the offline render path exactly where a scheduling
+    /// gap hard-cuts a DVS grain to silence (see Task 13/14 spec: DVS grains
+    /// are intentionally never faded in the live queue so contiguous grains
+    /// don't amplitude-modulate at the scheduler rate, which leaves every
+    /// gap edge as a hard cut to silence). The ramp is identical to
+    /// `applyEdgeFade`'s tail ramp (last sample → 0.0) and clamps to at most
+    /// half the array's count, so a tiny grain is never fully zeroed. Pure
+    /// value — no AVAudioEngine, safe on any thread.
+    static func fadeOutTail(_ samples: inout [Float], fadeFrames: Int) {
+        let count = samples.count
+        let f = min(max(0, fadeFrames), count / 2)
+        guard f > 0 else { return }
+        for i in 0..<f {
+            let ramp = Float(i) / Float(f)
+            samples[count - 1 - i] *= ramp
+        }
+    }
+
+    /// Pure linear fade-in of the leading `fadeFrames` samples of a grain
+    /// channel (first sample → 0.0), the head-side counterpart of
+    /// `fadeOutTail`. Same clamp semantics.
+    static func fadeInHead(_ samples: inout [Float], fadeFrames: Int) {
+        let count = samples.count
+        let f = min(max(0, fadeFrames), count / 2)
+        guard f > 0 else { return }
+        for i in 0..<f {
+            let ramp = Float(i) / Float(f)
+            samples[i] *= ramp
+        }
+    }
+
     private func directionDescription(_ direction: ScratchPlatterDirection) -> String {
         switch direction {
         case .forward: return "forward"
