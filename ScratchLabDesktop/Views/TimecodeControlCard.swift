@@ -159,13 +159,19 @@ struct TimecodeControlCard: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            Picker("Preset", selection: $selectedPreset) {
-                ForEach(TimecodeControlPreset.allCases, id: \.self) { preset in
-                    Text(preset.label).tag(preset)
+            HStack(spacing: 6) {
+                ForEach(
+                    TimecodeControlPreset.allCases.filter { $0 != .raneOneMkiiDebug },
+                    id: \.self
+                ) { preset in
+                    profilePresetButton(preset, label: preset.shortLabel)
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+
+            // Keep the long DEBUG hardware preset on its own row. Including
+            // it in the non-wrapping segmented picker above forced the whole
+            // inspector wider than its container and clipped the left side.
+            profilePresetButton(.raneOneMkiiDebug, label: "Rane ONE MKII (DEBUG)")
 
             // Show active profile summary
             let profile = TimecodePrototypeProfile.make(preset: selectedPreset, pipeline: pipeline)
@@ -222,6 +228,29 @@ struct TimecodeControlCard: View {
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    private func profilePresetButton(
+        _ preset: TimecodeControlPreset,
+        label: String
+    ) -> some View {
+        Button {
+            selectedPreset = preset
+        } label: {
+            HStack(spacing: 4) {
+                if selectedPreset == preset {
+                    Image(systemName: "checkmark")
+                }
+                Text(label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(selectedPreset == preset ? .accentColor : .secondary)
+        .accessibilityAddTraits(selectedPreset == preset ? .isSelected : [])
     }
 
     // MARK: - Setup checklist section (Batch 10)

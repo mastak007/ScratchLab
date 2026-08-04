@@ -10887,6 +10887,48 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertTrue(engineSource.contains("No MIDI received. Check IAC Driver / MixEmergency MIDI Out."))
     }
 
+    func testTimecodeControlCardRaneDebugPresetOwnsFullWidthRow() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/TimecodeControlCard.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        let profileSlice = try sourceSlice(
+            in: source,
+            from: "// MARK: - Profile section",
+            through: "// MARK: - Setup checklist section"
+        )
+
+        // The three general presets share one compact row.
+        XCTAssertTrue(
+            profileSlice.contains(
+                "TimecodeControlPreset.allCases.filter { $0 != .raneOneMkiiDebug }"
+            ),
+            "The general-profile compact row must exclude the DEBUG preset"
+        )
+        XCTAssertTrue(
+            profileSlice.contains("profilePresetButton(preset, label: preset.shortLabel)"),
+            "Each general preset must render through the compact profile button"
+        )
+
+        // The long DEBUG label sits on its own full-width row below the compact row.
+        XCTAssertTrue(
+            profileSlice.contains("profilePresetButton(.raneOneMkiiDebug, label: \"Rane ONE MKII (DEBUG)\")"),
+            "Rane ONE MKII (DEBUG) must own a full-width row of its own"
+        )
+
+        // No non-wrapping segmented picker remains for the profile presets.
+        XCTAssertFalse(
+            profileSlice.contains(".pickerStyle(.segmented)"),
+            "The preset section must not use the non-wrapping segmented picker that widened the inspector"
+        )
+
+        // Selection still writes the same `selectedPreset`, preserving preset
+        // application semantics (profile apply, validation flag, pair pinning).
+        XCTAssertTrue(
+            profileSlice.contains("selectedPreset = preset"),
+            "Profile buttons must keep writing the existing selectedPreset"
+        )
+    }
+
 }
 
 extension CaptureRecoveryPhase2CoreTests {
