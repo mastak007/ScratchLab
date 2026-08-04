@@ -179,6 +179,17 @@ final class TimecodeFixtureValidationTests: XCTestCase {
             .appendingPathComponent("Fixtures/Timecode", isDirectory: true)
     }
 
+    private var localHardwareArchiveDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "debug_captures/timecode/hardware_fixtures/20260731",
+                isDirectory: true
+            )
+    }
+
+
     /// Skips the calling test when `directory` itself is genuinely absent or
     /// is not a directory. The untracked `Fixtures/Timecode/` fixtures are
     /// never committed (licensing/redistribution posture pending approval),
@@ -1626,6 +1637,98 @@ final class TimecodeFixtureValidationTests: XCTestCase {
 
 
 
+    // MARK: - 28. Full local archive and callback continuity
+
+    /// Decodes one line of the per-capture `callbacks.jsonl` continuity
+    /// ledger written by the routine capture writer (DEBUG builds).
+    private struct FixtureCallback: Decodable {
+        let callbackUptime: Double
+        let frameCount: Int
+        let hostTime: UInt64
+        let sequenceNumber: Int
+        let sourceFrameStart: Int
+    }
+
+
+    func testLocalFullHardwareFixtureArchiveIsIntactAndGapless() throws {
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip(
+                "Full hardware captures are intentionally local-only; archive not present on this machine."
+            )
+        }
+
+        let catalog = try hardwareFixtureCatalog()
+        let transitionCatalog = try hardwareTransitionCatalog()
+        let decoder = JSONDecoder()
+        let archiveFixtures = catalog.fixtures.map {
+            (
+                label: $0.label,
+                sourceCaptureFolder: $0.sourceCaptureFolder,
+                fullCaptureSHA256: $0.fullCaptureSHA256
+            )
+        } + transitionCatalog.fixtures.map {
+            (
+                label: $0.label,
+                sourceCaptureFolder: $0.sourceCaptureFolder,
+                fullCaptureSHA256: $0.fullCaptureSHA256
+            )
+        }
+
+        for fixture in archiveFixtures {
+            let captureDirectory = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.sourceCaptureFolder, isDirectory: true)
+
+            for (fileName, expectedHash) in fixture.fullCaptureSHA256 {
+                let url = captureDirectory.appendingPathComponent(fileName)
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: url.path),
+                    "Missing full-capture file \(fixture.sourceCaptureFolder)/\(fileName)"
+                )
+                XCTAssertEqual(try sha256(of: url), expectedHash)
+            }
+
+            let manifestData = try Data(
+                contentsOf: captureDirectory.appendingPathComponent("manifest.json")
+            )
+            let manifest = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
+            )
+            XCTAssertEqual(manifest["label"] as? String, fixture.label)
+            XCTAssertEqual(manifest["sampleRate"] as? Double, 48_000)
+            XCTAssertEqual(manifest["sourceChannelCount"] as? Int, 14)
+            XCTAssertEqual((manifest["errors"] as? [String])?.isEmpty, true)
+
+            let callbackData = try Data(
+                contentsOf: captureDirectory.appendingPathComponent("callbacks.jsonl")
+            )
+            let callbackLines = try XCTUnwrap(
+                String(data: callbackData, encoding: .utf8)
+            )
+            let callbacks = try callbackLines
+                .split(whereSeparator: \.isNewline)
+                .map { try decoder.decode(FixtureCallback.self, from: Data($0.utf8)) }
+
+            XCTAssertEqual(callbacks.count, manifest["callbackCount"] as? Int)
+            XCTAssertFalse(callbacks.isEmpty)
+
+            for (previous, current) in zip(callbacks, callbacks.dropFirst()) {
+                XCTAssertEqual(current.sequenceNumber, previous.sequenceNumber + 1)
+                XCTAssertEqual(
+                    current.sourceFrameStart,
+                    previous.sourceFrameStart + previous.frameCount
+                )
+                XCTAssertGreaterThan(current.hostTime, previous.hostTime)
+                XCTAssertGreaterThan(current.callbackUptime, previous.callbackUptime)
+            }
+
+            let final = try XCTUnwrap(callbacks.last)
+            XCTAssertEqual(
+                final.sourceFrameStart + final.frameCount,
+                manifest["sampleCount"] as? Int
+            )
+        }
+    }
+
     // MARK: - 29. DVS density and cross-flush position audit
 
     func testHardwareFixturesReportCurrentDVSStageDensity() throws {
@@ -1755,6 +1858,50 @@ final class TimecodeFixtureValidationTests: XCTestCase {
         XCTAssertEqual(resetPosition, firstPosition, accuracy: 0.000_001)
     }
 
+    func testLocalFullHardwareCapturesReportCurrentDVSStageDensity() throws {
+        guard ProcessInfo.processInfo.environment["SCRATCHLAB_RUN_FULL_DVS_DENSITY_AUDIT"] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_DVS_DENSITY_AUDIT=1 for the multi-minute local full-capture density audit."
+            )
+        }
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip(
+                "Full hardware captures are intentionally local-only; density archive not present on this machine."
+            )
+        }
+        let steadyFixtures = try hardwareFixtureCatalog().fixtures.map {
+            (label: $0.label, sourceCaptureFolder: $0.sourceCaptureFolder)
+        }
+        let transitionFixtures = try hardwareTransitionCatalog().fixtures.map {
+            (label: $0.label, sourceCaptureFolder: $0.sourceCaptureFolder)
+        }
+
+        for fixture in steadyFixtures + transitionFixtures {
+            let url = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.sourceCaptureFolder, isDirectory: true)
+                .appendingPathComponent("pair_3_4_float32.wav")
+            let audit = try auditDVSDensity(label: "full/\(fixture.label)", url: url)
+            print(audit.logLine)
+
+            XCTAssertEqual(
+                audit.callbackWindowCount,
+                Int(ceil(Double(audit.sourceFrameCount) / 4_800.0)),
+                fixture.label
+            )
+            XCTAssertLessThanOrEqual(audit.decodedFrameCount, audit.callbackWindowCount)
+            XCTAssertLessThanOrEqual(audit.postFilterFrameCount, audit.decodedFrameCount)
+            XCTAssertLessThanOrEqual(audit.adapterSampleCount, audit.postFilterFrameCount)
+            XCTAssertLessThanOrEqual(
+                audit.trustEligibleUniqueSampleCount,
+                audit.adapterSampleCount
+            )
+            XCTAssertEqual(
+                audit.accumulatorSampleCount,
+                audit.trustEligibleUniqueSampleCount
+            )
+        }
+    }
+
     // MARK: - 30. Offline-only decoder subwindow comparison
 
     func testHardwareFixtureExcerptsReportDecoderSubwindowComparison() throws {
@@ -1803,6 +1950,56 @@ final class TimecodeFixtureValidationTests: XCTestCase {
         }
     }
 
+
+    func testLocalFullHardwareCapturesReportDecoderSubwindowComparison() throws {
+        guard ProcessInfo.processInfo.environment["SCRATCHLAB_RUN_FULL_DVS_SUBWINDOW_AUDIT"] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_DVS_SUBWINDOW_AUDIT=1 for the multi-minute full-capture subwindow comparison."
+            )
+        }
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip("Full hardware captures are intentionally local-only.")
+        }
+
+        let requestedWindow = ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_DVS_SUBWINDOW_WINDOW"
+        ].flatMap(Int.init)
+        let candidates = [512, 768, 1_024, 1_200, 4_800].filter { candidate in
+            requestedWindow.map { $0 == candidate } ?? true
+        }
+        let requestedLabel = ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_DVS_SUBWINDOW_LABEL"
+        ]
+        let fixtures = try hardwareFixtureCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections([$0.expectedDirection])
+            )
+        } + hardwareTransitionCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections($0.expectedDirections)
+            )
+        }
+
+        for fixture in fixtures where requestedLabel == nil || requestedLabel == fixture.label {
+            let url = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.folder, isDirectory: true)
+                .appendingPathComponent("pair_3_4_float32.wav")
+            for windowFrames in candidates {
+                let audit = try auditDVSSubwindow(
+                    label: "full/\(fixture.label)",
+                    url: url,
+                    windowFrames: windowFrames,
+                    expectedDirections: fixture.expected
+                )
+                print(audit.logLine)
+                XCTAssertLessThan(audit.positionError, 0.000_001, audit.logLine)
+            }
+        }
+    }
 
     // MARK: - 31. Offline-only stop-transition reversal-confirmation rule
 
@@ -2179,6 +2376,62 @@ final class TimecodeFixtureValidationTests: XCTestCase {
     /// Multi-minute; local-archive-gated like the density/subwindow audits.
     /// This test does not change any production cadence, threshold, or
     /// live decoding path — it only measures offline candidates.
+
+    func testLocalFullHardwareCapturesReportReversalConfirmationCandidates() throws {
+        guard ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_RUN_FULL_DVS_REVERSAL_CONFIRMATION_AUDIT"
+        ] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_DVS_REVERSAL_CONFIRMATION_AUDIT=1 for the multi-minute local full-capture reversal-confirmation audit."
+            )
+        }
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip("Full hardware captures are intentionally local-only.")
+        }
+
+        let requestedLabel = ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_DVS_REVERSAL_CONFIRMATION_LABEL"
+        ]
+        let fixtures = try hardwareFixtureCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections([$0.expectedDirection])
+            )
+        } + hardwareTransitionCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections($0.expectedDirections)
+            )
+        }
+
+        for fixture in fixtures where requestedLabel == nil || requestedLabel == fixture.label {
+            let url = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.folder, isDirectory: true)
+                .appendingPathComponent("pair_3_4_float32.wav")
+            let stream = try decodeDVSFrameStream(
+                label: "full/\(fixture.label)",
+                url: url,
+                windowFrames: 1_024
+            )
+            for candidate in reversalConfirmationCandidates {
+                let audit = auditDVSReversalConfirmation(
+                    stream: stream,
+                    windowFrames: 1_024,
+                    expectedDirections: fixture.expected,
+                    candidate: candidate
+                )
+                print(audit.logLine)
+                XCTAssertLessThanOrEqual(audit.confirmedCount, audit.rawCount, audit.logLine)
+                XCTAssertEqual(
+                    audit.confirmedCount + audit.rejectedFrameCount,
+                    audit.rawCount,
+                    audit.logLine
+                )
+            }
+        }
+    }
 
     // MARK: - DVS Phase-Continuity Audit
     //
@@ -2652,6 +2905,53 @@ final class TimecodeFixtureValidationTests: XCTestCase {
     /// This test does not change any production cadence, threshold, or live
     /// decoding path — it only measures raw phase-continuity signals.
 
+    func testLocalFullHardwareCapturesReportPhaseContinuityAudit() throws {
+        guard ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_RUN_FULL_DVS_PHASE_CONTINUITY_AUDIT"
+        ] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_DVS_PHASE_CONTINUITY_AUDIT=1 for the multi-minute local full-capture phase-continuity audit."
+            )
+        }
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip("Full hardware captures are intentionally local-only.")
+        }
+
+        let requestedLabel = ProcessInfo.processInfo.environment["SCRATCHLAB_DVS_PHASE_CONTINUITY_LABEL"]
+        let fixtures = try hardwareFixtureCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections([$0.expectedDirection])
+            )
+        } + hardwareTransitionCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections($0.expectedDirections)
+            )
+        }
+
+        for fixture in fixtures where requestedLabel == nil || requestedLabel == fixture.label {
+            let url = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.folder, isDirectory: true)
+                .appendingPathComponent("pair_3_4_float32.wav")
+            let audit = try auditPhaseContinuity(
+                label: "full/\(fixture.label)",
+                url: url,
+                windowFrames: 1_024,
+                expectedDirections: fixture.expected
+            )
+            print(audit.summaryLogLine)
+            for run in audit.runs { print(run.logLine) }
+            XCTAssertEqual(
+                audit.decodableWindows,
+                audit.runs.reduce(0) { $0 + $1.windowCount },
+                audit.summaryLogLine
+            )
+        }
+    }
+
     // MARK: - DVS Explicit Near-Zero / Direction-Indeterminate State
     //
     // Follow-up to the phase-continuity audit above. That audit found the
@@ -2946,6 +3246,51 @@ final class TimecodeFixtureValidationTests: XCTestCase {
     /// does not change any production cadence, threshold, or live decoding
     /// path — it only measures an offline candidate state.
 
+    func testLocalFullHardwareCapturesReportNearZeroStateAudit() throws {
+        guard ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_RUN_FULL_DVS_NEAR_ZERO_STATE_AUDIT"
+        ] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_DVS_NEAR_ZERO_STATE_AUDIT=1 for the multi-minute local full-capture near-zero-state audit."
+            )
+        }
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip("Full hardware captures are intentionally local-only.")
+        }
+
+        let requestedLabel = ProcessInfo.processInfo.environment["SCRATCHLAB_DVS_NEAR_ZERO_STATE_LABEL"]
+        let fixtures = try hardwareFixtureCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections([$0.expectedDirection])
+            )
+        } + hardwareTransitionCatalog().fixtures.map {
+            (
+                label: $0.label,
+                folder: $0.sourceCaptureFolder,
+                expected: decodedDirections($0.expectedDirections)
+            )
+        }
+
+        for fixture in fixtures where requestedLabel == nil || requestedLabel == fixture.label {
+            let url = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.folder, isDirectory: true)
+                .appendingPathComponent("pair_3_4_float32.wav")
+            for candidate in nearZeroStateCandidates {
+                let audit = try auditNearZeroState(
+                    label: "full/\(fixture.label)",
+                    url: url,
+                    windowFrames: 1_024,
+                    expectedDirections: fixture.expected,
+                    candidate: candidate
+                )
+                print(audit.logLine)
+                XCTAssertLessThanOrEqual(audit.candidateFalseRunCount, audit.baselineFalseRunCount, audit.logLine)
+            }
+        }
+    }
+
     // MARK: - DVS Dense Signed-Rate Estimator
     //
     // Offline-only measurement of `TimecodeSignedRateDenseEstimator` (see
@@ -3140,6 +3485,64 @@ final class TimecodeFixtureValidationTests: XCTestCase {
     /// local-archive-gated like the other full-capture audits in this file.
     /// Neither the estimator nor the stabilizer is wired into any
     /// production path by this test.
+
+    func testLocalFullHardwareCapturesReportDenseEstimatorAudit() throws {
+        guard ProcessInfo.processInfo.environment[
+            "SCRATCHLAB_RUN_FULL_DVS_DENSE_ESTIMATOR_AUDIT"
+        ] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_DVS_DENSE_ESTIMATOR_AUDIT=1 for the multi-minute local full-capture dense-estimator audit."
+            )
+        }
+        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
+            throw XCTSkip("Full hardware captures are intentionally local-only.")
+        }
+
+        let requestedLabel = ProcessInfo.processInfo.environment["SCRATCHLAB_DVS_DENSE_ESTIMATOR_LABEL"]
+        let fixtures = try hardwareFixtureCatalog().fixtures.map {
+            (label: $0.label, folder: $0.sourceCaptureFolder, isReversalFixture: false)
+        } + hardwareTransitionCatalog().fixtures.map {
+            (label: $0.label, folder: $0.sourceCaptureFolder, isReversalFixture: $0.scenario == "reversal")
+        }
+
+        let threshold = ProcessInfo.processInfo.environment["SCRATCHLAB_DVS_DENSE_ESTIMATOR_THRESHOLD"]
+            .flatMap(Double.init) ?? 0.05
+        let gap = ProcessInfo.processInfo.environment["SCRATCHLAB_DVS_DENSE_ESTIMATOR_GAP"]
+            .flatMap(Double.init) ?? 0.25
+
+        for fixture in fixtures where requestedLabel == nil || requestedLabel == fixture.label {
+            let url = localHardwareArchiveDirectory
+                .appendingPathComponent(fixture.folder, isDirectory: true)
+                .appendingPathComponent("pair_3_4_float32.wav")
+            let audit = try auditDenseEstimator(
+                label: "full/\(fixture.label)", url: url,
+                reversalAreaThreshold: threshold, maximumIntegrationGap: gap
+            )
+            print(audit.logLine)
+            for timestamp in audit.stabilizerReversalTimestamps {
+                print("DVS_DENSE_ESTIMATOR_REVERSAL label=full/\(fixture.label) t=\(timestamp)")
+            }
+
+            XCTAssertEqual(
+                audit.availableSampleCount + audit.noSignalSampleCount + audit.unknownSampleCount,
+                audit.totalSampleCount,
+                audit.logLine
+            )
+
+            if fixture.isReversalFixture {
+                XCTAssertGreaterThan(
+                    audit.stabilizerForwardToBackwardCount, 0,
+                    "Expected at least one forward-to-backward reversal retained: \(audit.logLine)"
+                )
+                XCTAssertGreaterThan(
+                    audit.stabilizerBackwardToForwardCount, 0,
+                    "Expected at least one backward-to-forward reversal retained: \(audit.logLine)"
+                )
+            }
+        }
+    }
+
 }
+
 
 #endif // DEBUG
