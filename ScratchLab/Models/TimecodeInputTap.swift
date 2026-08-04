@@ -37,19 +37,19 @@ public final class TimecodeInputTap: ObservableObject, @unchecked Sendable {
 
     /// The most recently accumulated buffer of diagnostics-ready samples.
     /// Replaced on each call to `drain()`.
-    @Published public private(set) var latestBuffer: TimecodeAudioBuffer
+    public private(set) var latestBuffer: TimecodeAudioBuffer
 
     /// The running host-time of the most recently pushed sample, if any.
-    @Published public private(set) var latestHostTime: UInt64?
+    public private(set) var latestHostTime: UInt64?
 
     /// Total number of sample buffers received since creation.
-    @Published public private(set) var bufferCount: Int = 0
+    public private(set) var bufferCount: Int = 0
 
     /// Total number of audio frames received since creation.
-    @Published public private(set) var totalFrameCount: Int = 0
+    public private(set) var totalFrameCount: Int = 0
 
     /// The most recent individual sample (for live level display).
-    @Published public private(set) var latestSample: TimecodeInputSample?
+    public private(set) var latestSample: TimecodeInputSample?
 
     // MARK: - Internal state
 
@@ -130,6 +130,7 @@ public final class TimecodeInputTap: ObservableObject, @unchecked Sendable {
         latestHostTime = hostTime
         latestSample = sample
         lock.unlock()
+        publishChange()
     }
 
     /// Push a mono audio buffer into the tap (convenience for mono sources).
@@ -159,10 +160,10 @@ public final class TimecodeInputTap: ObservableObject, @unchecked Sendable {
         lock.lock()
         let samples = pendingSamples
         pendingSamples.removeAll(keepingCapacity: true)
-        lock.unlock()
-
         let buffer = TimecodeAudioBuffer(samples: samples)
         latestBuffer = buffer
+        lock.unlock()
+        publishChange()
         return buffer
     }
 
@@ -176,6 +177,19 @@ public final class TimecodeInputTap: ObservableObject, @unchecked Sendable {
         latestSample = nil
         latestBuffer = .empty(sampleRate: sampleRate, channelCount: channelCount)
         lock.unlock()
+        publishChange()
+    }
+
+    /// Diagnostic state may be produced by the dedicated DVS worker, but
+    /// SwiftUI invalidation always belongs on the main queue.
+    private func publishChange() {
+        if Thread.isMainThread {
+            objectWillChange.send()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
     }
 
     // MARK: - Diagnostics convenience

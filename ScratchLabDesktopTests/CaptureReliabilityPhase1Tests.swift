@@ -10006,6 +10006,70 @@ extension CaptureReliabilityPhase1CoreTests {
             .deletingLastPathComponent()
     }
 
+    func testMacAnalyzerPersistsPerformerNameWithoutComputedPublishedOnChange() throws {
+        let sourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains(".onChange(of: routineSessionSetup.performerName)"),
+            "Reading a computed property backed by @Published config during view layout reproduced the capture crash."
+        )
+        XCTAssertTrue(source.contains(".onReceive(routineSessionSetup.$config.dropFirst()) { config in"))
+        XCTAssertTrue(source.contains("let trimmedPerformerName = config.performerName"))
+        XCTAssertTrue(source.contains("lastPerformerName = trimmedPerformerName"))
+    }
+
+    func testMacAdvancedSectionAvoidsAppStorageDuringLiveTapRedraws() throws {
+        let sourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("@AppStorage(\"scratchlab.mac.advancedSection\")"),
+            "The third hardware crash occurred in AppStorage.wrappedValue while the Advanced sidebar redrew."
+        )
+        XCTAssertTrue(
+            source.contains("@State private var advancedSectionRaw = UserDefaults.standard.string(")
+        )
+        XCTAssertTrue(
+            source.contains("forKey: Self.advancedSectionStorageKey")
+        )
+        XCTAssertTrue(
+            source.contains("UserDefaults.standard.set("),
+            "Changing the view-local selection must continue persisting the existing preference."
+        )
+    }
+
+    func testTimecodeInputExitKeepsLiveCallbackForRoutineCaptureAndCancelsOnlyFixtureRecording() throws {
+        let sourceURL = projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let timecodeCaseStart = try XCTUnwrap(source.range(of: "case .timecodeInput:"))
+        let timecodeCaseEnd = try XCTUnwrap(
+            source.range(
+                of: "\n#endif\n#endif\n        }",
+                range: timecodeCaseStart.upperBound..<source.endIndex
+            )
+        )
+        let timecodeCase = String(source[timecodeCaseStart.lowerBound..<timecodeCaseEnd.lowerBound])
+
+        XCTAssertTrue(
+            timecodeCase.contains("captureEngine.timecodeAudioCallback = {"),
+            "Timecode Input must install the live callback."
+        )
+        XCTAssertTrue(timecodeCase.contains("guard let pipeline = timecodePipeline,"))
+        XCTAssertTrue(timecodeCase.contains("pipeline.liveTapEnabled,"))
+        XCTAssertTrue(timecodeCase.contains("pipeline.mode != .disabled else { return }"))
+        XCTAssertTrue(timecodeCase.contains("debugCaptureTask?.cancel()"))
+        XCTAssertTrue(timecodeCase.contains("debugCaptureTask = nil"))
+        XCTAssertTrue(timecodeCase.contains("DebugTimecodeCapture.cancel()"))
+        XCTAssertFalse(
+            timecodeCase.contains("captureEngine.timecodeAudioCallback = nil"),
+            "Navigating to Routine Capture must keep live DVS ingress active."
+        )
+    }
+
     func sourceSlice(in source: String, from startToken: String, through endToken: String) throws -> String {
         let start = try XCTUnwrap(source.range(of: startToken), "Missing start token \(startToken)")
         let end = try XCTUnwrap(
@@ -12470,4 +12534,5 @@ final class LiveInputSuspensionTests: XCTestCase {
             "After suspension is cleared, live input must be allowed"
         )
     }
+
 }

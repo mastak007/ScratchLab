@@ -6,6 +6,114 @@ import Network
 import OSLog
 import Darwin
 
+#if DEBUG && ENABLE_TIMECODE_LIVE_TAP
+/// Owns the DVS control cadence on a dedicated serial queue and collapses
+/// timer bursts to one pending pass.
+///
+/// This is deliberately not observable: scheduling a tick must not itself
+/// invalidate or depend on the SwiftUI view hierarchy that owns it.
+final class DVSControlProcessingLoop {
+    typealias Enqueue = (@escaping () -> Void) -> Void
+
+    private let lock = NSLock()
+    private let enqueue: Enqueue
+    private let timerQueue: DispatchQueue
+    private let now: () -> Date
+    private var isPending = false
+    private var timer: DispatchSourceTimer?
+    private var generation = 0
+    private var lastTickAt: Date?
+
+    init(
+        queue: DispatchQueue = DispatchQueue(
+            label: "com.scratchlab.dvsControl",
+            qos: .userInteractive
+        ),
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.timerQueue = queue
+        self.enqueue = { operation in queue.async(execute: operation) }
+        self.now = now
+    }
+
+    init(
+        enqueue: @escaping Enqueue,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.timerQueue = DispatchQueue(
+            label: "com.scratchlab.dvsControl.test",
+            qos: .userInteractive
+        )
+        self.enqueue = enqueue
+        self.now = now
+    }
+
+    func request(_ operation: @escaping (TimeInterval) -> Void) {
+        lock.lock()
+        guard !isPending else {
+            lock.unlock()
+            return
+        }
+        isPending = true
+        let requestedGeneration = generation
+        lock.unlock()
+
+        enqueue { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            guard self.isPending, self.generation == requestedGeneration else {
+                self.lock.unlock()
+                return
+            }
+            self.isPending = false
+            let tickAt = self.now()
+            let elapsed = self.lastTickAt.map {
+                min(max(0, tickAt.timeIntervalSince($0)), 0.25)
+            } ?? 0.1
+            self.lastTickAt = tickAt
+            self.lock.unlock()
+            operation(elapsed)
+        }
+    }
+
+    func start(
+        interval: TimeInterval = 1.0 / 60.0,
+        operation: @escaping (TimeInterval) -> Void
+    ) {
+        lock.lock()
+        guard timer == nil else {
+            lock.unlock()
+            return
+        }
+        let source = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer = source
+        lock.unlock()
+
+        source.schedule(
+            deadline: .now() + interval,
+            repeating: interval,
+            leeway: .milliseconds(1)
+        )
+        source.setEventHandler { [weak self] in
+            self?.request(operation)
+        }
+        source.resume()
+    }
+
+    func stop() {
+        lock.lock()
+        let source = timer
+        timer = nil
+        isPending = false
+        lastTickAt = nil
+        generation += 1
+        lock.unlock()
+        source?.setEventHandler {}
+        source?.cancel()
+    }
+}
+#endif
+
 enum MacWorkspaceRouting {
     static let workspaceTabStorageKey = "scratchlab.mac.workspaceTab"
     static let practiceWorkspaceID = "practice"
@@ -415,10 +523,19 @@ struct MacAnalyzerView: View {
         }
     }
 
-    @AppStorage("scratchlab.mac.advancedSection") private var advancedSectionRaw = AdvancedSection.overview.rawValue
+    private static let advancedSectionStorageKey = "scratchlab.mac.advancedSection"
+    @State private var advancedSectionRaw = UserDefaults.standard.string(
+        forKey: Self.advancedSectionStorageKey
+    ) ?? AdvancedSection.overview.rawValue
     private var advancedSection: AdvancedSection {
         get { AdvancedSection(rawValue: advancedSectionRaw) ?? .overview }
-        nonmutating set { advancedSectionRaw = newValue.rawValue }
+        nonmutating set {
+            advancedSectionRaw = newValue.rawValue
+            UserDefaults.standard.set(
+                newValue.rawValue,
+                forKey: Self.advancedSectionStorageKey
+            )
+        }
     }
     private var advancedSectionBinding: Binding<AdvancedSection> {
         Binding(
@@ -518,13 +635,14 @@ struct MacAnalyzerView: View {
     @State private var debugCaptureTask: Task<Void, Never>?
 
 #if ENABLE_TIMECODE_LIVE_TAP
-    /// Periodic flush timer for the timecode decode accumulator.
-    /// Fires at ~10 Hz so decoded motion latency stays low while
-    /// batching enough frames for meaningful phase analysis.
-    private let timecodeFlushTimer = Timer.publish(every: 0.1, on: .main, in: .common)
-        .autoconnect()
+    @State private var dvsControlProcessingLoop = DVSControlProcessingLoop()
 #endif
     #endif
+
+#if DEBUG
+    /// CACurrentMediaTime of the most recent timecode flushDecode call.
+    private static var _lastFlushCADate: TimeInterval?
+#endif
 
     #if DEBUG
     /// Diagnostic-only: whether DVS motion is currently driving scratch
@@ -565,10 +683,19 @@ struct MacAnalyzerView: View {
             scheduleLine = "Last schedule: skipped (\(reason))"
         } else if diagnostics?.lastScheduledSourceFrame != nil {
             let rateText = diagnostics?.lastScheduledRate.map { String(format: "%.3f", $0) } ?? "?"
-            scheduleLine = "Last schedule: OK · rate=\(rateText)"
+            let directionText: String
+            switch diagnostics?.lastScheduledDirection {
+            case .forward: directionText = "forward"
+            case .backward: directionText = "backward"
+            case nil: directionText = "unknown"
+            }
+            scheduleLine = "Last schedule: OK · dir=\(directionText) · rate=\(rateText)"
         } else {
             scheduleLine = "Last schedule: none yet"
         }
+        let scheduleCountsLine = "Scheduled grains: forward \(diagnostics?.forwardScheduleCount ?? 0) · backward \(diagnostics?.backwardScheduleCount ?? 0)"
+        let bridgeGateLine = "Bridge gate: \(timecodeBridge.lastDecision.label)"
+        let bridgeGateCountsLine = "Bridge blocks: \(timecodeBridge.blockingDecisionSummary)"
         let engineLine: String
         if let diagnostics {
             let frame = diagnostics.currentSampleFrame
@@ -580,7 +707,10 @@ struct MacAnalyzerView: View {
             Text(statusLine).font(.caption).foregroundStyle(.secondary)
             Text(sampleLine).font(.caption).foregroundStyle(.secondary)
             Text(appliedLine).font(.caption).foregroundStyle(.secondary)
+            Text(bridgeGateLine).font(.caption).foregroundStyle(.secondary)
+            Text(bridgeGateCountsLine).font(.caption).foregroundStyle(.secondary)
             Text(scheduleLine).font(.caption).foregroundStyle(.secondary)
+            Text(scheduleCountsLine).font(.caption).foregroundStyle(.secondary)
             Text(engineLine).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -745,17 +875,17 @@ struct MacAnalyzerView: View {
             synchronizeSelectedRoutineSession()
             babyScratchDemo.configureBabyScratchIfNeeded()
             stageLayout = .desktopDeck
+#if ENABLE_TIMECODE_LIVE_TAP
+            dvsControlProcessingLoop.start { elapsed in
+                handleTimecodeFlushTick(elapsed: elapsed)
+            }
+#endif
             if !isPracticeSessionActive {
                 practiceTimeRemaining = practiceDuration.duration
             }
             if liveInputEnabled, stageLayout == .desktopDeck {
                 captureEngine.preferMacCameraForDesktopDeck()
             }
-        }
-        .onChange(of: routineSessionSetup.performerName) { _, newValue in
-            let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedValue.isEmpty else { return }
-            lastPerformerName = trimmedValue
         }
         .onChange(of: routineSessionStore.selectedSessionID) { _, _ in
             synchronizeSelectedRoutineSession()
@@ -770,6 +900,9 @@ struct MacAnalyzerView: View {
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             captureEngine.setPerformerMonitorStreamingEnabled(false)
+#if ENABLE_TIMECODE_LIVE_TAP
+            dvsControlProcessingLoop.stop()
+#endif
         }
         .onChange(of: stageLayoutRaw) { _, newValue in
             guard liveInputEnabled, StageLayout(rawValue: newValue) == .desktopDeck else { return }
@@ -794,18 +927,7 @@ struct MacAnalyzerView: View {
             cancelTestLabPracticeSession()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active, workspaceTab == .capture {
-                captureEngine.refreshDevices()
-                captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
-                return
-            }
-            guard newPhase != .active else { return }
-            babyScratchDemo.stop()
-            demoModeController.stopDemo()
-            demoWithBeatEngine.stop()
-            isDemoWithBeatMode = false
-            demoWithBeatStartUptime = nil
-            practiceBeatStore.handleAppDidBecomeInactive()
+            handleScenePhaseChange(newPhase)
         }
         .onChange(of: practiceDurationRaw) { _, _ in
             guard !isPracticeSessionActive else { return }
@@ -843,24 +965,14 @@ struct MacAnalyzerView: View {
             handlePracticeDetection(detection)
         }
         .onReceive(routineSessionSetup.$config.dropFirst()) { config in
+            let trimmedPerformerName = config.performerName
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedPerformerName.isEmpty {
+                lastPerformerName = trimmedPerformerName
+            }
             guard routineSessionStore.selectedSessionID == config.sessionID else { return }
             routineSessionStore.updateSelectedSession(config: config)
         }
-#if ENABLE_TIMECODE_LIVE_TAP
-        .onReceive(timecodeFlushTimer) { _ in
-            guard timecodePipeline.liveTapEnabled,
-                  timecodePipeline.mode == .controlPrototype else { return }
-            timecodePipeline.flushDecode()
-            // Gate is enforced entirely by TimecodePlaybackBridge.evaluate
-            // (mode, signal health, confidence, staleness, direction,
-            // validation). forwardTimecodeDrive is a no-op unless
-            // dvsPlaybackDriveActive is true, which mirrors the same
-            // user-facing toggle the bridge already exposes.
-            captureEngine.dvsPlaybackDriveActive = timecodeBridge.playbackDriveEnabled
-            timecodeBridge.evaluate(pipeline: timecodePipeline)
-            captureEngine.forwardTimecodeDrive(timecodeBridge.currentDrive, elapsed: 0.1)
-        }
-#endif
         .sheet(isPresented: $isShowingRawJSONInspector, onDismiss: {
             rawJSONInspector.close()
         }) {
@@ -870,8 +982,77 @@ struct MacAnalyzerView: View {
         .sheet(isPresented: $isShowingStagingInspector) {
             StagingInspectorView(contexts: stagingInspectorContexts)
         }
-        #endif
+#endif
     }
+
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        if newPhase == .active, workspaceTab == .capture {
+            captureEngine.refreshDevices()
+            captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+            return
+        }
+        guard newPhase != .active else { return }
+        babyScratchDemo.stop()
+        demoModeController.stopDemo()
+        demoWithBeatEngine.stop()
+        isDemoWithBeatMode = false
+        demoWithBeatStartUptime = nil
+        practiceBeatStore.handleAppDidBecomeInactive()
+    }
+
+#if ENABLE_TIMECODE_LIVE_TAP
+    private func handleTimecodeFlushTick(elapsed: TimeInterval) {
+        guard timecodePipeline.liveTapEnabled,
+              timecodePipeline.mode != .disabled else { return }
+#if DEBUG
+        let traceSequence = DVSTrace.claimNext()
+        let timerEntry = CACurrentMediaTime()
+        if DVSTrace.isEnabled {
+            let timerTime = String(format: "%.6f", timerEntry)
+            let rate = String(format: "%.3f", timecodePipeline.currentRate)
+            let thread = Thread.current.isMainThread ? "main" : "bg"
+            DVSTrace.log("[DVS-TRACE:2] analyzerView timer seq=\(traceSequence) monotonic=\(timerTime) dir=\(timecodePipeline.currentDirection) rate=\(rate) thread=\(thread)")
+        }
+#endif
+        let flushStart = CACurrentMediaTime()
+        timecodePipeline.flushDecode()
+        guard timecodePipeline.mode == .controlPrototype else { return }
+        let now = Date()
+#if DEBUG
+        logSlowTimecodeFlushIfNeeded(
+            now: now,
+            flushStart: flushStart,
+            elapsed: elapsed
+        )
+#endif
+#if DEBUG
+        if DVSTrace.isEnabled {
+            let postDrive = CACurrentMediaTime()
+            DVSTrace.log("[DVS-TRACE:2b] analyzerView postDrive seq=\(traceSequence) monotonic=\(postDrive) timerToPost=\(postDrive - timerEntry)s")
+        }
+#endif
+    }
+
+#if DEBUG
+    private func logSlowTimecodeFlushIfNeeded(
+        now: Date,
+        flushStart: CFTimeInterval,
+        elapsed: TimeInterval
+    ) {
+        let cadenceDuration = flushStart - (Self._lastFlushCADate ?? flushStart)
+        defer { Self._lastFlushCADate = flushStart }
+        guard elapsed > 0.15 || cadenceDuration > 0.15 else { return }
+
+        let tickMilliseconds = String(format: "%.0f", elapsed * 1_000)
+        let flushDuration = CACurrentMediaTime() - flushStart
+        let flushMilliseconds = String(format: "%.0f", flushDuration * 1_000)
+        let elapsedMilliseconds = String(format: "%.0f", elapsed * 1_000)
+        let rate = String(format: "%.2f", timecodePipeline.currentRate)
+        let health = timecodePipeline.signalHealth.rawValue
+        print("[DVS] ⏱ flushTick dt=\(tickMilliseconds)ms flushDuration=\(flushMilliseconds)ms elapsed=\(elapsedMilliseconds)ms dir=\(timecodePipeline.currentDirection) rate=\(rate) health=\(health)")
+    }
+#endif
+#endif
 
     private var practiceWorkspace: some View {
         HSplitView {
@@ -1953,46 +2134,28 @@ struct MacAnalyzerView: View {
             }
 #if ENABLE_TIMECODE_LIVE_TAP
             .onAppear {
-                let pendingLock = NSLock()
-                var pendingBuffers: [(left: [Float], right: [Float], sampleRate: Double, hostTime: UInt64?)] = []
-                var drainScheduled = false
                 captureEngine.timecodeAudioCallback = { [weak timecodePipeline] left, right, sampleRate, hostTime in
                     guard let pipeline = timecodePipeline,
                           pipeline.liveTapEnabled,
                           pipeline.mode != .disabled else { return }
-                    pendingLock.lock()
-                    pendingBuffers.append((left, right, sampleRate, hostTime))
-                    guard !drainScheduled else {
-                        pendingLock.unlock()
-                        return
-                    }
-                    drainScheduled = true
-                    pendingLock.unlock()
 
-                    // Drain on main because the pipeline publishes observable
-                    // state read by SwiftUI. Coalescing keeps AVCapture from
-                    // posting one main-queue job per audio callback.
-                    DispatchQueue.main.async {
-                        pendingLock.lock()
-                        let buffers = pendingBuffers
-                        pendingBuffers.removeAll(keepingCapacity: true)
-                        drainScheduled = false
-                        pendingLock.unlock()
-
-                        for buffer in buffers {
-                            guard pipeline.liveTapEnabled,
-                                  pipeline.mode != .disabled else { break }
-                            pipeline.pushStereoBuffer(left: buffer.left,
-                                                      right: buffer.right,
-                                                      sampleRate: buffer.sampleRate,
-                                                      hostTime: buffer.hostTime,
-                                                      frameCount: min(buffer.left.count, buffer.right.count))
-                        }
-                    }
+                    // The callback deposits audio into a lock-protected,
+                    // non-publishing ingress. The dedicated serial DVS worker
+                    // owns decode, diagnostics, bridge evaluation, and drive.
+                    pipeline.enqueueLiveStereoBuffer(
+                        left: left,
+                        right: right,
+                        sampleRate: sampleRate,
+                        hostTime: hostTime,
+                        frameCount: min(left.count, right.count)
+                    )
                 }
             }
+
             .onDisappear {
-                captureEngine.timecodeAudioCallback = nil
+                debugCaptureTask?.cancel()
+                debugCaptureTask = nil
+                DebugTimecodeCapture.cancel()
             }
 #endif
 #endif

@@ -2332,4 +2332,221 @@ final class TimecodeLiveTapTests: XCTestCase {
         XCTAssertEqual(result.right[12], channelData[1][12], accuracy: 0.000_001)
         XCTAssertTrue(result.formatSummary.contains("AVAudioEngine"))
     }
+
+    func testDeferredControlTickDefersCoalescesAndCanReschedule() {
+        var queued: [() -> Void] = []
+        var executionCount = 0
+        let tick = DVSControlProcessingLoop(enqueue: { operation in
+            queued.append(operation)
+        })
+
+        tick.request { _ in executionCount += 1 }
+        tick.request { _ in executionCount += 100 }
+
+        XCTAssertEqual(executionCount, 0, "request must not mutate state synchronously")
+        XCTAssertEqual(queued.count, 1, "timer bursts must share one pending control pass")
+
+        queued.removeFirst()()
+        XCTAssertEqual(executionCount, 1)
+
+        tick.request { _ in executionCount += 1 }
+        XCTAssertEqual(queued.count, 1, "a completed pass must allow the next tick")
+        queued.removeFirst()()
+        XCTAssertEqual(executionCount, 2)
+    }
+
+    func testStoppedControlTickCancelsAlreadyDeferredWork() {
+        var queued: [() -> Void] = []
+        var executionCount = 0
+        let tick = DVSControlProcessingLoop(enqueue: { operation in
+            queued.append(operation)
+        })
+
+        tick.request { _ in executionCount += 1 }
+        tick.stop()
+        queued.removeFirst()()
+
+        XCTAssertEqual(executionCount, 0)
+    }
+
+    func testControlLoopTimerRunsWhileMainThreadIsBlocked() {
+        let fired = DispatchSemaphore(value: 0)
+        let tick = DVSControlProcessingLoop()
+        var ranOnMainThread = true
+
+        tick.start(interval: 0.005) { _ in
+            ranOnMainThread = Thread.isMainThread
+            fired.signal()
+        }
+        defer { tick.stop() }
+
+        XCTAssertEqual(
+            fired.wait(timeout: .now() + 0.5),
+            .success,
+            "the DVS timer must not wait behind a blocked main queue"
+        )
+        XCTAssertFalse(ranOnMainThread)
+    }
+
+    func testControlLoopBoundsElapsedAfterWorkerStall() {
+        var queued: [() -> Void] = []
+        var clock = Date(timeIntervalSinceReferenceDate: 1_000)
+        var elapsedValues: [TimeInterval] = []
+        let tick = DVSControlProcessingLoop(
+            enqueue: { operation in queued.append(operation) },
+            now: { clock }
+        )
+
+        tick.request { elapsedValues.append($0) }
+        queued.removeFirst()()
+
+        clock.addTimeInterval(2.0)
+        tick.request { elapsedValues.append($0) }
+        queued.removeFirst()()
+
+        XCTAssertEqual(elapsedValues.count, 2)
+        XCTAssertEqual(elapsedValues[0], 0.1, accuracy: 0.000_001)
+        XCTAssertEqual(elapsedValues[1], 0.25, accuracy: 0.000_001)
+    }
+
+    func testLiveIngressAcceptsBackgroundCallbackAndPublishesFreshnessOnMainFlush() {
+        let pipeline = makePipeline(mode: .controlPrototype)
+        pipeline.liveTapEnabled = true
+        let callbackTime = Date(timeIntervalSinceReferenceDate: 1234)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer)
+        let enqueued = expectation(description: "background callback enqueued")
+
+        DispatchQueue.global(qos: .userInteractive).async {
+            XCTAssertFalse(Thread.isMainThread)
+            pipeline.enqueueLiveStereoBuffer(
+                left: buffer.left,
+                right: buffer.right,
+                sampleRate: self.sampleRate,
+                frameCount: self.framesPerBuffer,
+                receivedAt: callbackTime
+            )
+            enqueued.fulfill()
+        }
+        wait(for: [enqueued], timeout: 1)
+
+        XCTAssertNil(
+            pipeline.lastBufferReceivedAt,
+            "audio callback ingress must not publish SwiftUI-observed state off-main"
+        )
+        XCTAssertEqual(pipeline.liveIngressDiagnostics.pendingBuffers, 1)
+
+        pipeline.flushDecode()
+
+        XCTAssertEqual(pipeline.lastBufferReceivedAt, callbackTime)
+        XCTAssertEqual(pipeline.liveIngressDiagnostics.totalReceived, 1)
+        XCTAssertEqual(pipeline.liveIngressDiagnostics.pendingBuffers, 0)
+        XCTAssertEqual(pipeline.counters.totalBuffersReceived, 1)
+    }
+
+    func testLiveIngressPreservesDiagnosticsOnlyModeWithoutPublishingOffMain() {
+        let pipeline = makePipeline(mode: .diagnosticsOnly)
+        pipeline.liveTapEnabled = true
+        let callbackTime = Date(timeIntervalSinceReferenceDate: 1_500)
+        let buffer = continuousQuadratureBuffer(startFrame: 0, frameCount: framesPerBuffer)
+
+        pipeline.enqueueLiveStereoBuffer(
+            left: buffer.left,
+            right: buffer.right,
+            sampleRate: sampleRate,
+            frameCount: framesPerBuffer,
+            receivedAt: callbackTime
+        )
+
+        XCTAssertNil(pipeline.lastBufferReceivedAt)
+        XCTAssertNil(pipeline.latestDiagnosis)
+
+        pipeline.flushDecode(now: callbackTime)
+
+        XCTAssertEqual(pipeline.lastBufferReceivedAt, callbackTime)
+        XCTAssertNotNil(pipeline.latestDiagnosis)
+        XCTAssertNil(pipeline.latestPlatterTimeline)
+        XCTAssertEqual(pipeline.counters.totalBuffersReceived, 1)
+    }
+
+    func testLiveIngressDropsOldestBacklogAndAccountsForEveryCallback() {
+        let pipeline = TimecodeControlPipeline(sampleRate: 48_000, channelCount: 2)
+        pipeline.mode = .controlPrototype
+        pipeline.liveTapEnabled = true
+        let largeFrameCount = 4_800
+        let tone: [Float] = (0..<largeFrameCount).map { frame in
+            0.04 * sin(2 * Float.pi * 1_000 * Float(frame) / 48_000)
+        }
+        let newestReceipt = Date(timeIntervalSinceReferenceDate: 2_000)
+
+        for callbackIndex in 0..<10 {
+            pipeline.enqueueLiveStereoBuffer(
+                left: tone,
+                right: tone,
+                sampleRate: 48_000,
+                frameCount: largeFrameCount,
+                receivedAt: callbackIndex == 9
+                    ? newestReceipt
+                    : Date(timeIntervalSinceReferenceDate: Double(1_900 + callbackIndex))
+            )
+        }
+
+        let beforeFlush = pipeline.liveIngressDiagnostics
+        XCTAssertEqual(beforeFlush.totalReceived, 10)
+        XCTAssertEqual(beforeFlush.totalDroppedForLatency, 8)
+        XCTAssertEqual(beforeFlush.pendingBuffers, 2)
+        XCTAssertEqual(beforeFlush.pendingFrames, 9_600)
+        XCTAssertEqual(beforeFlush.latestReceivedAt, newestReceipt)
+
+        pipeline.flushDecode()
+
+        let afterFlush = pipeline.liveIngressDiagnostics
+        XCTAssertEqual(afterFlush.pendingBuffers, 0)
+        XCTAssertEqual(afterFlush.pendingFrames, 0)
+        XCTAssertEqual(afterFlush.totalDroppedForLatency, 8)
+        XCTAssertEqual(pipeline.counters.totalBuffersReceived, 10)
+        XCTAssertEqual(pipeline.lastBufferReceivedAt, newestReceipt)
+        XCTAssertTrue(
+            pipeline.makeValidationSnapshot(now: newestReceipt)
+                .captureDeviceDebugInfo.contains("DVS pipeline ingress: received=10 dropped=8"),
+            "validation copy must expose bounded-ingress evidence"
+        )
+    }
+
+    func testEmptyFlushesUseAudioClockAndDoNotInventLongDropoutBetweenRaneCallbacks() {
+        let pipeline = TimecodeControlPipeline(sampleRate: 48_000, channelCount: 2)
+        pipeline.mode = .controlPrototype
+        pipeline.liveTapEnabled = true
+        let callbackTime = Date(timeIntervalSinceReferenceDate: 50_000)
+        let frameCount = 4_800
+        let left: [Float] = (0..<frameCount).map { frame in
+            0.04 * sin(2 * Float.pi * 1_000 * Float(frame) / 48_000)
+        }
+        let right: [Float] = (0..<frameCount).map { frame in
+            0.04 * sin(2 * Float.pi * 1_000 * Float(frame) / 48_000 - Float.pi / 2)
+        }
+
+        pipeline.enqueueLiveStereoBuffer(
+            left: left,
+            right: right,
+            sampleRate: 48_000,
+            frameCount: frameCount,
+            receivedAt: callbackTime
+        )
+        pipeline.flushDecode(now: callbackTime)
+        pipeline.flushDecode(now: callbackTime.addingTimeInterval(0.1))
+        pipeline.flushDecode(now: callbackTime.addingTimeInterval(0.9))
+
+        XCTAssertEqual(
+            pipeline.counters.longDropoutCount,
+            0,
+            "sub-second gaps must not fail closed merely because the pipeline existed before the tap"
+        )
+
+        pipeline.flushDecode(now: callbackTime.addingTimeInterval(1.2))
+        XCTAssertEqual(
+            pipeline.counters.longDropoutCount,
+            1,
+            "a genuine callback gap beyond one second must still fail closed"
+        )
+    }
 }

@@ -380,6 +380,16 @@ struct TimecodeControlCard: View {
                     .foregroundStyle(bridgeStateColor)
             }
 
+            Text("Gate: \(bridge.lastDecision.label)")
+                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Gate counts: \(bridge.blockingDecisionSummary)")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+
             // Current drive info
             if let drive = bridge.currentDrive {
                 HStack(spacing: 8) {
