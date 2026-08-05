@@ -6658,7 +6658,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.lastMIDICCMessage = latestCC
                 self.lastMIDIEventSummary = latestSummary
                 self.midiListeningState = "Listening"
-                if isMidiLearn {
+                // Re-check state fresh here rather than using the `isMidiLearn`
+                // snapshot captured before dispatch: `applyLearnedCrossfaderMapping`
+                // (called earlier in this same event when `learning` was true) queues
+                // its own main-actor publish that sets `midiLearnState = .learned(...)`
+                // and the correct "Learned Xfader: ..." feedback first. Using the
+                // stale snapshot here would unconditionally overwrite that with the
+                // generic "Received CC..." summary on the very event that just
+                // committed the mapping; the fresh re-check correctly no-ops once
+                // the learn has already landed.
+                if self.midiLearnState == .listening {
                     self.midiLearnFeedback = latestSummary
                 }
             }
