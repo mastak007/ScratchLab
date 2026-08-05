@@ -3040,6 +3040,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         if let data = UserDefaults.standard.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
            let mapping = try? JSONDecoder().decode(CrossfaderCCMapping.self, from: data) {
+            crossfaderCCMapping = mapping
+            midiLearnState = .learned(mapping)
             persistedCrossfaderMapping = mapping
         }
 
