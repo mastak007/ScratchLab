@@ -7275,7 +7275,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(macSource.contains("true (Live Input)"))
         XCTAssertTrue(macSource.contains("live preview"))
-        XCTAssertTrue(notationSource.contains("Baby Scratch Template"))
+        XCTAssertTrue(notationSource.contains("Baby Scratch Demo"))
         XCTAssertTrue(notationSource.contains("Audio-only take"))
         XCTAssertTrue(notationSource.contains("No record movement detected."))
         XCTAssertFalse(notationSource.contains("Notation detected from audio — direction pending."))

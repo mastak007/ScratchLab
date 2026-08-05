@@ -308,15 +308,16 @@ struct NotationSheetTests {
         #expect(source.contains("let y2: CGFloat = isForward ? mid - h : mid + h"))
     }
 
-    @Test("Template Demo source keeps Baby Scratch Template only in the template branch")
-    func templateDemoStillOwnsBabyScratchTemplateLabel() throws {
+    @Test("Notation Lab's non-captured branch shows the Baby Scratch Demo label, not the retired Template label")
+    func nonCapturedBranchOwnsBabyScratchDemoLabel() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("ScratchLabDesktop/Views/NotationVisualizerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        #expect(source.contains("Baby Scratch Template"))
         #expect(source.contains("if showingCaptured, let snapshot = capturedSnapshot"))
+        #expect(source.contains("Baby Scratch Demo"))
+        #expect(!source.contains("Baby Scratch Template"))
     }
 
     // MARK: 14. No CXL strings surface in snapshot user-facing fields
