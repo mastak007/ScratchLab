@@ -1186,14 +1186,22 @@ struct CrossPlatformNotationParityTests {
     @Test("macOS animated visualizer routes its record lane through the shared renderer")
     func notationCanvasUsesSharedRenderer() throws {
         let source = try notationCanvasSource()
-        #expect(source.contains("ScratchStrokeGeometry.motionPath("))
-        #expect(source.contains("ScratchMotionRenderer.draw("))
+        // `drawActionNotationTrace` is the same call `ScratchMotionLane.swift`
+        // uses for the iOS Practice lane — a stronger parity guarantee than
+        // the retired `ScratchMotionRenderer.draw(_:in:viewport:style:)` +
+        // `ScratchStrokeGeometry.motionPath(for:)` tent-shaped path, which
+        // this view no longer calls.
+        #expect(source.contains("ScratchMotionRenderer.drawActionNotationTrace("))
         #expect(source.contains("LaneContent(notation:"))
         #expect(source.contains("LaneViewport("))
-        // The looping pattern is tiled via the path's own shift, not by
-        // hand-mapping per-stroke offsets — the geometry's deflect-and-return
-        // ends both sides of the path at the centre, so tiles meet seamlessly.
-        #expect(source.contains("motionPath.shifted(by:"))
+        // Looping tiles by shifting each stroke directly with the shared
+        // `LaneStroke.shifted(by:)` model method — the exact same
+        // `content.strokes.map { $0.shifted(by: ...) }` shape
+        // `ScratchMotionLane.swift` uses for the iOS lane — rather than the
+        // retired path-level `MotionPath.shifted(by:)`. Each stroke is an
+        // independent diagonal slash with no return-to-centre tail, so
+        // there is no path seam to keep closed; tiling is per-stroke.
+        #expect(source.contains("content.strokes.map { $0.shifted(by:"))
     }
 
     @Test("iOS practice lane uses the same shared renderer + geometry")
