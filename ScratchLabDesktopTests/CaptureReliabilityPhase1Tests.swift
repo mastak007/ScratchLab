@@ -1198,12 +1198,21 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testCoachPauseHoldsPoseFromAudioTimeAndAvoidsPausedTimelineWork() throws {
+        // `ScratchCoachRigView`/`ScratchCoachViews.swift` is the shared
+        // component that owns this contract (used by the iOS coach card in
+        // `MainMenuView.swift`/`PracticeModeView.swift`). `MacAnalyzerView.swift`
+        // no longer instantiates it: commit b8917f8 ("macOS: add
+        // beat-quantized Baby Scratch guide") intentionally replaced the
+        // animated macOS coach-rig card with the notation-strip guide
+        // (`practiceNotationStrip`/`LiveNotationOverlayView`), so there is no
+        // remaining macOS coach-pose call site to check here. The
+        // `babyScratchDemo.playbackState` reads still present in
+        // `MacAnalyzerView.swift` are diagnostic-label formatting only (idle
+        // tick-rate text, a friendly playback-state string), not pose/pause
+        // gating, so they no longer stand in for this contract either.
         let coachSourceURL = projectRootURL()
             .appendingPathComponent("ScratchLab/Views/ScratchCoachViews.swift")
-        let macSourceURL = projectRootURL()
-            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let coachSource = try String(contentsOf: coachSourceURL, encoding: .utf8)
-        let macSource = try String(contentsOf: macSourceURL, encoding: .utf8)
         let rigSource = try sourceSlice(
             in: coachSource,
             from: "struct ScratchCoachRigView: View",
@@ -1214,12 +1223,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(rigSource.contains("TimelineView(.periodic"))
         XCTAssertTrue(rigSource.contains("rigContent(\n                    playbackTime: playbackTimeProvider(),\n                    isPlaying: false"))
         XCTAssertTrue(rigSource.contains("ScratchLabPerformanceSignpost.withInterval(\"CoachRigUpdate\")"))
-        // The coordinator's pose+animation calls now live in ScratchCoachViews'
-        // resolvedAnimationState (outside the rig struct slice), and MacAnalyzerView
-        // gates coach state through playbackState instead of the old isStopped guard.
+        // The coordinator's pose+animation calls live in ScratchCoachViews'
+        // resolvedAnimationState (outside the rig struct slice).
         XCTAssertTrue(coachSource.contains("BabyScratchDemoPlaybackCoordinator.coachPose(for: playbackTime)"))
-        XCTAssertTrue(macSource.contains("babyScratchDemo.playbackState"))
-        XCTAssertFalse(macSource.contains("CACurrentMediaTime()"))
     }
 
     func testPausePerformanceSignpostsAndDiagnosticsAreWired() throws {
