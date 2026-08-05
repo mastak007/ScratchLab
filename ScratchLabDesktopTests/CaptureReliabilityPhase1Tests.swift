@@ -11025,6 +11025,7 @@ extension CaptureReliabilityPhase1CoreTests {
             controller: 7,
             value: 96
         )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertEqual(engine.midiEventsReceivedCount, 1)
         XCTAssertEqual(engine.lastMIDICCMessage, "CC7 Ch1 Value96")
