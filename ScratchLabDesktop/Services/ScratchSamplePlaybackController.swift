@@ -32,6 +32,24 @@ final class ScratchSamplePlaybackController {
     private let playerNode = AVAudioPlayerNode()
     private let varispeedNode = AVAudioUnitVarispeed()
 
+    // MARK: - Continuous DVS renderer (2026-08-09 static/burst fix)
+
+    /// Continuous-render replacement for the DVS 60 Hz short-grain
+    /// scheduling path. The control tick publishes signed velocity and the
+    /// authoritative loop phase; audio is generated continuously at the
+    /// hardware render rate by an AVAudioSourceNode, so no per-tick grain
+    /// joins exist to click, gap, overlap, or amplitude-modulate — the
+    /// architecture behind the residual static confirmed in the post-mixer
+    /// capture. See DVSContinuousVinylRenderer.swift.
+    let dvsContinuousRenderer = DVSContinuousVinylRenderer()
+
+    /// Production default: the continuous renderer carries DVS audio.
+    /// `false` routes DVS ticks through the legacy scheduled-grain branch
+    /// (still fully compiled — it remains the MIDI path's machinery), kept
+    /// as a hardware rollback lever and so grain-mechanism regression
+    /// tests keep exercising the code they were written against.
+    var dvsUsesContinuousRenderer = true
+
     // MARK: - Serial audio queue
 
     // All AVAudioEngine, AVAudioPlayerNode, AVAudioFile, and AVAudioPCMBuffer
@@ -51,13 +69,84 @@ final class ScratchSamplePlaybackController {
     private(set) var loadedSampleID: String?
     private var forwardBuffer: AVAudioPCMBuffer?
     private(set) var totalFrames: Int = 0
-    private var lastScheduledSteps: Int = 0
+    private var lastScheduledSteps: Double = 0
     private var lastScheduledDirection: ScratchPlatterDirection?
     private var lastScheduleTime: Double = 0
     private var diagnosticPreviewPlayedSampleID: String?
     private(set) var currentSampleFrame: Int = 0
-    private var lastPlatterSteps: Int?
+    private var lastPlatterSteps: Double?
     private var framesPerStep: Double = 1
+
+    /// Last raw absolute step count passed to `positionDidChange(steps:
+    /// Int, ...)` (MIDI CC6 path). Used only to compute this call's delta
+    /// via overflow-safe `Int` subtraction — never converted to `Double`
+    /// directly. See `midiAccumulatedSteps`.
+    private var lastRawMIDISteps: Int?
+
+    /// Running `Double` sum of real MIDI step deltas since load — mirrors
+    /// `dvsAccumulatedSteps`/`TimecodeDriveStepConverter.continuousSteps`.
+    /// `positionDidChange(steps: Int, ...)` takes an ever-growing absolute
+    /// step count from the caller (it can reach `Int.max/2`-scale over a
+    /// long session); converting that directly to `Double` loses enough
+    /// precision at that magnitude that two absolute values 12 steps apart
+    /// can round to the identical `Double`, collapsing the delta to zero
+    /// and silently freezing playback. Accumulating only the (always tiny)
+    /// per-call `Int` delta avoids the cliff entirely.
+    private var midiAccumulatedSteps: Double = 0
+
+    /// Listening-fix #4 (rotational mapping, uncommitted): one physical
+    /// platter revolution's worth of frames — `framesPerStep *
+    /// stepsPerRevolution`, i.e. exactly the same 1.8 s/rev constant
+    /// `framesPerStep` already encodes, just expressed as a frame count
+    /// instead of a per-step rate. DVS-only. Always `>= totalFrames` for
+    /// the current "ahh" asset (1.05 s content inside a 1.8 s revolution),
+    /// so `[0, totalFrames)` is real audio and `[totalFrames,
+    /// dvsLoopFrames)` is the silence that pads the loop out to one full
+    /// revolution — see `dvsLoopPhaseFrame`/`copyDVSLoopSegment`. The MIDI
+    /// hot-cue-pad path does not use this: pad samples intentionally loop
+    /// at their own length (`totalFrames`) regardless of platter RPM (see
+    /// the comment in `loadOnQueue` above `framesPerStep`).
+    private(set) var dvsLoopFrames: Double = 0
+
+    /// Listening-fix #4 (uncommitted): cumulative REAL platter steps
+    /// decoded since load (signed, DVS-only). The DVS sample position is
+    /// always derived fresh from this value via `dvsLoopPhaseFrame` rather
+    /// than incremented independently, so it can never accumulate drift:
+    /// equal-and-opposite motion always nets back to the same value bit-
+    /// for-bit, hence the same loop phase. Reversal-audibility compensation
+    /// (`effectiveFrameDelta` below) affects only how much source audio a
+    /// grain renders, never this accumulator.
+    private var dvsAccumulatedSteps: Double = 0
+
+    #if DEBUG
+    /// Hardware-verification instrumentation only (SCRATCHLAB_DVS_TRACE=1):
+    /// an in-progress candidate for one uninterrupted, single-direction
+    /// physical revolution, so `[DVS-TRACE:9]` can report each *genuine*
+    /// completed lap's real step length as it happens — the measurement
+    /// the calibration question in `dvsLoopFrames`'s doc comment needs:
+    /// candidate revolution periods and their consistency, from a live
+    /// session, rather than inferring lap count after the fact.
+    ///
+    /// A naive "phase wrapped since last time" check is not reversal-safe:
+    /// a scratch that straddles the loop boundary (forward across it, then
+    /// back) satisfies the wrap condition twice in quick succession without
+    /// a real revolution ever completing. `nil` means "no candidate in
+    /// progress" — set on load/unload, on any direction change, on a
+    /// detected dropout (`noDirection`), and on a detected scheduling gap
+    /// (stop/resume), so a completed lap can only ever be reported for an
+    /// uninterrupted run in one direction with no untrusted gap in it.
+    private var dvsLapCandidate: DVSLapCandidate?
+
+    private struct DVSLapCandidate {
+        let direction: ScratchPlatterDirection
+        let startAccumulatedSteps: Double
+        let startPhase: Double
+        let startUptime: TimeInterval
+        var travelledDistance: Double = 0
+        var tickCount: Int = 0
+    }
+    #endif
+
     private(set) var lastScheduledSourceFrame: Int?
     private(set) var lastScheduledSegmentFrames: Int?
     private(set) var lastScheduledRate: Float?
@@ -102,6 +191,20 @@ final class ScratchSamplePlaybackController {
         /// stretching (i.e. `segmentFrames`) — how few real samples were
         /// available to reconstruct the grain's full output window.
         let rawSourceFrameCount: Int
+        /// `schedulingClock()` value at the moment this grain was handed to
+        /// `scheduleBuffer` — NOT a real CoreAudio render-timeline
+        /// timestamp (this class never reads one; `scheduleBuffer(at: nil,
+        /// ...)` queues after whatever AVAudioPlayerNode already has
+        /// buffered, and that real timeline is not observable from here).
+        /// Paired with `scheduledOutputWindow`, this is the same
+        /// control-side estimate `dvsOutputTiming()`/the gap-detection
+        /// head-fade logic already uses: `scheduledAtUptime +
+        /// scheduledOutputWindow` is this grain's *expected* output end,
+        /// and comparing it against the next grain's `scheduledAtUptime`
+        /// shows a control-side gap or overlap in the scheduling
+        /// bookkeeping. It does not, and cannot, prove what the audio
+        /// hardware actually rendered.
+        let scheduledAtUptime: TimeInterval
     }
 
     /// Test/diagnostic-only hook: invoked synchronously on the audio queue
@@ -112,6 +215,184 @@ final class ScratchSamplePlaybackController {
     /// playback in a WAV for discontinuity/overlap/underrun diagnosis.
     var scheduledGrainObserver: ((ScheduledGrainSnapshot) -> Void)?
 
+    /// A single validated, uninterrupted, single-direction DVS revolution
+    /// candidate that completed (reported alongside `[DVS-TRACE:9]`, but
+    /// unconditionally — not gated behind `SCRATCHLAB_DVS_TRACE`, which is
+    /// read once at process launch and so can't be toggled from within a
+    /// test). See `dvsLapCandidate`'s doc comment for the reversal-safety
+    /// invariant this reports.
+    struct DVSLapSnapshot {
+        let direction: ScratchPlatterDirection
+        let lapSteps: Double
+        let startPhase: Double
+        let endPhase: Double
+        let tickCount: Int
+        let elapsedSeconds: TimeInterval
+    }
+
+    /// Test/diagnostic-only hook, same contract as `scheduledGrainObserver`:
+    /// invoked synchronously on the audio queue whenever a lap candidate is
+    /// validated and reported as a completed revolution. `nil` by default;
+    /// production and hardware code paths never set it.
+    var dvsLapCompletedObserver: ((DVSLapSnapshot) -> Void)?
+
+    /// Diagnostic record of a PCM join between two consecutively scheduled
+    /// grains.  All fields are scalars — no Array or reference-type fields,
+    /// so storage and copy are a bounded memcpy (~200 bytes).  Computed
+    /// when `grainJoinObserver` is set (tests) or `DVSTrace.isEnabled` is
+    /// true (hardware trace).  Production/hardware code paths never create
+    /// these.
+    struct GrainJoinDiagnostic {
+        // --- Timing (control-side, not hardware render timestamps) ---
+        let previousScheduledAtUptime: TimeInterval
+        let currentScheduledAtUptime: TimeInterval
+        let previousOutputWindow: TimeInterval
+        let currentOutputWindow: TimeInterval
+        let estimatedPreviousEnd: TimeInterval
+        /// Control-side gap: positive = gap, negative = overlap.
+        let estimatedControlGap: TimeInterval
+        // --- Phase ---
+        let previousSourceFrame: Int
+        let currentSourceFrame: Int
+        let direction: ScratchPlatterDirection
+        // --- PCM join (first channel, extracted from buffer pointers) ---
+        let previousLastSample: Float
+        let currentFirstSample: Float
+        let joinDiscontinuity: Float
+        let previousInternalMaxStep: Float
+        let currentInternalMaxStep: Float
+        let crossesPhaseBoundary: Bool
+        // --- Scheduling flags ---
+        let previousInterrupts: Bool
+        let currentInterrupts: Bool
+        let previousUsesSlowGrain: Bool
+        let currentUsesSlowGrain: Bool
+        let previousRawFrameCount: Int
+        let currentRawFrameCount: Int
+    }
+
+    /// Test/diagnostic-only hook: invoked synchronously on the audio queue
+    /// whenever two consecutive grains produce a join diagnostic.  `nil` by
+    /// default; production and hardware code paths never set it.
+    var grainJoinObserver: ((GrainJoinDiagnostic) -> Void)?
+
+    /// Lightweight scalar-only record of one grain's join-relevant state,
+    /// extracted directly from buffer pointers — no Array allocation, safe
+    /// on the audio scheduling queue.  Stored only to pair with the next
+    /// grain for join computation.
+    private struct GrainScalarSnapshot {
+        let scheduledAtUptime: TimeInterval
+        let scheduledOutputWindow: TimeInterval
+        let sourceFrame: Int
+        let direction: ScratchPlatterDirection
+        let interrupts: Bool
+        let usesSlowGrain: Bool
+        let rawFrameCount: Int
+        let lastSample: Float          // first channel, last frame
+        let internalMaxStep: Float     // first channel max |Δ|
+        let crossesPhaseBoundary: Bool
+    }
+    /// Previous grain's scalar snapshot for join computation.  `nil` after
+    /// load, unload, or a scheduling gap (noDirection).
+    private var previousGrainScalars: GrainScalarSnapshot?
+
+    /// Preallocated bounded ring for `GrainJoinDiagnostic` entries, written
+    /// on the audio queue when `DVSTrace.isEnabled` and read (flush/export)
+    /// off the audio queue.  Capacity fixed at init; push is an indexed
+    /// struct copy (memcpy) with no allocation, lock, or I/O.
+    private var dvsGrainRing: [GrainJoinDiagnostic?] = []
+    private let dvsGrainRingCapacity = 256
+    private var dvsGrainRingWriteIndex = 0
+
+    /// Preallocate ring storage.  Called once from `init` (main thread);
+    /// after this, `dvsGrainRingPush` does no allocation.
+    private func dvsGrainRingPreallocate() {
+        dvsGrainRing = Array(repeating: nil, count: dvsGrainRingCapacity)
+    }
+
+    /// Indexed assignment into the preallocated ring — one struct copy, no
+    /// allocation.  Called only from the audio scheduling queue.
+    private func dvsGrainRingPush(_ join: GrainJoinDiagnostic) {
+        dvsGrainRing[dvsGrainRingWriteIndex % dvsGrainRingCapacity] = join
+        dvsGrainRingWriteIndex &+= 1   // wrapping add, overflow is harmless
+    }
+
+    /// Flushes all recorded entries in write order (oldest first), resets
+    /// the ring, and returns the flushed entries.  Must NOT be called from
+    /// the audio queue (allocates result array).
+    func dvsGrainRingFlush() -> [GrainJoinDiagnostic] {
+        let total = dvsGrainRingWriteIndex
+        guard total > 0, !dvsGrainRing.isEmpty else { return [] }
+        let count = min(total, dvsGrainRingCapacity)
+        let start = total > dvsGrainRingCapacity
+            ? total % dvsGrainRingCapacity : 0
+        var result: [GrainJoinDiagnostic] = []
+        result.reserveCapacity(count)
+        for i in 0..<count {
+            let idx = (start &+ i) % dvsGrainRingCapacity
+            if let entry = dvsGrainRing[idx] {
+                result.append(entry)
+            }
+        }
+        dvsGrainRing.removeAll(keepingCapacity: true)
+        dvsGrainRingWriteIndex = 0
+        return result
+    }
+
+    /// Extracts scalar join-relevant data directly from buffer pointers —
+    /// no Array, no heap allocation, safe on the audio scheduling queue.
+    private static func extractGrainScalars(
+        from buffer: AVAudioPCMBuffer,
+        sourceFrame: Int,
+        direction: ScratchPlatterDirection,
+        interrupts: Bool,
+        usesSlowGrain: Bool,
+        rawFrameCount: Int,
+        scheduledOutputWindow: TimeInterval,
+        scheduledAtUptime: TimeInterval,
+        isDVSLoop: Bool
+    ) -> GrainScalarSnapshot? {
+        guard let channels = buffer.floatChannelData,
+              buffer.frameLength > 0 else { return nil }
+        let fc = Int(buffer.frameLength)
+        let lastIdx = fc - 1
+        let ptr = channels[0]
+
+        // Boundary samples.
+        let first = ptr[0]
+        let last = ptr[lastIdx]
+
+        // Max internal |Δ|.
+        var maxStep: Float = 0
+        for i in 1..<fc {
+            maxStep = max(maxStep, abs(ptr[i] - ptr[i - 1]))
+        }
+
+        // Phase boundary crossing (exact-zero vs non-zero within grain).
+        var hasZero = false, hasNonZero = false
+        for i in 0..<fc {
+            if ptr[i] == 0 { hasZero = true }
+            else { hasNonZero = true }
+            if hasZero && hasNonZero { break }
+        }
+
+        return GrainScalarSnapshot(
+            scheduledAtUptime: scheduledAtUptime,
+            scheduledOutputWindow: scheduledOutputWindow,
+            sourceFrame: sourceFrame,
+            direction: direction,
+            interrupts: interrupts,
+            usesSlowGrain: usesSlowGrain,
+            rawFrameCount: rawFrameCount,
+            lastSample: last,
+            internalMaxStep: maxStep,
+            crossesPhaseBoundary: isDVSLoop && hasZero && hasNonZero
+        )
+    }
+
+    /// Full channel-data copy for test/diagnostic snapshots.  Allocates
+    /// `[[Float]]` — only called when `scheduledGrainObserver` is set
+    /// (tests), never on the hardware trace path.
     private func channelData(of buffer: AVAudioPCMBuffer) -> [[Float]] {
         guard let channels = buffer.floatChannelData else { return [] }
         let frameCount = Int(buffer.frameLength)
@@ -195,6 +476,473 @@ final class ScratchSamplePlaybackController {
     @Published var crossfaderGate: Float = 1.0
     @Published var lastCrossfaderRawValue: Int? = nil
 
+    // MARK: - Click-free stop ramp (generation-protected)
+
+    // MARK: - Click-free stop ramp (audioQueue-owned, generation-protected)
+
+    /// Bumped on `audioQueue` only: every new `pausePlayback()` /
+    /// `resumePlayback()` / `unload()` / `stopEngine()` invalidates any
+    /// in-flight ramp. The ramp timer, every volume write, the final `stop()`
+    /// and cancellation all run on `audioQueue`, so a quick resume on the same
+    /// serialized queue can never be followed by a stale ramp step or stop.
+    private var stopRampGeneration = 0
+    private var stopRampTimer: DispatchSourceTimer?
+    /// Raised-cosine gain curve (smooth derivative at both ends) over ~10 ms.
+    private let stopRampSteps = 10
+    private let stopRampStepInterval: TimeInterval = 0.001
+
+    private func cancelStopRamp() {
+        stopRampTimer?.setEventHandler {}
+        stopRampTimer?.cancel()
+        stopRampTimer = nil
+    }
+
+    /// Starts a bounded ~10 ms output-gain ramp ending in `playerNode.stop()`.
+    /// Must be called on `audioQueue`; the timer is owned by `audioQueue`.
+    /// Every step re-verifies `stopRampGeneration` on the same serialized
+    /// queue before writing `playerNode.volume`, so a `resumePlayback()` /
+    /// `unload()` / `stopEngine()` that already bumped the generation
+    /// synchronously invalidates every subsequent step and the final stop.
+    private func beginStopRamp() {
+        stopRampGeneration += 1
+        let generation = stopRampGeneration
+        cancelStopRamp()
+
+        var step = 0
+        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
+        stopRampTimer = timer
+        timer.schedule(deadline: .now(), repeating: stopRampStepInterval, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Serialized on audioQueue: the generation can only differ here if
+            // resume/unload/stop ran on this same queue before this event.
+            guard self.stopRampGeneration == generation else {
+                timer.cancel()
+                return
+            }
+            step += 1
+            if step >= self.stopRampSteps {
+                timer.cancel()
+                self.playerNode.stop()
+                self.playerNode.volume = 1.0
+                self.dvsDefinitivelyStopped = true
+                self.dvsRestartMotionTicks = 0
+#if DEBUG
+                self.finishOutputCaptureIfArmed(only: .automatic)
+#endif
+                return
+            }
+            // Raised-cosine: gain = cos(t·π/2)²  →  1 at step 0, 0 at step n.
+            let t = Float(step) / Float(self.stopRampSteps)
+            let cosine = cos(t * .pi / 2)
+            self.playerNode.volume = cosine * cosine
+        }
+        timer.resume()
+    }
+
+    /// Test/diagnostic read of the current player-node output gain. Volume is
+    /// atomic on `AVAudioPlayerNode`; used by the stop-ramp race test to prove
+    /// a quick resume leaves the volume exactly 1.0.
+    var currentPlayerVolume: Float { playerNode.volume }
+
+    /// DVS-only auto-stop transition tracking (production lifecycle): true
+    /// while the DVS path has been scheduling real grains, so the click-free
+    /// stop ramp fires only on the motion -> noDirection transition, never on
+    /// every 60 Hz idle tick.
+    private var wasDVSMotionActive = false
+    /// Near-stop settling hysteresis: true once the DVS auto-stop ramp has
+    /// COMPLETED (player node stopped) — or the platter was already idle at a
+    /// nil tick — until sustained deliberate motion resumes. While true, small
+    /// valid motion ticks are silenced (phase still accumulates) until
+    /// `dvsRestartMotionTickThreshold` consecutive ticks prove deliberate
+    /// motion; motion at/above `minAudibleDeltaSteps` resumes immediately.
+    /// Prevents settling jitter from re-arming the player for one isolated
+    /// short grain per wobble and re-stopping it on the next nil tick (the
+    /// repeated sparse burst/static heard near stop).
+    private var dvsDefinitivelyStopped = false
+    /// Consecutive valid DVS motion ticks observed while definitively stopped,
+    /// without an intervening nil-direction tick.
+    private var dvsRestartMotionTicks = 0
+    /// Consecutive motion ticks required before an audible restart after a
+    /// definitive stop (2 x 1/60 s ≈ 33 ms of sustained motion).
+    private let dvsRestartMotionTickThreshold = 2
+    /// Test/diagnostic counters for the production noDirection auto-stop path.
+    private(set) var dvsAutoStopRampStartCount = 0
+    private(set) var dvsCaptureFinalizeCount = 0
+
+    /// Called on `audioQueue` from the real DVS scheduling path whenever a
+    /// grain is about to be scheduled while a click-free stop ramp is in
+    /// flight: invalidates the ramp (generation bump + timer cancel on this
+    /// same serialized queue) and restores unity volume, so the stale ramp
+    /// can never stop newly scheduled playback. Platter phase and accumulated
+    /// steps are untouched.
+    private func cancelPendingDVSAutoStopIfRamping() {
+        guard stopRampTimer != nil else { return }
+        stopRampGeneration += 1
+        cancelStopRamp()
+        playerNode.volume = 1.0
+    }
+
+#if DEBUG
+    // MARK: - Post-mixer output capture (bounded, DEBUG-only, env-gated)
+
+    /// One-shot capture of the engine's post-mixer output so live-only playback
+    /// artifacts (queue starvation gaps, resample/SRC noise, node timing) can
+    /// be measured on real hardware without touching the render callback.
+    /// Env-gated (`SCRATCHLAB_CAPTURE_OUTPUT=1`) so it is off by default.
+    /// Concurrency model: while the tap is installed ONLY the render callback
+    /// touches the ring and the write index (no locks, no allocation, no
+    /// logging, no file I/O on the render thread; there is no recurring
+    /// exporter reading them). Capture finishes on the controller/audio queue:
+    /// the mixer tap is removed first so no callback can still be executing,
+    /// and only then is the immutable chronological range dispatched to the
+    /// export queue for WAV writing. For the hardware test, capture finishes
+    /// when the generation-protected stop ramp completes (pausePlayback) or on
+    /// engine stop. Capacity is sized from the actual mixer sample rate x 30s.
+    private static let outputCaptureEnabled =
+        ProcessInfo.processInfo.environment["SCRATCHLAB_CAPTURE_OUTPUT"] == "1"
+    private var outputCaptureRingFrames = 0   // mixerSampleRate * 30
+    private var outputCaptureRing: UnsafeMutablePointer<Float>?
+    private var outputCaptureWriteFrames = 0  // render-callback owned while armed
+    private var outputCaptureArmed = false
+
+    /// Ownership of the currently armed output capture (nil when not armed).
+    /// `.automatic`: env-gated capture the motion→idle stop ramp may finalize.
+    /// `.manual`: explicit diagnostics capture only "Stop & Export" finalizes.
+    private var outputCaptureOwnership: OutputCaptureOwnership?
+
+    enum OutputCaptureOwnership {
+        case automatic
+        case manual
+    }
+    private var outputCaptureRate: Double = 44_100
+    private let outputCaptureExportQueue = DispatchQueue(label: "com.scratchlab.controller.captureExport", qos: .utility)
+
+#if DEBUG
+    /// Test/diagnostic read of how many mixer frames the tap captured before
+    /// finalization (0 while unarmed). Not safe while the tap is installed;
+    /// used only after finalization in tests/drivers.
+    var outputCaptureWrittenFramesProbe: Int { outputCaptureWriteFrames }
+    /// Test/diagnostic read of whether the post-mixer tap is currently armed.
+    var outputCaptureArmedProbe: Bool { outputCaptureArmed }
+    /// Test/diagnostic read of the armed capture's ownership (nil when not armed).
+    var outputCaptureOwnershipProbe: OutputCaptureOwnership? { outputCaptureOwnership }
+    /// Test/diagnostic read of total grains scheduled since load (DEBUG).
+    var scheduledGrainCountProbe: Int { forwardScheduleCount + backwardScheduleCount }
+    /// Test/diagnostic count of tap callback invocations (DEBUG).
+    private(set) var outputCaptureTapInvocations = 0
+#endif
+
+    /// Installs the post-mixer capture tap. `envGated: true` keeps the
+    /// automatic capture behind `SCRATCHLAB_CAPTURE_OUTPUT=1`; the manual
+    /// diagnostics control passes `false` (explicit user action). Returns the
+    /// install error, or nil when armed (or already armed).
+    @discardableResult
+    private func installOutputCaptureTap(envGated: Bool) -> Error? {
+        guard envGated ? Self.outputCaptureEnabled : true, !outputCaptureArmed else { return nil }
+        let mixerFormat = engine.mainMixerNode.outputFormat(forBus: 0)
+        let mixerRate = mixerFormat.sampleRate > 0 ? mixerFormat.sampleRate : 44_100
+        outputCaptureRate = mixerRate
+        // Capacity from the ACTUAL mixer sample rate: rate * 30 s.
+        outputCaptureRingFrames = Int(mixerRate * 30)
+        guard outputCaptureRingFrames > 0,
+              let tapFormat = AVAudioFormat(standardFormatWithSampleRate: mixerRate, channels: 2) else { return nil }
+        let ring = UnsafeMutablePointer<Float>.allocate(capacity: outputCaptureRingFrames)
+        ring.initialize(repeating: 0, count: outputCaptureRingFrames)
+        outputCaptureRing = ring
+        outputCaptureWriteFrames = 0
+        do {
+            try engine.mainMixerNode.installTap(
+                onBus: 0,
+                bufferSize: 1024,
+                format: tapFormat
+            ) { [weak self] buffer, _ in
+                guard let self else { return }
+#if DEBUG
+                self.outputCaptureTapInvocations += 1
+#endif
+                guard let ring = self.outputCaptureRing,
+                      let channels = buffer.floatChannelData else { return }
+                let frames = Int(buffer.frameLength)
+                guard frames > 0 else { return }
+                let capacity = self.outputCaptureRingFrames
+                let writeStart = self.outputCaptureWriteFrames % capacity
+                let ch0 = channels[0]
+                let ch1 = buffer.format.channelCount > 1 ? channels[1] : nil
+                var idx = writeStart
+                if let ch1 {
+                    for i in 0..<frames {
+                        ring[idx] = (ch0[i] + ch1[i]) * 0.5
+                        idx += 1
+                        if idx == capacity { idx = 0 }
+                    }
+                } else {
+                    for i in 0..<frames {
+                        ring[idx] = ch0[i]
+                        idx += 1
+                        if idx == capacity { idx = 0 }
+                    }
+                }
+                self.outputCaptureWriteFrames += frames  // single aligned store; single writer while armed
+            }
+            outputCaptureArmed = true
+            outputCaptureOwnership = envGated ? .automatic : .manual
+            return nil
+        } catch {
+            print("[ScratchSamplePlaybackController] output capture tap install failed: \(error)")
+            ring.deallocate()
+            outputCaptureRing = nil
+            return error
+        }
+    }
+
+    /// Finishes capture. The mixer tap is removed FIRST (after removal no
+    /// callback can still be executing and nothing else writes the ring or the
+    /// index), then the immutable chronological range is built and dispatched
+    /// to the export queue. Exactly one completion fires (when provided) unless
+    /// `only` mismatches the armed capture's ownership, in which case the
+    /// capture is left armed untouched (e.g. the motion→idle ramp must not
+    /// finalize a manual capture). Safe on `audioQueue` or during engine
+    /// teardown.
+    private func finishOutputCaptureIfArmed(
+        completion: ((OutputCaptureFinalizeOutcome) -> Void)? = nil,
+        only: OutputCaptureOwnership? = nil
+    ) {
+        guard outputCaptureArmed, let ring = outputCaptureRing else {
+            completion?(.notArmed)
+            return
+        }
+        if let only, outputCaptureOwnership != only {
+            // Not this path's capture: leave it armed (manual survives the
+            // motion→idle ramp; the automatic capture survives Stop & Export
+            // is NOT this case — explicit Stop & Export finalizes any).
+            return
+        }
+        outputCaptureArmed = false
+        outputCaptureOwnership = nil
+        engine.mainMixerNode.removeTap(onBus: 0)
+        dvsCaptureFinalizeCount += 1
+        // From here on no writer can touch the ring or the write index.
+        let written = outputCaptureWriteFrames
+        let capacity = outputCaptureRingFrames
+        guard written > 0, capacity > 0 else {
+            ring.deallocate()
+            outputCaptureRing = nil
+            completion?(.empty)
+            return
+        }
+        // Chronological circular-ring order: the last min(written, capacity)
+        // frames, starting at the final write position.
+        let samples = Self.orderedCaptureSamples(ring: ring, capacity: capacity, written: written)
+        ring.deallocate()
+        outputCaptureRing = nil
+        let rate = outputCaptureRate
+        outputCaptureExportQueue.async {
+            guard let directory = Self.defaultCaptureDirectory else {
+                print("[DVS-CAPTURE] export failed error=noApplicationSupportDirectory path=<unknown>")
+                completion?(.error(CaptureExportError.noApplicationSupportDirectory))
+                return
+            }
+            do {
+                let url = try Self.writeMonoFloatWAV(samples, sampleRate: rate, to: directory)
+                print("[DVS-CAPTURE] wrote frames=\(samples.count) rate=\(rate) path=\(url.path)")
+                completion?(.exported(path: url.path))
+            } catch {
+                print("[DVS-CAPTURE] export failed error=\(error) path=\(directory.appendingPathComponent("scratchlab-output-capture.wav").path)")
+                completion?(.error(error))
+            }
+        }
+    }
+
+    /// Outcome of a manual capture finalization.
+    enum OutputCaptureFinalizeOutcome {
+        case exported(path: String)
+        case empty
+        case notArmed
+        case error(Error)
+    }
+
+    /// Errors raised by the diagnostic capture export.
+    enum CaptureExportError: Error {
+        case emptyCapture
+        case noApplicationSupportDirectory
+    }
+
+    /// Sandbox-writable capture destination:
+    /// `~/Library/Application Support/ScratchLab/Diagnostics/`.
+    private static var defaultCaptureDirectory: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("Diagnostics", isDirectory: true)
+    }
+
+    /// Reorders a captured circular ring (capacity, total written frames, final
+    /// write position) into chronological order. Before the ring wraps
+    /// (`written < capacity`) the oldest frame is at index 0; after wrap it is
+    /// at `written % capacity`. Returns the last `min(written, capacity)`
+    /// frames in chronological order.
+    static func orderedCaptureSamples(
+        ring: UnsafePointer<Float>,
+        capacity: Int,
+        written: Int
+    ) -> [Float] {
+        let count = min(written, capacity)
+        guard count > 0, capacity > 0 else { return [] }
+        let start = written >= capacity ? written % capacity : 0
+        var out = [Float](repeating: 0, count: count)
+        for i in 0..<count {
+            out[i] = ring[(start + i) % capacity]
+        }
+        return out
+    }
+
+    /// Writes captured mono Float32 samples atomically to
+    /// `<directory>/scratchlab-output-capture.wav`, creating the directory
+    /// first (runs off the render callback, on the export queue). Returns the
+    /// written URL. Throws on empty capture or any file/directory error.
+    @discardableResult
+    static func writeMonoFloatWAV(
+        _ samples: [Float],
+        sampleRate: Double,
+        to directory: URL,
+        fileName: String = "scratchlab-output-capture.wav"
+    ) throws -> URL {
+        let frames = samples.count
+        guard frames > 0 else { throw CaptureExportError.emptyCapture }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(fileName)
+        var pcm = Data()
+        pcm.reserveCapacity(frames * 4 + 44)
+        func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { pcm.append(contentsOf: $0) } }
+        func u16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { pcm.append(contentsOf: $0) } }
+        u32(0x46464952); u32(UInt32(36 + frames * 4)); u32(0x45564157)
+        u32(0x20746D66); u32(16); u16(3); u16(1); u32(UInt32(sampleRate)); u32(UInt32(sampleRate * 4)); u16(4); u16(32)
+        u32(0x61746164); u32(UInt32(frames * 4))
+        samples.withUnsafeBytes { pcm.append(contentsOf: $0) }
+        try pcm.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// Manual start result for the DVS diagnostics panel (DEBUG-only).
+    enum OutputCaptureDiagnosticsResult {
+        case armed
+        case alreadyArmed
+        case engineNotRunning
+        case tapInstallFailed(Error)
+    }
+
+    /// Explicitly arms the post-mixer output capture from the manual
+    /// diagnostics control. The complete engine-running check, armed check,
+    /// tap installation, ring mutation and result creation run on `audioQueue`
+    /// (serialized with all other capture transitions); the result is returned
+    /// through the completion handler and exactly one completion fires.
+    /// Reports clearly when the playback engine is not running — it never
+    /// silently no-ops. Reuses the same bounded ring and real-time-safe tap as
+    /// the automatic path, without the env gate; ownership is `.manual`.
+    func armOutputCaptureForDiagnostics(
+        completion: @escaping (OutputCaptureDiagnosticsResult) -> Void
+    ) {
+        audioQueue.async { [weak self] in
+            guard let self else {
+                completion(.engineNotRunning)
+                return
+            }
+            guard self.engineStarted else {
+                completion(.engineNotRunning)
+                return
+            }
+            if self.outputCaptureArmed {
+                completion(.alreadyArmed)
+                return
+            }
+            if let error = self.installOutputCaptureTap(envGated: false) {
+                completion(.tapInstallFailed(error))
+                return
+            }
+            completion(self.outputCaptureArmed ? .armed
+                       : .tapInstallFailed(CaptureExportError.noApplicationSupportDirectory))
+        }
+    }
+
+    /// Explicitly removes the tap, finalizes the captured frames and exports
+    /// immediately (manual diagnostics control). Exactly one completion fires:
+    /// `.exported(path)`, `.empty`, `.notArmed`, or `.error`. Independent of
+    /// `direction:nil`, platter stopping, `pausePlayback`, the stop ramp, and
+    /// engine teardown. Runs on `audioQueue` so it is serialized with the
+    /// automatic finalization paths.
+    func finishOutputCaptureForDiagnostics(
+        completion: @escaping (OutputCaptureFinalizeOutcome) -> Void
+    ) {
+        audioQueue.async { [weak self] in
+            self?.finishOutputCaptureIfArmed(completion: completion)
+        }
+    }
+#endif
+
+#if DEBUG
+    /// DEBUG-only manual control for the post-mixer output capture, driven
+    /// from the DVS diagnostics panel. Holds a weak reference to the live
+    /// controller (registered at init) so the panel's Start / Stop & Export
+    /// buttons work without changing the SwiftUI production flow — the panel
+    /// re-reads this singleton on its bounded refresh timer.
+    final class OutputCaptureDiagnosticsControl: ObservableObject {
+        static let shared = OutputCaptureDiagnosticsControl()
+        @Published private(set) var status: String = "Capture idle"
+        private weak var controller: ScratchSamplePlaybackController?
+
+        func register(_ controller: ScratchSamplePlaybackController) {
+            self.controller = controller
+        }
+
+        func start() {
+            guard let controller else {
+                setStatus("Capture start failed: no controller")
+                return
+            }
+            setStatus("Arming…")
+            controller.armOutputCaptureForDiagnostics { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .armed:
+                    self.setStatus("Capture armed")
+                case .alreadyArmed:
+                    self.setStatus("Capture armed (already)")
+                case .engineNotRunning:
+                    self.setStatus("Capture start failed: engine not running")
+                case .tapInstallFailed(let error):
+                    self.setStatus("Capture start failed: \(error)")
+                }
+            }
+        }
+
+        func stopAndExport() {
+            guard let controller else {
+                setStatus("Capture stop failed: no controller")
+                return
+            }
+            controller.finishOutputCaptureForDiagnostics { [weak self] outcome in
+                guard let self else { return }
+                switch outcome {
+                case .exported(let path):
+                    self.setStatus("Exported: \(path)")
+                case .empty:
+                    self.setStatus("Export failed: capture is empty")
+                case .notArmed:
+                    self.setStatus("Export failed: capture not armed")
+                case .error(let error):
+                    self.setStatus("Export failed: \(error)")
+                }
+            }
+        }
+
+        private func setStatus(_ text: String) {
+            DispatchQueue.main.async { [weak self] in
+                self?.status = text
+            }
+        }
+    }
+#endif
+
     // MARK: - Lifecycle
 
     init(schedulingClock: @escaping () -> TimeInterval = { CACurrentMediaTime() }) {
@@ -204,6 +952,12 @@ final class ScratchSamplePlaybackController {
         engine.attach(varispeedNode)
         engine.connect(playerNode, to: varispeedNode, format: nil)
         engine.connect(varispeedNode, to: engine.mainMixerNode, format: nil)
+        engine.attach(dvsContinuousRenderer.node)
+        engine.connect(dvsContinuousRenderer.node, to: engine.mainMixerNode, format: nil)
+#if DEBUG
+        dvsGrainRingPreallocate()
+        OutputCaptureDiagnosticsControl.shared.register(self)
+#endif
     }
 
     deinit {
@@ -228,17 +982,35 @@ final class ScratchSamplePlaybackController {
             try engine.start()
             engineStarted = true
             playerNode.play()
+#if DEBUG
+            installOutputCaptureTap(envGated: true)
+#endif
             print("[ScratchSamplePlaybackController] engine started, output = system default")
         } catch {
             print("[ScratchSamplePlaybackController] engine start failed: \(error)")
         }
     }
 
+    /// Whether the engine is running, read under `engineLock` — the guard
+    /// both scheduling paths use before `playerNode.play()`.
+    private func isEngineRunningForPlayback() -> Bool {
+        engineLock.lock()
+        defer { engineLock.unlock() }
+        return engineStarted
+    }
+
     private func stopEngine() {
         engineLock.lock()
         defer { engineLock.unlock() }
+        dvsContinuousRenderer.publishIdle()
+        stopRampGeneration += 1
+        cancelStopRamp()
+#if DEBUG
+        finishOutputCaptureIfArmed()
+#endif
         guard engineStarted else { return }
         playerNode.stop()
+        playerNode.volume = 1.0
         engine.stop()
         engineStarted = false
     }
@@ -320,33 +1092,7 @@ final class ScratchSamplePlaybackController {
             return
         }
 
-        forwardBuffer = buffer
-        totalFrames = Int(buffer.frameLength)
-        loadedSampleID = sampleID
-        lastScheduledSteps = 0
-        lastScheduledDirection = nil
-        lastScheduleTime = 0
-        currentSampleFrame = 0
-        lastPlatterSteps = nil
-        // 33⅓ RPM → 1.8 s/rev → normal-speed playback allocates
-        // (sampleRate × 1.8) frames per revolution, distributed across
-        // controller steps. This way the varispeed graph hits rate=1.0
-        // when the platter turns at nominal vinyl speed, regardless of
-        // sample length — a 1 s snare and a 10 s bass both play back at
-        // the same pitch for the same platter speed.
-        let vinylSecondsPerRevolution = 60.0 / Self.nominalVinylRPM
-        let rate = Double(buffer.format.sampleRate)
-        framesPerStep = max(1, (rate * vinylSecondsPerRevolution) / Double(stepsPerRevolution))
-        lastScheduledSourceFrame = nil
-        lastScheduledSegmentFrames = nil
-        lastScheduledRate = nil
-        forwardScheduleCount = 0
-        backwardScheduleCount = 0
-        lastScheduleSkippedReason = nil
-        lastEffectiveFrameDelta = nil
-        lastReversalCompensated = false
-        resetDVSGrainTiming()
-        varispeedNode.rate = 1.0
+        applyLoadedBufferState(buffer, sampleID: sampleID)
 
         ensureEngineRunning()
 
@@ -391,6 +1137,82 @@ final class ScratchSamplePlaybackController {
         }
     }
 
+    /// Installs a decoded PCM buffer as the loaded sample and resets all
+    /// per-sample playback state. Extracted from `loadOnQueue` (unchanged
+    /// semantics) so the DEBUG synthetic-sample seam below shares the exact
+    /// production reset path instead of duplicating it. Must run on
+    /// `audioQueue`.
+    private func applyLoadedBufferState(_ buffer: AVAudioPCMBuffer, sampleID: String) {
+        forwardBuffer = buffer
+        totalFrames = Int(buffer.frameLength)
+        loadedSampleID = sampleID
+        lastScheduledSteps = 0
+        lastScheduledDirection = nil
+        lastScheduleTime = 0
+        currentSampleFrame = 0
+        lastPlatterSteps = nil
+        lastRawMIDISteps = nil
+        midiAccumulatedSteps = 0
+        wasDVSMotionActive = false
+        dvsDefinitivelyStopped = false
+        dvsRestartMotionTicks = 0
+        // 33⅓ RPM → 1.8 s/rev → normal-speed playback allocates
+        // (sampleRate × 1.8) frames per revolution, distributed across
+        // controller steps. This way the varispeed graph hits rate=1.0
+        // when the platter turns at nominal vinyl speed, regardless of
+        // sample length — a 1 s snare and a 10 s bass both play back at
+        // the same pitch for the same platter speed.
+        let vinylSecondsPerRevolution = 60.0 / Self.nominalVinylRPM
+        let rate = Double(buffer.format.sampleRate)
+        framesPerStep = max(1, (rate * vinylSecondsPerRevolution) / Double(stepsPerRevolution))
+        // Exactly one revolution's frame count at this sample's rate — see
+        // the `dvsLoopFrames` doc comment.
+        dvsLoopFrames = framesPerStep * Double(stepsPerRevolution)
+        dvsAccumulatedSteps = 0
+        #if DEBUG
+        dvsLapCandidate = nil
+        previousGrainScalars = nil
+        #endif
+        lastScheduledSourceFrame = nil
+        lastScheduledSegmentFrames = nil
+        lastScheduledRate = nil
+        forwardScheduleCount = 0
+        backwardScheduleCount = 0
+        lastScheduleSkippedReason = nil
+        lastEffectiveFrameDelta = nil
+        lastReversalCompensated = false
+        resetDVSGrainTiming()
+        varispeedNode.rate = 1.0
+        // Continuous DVS renderer: install the immutable PCM copy whenever
+        // the clip fits inside the one-revolution loop (always true for the
+        // production DVS asset). Longer samples never engage the renderer —
+        // `renderContinuousDVSTick` requires the same fit — so they only
+        // need the renderer silenced.
+        if Double(totalFrames) <= dvsLoopFrames {
+            dvsContinuousRenderer.installSample(
+                from: buffer,
+                loopFrames: dvsLoopFrames,
+                contentFadeFrames: dvsLoopContentFadeFrames
+            )
+        } else {
+            dvsContinuousRenderer.publishIdle()
+        }
+    }
+
+#if DEBUG
+    /// Test-only seam: installs a caller-built PCM buffer as the loaded
+    /// sample through the exact production reset path
+    /// (`applyLoadedBufferState`), skipping only bundle I/O, engine start,
+    /// and the audible diagnostic preview. Lets integration tests exercise
+    /// the DVS tick routing deterministically without bundled fixtures
+    /// (the documented command-line fixture-resolution gap).
+    func testOnly_installSyntheticSample(_ buffer: AVAudioPCMBuffer, sampleID: String) {
+        audioQueue.sync {
+            self.applyLoadedBufferState(buffer, sampleID: sampleID)
+        }
+    }
+#endif
+
     // MARK: - Position-driven playback
 
     /// Called when platter position changes. Runs the complete trace +
@@ -402,6 +1224,34 @@ final class ScratchSamplePlaybackController {
     /// `runSynchronouslyOnAudioQueue` avoids a self-deadlock if this is ever
     /// reached while already running on `audioQueue`.
     func positionDidChange(steps: Int, direction: ScratchPlatterDirection?, segmentWindow: TimeInterval? = nil) {
+        runSynchronouslyOnAudioQueue {
+            // Overflow-safe `Int` delta first (the caller's absolute step
+            // count can be huge over a long session — see
+            // `midiAccumulatedSteps`), only then folded into the `Double`
+            // accumulator `positionDidChangeOnQueue` expects.
+            let deltaSteps: Int
+            if let lastRaw = self.lastRawMIDISteps {
+                let result = steps.subtractingReportingOverflow(lastRaw)
+                deltaSteps = result.overflow ? (steps >= lastRaw ? Int.max : Int.min) : result.partialValue
+            } else {
+                deltaSteps = 0
+            }
+            self.lastRawMIDISteps = steps
+            self.midiAccumulatedSteps += Double(deltaSteps)
+            self.positionDidChangeOnQueue(
+                steps: self.midiAccumulatedSteps,
+                direction: direction,
+                segmentWindow: segmentWindow
+            )
+        }
+    }
+
+    /// Listening-fix #2 (Option 2, uncommitted): continuous fractional-steps
+    /// entry point used by the DVS drive path. `steps` is the running
+    /// fractional cumulative step total from `TimecodeDriveStepConverter
+    /// .continuousSteps`, so every moving tick emits a grain (no whole-step
+    /// quantization skips / batch lag at near-stop speeds).
+    func positionDidChangeContinuous(steps: Double, direction: ScratchPlatterDirection?, segmentWindow: TimeInterval? = nil) {
         runSynchronouslyOnAudioQueue {
             #if DEBUG
             let _ts = DVSTrace.current
@@ -431,7 +1281,7 @@ final class ScratchSamplePlaybackController {
         }
     }
 
-    private func positionDidChangeOnQueue(steps: Int, direction: ScratchPlatterDirection?, segmentWindow: TimeInterval? = nil) {
+    private func positionDidChangeOnQueue(steps: Double, direction: ScratchPlatterDirection?, segmentWindow: TimeInterval? = nil) {
         let now = schedulingClock()
 #if DEBUG
         let tScheduleEntry = now
@@ -440,8 +1290,22 @@ final class ScratchSamplePlaybackController {
         let dvsWindow: TimeInterval?
         if let segmentWindow, segmentWindow.isFinite {
             let sanitized = min(max(segmentWindow, 0), maximumDVSControlWindow)
+            // Listening-fix #2b (hardware-validated, restored): cap the
+            // accumulated control window at THIS tick's own window
+            // (`sanitized`), not `maximumDVSControlWindow` (0.25s). A
+            // 0.25s ceiling lets several skipped ticks (reversal crossing
+            // / stop) accumulate up to 250ms of "old movement" credit,
+            // which the next real grain then renders as one long stretched
+            // catch-up window — this is exactly the "platter can
+            // occasionally feel delayed" symptom seen on hardware. Capping
+            // at one tick means a scheduling stall can cost at most that
+            // tick's own window of latency, not up to a quarter second.
+            // This does NOT affect rotational-phase accuracy: the phase
+            // anchor (`dvsAccumulatedSteps`) is driven entirely by the
+            // decoder's real cumulative `deltaSteps`, never by this
+            // control-window bookkeeping.
             pendingDVSControlWindow = min(
-                maximumDVSControlWindow,
+                sanitized,
                 pendingDVSControlWindow + sanitized
             )
             dvsWindow = sanitized
@@ -469,6 +1333,10 @@ final class ScratchSamplePlaybackController {
             resetDVSGrainTiming()
             lastScheduleSkippedReason = "noDirection"
             #if DEBUG
+            // A dropout/untrusted tick invalidates any in-progress lap
+            // candidate — see `dvsLapCandidate`'s doc comment.
+            dvsLapCandidate = nil
+            previousGrainScalars = nil
             DVSTrace.log("[ScratchSamplePlaybackController] schedule skipped · reason=noDirection steps=\(steps)")
             #endif
             #if DEBUG
@@ -476,6 +1344,36 @@ final class ScratchSamplePlaybackController {
             let _thr = Thread.current.isMainThread ? "main" : "bg"
             DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=noDirection steps=\(steps) thread=\(_thr)")
             #endif
+            // DVS-only click-free stop: fire the generation-protected ramp only
+            // on the motion -> noDirection TRANSITION (DVS path only — MIDI has
+            // `dvsWindow == nil` and keeps its existing reset behaviour). Idle
+            // nil ticks never restart it. The completed ramp's final stop also
+            // finalizes the post-mixer output capture (if armed).
+            if dvsWindow != nil {
+                // Continuous renderer: a genuine no-direction tick settles
+                // the render output to silence click-free (velocity target
+                // zero, inactive). The retained render phase and the
+                // authoritative step anchor are deliberately untouched.
+                if dvsUsesContinuousRenderer {
+                    dvsContinuousRenderer.publishIdle()
+                }
+                // Any idle tick breaks a near-stop restart candidate: settling
+                // jitter must not accumulate across nil ticks into a restart.
+                dvsRestartMotionTicks = 0
+                if wasDVSMotionActive {
+                    wasDVSMotionActive = false
+                    if playerNode.isPlaying {
+                        dvsAutoStopRampStartCount += 1
+                        beginStopRamp()
+                    } else {
+                        // Already silent: stay definitively stopped (the ramp
+                        // completion also sets this, for the ramp path above).
+                        dvsDefinitivelyStopped = true
+                    }
+                } else {
+                    dvsDefinitivelyStopped = true
+                }
+            }
             return
         }
 
@@ -504,14 +1402,26 @@ final class ScratchSamplePlaybackController {
             return
         }
 
-        let deltaResult = steps.subtractingReportingOverflow(previousSteps)
-        let deltaSteps = deltaResult.overflow ? (steps >= previousSteps ? Int.max : Int.min) : deltaResult.partialValue
-        let deltaStepMagnitude: Double
-        if deltaResult.overflow || deltaSteps == Int.min {
-            deltaStepMagnitude = Double(Int.max)
-        } else {
-            deltaStepMagnitude = Double(abs(deltaSteps))
+        let deltaSteps = steps - previousSteps
+        let deltaStepMagnitude = abs(deltaSteps)
+
+        // Continuous-renderer DVS path (2026-08-09 static/burst fix): DVS
+        // ticks with the production loop geometry publish velocity + the
+        // authoritative phase anchor to the continuous renderer instead of
+        // scheduling a grain. Returns false (falling through to the legacy
+        // grain machinery below) for MIDI ticks, for the legacy rollback
+        // flag, and for samples longer than one revolution.
+        if dvsUsesContinuousRenderer,
+           let window = dvsWindow,
+           renderContinuousDVSTick(
+               steps: steps,
+               deltaSteps: deltaSteps,
+               tickWindow: window,
+               now: now
+           ) {
+            return
         }
+
         guard deltaStepMagnitude > 0 else {
             lastScheduleSkippedReason = "noMotion"
             #if DEBUG
@@ -523,6 +1433,18 @@ final class ScratchSamplePlaybackController {
             DVSTrace.log("[DVS-TRACE:7] playbackController scheduleSkip seq=\(DVSTrace.current) monotonic=\(_tm) reason=noMotion steps=\(steps) thread=\(_thr)")
             #endif
             return
+        }
+
+        // Confirmed real DVS motion (`deltaSteps != 0`): mark motion active
+        // for the noDirection transition trigger, and synchronously cancel any
+        // pending auto-stop ramp, so a stale stop can never truncate newly
+        // scheduled playback — even if a later render-eligibility guard (tiny
+        // grain, reversal, segment generation, near-stop, scheduling) returns
+        // early before any grain is rendered. Platter phase and accumulated
+        // steps are untouched. MIDI keeps its existing path (`dvsWindow == nil`).
+        if dvsWindow != nil {
+            wasDVSMotionActive = true
+            cancelPendingDVSAutoStopIfRamping()
         }
 
         // Scheduling direction comes from deltaSteps sign — the unambiguous physical
@@ -541,6 +1463,85 @@ final class ScratchSamplePlaybackController {
         // never itself sit exactly at a boundary the way the old clamp did.
 
         let sourceTotalFrames = Int(forward.frameLength)
+        // Only meaningful when the loaded content is shorter than one
+        // physical revolution (the real DVS "ahh" asset: ~1.05 s inside a
+        // 1.8 s loop). Samples at least as long as a revolution (e.g. the
+        // long hot-cue pad clip, also reachable through this same
+        // segmentWindow-driven path in tests) have no silence to pad and
+        // fall back to the existing whole-sample wrap unchanged. Computed
+        // here (rather than only at the segment-copy site below) because
+        // the reversal-compensation decision just below also needs it.
+        let isDVSLoop = dvsWindow != nil &&
+            dvsLoopFrames > 0 &&
+            Double(sourceTotalFrames) <= dvsLoopFrames
+
+        // Listening-fix #5 (position-tracking leak, uncommitted): the
+        // permanent phase anchor must advance for EVERY tick with real
+        // motion, independent of whether a grain ends up rendered —
+        // captured and applied here, before any of the render-eligibility
+        // guards below can return early. Previously this update lived
+        // inside the segment-generation branch further down, which the
+        // "tinyGrain" guard (motion too small to round to >= 2 frames —
+        // happens right at reversal turnarounds and near-full-stop
+        // moments) returns past without ever reaching: `lastPlatterSteps`
+        // still advanced (so the next tick's delta was computed
+        // correctly), but that tick's real `deltaSteps` was silently
+        // dropped from `dvsAccumulatedSteps` forever. A hardware trace
+        // confirmed `dvsAccumulatedSteps` is otherwise perfectly
+        // continuous (no reset), so this — a genuine, if small per
+        // occurrence, unrecoverable loss compounding over a long session
+        // — was a real contributor to reported long-session cue drift,
+        // separate from any steps-per-revolution calibration question
+        // (see `dvsLoopFrames`'s doc comment: a hardware trace's isolated,
+        // reversal-free sustained-forward run measured three consecutive
+        // laps at 3934/3950/3911 steps, averaging 3931.7 against the
+        // assumed 3932 — no evidence of a scale error worth chasing).
+        let dvsPhysicalStepsBeforeThisTick: Double?
+        let dvsStartPhaseThisTick: Double?
+        if isDVSLoop {
+            dvsPhysicalStepsBeforeThisTick = dvsAccumulatedSteps
+            dvsStartPhaseThisTick = dvsLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps)
+            dvsAccumulatedSteps += deltaSteps
+            currentSampleFrame = Int(dvsLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps))
+        } else {
+            dvsPhysicalStepsBeforeThisTick = nil
+            dvsStartPhaseThisTick = nil
+        }
+
+        // Near-stop settling hysteresis (burst/static defect, 2026-08-09):
+        // after the auto-stop ramp completes, the player node is stopped and
+        // silence begins. Platter settling jitter then arrives as isolated
+        // small valid motion ticks; without hysteresis each such tick would
+        // re-arm the player for one software-stretched short grain (the
+        // burst) and the next nil tick would immediately re-stop it (the
+        // exact-zero gap) — the repeated sparse restarts heard near stop.
+        // While `dvsDefinitivelyStopped`, small motion (below the deliberate
+        // threshold) is silenced until `dvsRestartMotionTickThreshold`
+        // CONSECUTIVE motion ticks prove deliberate sustained motion — the
+        // audible restart is temporarily suppressed, but phase keeps
+        // accumulating (the anchor above already advanced on every genuine
+        // motion tick), so cue / 12-o'clock mapping is untouched. Any
+        // intervening nil tick resets the count (noDirection branch). Motion
+        // at/above `minAudibleDeltaSteps` is unambiguously deliberate and
+        // resumes immediately with no suppression delay.
+        if dvsWindow != nil, dvsDefinitivelyStopped {
+            if deltaStepMagnitude >= Double(minAudibleDeltaSteps) {
+                dvsDefinitivelyStopped = false
+                dvsRestartMotionTicks = 0
+            } else {
+                dvsRestartMotionTicks += 1
+                if dvsRestartMotionTicks >= dvsRestartMotionTickThreshold {
+                    dvsDefinitivelyStopped = false
+                    dvsRestartMotionTicks = 0
+                } else {
+                    lastScheduleSkippedReason = "settleSuppress"
+                    lastPlatterSteps = steps
+                    lastScheduleTime = now
+                    return
+                }
+            }
+        }
+
         let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
         let frameDelta = max(1, Int(frameDeltaDouble))
         let consumedControlWindow = dvsWindow == nil
@@ -607,10 +1608,27 @@ final class ScratchSamplePlaybackController {
         // Compensate by borrowing the last direction's effective frameDelta,
         // capped so a very fast push doesn't produce a pathological jump on
         // the matching return stroke.
+        //
+        // DVS-loop exception: every DVS grain is already software
+        // time-stretched to its scheduled output window regardless of raw
+        // segment size (`usesSoftwareSlowGrain`/`softwareRateCorrectsGrain`
+        // below), so the reason this compensation exists for MIDI — a
+        // grain too short for the varispeed node to stretch to the slot —
+        // does not apply. Borrowing anyway would make this grain read
+        // further into the source than the anchor is about to land
+        // (`dvsAccumulatedSteps` only ever advances by the real
+        // `deltaSteps`, never by this compensation — see its doc comment),
+        // so the *next* DVS grain would restart from inside the content
+        // this one just played: an audible repeat/stutter, not a fix.
+        // Always use the real, uncompensated `frameDelta` for DVS so
+        // consecutive grains read exactly contiguous source content.
         let isDirectionChange = schedulingDirection != lastScheduledDirection
         let reversalCompensated: Bool
         let effectiveFrameDelta: Int
-        if isDirectionChange,
+        if isDVSLoop {
+            effectiveFrameDelta = frameDelta
+            reversalCompensated = false
+        } else if isDirectionChange,
            let lastEff = lastEffectiveFrameDelta {
             let borrowed = min(lastEff, reversalSymmetryCapFrames)
             if borrowed > frameDelta {
@@ -661,39 +1679,154 @@ final class ScratchSamplePlaybackController {
         let scheduledRawRate = Double(effectiveFrameDelta) / Double(scheduledOutputFrames)
         let usesSoftwareSlowGrain = permitsSoftwareSlowGrain &&
             scheduledRawRate < Double(minVarispeedRate)
-        let nodeRate = usesSoftwareSlowGrain
+        // Listening-fix (one variable, uncommitted): every DVS grain is
+        // rate-corrected IN SOFTWARE (resampled to its scheduled output
+        // window) and played through the varispeed node at unity, so the
+        // node-global rate is never mutated per grain. Previously the rate
+        // changed every grain and warped the tails of already-queued
+        // buffers — the live-only underwater/chirp artifacts the offline
+        // per-buffer reconstruction does not reproduce (A/B 2026-08-05).
+        // MIDI retains its existing per-grain node-rate behavior.
+        let softwareRateCorrectsGrain = dvsWindow != nil
+        let nodeRate = usesSoftwareSlowGrain || softwareRateCorrectsGrain
             ? Float(1)
             : Float(max(Double(minVarispeedRate), min(Double(maxVarispeedRate), scheduledRawRate)))
         let reportedRate = permitsSoftwareSlowGrain
             ? Float(max(0, min(Double(maxVarispeedRate), physicalRawRate)))
             : nodeRate
-        varispeedNode.rate = nodeRate
+        varispeedNode.rate = softwareRateCorrectsGrain ? 1.0 : nodeRate
 
         let sourceFrame: Int
         let segmentFrames: Int
         var segment: AVAudioPCMBuffer?
 
-        switch schedulingDirection {
-        case .forward:
-            sourceFrame = currentSampleFrame
+        if isDVSLoop, let startPhase = dvsStartPhaseThisTick, let physicalStepsBefore = dvsPhysicalStepsBeforeThisTick {
+            // Listening-fix #4 (rotational mapping, uncommitted): the
+            // rendered source frame comes from the anchored loop phase
+            // *before* this tick's motion (captured above, before the
+            // permanent anchor already advanced — see the
+            // `dvsPhysicalStepsBeforeThisTick` doc comment). Rendering
+            // still uses `effectiveFrameDelta`, which may be inflated by
+            // MIDI-style reversal compensation elsewhere, but that never
+            // reaches `dvsAccumulatedSteps` — the anchor already advanced
+            // by the real `deltaSteps` only, unconditionally, above.
+            sourceFrame = Int(startPhase)
             segmentFrames = effectiveFrameDelta
-            segment = copyWrappedForwardSegment(
+            segment = copyDVSLoopSegment(
                 from: forward,
-                startFrame: sourceFrame,
-                frameCount: segmentFrames
-            )
-            currentSampleFrame = wrappedSampleFrame(currentSampleFrame + effectiveFrameDelta)
-        case .backward:
-            sourceFrame = currentSampleFrame
-            segmentFrames = effectiveFrameDelta
-            segment = copyWrappedReversedSegmentEnding(
-                at: sourceFrame,
+                startPhase: startPhase,
                 frameCount: segmentFrames,
-                from: forward
+                direction: schedulingDirection
             )
-            currentSampleFrame = wrappedSampleFrame(currentSampleFrame - effectiveFrameDelta)
+            #if DEBUG
+            // Hardware-verification instrumentation (SCRATCHLAB_DVS_TRACE=1
+            // only — `DVSTrace.log`'s autoclosure means this string is
+            // never built when tracing is off): the full chain from
+            // physical decoder steps through to what actually gets
+            // rendered, so a discrepancy between "where the needle should
+            // be" and "what's playing" is visible directly in the log
+            // rather than inferred from audio.
+            DVSTrace.log("[DVS-TRACE:8] rotationalLoop seq=\(DVSTrace.current) dir=\(directionDescription(schedulingDirection)) physicalStepsBefore=\(physicalStepsBefore) deltaSteps=\(deltaSteps) physicalStepsAfter=\(dvsAccumulatedSteps) virtualPhaseBefore=\(startPhase) virtualPhaseAfter=\(Double(currentSampleFrame)) permanentAnchor=\(currentSampleFrame) renderedGrainStart=\(sourceFrame) renderedGrainFrames=\(segmentFrames) realFrameDelta=\(frameDelta) reversalCompensated=\(reversalCompensated) dvsLoopFrames=\(dvsLoopFrames)")
+
+            // Candidate-revolution-period measurement (uncommitted): a lap
+            // completes only for an uninterrupted, single-direction
+            // candidate that both crosses the loop boundary AND was
+            // already in progress before this tick. Logging each lap's
+            // real, monotonically-accumulated travel distance directly
+            // (rather than requiring offline reconstruction from
+            // `[DVS-TRACE:8]`) is what answering "is 3932 actually right"
+            // needs from a live session: several consecutive, isolated
+            // (reversal-free) laps whose lengths agree closely support the
+            // constant; laps that disagree — or that come out consistently
+            // on one side of 3932 — would be real evidence of a scale
+            // error worth correcting.
+            //
+            // Reversal safety: a naive "did the phase wrap since last
+            // time" check fires on EITHER side of a scratch that merely
+            // straddles the loop boundary (forward across it, then back —
+            // no revolution ever completed), because each individual
+            // crossing satisfies the wrap condition on its own. A
+            // candidate is therefore invalidated and restarted — not
+            // extended — on any direction change, any detected scheduling
+            // gap (stop/resume; dropouts are handled separately, at the
+            // `noDirection` guard above), and can only be reported once it
+            // has accumulated at least one full tick of same-direction
+            // travel from BEFORE the wrapping tick (`candidateJustStarted`
+            // below) — a reversal that happens to also cross the boundary
+            // on the very same tick cannot be misreported as a lap.
+            let gapDetected: Bool
+            if let lastEstimate = lastDVSQueueEstimateAt, let lastWindow = lastDVSScheduledOutputWindow {
+                gapDetected = now > lastEstimate + lastWindow + 0.004
+            } else {
+                gapDetected = false
+            }
+            let candidateJustStarted: Bool
+            if dvsLapCandidate == nil || dvsLapCandidate?.direction != schedulingDirection || gapDetected {
+                dvsLapCandidate = DVSLapCandidate(
+                    direction: schedulingDirection,
+                    startAccumulatedSteps: physicalStepsBefore,
+                    startPhase: startPhase,
+                    startUptime: now
+                )
+                candidateJustStarted = true
+            } else {
+                candidateJustStarted = false
+            }
+            dvsLapCandidate?.travelledDistance += deltaStepMagnitude
+            dvsLapCandidate?.tickCount += 1
+
+            let wrapped: Bool
+            switch schedulingDirection {
+            case .forward:  wrapped = startPhase > Double(currentSampleFrame)
+            case .backward: wrapped = startPhase < Double(currentSampleFrame)
+            }
+            if wrapped, !candidateJustStarted, let candidate = dvsLapCandidate {
+                let lapSteps = candidate.travelledDistance
+                let elapsedSeconds = now - candidate.startUptime
+                DVSTrace.log("[DVS-TRACE:9] revolutionLap seq=\(DVSTrace.current) dir=\(directionDescription(schedulingDirection)) lapSteps=\(lapSteps) assumedStepsPerRevolution=3932 deltaFromAssumed=\(lapSteps - 3932) startPhase=\(candidate.startPhase) endPhase=\(Double(currentSampleFrame)) ticks=\(candidate.tickCount) elapsedSeconds=\(elapsedSeconds)")
+                dvsLapCompletedObserver?(
+                    DVSLapSnapshot(
+                        direction: schedulingDirection,
+                        lapSteps: lapSteps,
+                        startPhase: candidate.startPhase,
+                        endPhase: Double(currentSampleFrame),
+                        tickCount: candidate.tickCount,
+                        elapsedSeconds: elapsedSeconds
+                    )
+                )
+                // The completed lap seamlessly starts the next candidate,
+                // same direction, if motion continues past the boundary.
+                dvsLapCandidate = DVSLapCandidate(
+                    direction: schedulingDirection,
+                    startAccumulatedSteps: dvsAccumulatedSteps,
+                    startPhase: Double(currentSampleFrame),
+                    startUptime: now
+                )
+            }
+            #endif
+        } else {
+            switch schedulingDirection {
+            case .forward:
+                sourceFrame = currentSampleFrame
+                segmentFrames = effectiveFrameDelta
+                segment = copyWrappedForwardSegment(
+                    from: forward,
+                    startFrame: sourceFrame,
+                    frameCount: segmentFrames
+                )
+                currentSampleFrame = wrappedSampleFrame(currentSampleFrame + effectiveFrameDelta)
+            case .backward:
+                sourceFrame = currentSampleFrame
+                segmentFrames = effectiveFrameDelta
+                segment = copyWrappedReversedSegmentEnding(
+                    at: sourceFrame,
+                    frameCount: segmentFrames,
+                    from: forward
+                )
+                currentSampleFrame = wrappedSampleFrame(currentSampleFrame - effectiveFrameDelta)
+            }
         }
-        if usesSoftwareSlowGrain, let sourceSegment = segment {
+        if (usesSoftwareSlowGrain || dvsWindow != nil), let sourceSegment = segment {
             segment = copyTimeStretched(
                 sourceSegment,
                 outputFrameCount: scheduledOutputFrames
@@ -706,17 +1839,30 @@ final class ScratchSamplePlaybackController {
         #endif
 
         let isValidSegment: Bool
-        switch schedulingDirection {
-        case .forward:
+        if isDVSLoop {
+            // `sourceFrame` is a position in the DVS virtual loop
+            // `[0, dvsLoopFrames)`, which extends past `sourceTotalFrames`
+            // into the silence region — bound against the loop, not the
+            // raw buffer length, or every silent-phase grain would be
+            // rejected as "invalid" instead of scheduled as silence.
+            let loopBound = Int(dvsLoopFrames)
             isValidSegment = sourceFrame >= 0 &&
-                sourceFrame < sourceTotalFrames &&
+                sourceFrame < loopBound &&
                 segmentFrames > 0 &&
-                segmentFrames <= sourceTotalFrames
-        case .backward:
-            isValidSegment = sourceFrame >= 0 &&
-                sourceFrame < sourceTotalFrames &&
-                segmentFrames > 0 &&
-                segmentFrames <= sourceTotalFrames
+                segmentFrames <= loopBound
+        } else {
+            switch schedulingDirection {
+            case .forward:
+                isValidSegment = sourceFrame >= 0 &&
+                    sourceFrame < sourceTotalFrames &&
+                    segmentFrames > 0 &&
+                    segmentFrames <= sourceTotalFrames
+            case .backward:
+                isValidSegment = sourceFrame >= 0 &&
+                    sourceFrame < sourceTotalFrames &&
+                    segmentFrames > 0 &&
+                    segmentFrames <= sourceTotalFrames
+            }
         }
 
         guard isValidSegment else {
@@ -754,6 +1900,23 @@ final class ScratchSamplePlaybackController {
             applyEdgeFade(to: segment)
         }
 
+        // Listening-fix #3 (uncommitted): de-click fade on resume after a
+        // genuine DVS schedule gap. The previous DVS grain's audio ended at
+        // (lastDVSQueueEstimateAt + lastDVSScheduledOutputWindow); if this
+        // grain starts after that (plus a small epsilon), the output was
+        // silent in between (noMotion / tinyGrain / unusable-signal gap) —
+        // fade this grain's head in so playback ramps up from silence
+        // instead of hard-cutting. Steady contiguous DVS never triggers this
+        // (now is at/before expectedEnd), so no amplitude modulation.
+        if dvsWindow != nil,
+           let lastEstimate = lastDVSQueueEstimateAt,
+           let lastWindow = lastDVSScheduledOutputWindow {
+            let expectedEnd = lastEstimate + lastWindow
+            if now > expectedEnd + 0.004 {
+                applyHeadFade(to: segment, frames: grainEdgeFadeFrames)
+            }
+        }
+
         let opts: AVAudioPlayerNodeBufferOptions = interruptsQueuedAudio ? .interrupts : []
 #if DEBUG
         let _scheduleThread = Thread.current.isMainThread ? "main" : "bg"
@@ -761,7 +1924,36 @@ final class ScratchSamplePlaybackController {
         DVSTrace.log("[DVS-TRACE:6] playbackController scheduleBuffer seq=\(DVSTrace.current) monotonic=\(CACurrentMediaTime()) dir=\(directionDescription(schedulingDirection)) rate=\(reportedRate) nodeRate=\(nodeRate) softwareSlow=\(usesSoftwareSlowGrain) segmentFrames=\(segmentFrames) segmentWindow=\(segmentWindow ?? segmentDuration) opts=\(_optsStr) playerNodePlaying=\(playerNode.isPlaying) sourceFrame=\(sourceFrame) currentFrame=\(currentSampleFrame) thread=\(_scheduleThread)")
 #endif
 #if DEBUG
-        if let observer = scheduledGrainObserver {
+        // ── scalar extraction (buffer pointers, no allocation) ──────────
+        let traceEnabled = DVSTrace.isEnabled
+        let wantsJoin = grainJoinObserver != nil || traceEnabled
+        let wantsFullSnapshot = scheduledGrainObserver != nil
+
+        // Extract join-relevant scalars directly from the segment buffer
+        // pointers — no Array, no heap allocation on the audio queue.
+        // This runs whenever any observer or trace needs it; production
+        // builds and non-trace DEBUG builds skip it entirely (all flags
+        // are compile-time false or runtime nil).
+        let currentScalars: GrainScalarSnapshot?
+        if wantsJoin || wantsFullSnapshot {
+            currentScalars = Self.extractGrainScalars(
+                from: segment,
+                sourceFrame: sourceFrame,
+                direction: schedulingDirection,
+                interrupts: opts == .interrupts,
+                usesSlowGrain: usesSoftwareSlowGrain,
+                rawFrameCount: segmentFrames,
+                scheduledOutputWindow: scheduledOutputWindow,
+                scheduledAtUptime: now,
+                isDVSLoop: isDVSLoop
+            )
+        } else {
+            currentScalars = nil
+        }
+
+        // Full channel-data snapshot — allocates [[Float]]; only for
+        // test-configured observers, never on the hardware trace path.
+        if let observer = scheduledGrainObserver, currentScalars != nil {
             observer(
                 ScheduledGrainSnapshot(
                     direction: schedulingDirection,
@@ -772,10 +1964,45 @@ final class ScratchSamplePlaybackController {
                     sampleRate: forward.format.sampleRate,
                     channelData: channelData(of: segment),
                     usesSoftwareSlowGrain: usesSoftwareSlowGrain,
-                    rawSourceFrameCount: segmentFrames
+                    rawSourceFrameCount: segmentFrames,
+                    scheduledAtUptime: now
                 )
             )
         }
+
+        // Join diagnostic from two consecutive scalar snapshots.
+        if wantsJoin, let prev = previousGrainScalars, let curr = currentScalars {
+            let estimatedPreviousEnd = prev.scheduledAtUptime + prev.scheduledOutputWindow
+            let estimatedControlGap = curr.scheduledAtUptime - estimatedPreviousEnd
+            let currFirst: Float = segment.floatChannelData?[0][0] ?? 0
+            let join = GrainJoinDiagnostic(
+                previousScheduledAtUptime: prev.scheduledAtUptime,
+                currentScheduledAtUptime: curr.scheduledAtUptime,
+                previousOutputWindow: prev.scheduledOutputWindow,
+                currentOutputWindow: curr.scheduledOutputWindow,
+                estimatedPreviousEnd: estimatedPreviousEnd,
+                estimatedControlGap: estimatedControlGap,
+                previousSourceFrame: prev.sourceFrame,
+                currentSourceFrame: curr.sourceFrame,
+                direction: curr.direction,
+                previousLastSample: prev.lastSample,
+                currentFirstSample: currFirst,
+                joinDiscontinuity: abs(currFirst - prev.lastSample),
+                previousInternalMaxStep: prev.internalMaxStep,
+                currentInternalMaxStep: curr.internalMaxStep,
+                crossesPhaseBoundary: prev.crossesPhaseBoundary || curr.crossesPhaseBoundary,
+                previousInterrupts: prev.interrupts,
+                currentInterrupts: curr.interrupts,
+                previousUsesSlowGrain: prev.usesSlowGrain,
+                currentUsesSlowGrain: curr.usesSlowGrain,
+                previousRawFrameCount: prev.rawFrameCount,
+                currentRawFrameCount: curr.rawFrameCount
+            )
+            grainJoinObserver?(join)
+            if traceEnabled { dvsGrainRingPush(join) }
+        }
+
+        previousGrainScalars = currentScalars
 #endif
         playerNode.scheduleBuffer(
             segment,
@@ -784,7 +2011,11 @@ final class ScratchSamplePlaybackController {
             completionHandler: nil
         )
 
-        if !playerNode.isPlaying {
+        // Guarded on a running engine (always true in production after
+        // load — `loadOnQueue` starts it) so engine-free deterministic
+        // tests can drive this path; AVAudioPlayerNode.play() raises when
+        // its engine is not running.
+        if isEngineRunningForPlayback(), !playerNode.isPlaying {
             playerNode.play()
         }
 
@@ -810,6 +2041,204 @@ final class ScratchSamplePlaybackController {
             lastDVSScheduledOutputWindow = scheduledOutputWindow
             pendingDVSControlWindow = 0
         }
+    }
+
+    /// Continuous-renderer handling for one DVS control tick. Returns true
+    /// when the tick was fully handled (the caller returns); false when the
+    /// tick must fall through to the legacy grain machinery (sample longer
+    /// than one revolution — never the production DVS asset).
+    ///
+    /// Behavioral parity is deliberate: the authoritative phase anchor
+    /// (`dvsAccumulatedSteps` → `dvsLoopPhaseFrame`), the near-stop settle
+    /// hysteresis, the motion→noDirection stop-ramp lifecycle flags, and
+    /// every scalar diagnostic (`forwardScheduleCount`, `lastScheduledRate`,
+    /// consumed-window bookkeeping, lap detection) behave exactly as the
+    /// grain path did. Only the audio generation changes: instead of
+    /// copying/stretching a PCM grain and queueing it on `playerNode`, the
+    /// tick publishes signed velocity plus the post-tick anchor phase to
+    /// `dvsContinuousRenderer`, which generates audio continuously at the
+    /// render rate. `playerNode.play()` is still asserted during motion so
+    /// the `playerIsPlaying` diagnostic and the stop-ramp lifecycle keep
+    /// their established meaning (the node itself carries no DVS grains).
+    private func renderContinuousDVSTick(
+        steps: Double,
+        deltaSteps: Double,
+        tickWindow: TimeInterval,
+        now: TimeInterval
+    ) -> Bool {
+        guard let forward = forwardBuffer else { return false }
+        let sourceTotalFrames = Int(forward.frameLength)
+        guard dvsLoopFrames > 0, Double(sourceTotalFrames) <= dvsLoopFrames else {
+            return false
+        }
+
+        let deltaStepMagnitude = abs(deltaSteps)
+        guard deltaStepMagnitude > 0 else {
+            // Direction present but no steps (e.g. rate reported as zero):
+            // the platter is not moving, so the authoritative decision is
+            // idle — the renderer ramps click-free to silence with its
+            // retained phase untouched, matching the legacy behaviour
+            // where a noMotion tick scheduled nothing and the queued audio
+            // simply drained out. Anchor, pending-window accumulation, and
+            // skip bookkeeping match the legacy noMotion path.
+            dvsContinuousRenderer.publishIdle()
+            lastScheduleSkippedReason = "noMotion"
+            #if DEBUG
+            DVSTrace.log("[ScratchSamplePlaybackController] continuous render idle · reason=noMotion steps=\(steps)")
+            #endif
+            return true
+        }
+
+        // Confirmed real DVS motion: identical lifecycle marking to the
+        // grain path — the noDirection transition trigger and the stale
+        // stop-ramp cancellation must behave exactly as validated.
+        wasDVSMotionActive = true
+        cancelPendingDVSAutoStopIfRamping()
+
+        let schedulingDirection: ScratchPlatterDirection = deltaSteps > 0 ? .forward : .backward
+
+        // Authoritative phase anchor: advances for EVERY tick with real
+        // motion (listening-fix #5), exactly as before.
+        #if DEBUG
+        let physicalStepsBefore = dvsAccumulatedSteps
+        #endif
+        let startPhase = dvsLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps)
+        dvsAccumulatedSteps += deltaSteps
+        let endPhase = dvsLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps)
+        currentSampleFrame = Int(endPhase)
+
+        // Near-stop settling hysteresis: unchanged, hardware-validated
+        // (2026-08-09). Suppressed wobble ticks stay silent (velocity is
+        // not published, so the renderer keeps settling) while the phase
+        // anchor above has already advanced — cue mapping untouched.
+        if dvsDefinitivelyStopped {
+            if deltaStepMagnitude >= Double(minAudibleDeltaSteps) {
+                dvsDefinitivelyStopped = false
+                dvsRestartMotionTicks = 0
+            } else {
+                dvsRestartMotionTicks += 1
+                if dvsRestartMotionTicks >= dvsRestartMotionTickThreshold {
+                    dvsDefinitivelyStopped = false
+                    dvsRestartMotionTicks = 0
+                } else {
+                    lastScheduleSkippedReason = "settleSuppress"
+                    lastPlatterSteps = steps
+                    lastScheduleTime = now
+                    return true
+                }
+            }
+        }
+
+        // Same consumed-window semantics as the grain path: the pending
+        // accumulator is already capped at this tick's own sanitized window
+        // (listening-fix #2b), so a scheduling stall can cost at most one
+        // tick of catch-up in the velocity estimate.
+        let consumedControlWindow = max(pendingDVSControlWindow, 0.001)
+        let velocity = deltaSteps * framesPerStep / consumedControlWindow
+
+        #if DEBUG
+        // Lap-detection gap check needs the PREVIOUS tick's estimate — read
+        // before this tick overwrites the fields below.
+        let previousEstimateAt = lastDVSQueueEstimateAt
+        let previousOutputWindow = lastDVSScheduledOutputWindow
+        #endif
+
+        dvsContinuousRenderer.publish(
+            velocity: velocity,
+            authoritativePhase: endPhase,
+            active: true
+        )
+        // The player node carries no DVS audio on this path, but its
+        // play/stop state remains the "DVS audibly active" signal for the
+        // diagnostics panel and the validated stop-ramp lifecycle. Guarded
+        // on a running engine (always true in production after load) so
+        // engine-free deterministic tests can drive this path.
+        if isEngineRunningForPlayback(), !playerNode.isPlaying {
+            playerNode.play()
+        }
+
+        // Scalar diagnostics parity (the panel and focused tests read
+        // these): rate is the physical platter rate against the consumed
+        // window, exactly as the grain path reported it.
+        let frameDelta = max(1, Int((deltaStepMagnitude * framesPerStep).rounded()))
+        let physicalRate = abs(velocity) / forward.format.sampleRate
+        lastScheduledSourceFrame = Int(startPhase)
+        lastScheduledSegmentFrames = frameDelta
+        lastScheduledRate = Float(max(0, min(Double(maxVarispeedRate), physicalRate)))
+        lastEffectiveFrameDelta = frameDelta
+        lastReversalCompensated = false
+        lastScheduleSkippedReason = nil
+        lastScheduledSteps = steps
+        lastScheduledDirection = schedulingDirection
+        if schedulingDirection == .forward {
+            forwardScheduleCount += 1
+        } else {
+            backwardScheduleCount += 1
+        }
+        lastPlatterSteps = steps
+        lastScheduleTime = now
+        estimatedDVSQueuedDuration = 0
+        lastDVSQueueEstimateAt = now
+        lastDVSConsumedControlWindow = consumedControlWindow
+        lastDVSScheduledOutputWindow = consumedControlWindow
+        pendingDVSControlWindow = 0
+
+        #if DEBUG
+        DVSTrace.log("[DVS-TRACE:6C] continuousRender publish seq=\(DVSTrace.current) monotonic=\(CACurrentMediaTime()) dir=\(directionDescription(schedulingDirection)) velocity=\(velocity) physicalRate=\(physicalRate) window=\(consumedControlWindow) tickWindow=\(tickWindow) anchorPhase=\(endPhase) currentFrame=\(currentSampleFrame) steps=\(steps) deltaSteps=\(deltaSteps)")
+
+        // Candidate-revolution lap measurement: identical semantics to the
+        // grain path (see the [DVS-TRACE:9] block there) — candidates are
+        // invalidated on direction change and on a detected scheduling gap,
+        // and can only report once in progress before the wrapping tick.
+        let gapDetected: Bool
+        if let previousEstimateAt, let previousOutputWindow {
+            gapDetected = now > previousEstimateAt + previousOutputWindow + 0.004
+        } else {
+            gapDetected = false
+        }
+        let candidateJustStarted: Bool
+        if dvsLapCandidate == nil || dvsLapCandidate?.direction != schedulingDirection || gapDetected {
+            dvsLapCandidate = DVSLapCandidate(
+                direction: schedulingDirection,
+                startAccumulatedSteps: physicalStepsBefore,
+                startPhase: startPhase,
+                startUptime: now
+            )
+            candidateJustStarted = true
+        } else {
+            candidateJustStarted = false
+        }
+        dvsLapCandidate?.travelledDistance += deltaStepMagnitude
+        dvsLapCandidate?.tickCount += 1
+
+        let wrapped: Bool
+        switch schedulingDirection {
+        case .forward:  wrapped = startPhase > Double(currentSampleFrame)
+        case .backward: wrapped = startPhase < Double(currentSampleFrame)
+        }
+        if wrapped, !candidateJustStarted, let candidate = dvsLapCandidate {
+            let lapSteps = candidate.travelledDistance
+            let elapsedSeconds = now - candidate.startUptime
+            DVSTrace.log("[DVS-TRACE:9] revolutionLap seq=\(DVSTrace.current) dir=\(directionDescription(schedulingDirection)) lapSteps=\(lapSteps) assumedStepsPerRevolution=3932 deltaFromAssumed=\(lapSteps - 3932) startPhase=\(candidate.startPhase) endPhase=\(Double(currentSampleFrame)) ticks=\(candidate.tickCount) elapsedSeconds=\(elapsedSeconds)")
+            dvsLapCompletedObserver?(
+                DVSLapSnapshot(
+                    direction: schedulingDirection,
+                    lapSteps: lapSteps,
+                    startPhase: candidate.startPhase,
+                    endPhase: Double(currentSampleFrame),
+                    tickCount: candidate.tickCount,
+                    elapsedSeconds: elapsedSeconds
+                )
+            )
+            dvsLapCandidate = DVSLapCandidate(
+                direction: schedulingDirection,
+                startAccumulatedSteps: dvsAccumulatedSteps,
+                startPhase: Double(currentSampleFrame),
+                startUptime: now
+            )
+        }
+        #endif
+        return true
     }
 
     private func dvsOutputTiming(
@@ -842,16 +2271,25 @@ final class ScratchSamplePlaybackController {
         lastDVSScheduledOutputWindow = nil
     }
 
-    /// Stop playback (e.g. when platter is idle).
+    /// Stop playback (e.g. when platter is idle). Click-free: a short bounded
+    /// output-gain ramp (raised cosine, ~10 ms) precedes the actual
+    /// `playerNode.stop()`, so whatever grain is mid-playback is faded rather
+    /// than hard-truncated. Generation-protected so a quick resume cannot be
+    /// executed by a stale stop (see `beginStopRamp`).
     func pausePlayback() {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            self.playerNode.stop()
+            self.dvsContinuousRenderer.publishIdle()
             self.lastScheduledDirection = nil
             let id = self.loadedSampleID
             self.debugPublishOnMainAsync(field: "statusLabel.paused") { [weak self] in
                 guard let self, let id else { return }
                 self.statusLabel = "loaded: \(id) · paused"
+            }
+            if self.playerNode.isPlaying {
+                self.beginStopRamp()
+            } else {
+                self.cancelStopRamp()
             }
         }
     }
@@ -860,6 +2298,11 @@ final class ScratchSamplePlaybackController {
     func resumePlayback() {
         audioQueue.async { [weak self] in
             guard let self, self.loadedSampleID != nil else { return }
+            // Invalidate any in-flight stop ramp: a quick resume must not be
+            // followed by the stale ramp's `stop()`, and volume is restored.
+            self.stopRampGeneration += 1
+            self.cancelStopRamp()
+            self.playerNode.volume = 1.0
             self.playerNode.play()
         }
     }
@@ -868,7 +2311,11 @@ final class ScratchSamplePlaybackController {
     func unload() {
         audioQueue.async { [weak self] in
             guard let self else { return }
+            self.dvsContinuousRenderer.publishIdle()
+            self.stopRampGeneration += 1
+            self.cancelStopRamp()
             self.playerNode.stop()
+            self.playerNode.volume = 1.0
             self.forwardBuffer = nil
             self.loadedSampleID = nil
             self.totalFrames = 0
@@ -877,6 +2324,17 @@ final class ScratchSamplePlaybackController {
             self.diagnosticPreviewPlayedSampleID = nil
             self.currentSampleFrame = 0
             self.lastPlatterSteps = nil
+            self.lastRawMIDISteps = nil
+            self.midiAccumulatedSteps = 0
+            self.dvsLoopFrames = 0
+            self.dvsAccumulatedSteps = 0
+            self.wasDVSMotionActive = false
+            self.dvsDefinitivelyStopped = false
+            self.dvsRestartMotionTicks = 0
+            #if DEBUG
+            self.dvsLapCandidate = nil
+            self.previousGrainScalars = nil
+            #endif
             self.lastScheduledSourceFrame = nil
             self.lastScheduledSegmentFrames = nil
             self.lastScheduledRate = nil
@@ -994,10 +2452,109 @@ final class ScratchSamplePlaybackController {
         return wrapped < 0 ? wrapped + totalFrames : wrapped
     }
 
+    // MARK: - DVS rotational loop (listening-fix #4, uncommitted)
+
+    /// Number of raw source frames the "ahh" content is ramped to/from
+    /// silence over, at both the head (frame 0) and tail (`totalFrames`)
+    /// of the loaded clip. Declicks the content boundary as a function of
+    /// loop *position* rather than direction of travel, so it works
+    /// identically whether the loop is entering the content, leaving it,
+    /// or reversing exactly at the edge — one gain curve handles all three
+    /// without a separate directional fade pass. Small relative to the
+    /// ~46k-frame clip, so it costs no audible amount of the "ahh" itself.
+    private let dvsLoopContentFadeFrames = 64
+
+    /// Maps cumulative real platter steps to a position within the DVS
+    /// virtual one-revolution loop `[0, dvsLoopFrames)`. Pure function of
+    /// the accumulated step count — not incrementally chained — so
+    /// retracing any run of steps exactly retraces the same phase and
+    /// round-trip motion cannot drift (mod float rounding, which does not
+    /// itself accumulate since every call recomputes from scratch).
+    private func dvsLoopPhaseFrame(forAccumulatedSteps steps: Double) -> Double {
+        guard dvsLoopFrames > 0 else { return 0 }
+        var wrapped = (steps * framesPerStep).truncatingRemainder(dividingBy: dvsLoopFrames)
+        if wrapped < 0 { wrapped += dvsLoopFrames }
+        return wrapped
+    }
+
+    /// Copies `frameCount` frames of the DVS rotational loop starting at
+    /// `startPhase` (a position in `[0, dvsLoopFrames)`). Positions inside
+    /// `[0, totalFrames)` read real "ahh" PCM, ramped to silence within
+    /// `dvsLoopContentFadeFrames` of either edge; positions in
+    /// `[totalFrames, dvsLoopFrames)` — the remainder of the physical
+    /// revolution the short clip does not fill — are true silence. Because
+    /// `dvsLoopFrames` is exactly one revolution and is always `>=
+    /// totalFrames` for the loaded DVS asset, a single revolution always
+    /// plays the content at most once, however large `frameCount` grows.
+    private func copyDVSLoopSegment(
+        from source: AVAudioPCMBuffer,
+        startPhase: Double,
+        frameCount: Int,
+        direction: ScratchPlatterDirection
+    ) -> AVAudioPCMBuffer? {
+        guard frameCount > 0,
+              dvsLoopFrames > 0,
+              totalFrames > 0,
+              source.format.commonFormat == .pcmFormatFloat32,
+              !source.format.isInterleaved,
+              let sourceChannels = source.floatChannelData,
+              let out = AVAudioPCMBuffer(
+                pcmFormat: source.format,
+                frameCapacity: AVAudioFrameCount(frameCount)
+              ),
+              let outChannels = out.floatChannelData else {
+            return nil
+        }
+        out.frameLength = AVAudioFrameCount(frameCount)
+        let channelCount = Int(source.format.channelCount)
+        let total = Double(totalFrames)
+        let fadeWidth = Double(dvsLoopContentFadeFrames)
+        let step: Double = direction == .forward ? 1 : -1
+
+        for i in 0..<frameCount {
+            var phase = (startPhase + step * Double(i)).truncatingRemainder(dividingBy: dvsLoopFrames)
+            if phase < 0 { phase += dvsLoopFrames }
+            if phase < total {
+                let index = min(Int(phase), totalFrames - 1)
+                let gain = Float(min(min(phase, total - phase), fadeWidth) / fadeWidth)
+                for c in 0..<channelCount {
+                    outChannels[c][i] = sourceChannels[c][index] * gain
+                }
+            } else {
+                for c in 0..<channelCount {
+                    outChannels[c][i] = 0
+                }
+            }
+        }
+        return out
+    }
+
     /// Apply a symmetric linear fade-in/fade-out ramp to the leading and trailing
     /// `grainEdgeFadeFrames` samples of `buffer`, mutating it in place.
     /// The fade length is clamped to at most half the buffer's frame count so
     /// that tiny grains produced near sample boundaries are never fully zeroed.
+    /// Listening-fix #3 (uncommitted): short de-click ramp (smoothstep
+    /// 0 -> 1) over the first `frames` frames of the buffer, applied to the
+    /// head of the first DVS grain scheduled after a genuine scheduling gap
+    /// (noMotion / tinyGrain / unusable-signal), so playback resumes with a
+    /// fade-in instead of hard-cutting from silence. Deliberately applied to
+    /// the head ONLY and ONLY after a gap: contiguous DVS grains are never
+    /// faded (see the warning below), so no scheduler-rate amplitude
+    /// modulation is introduced.
+    func applyHeadFade(to buffer: AVAudioPCMBuffer, frames: Int) {
+        guard frames > 1,
+              let channels = buffer.floatChannelData else { return }
+        let count = min(frames, Int(buffer.frameLength))
+        guard count > 1 else { return }
+        for channel in 0..<Int(buffer.format.channelCount) {
+            let data = channels[channel]
+            for i in 0..<count {
+                let t = Float(i) / Float(count - 1)
+                data[i] *= t * t * (3 - 2 * t)
+            }
+        }
+    }
+
     func applyEdgeFade(to buffer: AVAudioPCMBuffer) {
         guard buffer.format.commonFormat == .pcmFormatFloat32,
               !buffer.format.isInterleaved,
@@ -1169,7 +2726,7 @@ final class ScratchSamplePlaybackController {
         let inputFrameCount = Int(source.frameLength)
         let format = source.format
         guard inputFrameCount >= 2,
-              outputFrameCount >= inputFrameCount,
+              outputFrameCount >= 1,
               format.commonFormat == .pcmFormatFloat32,
               !format.isInterleaved,
               let inputChannels = source.floatChannelData,

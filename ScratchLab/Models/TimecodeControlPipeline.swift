@@ -874,8 +874,18 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
 
     // MARK: - Init
 
-    public init(sampleRate: Double = 44100, channelCount: Int = 2) {
+    /// `notificationClock` back the flush-notification coalescing below —
+    /// injectable so tests can pin elapsed time deterministically instead
+    /// of depending on how long a test's own synthetic decode work
+    /// happens to take on the machine running it. Defaults to the real
+    /// monotonic clock for production use.
+    public init(
+        sampleRate: Double = 44100,
+        channelCount: Int = 2,
+        notificationClock: @escaping () -> TimeInterval = { CACurrentMediaTime() }
+    ) {
         self.diagnosticsTap = TimecodeInputTap(sampleRate: sampleRate, channelCount: channelCount)
+        self.notificationClock = notificationClock
     }
 
     // MARK: - Buffer input
@@ -1075,7 +1085,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         defer {
             let changed = swapPublishedOutput(state)
             processingLock.unlock()
-            if changed { sendChangeNotification() }
+            if changed { sendCoalescedFlushChangeNotification() }
         }
 
         lock.lock()
@@ -1595,13 +1605,114 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     /// `processingLock` held — calls this method once, if that swap found
     /// a real change. `objectWillChange` must never be delivered while a
     /// lock is held.
+    ///
+    /// Used by every transactional method EXCEPT `flushDecode()` — mode
+    /// changes, calibration batches, and resets are discrete, infrequent,
+    /// user/session-driven operations that should always notify
+    /// immediately. `flushDecode()` alone runs at the ~60 Hz DVS
+    /// control-worker rate and uses the separate, coalesced
+    /// `sendCoalescedFlushChangeNotification()` below instead — see its
+    /// doc comment for why that one specific path needs throttling and
+    /// this one does not.
     private func sendChangeNotification() {
+        // Hardware-verification instrumentation: a unique identity per
+        // publish call site, immediately before `objectWillChange.send()`,
+        // so a live session's console log can be correlated directly
+        // against "Modifying state during view update" — grep both for
+        // `[SwiftUIStateGuard]`. Cheap (main-thread only, never the
+        // realtime audio/decode path) and not gated behind
+        // SCRATCHLAB_DVS_TRACE since it's needed precisely when tracing a
+        // *rendering* problem, not an audio one.
+        print("[SwiftUIStateGuard] publish · source=TimecodeControlPipeline.sendChangeNotification thread=\(Thread.isMainThread ? "main" : "background") time=\(String(format: "%.6f", CACurrentMediaTime()))")
         if Thread.isMainThread {
             objectWillChange.send()
         } else {
             DispatchQueue.main.async { [weak self] in
                 self?.objectWillChange.send()
             }
+        }
+    }
+
+    /// Real monotonic clock by default; injectable so tests can pin
+    /// elapsed time deterministically (see `init`).
+    private let notificationClock: () -> TimeInterval
+
+    /// Dedicated to the coalescing state below only — never held while
+    /// calling into any other method on this type, and nothing else on
+    /// this type ever acquires it. Kept fully independent of
+    /// `configurationLock`/`outputLock`/`processingLock`/`lock` so this
+    /// UI-notification concern can never interact with their carefully
+    /// ordered locking (see the doc comments on `mode`'s setter and
+    /// `captureConfigurationForOperation()`).
+    private let flushChangeNotificationLock = NSLock()
+    private var lastFlushChangeNotificationUptime: TimeInterval = -.infinity
+    private var flushChangeNotificationFlushScheduled = false
+
+    /// Caps how often `flushDecode()` *tries* to deliver `objectWillChange`,
+    /// down from every ~60 Hz tick to at most 20/s. This alone does NOT
+    /// eliminate "Modifying state during view update" — a hardware session
+    /// after this coalescing landed still showed the warning, just in
+    /// smaller, ~20 Hz-periodic clusters instead of a continuous 60 Hz
+    /// stream (see `[DVS-TRACE:` correlation notes and
+    /// `MacAnalyzerView`'s `@State`/ticker doc comment, which is the actual
+    /// fix: this pipeline is no longer observed by any SwiftUI view
+    /// directly — `MacAnalyzerView`, `TimecodeControlCard`, and
+    /// `DVSControlVinylPanel` all read it as plain state and re-render on
+    /// their own bounded, main-actor-only timers instead). What coalescing
+    /// here still legitimately provides: it keeps `objectWillChange` traffic
+    /// low for any FUTURE observer of this object, and bounds the delay
+    /// before the diagnostics recorder in `DVSLiveLogger`-style consumers
+    /// see a change. It is a supporting mitigation, not the fix for the
+    /// rendering warning.
+    ///
+    /// This governs only the UI *notification* — every reader of this
+    /// pipeline's actual control data (`currentDirection`, `currentRate`,
+    /// `latestPlatterTimeline`, `counters`, …, and
+    /// `TimecodePlaybackBridge.evaluate(pipeline:)`, which drives DVS
+    /// playback) reads those plain, lock-protected properties directly,
+    /// not through Combine/`objectWillChange`. Throttling how often
+    /// SwiftUI is *told to re-render* therefore cannot add any latency to
+    /// DVS control or audio scheduling — the underlying state is already
+    /// fully up to date and lock-protected the instant
+    /// `swapPublishedOutput` returns, on every single flush, unthrottled;
+    /// only the "please redraw" signal is coalesced.
+    private static let flushChangeNotificationMinInterval: TimeInterval = 1.0 / 20.0
+
+    private func sendCoalescedFlushChangeNotification() {
+        let now = notificationClock()
+        flushChangeNotificationLock.lock()
+        let elapsed = now - lastFlushChangeNotificationUptime
+        if elapsed >= Self.flushChangeNotificationMinInterval {
+            lastFlushChangeNotificationUptime = now
+            flushChangeNotificationLock.unlock()
+            sendChangeNotification()
+            return
+        }
+        guard !flushChangeNotificationFlushScheduled else {
+            flushChangeNotificationLock.unlock()
+            return
+        }
+        flushChangeNotificationFlushScheduled = true
+        let delay = Self.flushChangeNotificationMinInterval - elapsed
+        flushChangeNotificationLock.unlock()
+
+        // Deliberately NOT `Timer`/a repeating source: this is a single
+        // one-shot flush of whatever the latest state is by the time it
+        // fires, not a recurring UI tick — normal DVS motion re-enters
+        // `sendCoalescedFlushChangeNotification()` on its own well before
+        // this fires and finds `elapsed >= flushChangeNotificationMinInterval`
+        // already true, so the explicit timer only matters for the tail
+        // end of a gesture (the very last change before motion stops),
+        // ensuring the UI still reflects it instead of staying stuck on a
+        // throttled-away intermediate state.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.flushChangeNotificationLock.lock()
+            self.lastFlushChangeNotificationUptime = self.notificationClock()
+            self.flushChangeNotificationFlushScheduled = false
+            self.flushChangeNotificationLock.unlock()
+            print("[SwiftUIStateGuard] publish · source=TimecodeControlPipeline.sendCoalescedFlushChangeNotification.tailFlush thread=main time=\(String(format: "%.6f", CACurrentMediaTime()))")
+            self.objectWillChange.send()
         }
     }
 

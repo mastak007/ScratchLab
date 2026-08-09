@@ -201,6 +201,9 @@
 		SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */; };
 		SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0001FREF /* ScratchSamplePlaybackController.swift */; };
 		SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */; };
+		TBCF0001TST /* TimecodeBridgeContinuityFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBCF0002FREF /* TimecodeBridgeContinuityFixTests.swift */; };
+		DCVR0001MAC /* DVSContinuousVinylRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCVR0001FREF /* DVSContinuousVinylRenderer.swift */; };
+		DCVT0001TST /* DVSContinuousVinylRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCVT0002FREF /* DVSContinuousVinylRendererTests.swift */; };
 		DOGR0001TST /* DVSOfflineGrainRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */; };
 		TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNRT0002FREF /* TimecodeNotationRoutingTests.swift */; };
 		SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
@@ -654,6 +657,9 @@
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SSPC0001FREF /* ScratchSamplePlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackController.swift; sourceTree = "<group>"; };
 		SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerTests.swift; sourceTree = "<group>"; };
+		TBCF0002FREF /* TimecodeBridgeContinuityFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeBridgeContinuityFixTests.swift; sourceTree = "<group>"; };
+		DCVR0001FREF /* DVSContinuousVinylRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSContinuousVinylRenderer.swift; sourceTree = "<group>"; };
+		DCVT0002FREF /* DVSContinuousVinylRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSContinuousVinylRendererTests.swift; sourceTree = "<group>"; };
 		DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSOfflineGrainRendererTests.swift; sourceTree = "<group>"; };
 		TNRT0002FREF /* TimecodeNotationRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeNotationRoutingTests.swift; sourceTree = "<group>"; };
 		SPTR0001FREF /* ScratchPlatterTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTracker.swift; sourceTree = "<group>"; };
@@ -1016,6 +1022,8 @@
 				SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */,
 				SPTR0002FREF /* ScratchPlatterTrackerTests.swift */,
 				SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */,
+				TBCF0002FREF /* TimecodeBridgeContinuityFixTests.swift */,
+				DCVT0002FREF /* DVSContinuousVinylRendererTests.swift */,
 				DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */,
 				TNRT0002FREF /* TimecodeNotationRoutingTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
@@ -1434,6 +1442,7 @@
 				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
 				SSPC0001FREF /* ScratchSamplePlaybackController.swift */,
+				DCVR0001FREF /* DVSContinuousVinylRenderer.swift */,
 				B2000006 /* MacScratchDetector.swift */,
 				B2000007 /* CompanionCameraReceiver.swift */,
 				B2000008 /* DJRigLayoutDetector.swift */,
@@ -1788,6 +1797,7 @@
 				TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */,
 				SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */,
 				SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */,
+				DCVR0001MAC /* DVSContinuousVinylRenderer.swift in Sources */,
 				D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */,
 				309F7737DD8317EA37CCFC73 /* CompanionCameraReceiver.swift in Sources */,
 				10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */,
@@ -2210,6 +2220,8 @@
 				SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */,
 				SPTR0001TST /* ScratchPlatterTrackerTests.swift in Sources */,
 				SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */,
+				TBCF0001TST /* TimecodeBridgeContinuityFixTests.swift in Sources */,
+				DCVT0001TST /* DVSContinuousVinylRendererTests.swift in Sources */,
 				DOGR0001TST /* DVSOfflineGrainRendererTests.swift in Sources */,
 				TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,

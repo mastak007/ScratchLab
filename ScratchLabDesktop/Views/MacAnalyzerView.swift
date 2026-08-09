@@ -627,8 +627,33 @@ struct MacAnalyzerView: View {
     @State private var isShowingStagingInspector = false
     /// Timecode control pipeline (Batch 3 — control pipeline integration).
     /// Used by the Timecode Control card in the Advanced workspace sidebar.
-    @StateObject private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
-    @StateObject private var timecodeBridge = TimecodePlaybackBridge()
+    //
+    // Listening-fix (SwiftUI publish-during-render, uncommitted): `@State`,
+    // not `@StateObject` — `@State` on a reference type still gives this
+    // view SwiftUI-owned, create-once identity/lifetime (the object is not
+    // recreated across re-renders), but — unlike `@StateObject` — does NOT
+    // subscribe this view to the object's `objectWillChange`. Both objects
+    // are realtime, lock-protected state updated at the ~60 Hz DVS
+    // control-worker rate (`handleTimecodeFlushTick` below calls
+    // `flushDecode()`/`evaluate()` every tick); observing them directly at
+    // this level re-ran this view's entire (10,000+ line) body on every
+    // tick, and dispatching an already-coalesced notification to the main
+    // queue does not reliably land *between* SwiftUI render passes at that
+    // rate (confirmed on hardware: warnings persisted, just less often,
+    // after coalescing alone — see `dvsUIRefreshTick` below). Every read of
+    // `timecodePipeline`/`timecodeBridge` below is a plain, already
+    // thread-safe property access and works identically regardless of
+    // property-wrapper choice; only automatic re-render-on-notify is
+    // removed. `TimecodeControlCard`/`DVSControlVinylPanel`, which this
+    // view passes both objects into, make the same change independently.
+    @State private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
+    @State private var timecodeBridge = TimecodePlaybackBridge()
+    /// Bumped by a bounded, main-actor-only timer (`dvsUIRefreshTimer`) —
+    /// never by the realtime DVS tick — to gate how often this view's body
+    /// re-evaluates the `timecodePipeline`/`timecodeBridge` diagnostic text
+    /// below, now that those objects no longer trigger re-render directly.
+    @State private var dvsUIRefreshTick = 0
+    private let dvsUIRefreshTimer = Timer.publish(every: 1.0 / 15.0, on: .main, in: .common).autoconnect()
     @State private var debugCaptureLabel = DebugTimecodeCapture.labels[0]
     @State private var debugCaptureStatus = "Ready to capture raw pair 3/4."
     @State private var debugCaptureSummary: DebugTimecodeCapture.Summary?
@@ -989,6 +1014,7 @@ struct MacAnalyzerView: View {
         .sheet(isPresented: $isShowingStagingInspector) {
             StagingInspectorView(contexts: stagingInspectorContexts)
         }
+        .onReceive(dvsUIRefreshTimer) { _ in dvsUIRefreshTick += 1 }
 #endif
     }
 
@@ -1024,6 +1050,9 @@ struct MacAnalyzerView: View {
         let flushStart = CACurrentMediaTime()
         timecodePipeline.flushDecode()
         guard timecodePipeline.mode == .controlPrototype else { return }
+        captureEngine.setDVSPlaybackDriveActive(timecodeBridge.playbackDriveEnabled)
+        let playbackDrive = timecodeBridge.evaluate(pipeline: timecodePipeline)
+
         let now = Date()
 #if DEBUG
         logSlowTimecodeFlushIfNeeded(
@@ -1032,13 +1061,18 @@ struct MacAnalyzerView: View {
             elapsed: elapsed
         )
 #endif
+        captureEngine.forwardTimecodeDrive(
+            playbackDrive,
+            decision: timecodeBridge.lastDecision,
+            elapsed: max(0, elapsed)
+        )
 #if DEBUG
-        // Independent of any playback drive: this only ever accumulates
-        // into notation when `captureEngine.notationRoutingEnabled` is
-        // explicitly set (no UI sets it yet — see TASKS.md's DVS notation
-        // slice 2) and a routine take is actively recording. Evaluating it
-        // here never reads `timecodeBridge`/`playbackDrive`, and never
-        // affects them.
+        // Independent of the playback drive evaluated/forwarded just
+        // above: this only ever accumulates into notation when
+        // `captureEngine.notationRoutingEnabled` is explicitly set (no UI
+        // sets it yet — see TASKS.md's DVS notation slice 2) and a
+        // routine take is actively recording. Evaluating it here never
+        // reads `timecodeBridge`/`playbackDrive`, and never affects them.
         captureEngine.forwardTimecodeNotationWindow(
             pipeline: timecodePipeline,
             minConfidence: timecodePipeline.minConfidence
@@ -2058,18 +2092,26 @@ struct MacAnalyzerView: View {
         // endless technical scroll. All cards remain reachable — pick a
         // section to bring them into view.
         VStack(alignment: .leading, spacing: 18) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    advancedHeaderCard
-                    advancedSectionPickerCard
+            GeometryReader { sidebarGeometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        advancedHeaderCard
+                        advancedSectionPickerCard
 
-                    if let activeSession = routineSessionPresentation.activeSession {
-                        activeRoutineSessionCard(activeSession)
+                        if let activeSession = routineSessionPresentation.activeSession {
+                            activeRoutineSessionCard(activeSession)
+                        }
+
+                        advancedSelectedSectionContent
                     }
-
-                    advancedSelectedSectionContent
+                    // A vertical ScrollView proposes an unbounded width to
+                    // its content. `maxWidth: .infinity` therefore did not
+                    // give ViewThatFits a finite width, so the header still
+                    // chose its oversized horizontal layout. Use the actual
+                    // sidebar width to make every wrapping decision honest.
+                    .frame(width: sidebarGeometry.size.width, alignment: .leading)
+                    .padding(.bottom, 24)
                 }
-                .padding(.bottom, 24)
             }
         }
         .padding(.horizontal, 24)
@@ -4069,37 +4111,29 @@ struct MacAnalyzerView: View {
 
     private var advancedHeaderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Advanced")
-                        .font(.system(size: 28, weight: .semibold))
-
-                    Text("ScratchLab")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    advancedHeaderIdentity
+                    Spacer(minLength: 12)
+                    advancedHeaderActions
                 }
 
-                Spacer(minLength: 12)
-
-                HStack(spacing: 8) {
-                    Button("New session", action: createNewSessionAction)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(captureEngine.isRoutineRecording)
-
-                    Button("Open Performer Monitor") {
-                        openWindow(id: "performer-monitor")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 10) {
+                    advancedHeaderIdentity
+                    advancedHeaderActions
                 }
             }
 
             Text("Diagnostics, calibration, and notation tools.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 105), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
                 headerStatusPill(
                     title: "Audio",
                     value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not connected" : "Ready",
@@ -4123,6 +4157,8 @@ struct MacAnalyzerView: View {
             Label(captureEngine.statusMessage, systemImage: captureEngine.statusIcon)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(captureEngine.statusColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if !captureEngine.isCameraActive {
                 Button {
@@ -4140,6 +4176,8 @@ struct MacAnalyzerView: View {
             Label(performerBroadcaster.connectionStatus, systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(performerBroadcaster.connectedPeerNames.isEmpty ? Color.secondary : Color.green)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             DisclosureGroup("Connect manually") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -4162,6 +4200,46 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var advancedHeaderIdentity: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Advanced")
+                .font(.system(size: 28, weight: .semibold))
+
+            Text("ScratchLab")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var advancedHeaderActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                advancedNewSessionButton
+                advancedPerformerMonitorButton
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                advancedNewSessionButton
+                advancedPerformerMonitorButton
+            }
+        }
+    }
+
+    private var advancedNewSessionButton: some View {
+        Button("New session", action: createNewSessionAction)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(captureEngine.isRoutineRecording)
+    }
+
+    private var advancedPerformerMonitorButton: some View {
+        Button("Open Performer Monitor") {
+            openWindow(id: "performer-monitor")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private var advancedToolsCard: some View {

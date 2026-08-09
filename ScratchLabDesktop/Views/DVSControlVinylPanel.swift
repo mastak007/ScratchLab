@@ -13,13 +13,27 @@ import SwiftUI
 /// layout reflow.
 struct DVSControlVinylPanel: View {
 
-    @ObservedObject var pipeline: TimecodeControlPipeline
+    // Listening-fix (SwiftUI publish-during-render, uncommitted): plain
+    // (not `@ObservedObject`) — `pipeline` is realtime, lock-protected
+    // state updated by the DVS control worker at ~60 Hz; observing it
+    // directly here re-ran this entire panel's body on every tick,
+    // regardless of any coalescing on the pipeline's own `objectWillChange`
+    // (dispatching an already-coalesced notification to the main queue
+    // still doesn't guarantee it lands *between* SwiftUI render passes at
+    // that rate). Reading `pipeline.*` as plain properties instead — every
+    // read below is already thread-safe and always current — and gating
+    // this view's re-render on `uiRefreshTick` (bumped by the existing
+    // 4 Hz `timer` below, the same cadence this panel's log already used)
+    // moves the redraw onto a bounded, main-actor-only cadence that is
+    // never triggered from the realtime tick at all.
+    let pipeline: TimecodeControlPipeline
 
     @StateObject private var logger = DVSLiveLogger()
     @State private var copyConfirmed = false
 #if ENABLE_TIMECODE_LIVE_TAP
     @State private var isDetailsExpanded = false
 #endif
+    @State private var uiRefreshTick = 0
 
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
@@ -28,6 +42,7 @@ struct DVSControlVinylPanel: View {
             controlsSection
             liveReadingsSection
             statusSection
+            outputCaptureSection
 #if ENABLE_TIMECODE_LIVE_TAP
             detailsSection
 #endif
@@ -37,6 +52,37 @@ struct DVSControlVinylPanel: View {
         .transaction { $0.animation = nil }
         .onReceive(timer) { _ in
             logger.append(makeLogEntry())
+            uiRefreshTick += 1
+        }
+    }
+
+    // MARK: - Output capture (manual diagnostics, DEBUG-only)
+
+    /// Manual post-mixer output capture: Start installs/arms the tap and shows
+    /// "Capture armed"; Stop & Export removes the tap, finalizes the captured
+    /// frames and exports immediately, showing the exact success path or error
+    /// in the UI (and console). Independent of platter stop / pause / ramp /
+    /// engine teardown. Status re-read from the shared control each tick.
+    private var outputCaptureSection: some View {
+        GroupBox("Output Capture (manual diagnostics)") {
+            VStack(alignment: .leading, spacing: 8) {
+                diagnosticRow("Status",
+                              ScratchSamplePlaybackController.OutputCaptureDiagnosticsControl.shared.status.isEmpty
+                                  ? "Capture idle"
+                                  : ScratchSamplePlaybackController.OutputCaptureDiagnosticsControl.shared.status)
+                HStack(spacing: 8) {
+                    Button("Start Output Capture") {
+                        ScratchSamplePlaybackController.OutputCaptureDiagnosticsControl.shared.start()
+                    }
+                    Button("Stop & Export") {
+                        ScratchSamplePlaybackController.OutputCaptureDiagnosticsControl.shared.stopAndExport()
+                    }
+                }
+                Text("Capture is written to ~/Library/Containers/com.machelpnz.scratchlab/Data/Library/Application Support/ScratchLab/Diagnostics/scratchlab-output-capture.wav")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(4)
         }
     }
 

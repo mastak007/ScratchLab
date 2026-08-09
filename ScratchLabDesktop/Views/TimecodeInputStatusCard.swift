@@ -20,7 +20,14 @@ import SwiftUI
 struct TimecodeInputStatusCard: View {
 
     /// The tap to observe. Nil means "no tap configured."
-    @ObservedObject var tap: TimecodeInputTap
+    // Listening-fix (SwiftUI publish-during-render, uncommitted): plain
+    // (not `@ObservedObject`) — `tap` is realtime state pushed from a live
+    // audio callback (see `TimecodeInputTap.push`'s doc comment);
+    // observing it directly re-ran this card's body on every push,
+    // independent of (and in addition to) the existing 0.25s `timer`
+    // below, which already drives this card's refresh at a bounded,
+    // main-actor-only rate via `refresh()`'s `@State` write.
+    let tap: TimecodeInputTap
 
     /// The diagnostics engine to use.
     let diagnostics: TimecodeSignalDiagnostics

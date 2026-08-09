@@ -20,8 +20,21 @@ import SwiftUI
 /// **Batch 10:** Profile/preset picker, setup checklist, validation-override.
 struct TimecodeControlCard: View {
 
-    @ObservedObject var pipeline: TimecodeControlPipeline
-    @ObservedObject var bridge: TimecodePlaybackBridge
+    // Listening-fix (SwiftUI publish-during-render, uncommitted): plain
+    // (not `@ObservedObject`) for the same reason as `DVSControlVinylPanel`
+    // — both objects carry realtime, lock-protected state updated at
+    // ~60 Hz by the DVS control worker, and observing them directly here
+    // re-ran this entire card's body (sliders, toggles, and all) on every
+    // tick. Every interactive control below already used, or has been
+    // converted to, a manual `Binding(get:set:)` (see `invertDirectionBinding`
+    // for the pre-existing example this follows) — those read/write the
+    // real `pipeline`/`bridge` directly and don't require `@ObservedObject`.
+    // This card's own re-render is instead gated on `uiRefreshTick`, bumped
+    // by a bounded main-actor-only timer never triggered by the realtime tick.
+    let pipeline: TimecodeControlPipeline
+    let bridge: TimecodePlaybackBridge
+    @State private var uiRefreshTick = 0
+    private let uiRefreshTimer = Timer.publish(every: 1.0 / 15.0, on: .main, in: .common).autoconnect()
 
     /// Persisted mode so the picker survives view disappearance.
     @AppStorage("scratchlab.mac.timecodeMode") private var persistedModeRaw: String = TimecodeControlMode.disabled.rawValue
@@ -105,6 +118,45 @@ struct TimecodeControlCard: View {
             persistedPresetRaw = newPreset.rawValue
             applyPreset(newPreset)
         }
+        .onReceive(uiRefreshTimer) { _ in uiRefreshTick += 1 }
+    }
+
+    // MARK: - Manual bindings (plain `pipeline`/`bridge` — see their doc comment)
+
+    private var modeBinding: Binding<TimecodeControlMode> {
+        Binding(get: { pipeline.mode }, set: { pipeline.mode = $0 })
+    }
+
+    private var inputChannelBinding: Binding<TimecodeInputChannel> {
+        Binding(get: { pipeline.inputChannel }, set: { pipeline.inputChannel = $0 })
+    }
+
+    private var rateScaleBinding: Binding<Double> {
+        Binding(get: { pipeline.rateScale }, set: { pipeline.rateScale = $0 })
+    }
+
+    private var minConfidenceBinding: Binding<Double> {
+        Binding(get: { pipeline.minConfidence }, set: { pipeline.minConfidence = $0 })
+    }
+
+    private var maxRateBinding: Binding<Double> {
+        Binding(get: { pipeline.maxRate }, set: { pipeline.maxRate = $0 })
+    }
+
+    private var signalThresholdRMSBinding: Binding<Float> {
+        Binding(get: { pipeline.signalThresholdRMS }, set: { pipeline.signalThresholdRMS = $0 })
+    }
+
+    private var liveTapEnabledBinding: Binding<Bool> {
+        Binding(get: { pipeline.liveTapEnabled }, set: { pipeline.liveTapEnabled = $0 })
+    }
+
+    private var playbackDriveEnabledBinding: Binding<Bool> {
+        Binding(get: { bridge.playbackDriveEnabled }, set: { bridge.playbackDriveEnabled = $0 })
+    }
+
+    private var validationOverrideBinding: Binding<Bool> {
+        Binding(get: { bridge.validationOverride }, set: { bridge.validationOverride = $0 })
     }
 
     // MARK: - Preset application
@@ -162,7 +214,7 @@ struct TimecodeControlCard: View {
             Text("Timecode Control")
                 .font(.headline)
 
-            Picker("Mode", selection: $pipeline.mode) {
+            Picker("Mode", selection: modeBinding) {
                 ForEach(TimecodeControlMode.allCases, id: \.self) { mode in
                     Text(mode.label).tag(mode)
                 }
@@ -236,6 +288,21 @@ struct TimecodeControlCard: View {
                     Text(warning)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(Color(nsColor: .systemYellow))
+                }
+            }
+
+            // Physical hardware setup reminder — informational, not a
+            // warning, so styled distinctly from the yellow experimental
+            // banner above.
+            if let setupNote = selectedPreset.setupNote {
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text(setupNote)
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -358,7 +425,7 @@ struct TimecodeControlCard: View {
                 .foregroundStyle(.secondary)
 
             // Toggle
-            Toggle(isOn: $bridge.playbackDriveEnabled) {
+            Toggle(isOn: playbackDriveEnabledBinding) {
                 HStack(spacing: 6) {
                     Image(systemName: "play.rectangle")
                         .font(.system(size: 11))
@@ -388,7 +455,6 @@ struct TimecodeControlCard: View {
                 .font(.system(size: 9, weight: .regular, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
-
 
             // Current drive info
             if let drive = bridge.currentDrive {
@@ -426,7 +492,7 @@ struct TimecodeControlCard: View {
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Color(nsColor: .systemOrange))
                     }
-                    Toggle(isOn: $bridge.validationOverride) {
+                    Toggle(isOn: validationOverrideBinding) {
                         HStack(spacing: 6) {
                             Image(systemName: "hand.raised")
                                 .font(.system(size: 11))
@@ -491,7 +557,7 @@ struct TimecodeControlCard: View {
                 Text("Channel")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                Picker("", selection: $pipeline.inputChannel) {
+                Picker("", selection: inputChannelBinding) {
                     ForEach(TimecodeInputChannel.allCases, id: \.self) { ch in
                         Text(ch.label).tag(ch)
                     }
@@ -533,7 +599,7 @@ struct TimecodeControlCard: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.primary)
                 }
-                Slider(value: $pipeline.rateScale, in: 0.1...5.0, step: 0.1)
+                Slider(value: rateScaleBinding, in: 0.1...5.0, step: 0.1)
                     .controlSize(.small)
             }
 
@@ -557,7 +623,7 @@ struct TimecodeControlCard: View {
                         .foregroundStyle(.primary)
                 }
                 Slider(
-                    value: $pipeline.minConfidence,
+                    value: minConfidenceBinding,
                     in: 0.0...1.0,
                     step: 0.05,
                     onEditingChanged: { isEditing in
@@ -585,7 +651,7 @@ struct TimecodeControlCard: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.primary)
                 }
-                Slider(value: $pipeline.maxRate, in: 0.5...50.0, step: 0.5)
+                Slider(value: maxRateBinding, in: 0.5...50.0, step: 0.5)
                     .controlSize(.small)
             }
 
@@ -600,7 +666,7 @@ struct TimecodeControlCard: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.primary)
                 }
-                Slider(value: $pipeline.signalThresholdRMS, in: 0.0001...0.1)
+                Slider(value: signalThresholdRMSBinding, in: 0.0001...0.1)
                     .controlSize(.small)
             }
 
@@ -988,7 +1054,7 @@ struct TimecodeControlCard: View {
                 liveTapStatusBadge()
             }
 
-            Toggle(isOn: $pipeline.liveTapEnabled) {
+            Toggle(isOn: liveTapEnabledBinding) {
                 HStack(spacing: 6) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .font(.system(size: 11))

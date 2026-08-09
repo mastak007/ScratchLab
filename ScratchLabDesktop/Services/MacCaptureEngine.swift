@@ -48,6 +48,19 @@ struct TimecodeDriveStepConverter {
 
     private var accumulatedSteps: Double = 0
 
+    /// Listening-fix #2 (Option 2, uncommitted): continuous fractional
+    /// cumulative steps. Returns the running fractional step total so the
+    /// scheduler can emit a grain EVERY tick from real (sub-step) motion —
+    /// whole-step quantization previously batch-played near-stop motion
+    /// (up to ~154ms of audio lag) or skipped it (13ms gap clicks).
+    mutating func continuousSteps(
+        forRate rate: Double,
+        elapsed: TimeInterval
+    ) -> Double {
+        accumulatedSteps += rate * Self.stepsPerSecondAtRate1 * elapsed
+        return accumulatedSteps
+    }
+
     mutating func steps(
         forRate rate: Double,
         direction: TimecodeDirection,
@@ -2077,21 +2090,85 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// below is suppressed so the two sources never drive playback at once.
     /// Defaults to false — MIDI CC6 behavior is unchanged unless the DVS
     /// panel explicitly enables the bridge.
-    @Published var dvsPlaybackDriveActive: Bool = false
+    @Published private var publishedDVSPlaybackDriveActive: Bool = false
+    private let dvsPlaybackDriveStateLock = NSLock()
+    private var dvsPlaybackDriveActiveStorage = false
+
+    var dvsPlaybackDriveActive: Bool {
+        dvsPlaybackDriveStateLock.lock()
+        defer { dvsPlaybackDriveStateLock.unlock() }
+        return dvsPlaybackDriveActiveStorage
+    }
+
+    /// Updates the scheduling gate synchronously on any caller queue while
+    /// mirroring the user-facing state asynchronously on the main queue.
+    /// DVS decode/playback must not wait behind a stalled SwiftUI run loop.
+    func setDVSPlaybackDriveActive(_ isActive: Bool) {
+        dvsPlaybackDriveStateLock.lock()
+        let changed = dvsPlaybackDriveActiveStorage != isActive
+        dvsPlaybackDriveActiveStorage = isActive
+        dvsPlaybackDriveStateLock.unlock()
+        guard changed else { return }
+
+        if !isActive {
+            // Deactivating Drive must not leave a trusted drive or dropout
+            // count from this session around to be replayed as inferred
+            // motion if Drive is re-enabled later — `clearDVSDriveHoldState`
+            // takes `dvsDriveHoldStateLock`, safe to call from any thread
+            // (this setter is not confined to the DVS control queue).
+            // `lastForwardedContinuousSteps` is deliberately untouched.
+            clearDVSDriveHoldState()
+        }
+
+        let publish = { [weak self] in
+            guard let self,
+                  self.publishedDVSPlaybackDriveActive != isActive else { return }
+            self.publishedDVSPlaybackDriveActive = isActive
+        }
+        // Dispatch asynchronously: writing @Published state synchronously
+        // from the main thread is the known gap flagged in the
+        // publishDVSDriveDiagnosticsIfNeeded comment block.  This alone is
+        // not sufficient to eliminate the "Modifying state during view
+        // update" warning — hardware proved publishOnMainAsync (which
+        // already dispatches async) still warns.  The identical-value guard
+        // above (publishedDVSPlaybackDriveActive != isActive) avoids the
+        // most common unnecessary republish case.
+        DispatchQueue.main.async(execute: publish)
+    }
 
     /// Timestamp of the most recent DVS-driven `positionDidChange` call —
     /// diagnostic only. `nil` means no DVS motion has reached playback yet
     /// this session (bridge inactive, gated off, or never evaluated).
-    @Published private(set) var lastTimecodeDriveAppliedAt: Date?
+    var lastTimecodeDriveAppliedAt: Date? {
+        dvsDriveDiagnosticState.lastTimecodeDriveAppliedAt
+    }
 
     /// Diagnostic only: whether an auto-load of the DVS drive sample has
     /// been requested this session (does not mean it necessarily
     /// succeeded — see `dvsSampleLoadFailed`).
-    @Published private(set) var dvsAutoLoadAttempted: Bool = false
+    var dvsAutoLoadAttempted: Bool {
+        dvsDriveDiagnosticState.autoLoadAttempted
+    }
 
     /// Diagnostic only: true if the most recent DVS auto-load request
     /// failed (sample ID unknown or WAV missing from the bundle).
-    @Published private(set) var dvsSampleLoadFailed: Bool = false
+    var dvsSampleLoadFailed: Bool {
+        dvsDriveDiagnosticState.sampleLoadFailed
+    }
+
+    /// CACurrentMediaTime of the most recent forwardTimecodeDrive call (DEBUG).
+    private static var _lastDriveCADate: TimeInterval = 0
+
+#if DEBUG
+    /// CACurrentMediaTime of the entry to the most recent forwardTimecodeDrive call — for
+    /// measuring inter-call interval at this layer. Used by [DVS-TRACE:3].
+    private static var _lastForwardEntryTime: TimeInterval = 0
+
+    /// Number of forwardTimecodeDrive calls currently in flight (incremented at entry,
+    /// decremented after positionDidChange returns). Since execution is synchronous this
+    /// is always 0 or 1; a value >1 would indicate unexpected re-entrancy.
+    private static var _pendingDriveOps: Int = 0
+#endif
 
     /// Diagnostic only: whether `scratchPlaybackController` currently has
     /// any sample loaded (of any source — DVS, MIDI pad, or debug button).
@@ -2105,13 +2182,99 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// One tick behind the schedule call within the same
     /// `forwardTimecodeDrive` invocation (the schedule itself is queued
     /// async), but continuously refreshed at the ~10 Hz tick rate.
-    @Published private(set) var dvsPlaybackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics?
+    var dvsPlaybackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics? {
+        dvsDriveDiagnosticState.playbackDiagnostics
+    }
 
-    /// Sample ID armed for DVS-driven playback. Matches the "ahhh" sample
-    /// used elsewhere (hot-cue pads, debug preview button).
-    private static let dvsDriveSampleID = "ahhh"
+    /// Test-only: synchronous, unthrottled snapshot of the playback
+    /// controller's diagnostics, bypassing `dvsPlaybackDiagnostics`'s
+    /// 200ms publish throttle and main-queue async hop. Deterministic tests
+    /// asserting on the effect of a single `forwardTimecodeDrive` tick need
+    /// the state immediately after that call returns, not eventually.
+    func testOnly_scratchPlaybackDiagnosticsSnapshot() -> ScratchSamplePlaybackController.DVSPlaybackDiagnostics {
+        scratchPlaybackController.diagnosticsSnapshot()
+    }
+
+    /// Test-only: blocks until the playback controller's audio queue is
+    /// idle — e.g. after `ensureLoadedForDVSDrive`'s async sample load,
+    /// which `forwardTimecodeDrive` itself does not wait for.
+    func testOnly_waitForPlaybackQueue() {
+        scratchPlaybackController.waitForAudioQueue()
+    }
+
+    /// Test-only passthrough for asserting the bridge-to-playback
+    /// continuity fix does not cause repeated/duplicate stop ramps — see
+    /// `ScratchSamplePlaybackController.dvsAutoStopRampStartCount`.
+    var testOnly_scratchAutoStopRampStartCount: Int {
+        scratchPlaybackController.dvsAutoStopRampStartCount
+    }
+
+    private struct DVSDriveDiagnosticState: Equatable {
+        var lastTimecodeDriveAppliedAt: Date?
+        var autoLoadAttempted = false
+        var sampleLoadFailed = false
+        var playbackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics?
+    }
+
+    @Published private var dvsDriveDiagnosticState = DVSDriveDiagnosticState()
+    private var lastDVSDriveDiagnosticPublishUptime: TimeInterval = -.infinity
+    private static let dvsDriveDiagnosticPublishInterval: TimeInterval = 0.2
+
+    /// Sample ID armed for DVS-driven playback. Uses the short, continuous
+    /// VirtualPlatter Ahhh rather than the pad sample's long silent tail.
+    private static let dvsDriveSampleID = "dvs_ahhh"
 
     private var timecodeDriveStepConverter = TimecodeDriveStepConverter()
+
+    /// Guards `lastTrustedTimecodeDrive` and `consecutiveTransientDropoutTicks`
+    /// only — `forwardTimecodeDrive` itself is confined to the DVS control
+    /// queue (`DVSControlProcessingLoop`'s serial `com.scratchlab.dvsControl`
+    /// queue), but `setDVSPlaybackDriveActive` is callable from any thread
+    /// (e.g. a main-thread SwiftUI toggle) and must be able to clear this
+    /// hold state without racing a concurrent `forwardTimecodeDrive` tick.
+    /// `lastForwardedContinuousSteps` is read/written only from
+    /// `forwardTimecodeDrive`'s own queue and is deliberately not guarded by
+    /// this lock.
+    private let dvsDriveHoldStateLock = NSLock()
+
+    /// Bridge-to-playback continuity fix (2026-08-09 near-stop burst/static):
+    /// last `.driving` drive, held for at most one transient bridge-dropout
+    /// tick — see `forwardTimecodeDrive`'s decision handling. Cleared (not
+    /// just left stale) on `.unknownDirection`, after a second consecutive
+    /// transient failure gives up holding, and whenever DVS drive is
+    /// deactivated — a stale trusted drive from before a genuine stop must
+    /// never be replayed as inferred motion by a later transient tick.
+    /// Access only through `dvsDriveHoldStateLock`.
+    private var lastTrustedTimecodeDrive: TimecodePlaybackDrive?
+
+    /// Cumulative continuous platter steps most recently forwarded to the
+    /// playback controller — the position anchor a no-direction tick must
+    /// reuse. `positionDidChangeContinuous(steps:)` expects the caller's own
+    /// running total, not a delta, so a real "no motion" tick must resend
+    /// this rather than fabricate `steps: 0`. Never reset merely because
+    /// motion became unavailable — only `forwardTrustedDrive` advances it.
+    private var lastForwardedContinuousSteps: Double = 0
+
+    /// Consecutive *transient* bridge-dropout ticks (unusableSignalHealth /
+    /// lowConfidence / missingTimeline / validationRequired / staleSignal).
+    /// Reset to 0 by any `.driving` tick, by `.unknownDirection`, and when
+    /// DVS drive is deactivated. At 0→1 the last trusted drive is held for
+    /// exactly this one tick (inferred motion bounded to this tick's own
+    /// `elapsed`, ~16–17ms at 60 Hz); from 1 onward, holding stops and every
+    /// further tick forwards one no-direction tick instead — see
+    /// `forwardTimecodeDrive`. Access only through `dvsDriveHoldStateLock`.
+    private var consecutiveTransientDropoutTicks = 0
+
+    /// Clears the held-drive/dropout-hold state — see
+    /// `lastTrustedTimecodeDrive`'s and `consecutiveTransientDropoutTicks`'s
+    /// doc comments for the three call sites this covers. Deliberately does
+    /// not touch `lastForwardedContinuousSteps`.
+    private func clearDVSDriveHoldState() {
+        dvsDriveHoldStateLock.lock()
+        lastTrustedTimecodeDrive = nil
+        consecutiveTransientDropoutTicks = 0
+        dvsDriveHoldStateLock.unlock()
+    }
 
     /// Forwards an already-gated `TimecodePlaybackDrive` (validated by
     /// `TimecodePlaybackBridge.evaluate`) into the existing platter-driven
@@ -2123,21 +2286,187 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// before the first valid motion arrives. `ensureLoadedForDVSDrive` is
     /// idempotent and safe to call every tick: it does not reload or reset
     /// `currentSampleFrame` once the sample is already loaded.
-    func forwardTimecodeDrive(_ drive: TimecodePlaybackDrive?, elapsed: TimeInterval) {
+    ///
+    /// - Parameter decision: `timecodeBridge.lastDecision` for this same
+    ///   evaluation. A nil `drive` alone cannot distinguish "genuinely no
+    ///   motion" (`.unknownDirection`) from "signal transiently untrusted"
+    ///   (e.g. `.unusableSignalHealth`) from "hard-gated off"
+    ///   (`.disabled`/`.replayActive`/…) — those three call for different
+    ///   handling below, and previously all three silently produced no call
+    ///   into the playback controller at all, which is what let its queued
+    ///   grain expire into digital silence with no tick for the settling
+    ///   hysteresis to ever see (2026-08-09 hardware capture correlation).
+    func forwardTimecodeDrive(
+        _ drive: TimecodePlaybackDrive?,
+        decision: TimecodePlaybackBridgeDecision,
+        elapsed: TimeInterval
+    ) {
         guard dvsPlaybackDriveActive else { return }
-        defer { dvsPlaybackDiagnostics = scratchPlaybackController.diagnosticsSnapshot() }
+        let driveEntryUptime = CACurrentMediaTime()
+
+#if DEBUG
+        let traceSeq = DVSTrace.current
+        let tFwdEntry = driveEntryUptime
+        let fwdDt = tFwdEntry - Self._lastForwardEntryTime
+        Self._lastForwardEntryTime = tFwdEntry
+        let pendingOps = Self._pendingDriveOps
+        Self._pendingDriveOps += 1
+        defer { Self._pendingDriveOps -= 1 }
+        let _dirStr = drive.map { $0.direction.rawValue } ?? "nil"
+        let _thr = Thread.current.isMainThread ? "main" : "bg"
+        DVSTrace.log("[DVS-TRACE:3] captureEngine forward seq=\(traceSeq) monotonic=\(tFwdEntry) fwdDt=\(fwdDt)s pendingOps=\(pendingOps) elapsed=\(elapsed)s dir=\(_dirStr) rate=\(drive.map { $0.rate } ?? 0) segmentWindow=\(elapsed) decision=\(decision.rawValue) thread=\(_thr)")
+#endif
+
+        #if DEBUG
+        let now = CACurrentMediaTime()
+        let dt = now - Self._lastDriveCADate
+        Self._lastDriveCADate = now
+        if dt > 0.15 {
+            print("[DVS] ⏱ drive dt=\(String(format: "%.0f", dt * 1000))ms elapsed=\(String(format: "%.0f", elapsed * 1000))ms rate=\(drive.map { String(format: "%.2f", $0.rate) } ?? "nil") dir=\(drive.map { "\($0.direction)" } ?? "nil") decision=\(decision.rawValue)")
+        }
+        #endif
+
         let loadOK = scratchPlaybackController.ensureLoadedForDVSDrive(sampleID: Self.dvsDriveSampleID)
-        dvsAutoLoadAttempted = true
-        dvsSampleLoadFailed = !loadOK
-        guard let drive else { return }
-        let (steps, direction) = timecodeDriveStepConverter.steps(
+        let driveApplied: Bool
+
+        switch decision {
+        case .driving:
+            // Expected to carry a drive; if it somehow doesn't, fail safe
+            // exactly like the pre-fix nil-drive path (no motion inferred).
+            if let drive {
+                dvsDriveHoldStateLock.lock()
+                consecutiveTransientDropoutTicks = 0
+                lastTrustedTimecodeDrive = drive
+                dvsDriveHoldStateLock.unlock()
+                forwardTrustedDrive(drive, elapsed: elapsed)
+                driveApplied = true
+            } else {
+                forwardNoDirectionTick(elapsed: elapsed)
+                driveApplied = false
+            }
+
+        case .unknownDirection:
+            // Genuine stationary/no-direction tick: never inferred motion,
+            // never held — let the existing stop ramp and settling
+            // hysteresis (untouched by this fix) see it immediately. Then
+            // clear the hold: a genuine stop must not leave a stale trusted
+            // drive for a later transient tick to replay as inferred motion.
+            forwardNoDirectionTick(elapsed: elapsed)
+            driveApplied = false
+            clearDVSDriveHoldState()
+
+        case .unusableSignalHealth, .lowConfidence, .missingTimeline, .validationRequired, .staleSignal:
+            // Transient: the signal is momentarily untrusted, not proven
+            // absent. Hold the last trusted drive for exactly one tick so a
+            // single flapped gate cannot open a digital-silence hole; a
+            // second consecutive transient tick gives up holding (bounded —
+            // see `consecutiveTransientDropoutTicks`'s doc comment), reports
+            // genuine no-direction instead, and clears the trusted drive —
+            // further transient ticks must never infer motion again until a
+            // new genuine `.driving` result stores a fresh trusted drive.
+            dvsDriveHoldStateLock.lock()
+            let ticksSoFar = consecutiveTransientDropoutTicks
+            let trusted = lastTrustedTimecodeDrive
+            if ticksSoFar == 0, let trusted {
+                consecutiveTransientDropoutTicks = 1
+                dvsDriveHoldStateLock.unlock()
+                forwardTrustedDrive(trusted, elapsed: elapsed)
+                driveApplied = true
+            } else {
+                consecutiveTransientDropoutTicks = ticksSoFar + 1
+                lastTrustedTimecodeDrive = nil
+                dvsDriveHoldStateLock.unlock()
+                forwardNoDirectionTick(elapsed: elapsed)
+                driveApplied = false
+            }
+
+        case .disabled, .pipelineDisabled, .diagnosticsOnly, .replayActive, .liveTapOff, .notEvaluated:
+            // Hard configuration/safety gate: no signal to hold or infer
+            // from. Forward no-direction immediately and drop any hold.
+            clearDVSDriveHoldState()
+            forwardNoDirectionTick(elapsed: elapsed)
+            driveApplied = false
+        }
+
+        publishDVSDriveDiagnosticsIfNeeded(
+            uptime: driveEntryUptime,
+            loadFailed: !loadOK,
+            driveApplied: driveApplied
+        )
+    }
+
+    /// Advances the step converter by `elapsed` at `drive`'s rate, records
+    /// the resulting cumulative steps as `lastForwardedContinuousSteps`, and
+    /// forwards `drive`'s direction to the playback controller. Used both
+    /// for a genuine `.driving` tick and for the at-most-one-tick
+    /// transient-dropout hold in `forwardTimecodeDrive`.
+    private func forwardTrustedDrive(_ drive: TimecodePlaybackDrive, elapsed: TimeInterval) {
+        let steps = timecodeDriveStepConverter.continuousSteps(
             forRate: drive.rate,
-            direction: drive.direction,
             elapsed: elapsed
         )
-        scratchPlaybackController.positionDidChange(steps: steps, direction: direction)
-        lastTimecodeDriveAppliedAt = Date()
+        lastForwardedContinuousSteps = steps
+        let direction: ScratchPlatterDirection? = {
+            switch drive.direction {
+            case .forward:  return .forward
+            case .backward: return .backward
+            case .unknown:  return nil
+            }
+        }()
+        // Pass the real tick interval as the scheduling window so the grain's
+        // varispeed rate reflects true platter speed instead of the fixed
+        // 1/60s slot sized for MIDI CC6's much faster call cadence — see
+        // the doc comment on `positionDidChange(steps:direction:segmentWindow:)`.
+        scratchPlaybackController.positionDidChangeContinuous(steps: steps, direction: direction, segmentWindow: elapsed)
     }
+
+    /// Forwards a genuine no-motion tick at the last known cumulative step
+    /// position — never a fabricated `steps: 0` — so the playback
+    /// controller's existing (untouched) stop-ramp / settling hysteresis
+    /// sees a real "no direction" tick instead of receiving no call at all.
+    /// Deliberately does not advance `timecodeDriveStepConverter`: there is
+    /// no trusted rate to integrate for a tick with no direction.
+    private func forwardNoDirectionTick(elapsed: TimeInterval) {
+        scratchPlaybackController.positionDidChangeContinuous(
+            steps: lastForwardedContinuousSteps,
+            direction: nil,
+            segmentWindow: elapsed
+        )
+    }
+
+    private func publishDVSDriveDiagnosticsIfNeeded(
+        uptime: TimeInterval,
+        loadFailed: Bool,
+        driveApplied: Bool
+    ) {
+        guard uptime - lastDVSDriveDiagnosticPublishUptime >=
+                Self.dvsDriveDiagnosticPublishInterval else {
+            return
+        }
+        lastDVSDriveDiagnosticPublishUptime = uptime
+
+        var next = dvsDriveDiagnosticState
+        next.autoLoadAttempted = true
+        next.sampleLoadFailed = loadFailed
+        next.playbackDiagnostics = scratchPlaybackController.diagnosticsSnapshot()
+        if driveApplied {
+            next.lastTimecodeDriveAppliedAt = Date()
+        }
+        let publish = { [weak self] in
+            guard let self, self.dvsDriveDiagnosticState != next else { return }
+            print("[SwiftUIStateGuard] publish · source=MacCaptureEngine.publishDVSDriveDiagnosticsIfNeeded field=dvsDriveDiagnosticState thread=\(Thread.isMainThread ? "main" : "background") time=\(String(format: "%.6f", CACurrentMediaTime()))")
+            self.dvsDriveDiagnosticState = next
+        }
+        // Dispatch asynchronously: the prior `Thread.isMainThread` shortcut
+        // was a known gap (documented in the since-removed comment block
+        // above).  This alone is not sufficient to eliminate the SwiftUI
+        // warning — hardware proved publishOnMainAsync (which already
+        // dispatches async) still warns.  The identical-value guard and the
+        // async dispatch reduce unnecessary republishes but are
+        // hardware-unverified as a complete fix.
+        DispatchQueue.main.async(execute: publish)
+    }
+
 #if DEBUG
     /// Evaluates the independent DVS notation trust gate against `pipeline`
     /// and, only when trusted and a routine take is actively recording with
@@ -3056,8 +3385,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         if let mapping = persistedCrossfaderMapping {
             publishOnMainAsync(field: "midiLearn.initialMapping") { [weak self] in
-                self?.crossfaderCCMapping = mapping
-                self?.midiLearnState = .learned(mapping)
+                guard let self,
+                      self.midiLearnState != .learned(mapping) else { return }
+                self.crossfaderCCMapping = mapping
+                self.midiLearnState = .learned(mapping)
             }
         }
 
@@ -6264,8 +6595,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let eventCountAtStart = midiEventsReceivedCount
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiLearn") { [weak self] in
-            self?.midiLearnState = .listening
-            self?.midiLearnFeedback = "Listening..."
+            guard let self else { return }
+            if self.midiLearnState != .listening { self.midiLearnState = .listening }
+            if self.midiLearnFeedback != "Listening..." { self.midiLearnFeedback = "Listening..." }
         }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -6277,7 +6609,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             guard shouldWarn else { return }
             self.publishOnMainAsync(field: "midiLearnFeedback") { [weak self] in
-                self?.midiLearnFeedback = "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
+                guard let self,
+                      self.midiLearnFeedback != "No MIDI received. Check IAC Driver / MixEmergency MIDI Out." else { return }
+                self.midiLearnFeedback = "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
             }
         }
     }
@@ -6310,8 +6644,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
-            self.midiLearnState = self.crossfaderCCMapping.map { .learned($0) } ?? .idle
-            self.midiLearnFeedback = ""
+            let nextState = self.crossfaderCCMapping.map { MIDILearnState.learned($0) } ?? .idle
+            if self.midiLearnState != nextState { self.midiLearnState = nextState }
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
     }
 
@@ -6322,9 +6657,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
         publishOnMainAsync(field: "midiLearn") { [weak self] in
-            self?.crossfaderCCMapping = nil
-            self?.midiLearnState = .idle
-            self?.midiLearnFeedback = ""
+            guard let self else { return }
+            self.crossfaderCCMapping = nil
+            if self.midiLearnState != .idle { self.midiLearnState = .idle }
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
     }
 
@@ -6337,9 +6673,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
         }
         publishOnMainAsync(field: "midiLearn") { [weak self] in
-            self?.crossfaderCCMapping = mapping
-            self?.midiLearnState = .learned(mapping)
-            self?.midiLearnFeedback = "Learned Xfader: \(mapping.displayName)"
+            guard let self else { return }
+            self.crossfaderCCMapping = mapping
+            let nextState = MIDILearnState.learned(mapping)
+            let nextFeedback = "Learned Xfader: \(mapping.displayName)"
+            if self.midiLearnState != nextState { self.midiLearnState = nextState }
+            if self.midiLearnFeedback != nextFeedback { self.midiLearnFeedback = nextFeedback }
         }
     }
 
@@ -6373,7 +6712,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiListeningState") { [weak self] in
             guard let self else { return }
-            self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Selected"
+            let next = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Selected"
+            if self.midiListeningState != next { self.midiListeningState = next }
         }
     }
 
@@ -6562,7 +6902,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         if selectedMIDIInputSourceID.isEmpty {
             publishOnMainAsync(field: "midiListeningState") { [weak self] in
-                self?.midiListeningState = "Not Connected"
+                guard let self, self.midiListeningState != "Not Connected" else { return }
+                self.midiListeningState = "Not Connected"
             }
         }
         reconnectSelectedMIDIInput()
@@ -6655,8 +6996,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.midiEventsReceivedCount += count
                 self.lastMIDICCMessage = latestCC
                 self.lastMIDIEventSummary = latestSummary
-                self.midiListeningState = "Listening"
-                if isMidiLearn {
+                // Avoid identical-value @Published writes — each one triggers
+                // objectWillChange.send(), which SwiftUI flags as "Modifying
+                // state during view update" when it lands inside an active
+                // update transaction.  This path fires at up to 4 Hz during
+                // active controller input; "Listening" → "Listening" is the
+                // overwhelming majority case.
+                if self.midiListeningState != "Listening" {
+                    self.midiListeningState = "Listening"
+                }
+                if isMidiLearn, self.midiLearnFeedback != latestSummary {
                     self.midiLearnFeedback = latestSummary
                 }
             }
@@ -6820,7 +7169,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
               let endpoint = midiSourceEndpoints[selectedSource] else {
             publishOnMainAsync(field: "midiListeningState") { [weak self] in
                 guard let self else { return }
-                self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
+                let next = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
+                if self.midiListeningState != next { self.midiListeningState = next }
             }
             return
         }
@@ -6830,7 +7180,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         MIDIPortConnectSource(midiInputPort, endpoint, nil)
         publishOnMainAsync(field: "midiListeningState") { [weak self] in
-            self?.midiListeningState = "Listening"
+            guard let self, self.midiListeningState != "Listening" else { return }
+            self.midiListeningState = "Listening"
         }
     }
 
@@ -6842,13 +7193,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         lastMidiMonitorPublishTime = 0
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiMonitorReset") { [weak self] in
-            self?.midiEventsReceivedCount = 0
-            self?.lastMIDIEventSummary = "No MIDI received yet"
-            self?.lastMIDICCMessage = "CC -- Ch -- Value --"
-            self?.midiLearnFeedback = ""
-            self?.lastScratchBankPadLabel = ""
+            guard let self else { return }
+            self.midiEventsReceivedCount = 0
+            self.lastMIDIEventSummary = "No MIDI received yet"
+            self.lastMIDICCMessage = "CC -- Ch -- Value --"
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+            self.lastScratchBankPadLabel = ""
 #if DEBUG
-            self?.lastRawPadDiagnostic = ""
+            self.lastRawPadDiagnostic = ""
 #endif
         }
     }

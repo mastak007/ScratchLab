@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import QuartzCore
 #if os(macOS) || os(iOS)
 import Accelerate
 #endif
@@ -180,9 +181,72 @@ public final class TimecodeInputTap: ObservableObject, @unchecked Sendable {
         publishChange()
     }
 
-    /// Diagnostic state may be produced by the dedicated DVS worker, but
-    /// SwiftUI invalidation always belongs on the main queue.
+    /// Dedicated to the coalescing state below only — see the equivalent
+    /// property in `TimecodeControlPipeline` for why this is a separate
+    /// lock rather than reusing `lock`.
+    private let changeNotificationLock = NSLock()
+    private var lastChangeNotificationUptime: TimeInterval = -.infinity
+    private var changeNotificationFlushScheduled = false
+
+    /// `push(...)` is called once per raw audio buffer from the live tap —
+    /// at the audio device's callback rate, which can exceed the 60 Hz DVS
+    /// control-tick rate — and previously published unconditionally on
+    /// every call ("publish once for every low-level audio callback",
+    /// exactly what produced the SwiftUI "Modifying state during view
+    /// update" flood). `latestBuffer`/`latestSample`/`bufferCount`/etc.
+    /// remain fully up to date on every call regardless of this cap —
+    /// callers that read them directly (rather than observing
+    /// `objectWillChange`) see live data; only the redraw signal is
+    /// coalesced.
+    private static let changeNotificationMinInterval: TimeInterval = 1.0 / 20.0
+
+    /// Diagnostic state may be produced by the dedicated DVS worker or a
+    /// live audio callback, but SwiftUI invalidation always belongs on the
+    /// main queue — coalesced to `changeNotificationMinInterval` so a
+    /// sustained stream of buffer pushes cannot flood SwiftUI with
+    /// render-transaction-adjacent notifications (see
+    /// `TimecodeControlPipeline.sendChangeNotification`'s doc comment for
+    /// why throttling the dispatched call alone isn't sufficient at this
+    /// rate).
     private func publishChange() {
+        let now = CACurrentMediaTime()
+        changeNotificationLock.lock()
+        let elapsed = now - lastChangeNotificationUptime
+        if elapsed >= Self.changeNotificationMinInterval {
+            lastChangeNotificationUptime = now
+            changeNotificationLock.unlock()
+            deliverChangeNotification()
+            return
+        }
+        guard !changeNotificationFlushScheduled else {
+            changeNotificationLock.unlock()
+            return
+        }
+        changeNotificationFlushScheduled = true
+        let delay = Self.changeNotificationMinInterval - elapsed
+        changeNotificationLock.unlock()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.changeNotificationLock.lock()
+            self.lastChangeNotificationUptime = CACurrentMediaTime()
+            self.changeNotificationFlushScheduled = false
+            self.changeNotificationLock.unlock()
+            print("[SwiftUIStateGuard] publish · source=TimecodeInputTap.publishChange.tailFlush thread=main time=\(String(format: "%.6f", CACurrentMediaTime()))")
+            self.objectWillChange.send()
+        }
+    }
+
+    // Hardware-verification instrumentation: a unique identity per publish
+    // call site, immediately before `objectWillChange.send()` — see
+    // `TimecodeControlPipeline.sendChangeNotification`'s matching comment.
+    // As of the `TimecodeInputStatusCard`/`TimecodeControlCard` fix, no
+    // production view observes this tap directly anymore (only the
+    // DEBUG-only, button-driven `TimecodeInputStatusCard_Host` preview
+    // harness does, via its own `@StateObject`), so this call site should
+    // be rare/absent in a real hardware session's log.
+    private func deliverChangeNotification() {
+        print("[SwiftUIStateGuard] publish · source=TimecodeInputTap.deliverChangeNotification thread=\(Thread.isMainThread ? "main" : "background") time=\(String(format: "%.6f", CACurrentMediaTime()))")
         if Thread.isMainThread {
             objectWillChange.send()
         } else {
