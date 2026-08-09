@@ -2509,6 +2509,10 @@ struct MacAnalyzerView: View {
                 return "Learned Xfader: \(mapping.displayName)"
             }
             return "Learned Xfader: \(mapping.displayName) · Received \(captureEngine.lastMIDICCMessage)"
+        case .listeningFor(let action):
+            // Another control (upfader/hot cue) is being learned via the
+            // Mixer & Hot-Cue Mapping section below.
+            return "Learning \(action.displayName)…"
         }
     }
 
@@ -2537,9 +2541,247 @@ struct MacAnalyzerView: View {
                     Button("Clear") { captureEngine.clearCrossfaderMapping() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                case .listeningFor:
+                    Button("Cancel") { captureEngine.cancelMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 }
                 Spacer()
             }
+        }
+    }
+
+    // MARK: - Mixer & Hot-Cue Mapping (MIDI Learn checkpoint)
+    //
+    // Minimal Advanced/Debug UI for the generic per-device MIDI Learn model:
+    // left/right upfader learn+clear, hot cue 1-8 learn+clear with scratch
+    // sample assignment, active-device mapping summary, live learn feedback,
+    // and persistence/load error surfacing. Audio routing is out of scope.
+
+    private static let hotCueActions: [MIDISemanticAction] = [
+        .hotCue1, .hotCue2, .hotCue3, .hotCue4, .hotCue5, .hotCue6, .hotCue7, .hotCue8
+    ]
+
+    /// Parses the raw 0-127 value out of `lastMIDICCMessage`, formatted as
+    /// `"CC<n> Ch<c> Value<v>"` (or the `"CC -- Ch -- Value --"` placeholder).
+    private func parsedLastCCRawValue() -> Int? {
+        let message = captureEngine.lastMIDICCMessage
+        guard let range = message.range(of: "Value") else { return nil }
+        return Int(message[range.upperBound...])
+    }
+
+    private var midiLearnLiveValueText: String? {
+        guard let action = captureEngine.activeMIDILearnAction else { return nil }
+        guard let raw = parsedLastCCRawValue() else {
+            return "Learning \(action.displayName)… move the control now"
+        }
+        let normalized = Double(max(0, min(127, raw))) / 127.0
+        return "Learning \(action.displayName) · raw \(raw) · normalized \(String(format: "%.2f", normalized))"
+    }
+
+    private func midiMappingStatusLabel(for action: MIDISemanticAction) -> String {
+        if let control = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
+            return control.displayName
+        }
+        return "not mapped"
+    }
+
+    @ViewBuilder
+    private func midiLearnActionRow(_ action: MIDISemanticAction, title: String) -> some View {
+        let isLearningThis = captureEngine.activeMIDILearnAction == action
+        let isMapped = captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if isLearningThis {
+                Button("Cancel") { captureEngine.cancelMIDILearn() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else {
+                Button("Learn") { captureEngine.startMIDILearn(for: action) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.activeMIDILearnAction != nil)
+                if isMapped {
+                    Button("Clear") { captureEngine.clearMapping(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    /// Sorted, available bundled scratch-sample IDs for hot-cue assignment.
+    private var availableScratchSampleIDs: [String] {
+        ScratchSamplePlaybackController.knownSampleIDs.sorted()
+    }
+
+    @ViewBuilder
+    private func hotCueMappingRow(_ index: Int) -> some View {
+        let action = Self.hotCueActions[index - 1]
+        let isLearningThis = captureEngine.activeMIDILearnAction == action
+        let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hot Cue \(index)")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if isLearningThis {
+                    Button("Cancel") { captureEngine.cancelMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Learn") { captureEngine.startMIDILearn(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.activeMIDILearnAction != nil)
+                    if learnedControl != nil {
+                        Button("Clear") { captureEngine.clearMapping(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+
+            if let learnedControl {
+                Picker("Sample", selection: Binding(
+                    get: { learnedControl.assignedSampleID ?? "" },
+                    set: { newValue in
+                        guard !newValue.isEmpty else { return }
+                        captureEngine.assignSampleToHotCue(newValue, hotCueIndex: index)
+                    }
+                )) {
+                    Text("None").tag("")
+                    ForEach(availableScratchSampleIDs, id: \.self) { sampleID in
+                        Text(sampleID).tag(sampleID)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(maxWidth: 200, alignment: .leading)
+            }
+        }
+    }
+
+    private var midiMappingDeviceSummary: String {
+        guard let mapping = captureEngine.currentMIDIDeviceMapping else {
+            return "No saved mapping for this device yet."
+        }
+        return "\(mapping.deviceName) · \(mapping.controls.count) control\(mapping.controls.count == 1 ? "" : "s") mapped"
+    }
+
+    /// Status text for a continuous action's calibration row — live observed
+    /// range while calibrating, or the persisted range/inversion otherwise.
+    private func calibrationStatusText(for action: MIDISemanticAction, control: MIDILearnedControl, isCalibrating: Bool) -> String {
+        if isCalibrating {
+            if let observedMin = captureEngine.calibrationObservedMin, let observedMax = captureEngine.calibrationObservedMax {
+                return "\(action.displayName) calibration: observed \(observedMin)–\(observedMax) · move through full range"
+            }
+            return "\(action.displayName) calibration: move the control through its full range"
+        }
+        let invertLabel = control.inverted ? " · inverted" : ""
+        return "\(action.displayName) range \(control.minValue)–\(control.maxValue)\(invertLabel)"
+    }
+
+    /// Calibrate/Finish/Cancel + inversion toggle for one already-learned
+    /// continuous action (crossfader, left/right upfader). Nothing renders
+    /// until the action has a learned binding — calibration observes the
+    /// binding's raw range, it doesn't learn the binding itself.
+    @ViewBuilder
+    private func calibrationRow(for action: MIDISemanticAction) -> some View {
+        if let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
+            let isCalibratingThis = captureEngine.activeCalibrationAction == action
+            HStack(spacing: 8) {
+                Text(calibrationStatusText(for: action, control: learnedControl, isCalibrating: isCalibratingThis))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if isCalibratingThis {
+                    Button("Finish") { captureEngine.finishCalibration() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    Button("Cancel") { captureEngine.cancelCalibration() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Calibrate") { captureEngine.startCalibration(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.activeMIDILearnAction != nil || captureEngine.activeCalibrationAction != nil)
+                    Toggle("Invert", isOn: Binding(
+                        get: { learnedControl.inverted },
+                        set: { captureEngine.setInversion($0, for: action) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11, weight: .medium))
+                    .fixedSize()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mixerAndHotCueMappingSection: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(midiMappingDeviceSummary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                if !captureEngine.midiMappingError.isEmpty {
+                    Label(captureEngine.midiMappingError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !captureEngine.calibrationError.isEmpty {
+                    Label(captureEngine.calibrationError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider()
+
+                calibrationRow(for: .crossfader)
+                midiLearnActionRow(.leftUpfader, title: "Left Upfader")
+                calibrationRow(for: .leftUpfader)
+                midiLearnActionRow(.rightUpfader, title: "Right Upfader")
+                calibrationRow(for: .rightUpfader)
+
+                Divider()
+
+                Text("Hot Cues")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(1...8, id: \.self) { index in
+                        hotCueMappingRow(index)
+                    }
+                }
+            }
+            .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+        } label: {
+            Label("Mixer & Hot-Cue Mapping", systemImage: "pianokeys")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -4881,6 +5123,8 @@ struct MacAnalyzerView: View {
             }
 
             midiLearnRow
+
+            mixerAndHotCueMappingSection
 
 #if DEBUG
             Divider()

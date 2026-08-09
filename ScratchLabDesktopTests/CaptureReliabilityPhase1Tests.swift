@@ -11033,8 +11033,17 @@ extension CaptureReliabilityPhase1CoreTests {
     }
 
     func testMIDILearnUpdatesFromListeningToLearnedStateWhenCCArrives() {
+        // `recordReceivedMIDICCEvent` no longer learns anything itself (that
+        // duplicate legacy path was the root cause of a hardware hang/crash —
+        // see MIDILearnEngineTests). The real packet-parsing loop always
+        // calls `evaluateMIDILearnForCC` (the sole learn consumer) first, then
+        // `recordReceivedMIDICCEvent` for monitoring/recording only — mirror
+        // that sequence here.
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.startMIDILearn()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let learnResult = engine.evaluateMIDILearnForCC(channel: 1, controller: 11, value: 64)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         engine.recordReceivedMIDICCEvent(
@@ -11042,7 +11051,8 @@ extension CaptureReliabilityPhase1CoreTests {
             channel: 1,
             controller: 11,
             value: 64,
-            mappedControl: "crossfader"
+            mappedControl: "crossfader",
+            consumedByLearn: learnResult.consumedByLearn
         )
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
