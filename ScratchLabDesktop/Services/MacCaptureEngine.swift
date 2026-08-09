@@ -2075,6 +2075,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastScratchBankPadLabel: String = ""
 #if DEBUG
     @Published private(set) var lastRawPadDiagnostic: String = ""
+    /// Debug-only: outcome of the most recent `loadPlatterTestSample()`
+    /// request — "loaded: <id>" or "load failed: <reason>" — so a silent
+    /// load failure is never mistaken for a platter/MIDI hardware problem.
+    @Published private(set) var platterTestLoadStatus: String = ""
 #endif
     var scratchBankPadPreviewCallback: ((String) -> Void)?
 
@@ -2109,6 +2113,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         dvsPlaybackDriveActiveStorage = isActive
         dvsPlaybackDriveStateLock.unlock()
         guard changed else { return }
+
+        // Right-deck MIDI continuous drive ownership: DVS always outranks
+        // MIDI. This is the single authoritative signal both the legacy
+        // raw-CC6 suppression below and the continuous-renderer ownership
+        // arbitration are driven from.
+        scratchPlaybackController.setDVSOwnership(active: isActive)
 
         if !isActive {
             // Deactivating Drive must not leave a trusted drive or dropout
@@ -3354,6 +3364,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             print("[RanePad] loading sample · sampleID=\(sampleID)")
             self.scratchPlaybackController.load(sampleID: sampleID)
         }
+
+        // Right-deck (channel 1) MIDI continuous platter drive (2026-08-09):
+        // the single loaded scratch sample is owned exclusively by the Rane
+        // ONE MKII right platter / Deck 2, per product decision. The
+        // coalescing timer inside `scratchPlaybackController` samples this
+        // provider on its own bounded cadence — it never reads the left
+        // deck (channel 0), which stays tracked/diagnostic-only.
+        scratchPlaybackController.configureMIDIPlatterProvider(
+            rightDeckAccumulatedSteps: { [platterTracker] in
+                platterTracker.accumulatedSteps(for: ScratchPlatterTracker.rightChannel)
+            }
+        )
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleWorkspaceApplicationChange(_:)),
@@ -6616,10 +6638,47 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    func playScratchSampleDiagnostic(sampleID: String) {
-        print("[ScratchSamplePlaybackBridge] TEMP UI direct load · sampleID=\(sampleID)")
-        scratchPlaybackController.load(sampleID: sampleID)
+#if DEBUG
+    /// Debug-only right-deck platter test: loads the validated
+    /// one-revolution `dvs_ahhh` asset (`VirtualPlatter/ahhh.wav`,
+    /// ~1.0474 s) with no automatic preview/playback — only loads it into
+    /// `scratchPlaybackController`. Moving the right platter (channel 1
+    /// CC6) is what produces audio, through the same direct-MIDI
+    /// continuous drive DVS's renderer uses.
+    ///
+    /// Deliberately hardcoded, not parameterized: the hot-cue pad asset
+    /// `ahhh.wav` (~4.4667 s) is longer than one physical platter
+    /// revolution (`dvsLoopFrames`, ~1.8 s) and is rejected by
+    /// `midiCoalescingTick`'s loop-fit guard — this button must always
+    /// load the short, validated asset. Supporting longer samples on the
+    /// direct-MIDI path is out of scope here (hot-cue/sample-mapping
+    /// design, later).
+    func loadPlatterTestSample() {
+        let sampleID = "dvs_ahhh"
+        print("[ScratchSamplePlaybackBridge] platter test load requested · sampleID=\(sampleID)")
+        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false)
+        guard requested else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "not found: \(sampleID)"
+            }
+            return
+        }
+        // Bounded: `load` only queues a small bundled-WAV read on the
+        // controller's own audio queue; draining it here (debug tool only,
+        // main-thread button action) lets the status reflect the real
+        // outcome instead of just "a request was queued".
+        scratchPlaybackController.waitForAudioQueue()
+        let snapshot = scratchPlaybackController.diagnosticsSnapshot()
+        publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+            guard let self else { return }
+            if snapshot.loadedSampleID == sampleID {
+                self.platterTestLoadStatus = "loaded: \(sampleID)"
+            } else {
+                self.platterTestLoadStatus = "load failed: \(snapshot.lastLoadError ?? "unknown")"
+            }
+        }
     }
+#endif
 
     private func publishOnMainAsync(field: String, _ update: @escaping () -> Void) {
         let requestTime = CACurrentMediaTime()
@@ -6775,8 +6834,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                             // CC6 platter fast path: feed tracker → playback controller.
                             // Verified Rane ONE MKII: left platter = ch=0 CC6,
                             // right platter = ch=1 CC6. Pads are ch=4/ch=5 (NOT platter).
-                            // Rate-limited inside the controller (~60 Hz); CC6 events
-                            // fire at ~800 Hz so the controller drops excess updates.
+                            // Both decks are tracked here for diagnostics, but only the
+                            // right platter (channel 1 / Deck 2) may ever drive the single
+                            // loaded scratch sample — product decision 2026-08-09. The left
+                            // platter (channel 0) stays tracked/diagnostic-only and never
+                            // reaches the playback controller.
                             if controller == 6, channel == 0 || channel == 1 {
                                 platterTracker.ingest(channel: channel, value: value)
                                 let steps = platterTracker.accumulatedSteps(for: channel)
@@ -6787,13 +6849,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                                     print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
                                 }
                                 // Suppress the raw MIDI CC6 path while DVS/timecode
-                                // motion is driving playback, so the two sources
-                                // never call positionDidChange at the same time.
-                                if !dvsPlaybackDriveActive {
-                                    scratchPlaybackController.positionDidChange(
-                                        steps: steps,
-                                        direction: direction
-                                    )
+                                // motion is driving playback, so the two sources never
+                                // publish to the playback controller at the same time.
+                                if channel == ScratchPlatterTracker.rightChannel, !dvsPlaybackDriveActive {
+                                    if scratchPlaybackController.midiUsesContinuousRenderer {
+                                        // The controller's own coalescing timer
+                                        // independently samples the tracker at a bounded
+                                        // cadence (see `configureMIDIPlatterProvider`) — no
+                                        // per-event forwarding, keeping this CoreMIDI
+                                        // receive callback bounded and non-blocking.
+                                    } else {
+                                        // Rate-limited inside the controller (~60 Hz); CC6
+                                        // events fire at ~800 Hz so the controller drops
+                                        // excess updates. Legacy grain rollback path only.
+                                        scratchPlaybackController.positionDidChange(
+                                            steps: steps,
+                                            direction: direction
+                                        )
+                                    }
                                 }
                             }
                             // CC8 crossfader: diagnostics/MIDI-learn only.

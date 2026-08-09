@@ -4897,12 +4897,20 @@ struct MacAnalyzerView: View {
             }
             .toggleStyle(.switch)
 
-            // TEMP HARDWARE DIAGNOSTIC: direct app-side proof path for sample playback.
-            Button("Play ahhh test") {
-                captureEngine.playScratchSampleDiagnostic(sampleID: "ahhh")
+            // TEMP HARDWARE DIAGNOSTIC: loads the validated one-revolution
+            // platter asset (dvs_ahhh) with no auto-preview — move the
+            // right platter afterward to hear it.
+            Button("Load platter ahhh test") {
+                captureEngine.loadPlatterTestSample()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+
+            if !captureEngine.platterTestLoadStatus.isEmpty {
+                Text(captureEngine.platterTestLoadStatus)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(captureEngine.platterTestLoadStatus.hasPrefix("loaded:") ? .green : .red)
+            }
 
             if !captureEngine.lastScratchBankPadLabel.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {

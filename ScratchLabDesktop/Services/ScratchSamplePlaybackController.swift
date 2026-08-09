@@ -50,6 +50,340 @@ final class ScratchSamplePlaybackController {
     /// tests keep exercising the code they were written against.
     var dvsUsesContinuousRenderer = true
 
+    // MARK: - Continuous MIDI platter drive (2026-08-09, right-deck-owned)
+    //
+    // Product decision (2026-08-09): the single loaded scratch sample is
+    // owned exclusively by the Rane ONE MKII right platter / Deck 2 (MIDI
+    // channel 1, CC6). This section never touches `positionDidChange`,
+    // `positionDidChangeOnQueue`, `positionDidChangeContinuous`, or
+    // `renderContinuousDVSTick` — the legacy grain path (still exercised
+    // unmodified by the pinned grain-mechanism regression tests) and every
+    // validated DVS behavior are completely untouched by this addition.
+
+    /// Production default: right-deck direct MIDI drives
+    /// `dvsContinuousRenderer` (the same renderer DVS uses) via the
+    /// coalescing tick below. `false` disables that routing entirely —
+    /// `MacCaptureEngine` then falls back to calling the untouched legacy
+    /// `positionDidChange` grain path for right-deck CC6 — a hardware
+    /// rollback lever independent of `dvsUsesContinuousRenderer`.
+    var midiUsesContinuousRenderer = true
+
+    /// Which control source currently owns `dvsContinuousRenderer`'s single
+    /// publication surface. DVS always outranks MIDI. Confined to
+    /// `audioQueue` — read and written only from code that already runs
+    /// there, so no additional locking is needed.
+    private enum PlatterRenderOwner {
+        case none
+        case dvs
+        case midi
+    }
+    private var platterRenderOwner: PlatterRenderOwner = .none
+
+    /// Authoritative record of whether DVS/timecode is the active control
+    /// source, set exclusively by `applyDVSOwnership(active:)`. Unlike
+    /// `platterRenderOwner` (which sample load/unload may legitimately
+    /// reset to `.none` for bookkeeping), this flag is never touched by
+    /// load/unload — DVS's ownership survives a reload performed while it
+    /// is active, and `midiCoalescingTick` gates on this flag directly so a
+    /// load/unload race can never let MIDI publish while DVS is active.
+    private var dvsOwnershipActive = false
+
+    /// Pure velocity/phase-delta estimator for the right-deck coalescing
+    /// tick. See `MIDIPlatterContinuousDrive`.
+    private var midiContinuousDrive = MIDIPlatterContinuousDrive()
+
+    /// MIDI's own accumulated-steps phase anchor — deliberately independent
+    /// of `dvsAccumulatedSteps` (DVS's validated anchor is never read or
+    /// written by this path) so the two control sources can never corrupt
+    /// each other's rotational phase history. Reuses the exact same
+    /// `dvsLoopPhaseFrame`/`framesPerStep`/`stepsPerRevolution` calibration
+    /// DVS uses, so the calibration and the 12 o'clock cue mapping are
+    /// identical for both sources.
+    private var midiContinuousAccumulatedSteps: Double = 0
+
+    /// True while the most recent coalescing tick published real (non-idle)
+    /// motion — lets the control side declare inactivity promptly, on the
+    /// very next quiet tick, instead of relying on the renderer's own
+    /// 0.25 s stale-control fallback.
+    private var midiContinuousWasActive = false
+
+    /// Non-nil while the currently loaded sample does not fit within one
+    /// physical platter revolution (`dvsLoopFrames`) — the direct-MIDI
+    /// continuous path cannot drive it and `midiCoalescingTick` returns
+    /// early every tick. Cleared as soon as a compatible sample loads.
+    /// Readable for diagnostics/tests; not a UI-facing field itself.
+    private(set) var lastMIDIContinuousRejectionReason: String?
+
+    private var midiCoalescingTimer: DispatchSourceTimer?
+
+    /// Reuses the existing MIDI rate limiter already established for the
+    /// legacy grain path (`minScheduleInterval`) as the coalescing cadence,
+    /// rather than inventing a new one.
+    private var midiCoalescingInterval: TimeInterval { minScheduleInterval }
+
+    /// Set once by `MacCaptureEngine` after both the platter tracker and
+    /// this controller exist. Reads `ScratchPlatterTracker
+    /// .accumulatedSteps(for:)` for the right deck (channel 1) only — the
+    /// tracker is documented safe to call from any thread, so calling it
+    /// from `audioQueue`'s coalescing timer is safe without extra locking.
+    /// Left-deck (channel 0) steps are never read here: the isolation rule
+    /// is structural, not a runtime check.
+    private var rightDeckAccumulatedStepsProvider: (() -> Int)?
+
+    /// Wires the right-deck steps provider and starts the real-time
+    /// coalescing timer (idempotent). Safe to call from any thread.
+    func configureMIDIPlatterProvider(rightDeckAccumulatedSteps provider: @escaping () -> Int) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.rightDeckAccumulatedStepsProvider = provider
+            if self.midiCoalescingTimer == nil {
+                self.startMIDICoalescingTimer()
+            }
+        }
+    }
+
+    /// Starts the right-deck MIDI coalescing timer once, at the existing
+    /// MIDI cadence, on `audioQueue` — the same `DispatchSource.makeTimerSource`
+    /// pattern already established by `beginStopRamp`/`audioSignalDecayTimer`.
+    /// The timer callback runs directly on `audioQueue` (no additional
+    /// dispatch hop), so it is naturally serialized with every DVS tick,
+    /// ownership change, load, and unload.
+    private func startMIDICoalescingTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
+        midiCoalescingTimer = timer
+        timer.schedule(deadline: .now(), repeating: midiCoalescingInterval, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.midiCoalescingTick()
+        }
+        timer.resume()
+#if DEBUG
+        testOnly_midiCoalescingTimerStartCount += 1
+#endif
+    }
+#if DEBUG
+    /// Test-only: counts real `startMIDICoalescingTimer` invocations —
+    /// proves `configureMIDIPlatterProvider`'s idempotent-start guard
+    /// deterministically, without depending on real-time tick counts.
+    private(set) var testOnly_midiCoalescingTimerStartCount = 0
+#endif
+
+    /// Bounded cancellation, mirroring `cancelStopRamp()`: clears the event
+    /// handler before cancelling so no further tick can fire once this
+    /// returns, then releases the timer. Called only from `stopEngine()`
+    /// (controller teardown / `deinit`) — never on ordinary platter idle —
+    /// so the timer keeps running, and `configureMIDIPlatterProvider`
+    /// remains free to restart it later, for the controller's entire
+    /// lifetime while it is alive.
+    private func cancelMIDICoalescingTimer() {
+        midiCoalescingTimer?.setEventHandler {}
+        midiCoalescingTimer?.cancel()
+        midiCoalescingTimer = nil
+    }
+
+    /// Called by `MacCaptureEngine.setDVSPlaybackDriveActive` — the single
+    /// authoritative signal for whether the timecode/DVS control source is
+    /// currently allowed to drive playback. Active DVS always has priority:
+    /// while active, MIDI continuous publication is suppressed
+    /// unconditionally and any in-flight MIDI ownership is released with a
+    /// click-free idle publish; when DVS relinquishes, MIDI's drive history
+    /// is reset so a stale pre-handoff delta/time pair can never resume as
+    /// a catch-up burst.
+    func setDVSOwnership(active: Bool) {
+        audioQueue.async { [weak self] in
+            self?.applyDVSOwnership(active: active)
+        }
+    }
+
+    private func applyDVSOwnership(active: Bool) {
+        // Idempotent on the authoritative flag itself, not on
+        // `platterRenderOwner` — a reload performed while DVS is active
+        // re-forces `platterRenderOwner` back to `.dvs` (see
+        // `applyLoadedBufferState`/`unload`), so gating on that field would
+        // make a repeated `active: true` call after a reload incorrectly
+        // re-run the handoff side effects below.
+        guard dvsOwnershipActive != active else { return }
+        dvsOwnershipActive = active
+
+        if active {
+            if platterRenderOwner == .midi {
+                dvsContinuousRenderer.publishIdle()
+            }
+            platterRenderOwner = .dvs
+            midiContinuousDrive.reset()
+            midiContinuousWasActive = false
+        } else {
+            platterRenderOwner = .none
+            dvsContinuousRenderer.publishIdle()
+            // Rebase MIDI's own phase anchor to the position DVS left the
+            // audible sample at, using the exact inverse of the mapping
+            // MIDI itself publishes through (`dvsLoopPhaseFrame`):
+            // frame = (steps * framesPerStep) mod loop, so
+            // steps = frame / framesPerStep reproduces that frame exactly.
+            // `currentSampleFrame` is DVS's own control-side authoritative
+            // phase (maintained on `audioQueue` by
+            // `positionDidChangeOnQueue`/`renderContinuousDVSTick`, never
+            // read from the render thread), retained through DVS's own
+            // idle ticks, so it is always "wherever DVS left it" — without
+            // this rebase, `midiContinuousAccumulatedSteps` stays frozen at
+            // its stale pre-handoff value and the first real post-handoff
+            // MIDI tick would publish a wrong authoritative phase, which
+            // the renderer's bounded correction would then visibly correct
+            // toward. This only repoints MIDI's own control-side anchor —
+            // the renderer's audible phase (never reset by an idle
+            // publish) is untouched.
+            if framesPerStep > 0 {
+                midiContinuousAccumulatedSteps = Double(currentSampleFrame) / framesPerStep
+            }
+            // MIDI resumes from a clean delta/time baseline — no stale
+            // pre-handoff delta/time pair carried across the handoff, so
+            // the very next real tick cannot replay a suppressed backlog
+            // as a catch-up burst. The next timer tick after this reset is
+            // therefore a priming call (no publish); the one after that
+            // continues from the rebased anchor above with only the new
+            // real MIDI delta.
+            midiContinuousDrive.reset()
+            midiContinuousWasActive = false
+        }
+    }
+
+    /// One coalesced right-deck MIDI control tick. Runs on `audioQueue`
+    /// (the timer's own queue). Reads the right deck's accumulated CC6
+    /// steps at this bounded cadence — never per raw MIDI event — derives a
+    /// signed velocity from real elapsed time, and publishes to the exact
+    /// same `dvsContinuousRenderer` DVS uses, only while MIDI currently
+    /// owns it (DVS always wins; see `applyDVSOwnership`).
+    private func midiCoalescingTick() {
+        guard midiUsesContinuousRenderer,
+              !dvsOwnershipActive,
+              let provider = rightDeckAccumulatedStepsProvider,
+              let forward = forwardBuffer
+        else { return }
+
+        // A sample longer than one physical platter revolution cannot enter
+        // the direct-MIDI continuous path — the same one-revolution-loop
+        // constraint DVS itself requires (see `dvsLoopFrames`'s doc
+        // comment). Surfaced as a clear, readable diagnostic (rather than a
+        // silent no-op) so a mismatched sample choice — e.g. a ~4.5 s
+        // hot-cue pad clip instead of the validated ~1.05 s platter asset —
+        // is never mistaken for a platter/MIDI hardware problem. Supporting
+        // longer samples on this path is explicitly out of scope; that
+        // belongs to the later hot-cue/sample-mapping design.
+        guard dvsLoopFrames > 0, Double(forward.frameLength) <= dvsLoopFrames else {
+            if lastMIDIContinuousRejectionReason == nil {
+                let reason = "sample \(forward.frameLength) frames exceeds one platter " +
+                    "revolution (\(Int(dvsLoopFrames)) frames) — direct-MIDI continuous drive rejected"
+                lastMIDIContinuousRejectionReason = reason
+                print("[ScratchSamplePlaybackController] \(reason)")
+            }
+            return
+        }
+        if lastMIDIContinuousRejectionReason != nil {
+            lastMIDIContinuousRejectionReason = nil
+        }
+
+        let now = schedulingClock()
+        let steps = provider()
+        guard let result = midiContinuousDrive.tick(accumulatedSteps: steps, now: now) else {
+            return // Priming: baseline captured, nothing to publish yet.
+        }
+
+        // The full signed delta always folds into the phase anchor, even on
+        // a tick whose velocity was sanitized to 0 — real motion is never
+        // lost, matching the DVS anchor's own "never lose real steps"
+        // contract (see `dvsAccumulatedSteps`).
+        if result.deltaSteps != 0 {
+            midiContinuousAccumulatedSteps += result.deltaSteps
+        }
+
+        guard result.velocity != 0 else {
+            // No sane motion this tick: publish idle promptly — the
+            // control side owns this decision on its own bounded cadence,
+            // rather than waiting on the renderer's 0.25 s staleness
+            // fallback — but only once, on the active -> idle transition,
+            // not on every already-quiet tick.
+            if midiContinuousWasActive {
+                midiContinuousWasActive = false
+                platterRenderOwner = .midi
+                dvsContinuousRenderer.publishIdle()
+            }
+            return
+        }
+
+        platterRenderOwner = .midi
+        midiContinuousWasActive = true
+        let phase = dvsLoopPhaseFrame(forAccumulatedSteps: midiContinuousAccumulatedSteps)
+        dvsContinuousRenderer.publish(
+            velocity: result.velocity * framesPerStep,
+            authoritativePhase: phase,
+            active: true
+        )
+        if isEngineRunningForPlayback(), !playerNode.isPlaying {
+            playerNode.play()
+        }
+        currentSampleFrame = Int(phase)
+    }
+
+#if DEBUG
+    /// Test-only: injects the right-deck steps provider without starting
+    /// the real-time coalescing timer, so deterministic tests can drive
+    /// `testOnly_midiCoalescingTick()` on their own schedule.
+    func testOnly_setRightDeckAccumulatedStepsProvider(_ provider: @escaping () -> Int) {
+        audioQueue.sync { self.rightDeckAccumulatedStepsProvider = provider }
+    }
+
+    /// Test-only: drives exactly one coalesced MIDI control tick
+    /// synchronously on `audioQueue`, bypassing the real-time timer so
+    /// tests can advance the drive deterministically.
+    func testOnly_midiCoalescingTick() {
+        audioQueue.sync { self.midiCoalescingTick() }
+    }
+
+    /// Test-only: exercises the exact teardown cancellation helper
+    /// (`cancelMIDICoalescingTimer`) without requiring controller
+    /// deallocation, so the bounded-cancellation contract can be verified
+    /// deterministically.
+    func testOnly_cancelMIDICoalescingTimer() {
+        audioQueue.sync { self.cancelMIDICoalescingTimer() }
+    }
+
+    /// Test-only: true while MIDI currently owns `dvsContinuousRenderer`.
+    var testOnly_midiOwnsPlatterRender: Bool {
+        var owns = false
+        audioQueue.sync { owns = (platterRenderOwner == .midi) }
+        return owns
+    }
+
+    /// Test-only: true while DVS currently owns `dvsContinuousRenderer`.
+    var testOnly_dvsOwnsPlatterRender: Bool {
+        var owns = false
+        audioQueue.sync { owns = (platterRenderOwner == .dvs) }
+        return owns
+    }
+
+    /// Test-only: the authoritative DVS-active flag `midiCoalescingTick`
+    /// gates on directly (see `dvsOwnershipActive`).
+    var testOnly_dvsOwnershipActive: Bool {
+        var active = false
+        audioQueue.sync { active = dvsOwnershipActive }
+        return active
+    }
+
+    /// Test-only: MIDI's own control-side phase anchor, in MIDI step units
+    /// (see `midiContinuousAccumulatedSteps`).
+    var testOnly_midiContinuousAccumulatedSteps: Double {
+        var steps = 0.0
+        audioQueue.sync { steps = midiContinuousAccumulatedSteps }
+        return steps
+    }
+
+    /// Test-only: true while the coalescing timer is currently running.
+    var testOnly_midiCoalescingTimerActive: Bool {
+        var active = false
+        audioQueue.sync { active = (midiCoalescingTimer != nil) }
+        return active
+    }
+#endif
+
     // MARK: - Serial audio queue
 
     // All AVAudioEngine, AVAudioPlayerNode, AVAudioFile, and AVAudioPCMBuffer
@@ -1005,6 +1339,7 @@ final class ScratchSamplePlaybackController {
         dvsContinuousRenderer.publishIdle()
         stopRampGeneration += 1
         cancelStopRamp()
+        cancelMIDICoalescingTimer()
 #if DEBUG
         finishOutputCaptureIfArmed()
 #endif
@@ -1022,8 +1357,15 @@ final class ScratchSamplePlaybackController {
     /// Returns false synchronously only if the sample ID is unknown or the WAV
     /// is absent from the bundle. Actual file I/O, buffer preparation, and
     /// engine startup run on the audio queue; the caller returns immediately.
+    ///
+    /// - Parameter playDiagnosticPreview: When true (the default, and the
+    ///   behavior every existing caller — hot-cue pads, crossfader trigger —
+    ///   keeps unchanged), a short audible snippet plays once to prove the
+    ///   engine/sample chain is audible. Pass `false` for a load that must
+    ///   produce no audio by itself (e.g. the right-deck platter test button:
+    ///   platter movement, not the load itself, should be what's heard).
     @discardableResult
-    func load(sampleID: String) -> Bool {
+    func load(sampleID: String, playDiagnosticPreview: Bool = true) -> Bool {
         print("[ScratchSamplePlaybackController] load requested · sampleID=\(sampleID)")
         guard let url = wavURL(for: sampleID) else {
             print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
@@ -1033,7 +1375,7 @@ final class ScratchSamplePlaybackController {
             return false
         }
         audioQueue.async { [weak self] in
-            self?.loadOnQueue(sampleID: sampleID, url: url)
+            self?.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: playDiagnosticPreview)
         }
         return true
     }
@@ -1062,12 +1404,12 @@ final class ScratchSamplePlaybackController {
         }
         audioQueue.async { [weak self] in
             guard let self, self.loadedSampleID != sampleID else { return }
-            self.loadOnQueue(sampleID: sampleID, url: url)
+            self.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: true)
         }
         return true
     }
 
-    private func loadOnQueue(sampleID: String, url: URL) {
+    private func loadOnQueue(sampleID: String, url: URL, playDiagnosticPreview: Bool) {
         print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
         lastLoadError = nil
         let file: AVAudioFile
@@ -1096,7 +1438,9 @@ final class ScratchSamplePlaybackController {
 
         ensureEngineRunning()
 
-        if diagnosticPreviewPlayedSampleID == sampleID {
+        if !playDiagnosticPreview {
+            print("[ScratchSamplePlaybackController] diagnostic preview suppressed by caller · sampleID=\(sampleID)")
+        } else if diagnosticPreviewPlayedSampleID == sampleID {
             print("[ScratchSamplePlaybackController] diagnostic preview skipped · sampleID=\(sampleID)")
         } else {
             diagnosticPreviewPlayedSampleID = sampleID
@@ -1169,6 +1513,22 @@ final class ScratchSamplePlaybackController {
         // the `dvsLoopFrames` doc comment.
         dvsLoopFrames = framesPerStep * Double(stepsPerRevolution)
         dvsAccumulatedSteps = 0
+        // Right-deck MIDI continuous drive: independent phase anchor and
+        // drive history reset alongside DVS's, on every load (a freshly
+        // loaded sample starts both control sources at phase 0). Ownership
+        // is a separate concern from the phase reset above: if DVS is the
+        // authoritative active control source (`dvsOwnershipActive`), a
+        // load/reload performed while it is active must not let the timer
+        // observe `.none` and briefly claim `.midi` — see `midiCoalescingTick`,
+        // which in any case guards on `dvsOwnershipActive` directly, not
+        // this field.
+        midiContinuousAccumulatedSteps = 0
+        midiContinuousDrive.reset()
+        midiContinuousWasActive = false
+        platterRenderOwner = dvsOwnershipActive ? .dvs : .none
+        // Stale from a previous sample; the next coalescing tick
+        // recomputes it fresh against the sample just loaded.
+        lastMIDIContinuousRejectionReason = nil
         #if DEBUG
         dvsLapCandidate = nil
         previousGrainScalars = nil
@@ -2331,6 +2691,13 @@ final class ScratchSamplePlaybackController {
             self.wasDVSMotionActive = false
             self.dvsDefinitivelyStopped = false
             self.dvsRestartMotionTicks = 0
+            self.midiContinuousAccumulatedSteps = 0
+            self.midiContinuousDrive.reset()
+            self.midiContinuousWasActive = false
+            // Preserve DVS ownership across unload if it is authoritatively
+            // active — see the matching comment in `applyLoadedBufferState`.
+            self.platterRenderOwner = self.dvsOwnershipActive ? .dvs : .none
+            self.lastMIDIContinuousRejectionReason = nil
             #if DEBUG
             self.dvsLapCandidate = nil
             self.previousGrainScalars = nil
