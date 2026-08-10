@@ -5572,6 +5572,58 @@ struct MacAnalyzerView: View {
     /// 90 BPM, beyond any Review take this surface handles.
     private static let reviewComparisonMaxCycles = 64
 
+    /// One deterministic gameplay attempt — the first canonical target cycle
+    /// only — built from the same capture evidence `reviewPerformanceComparison`
+    /// already resolves, via the shared `ScratchGameplayAttempt` primitives
+    /// (`PracticeAttemptBuilder`). This is a preview integration proving the
+    /// attempt engine runs on real macOS capture evidence; it does not
+    /// replace, duplicate, or re-score `reviewPerformanceComparison`, which
+    /// stays the whole-take comparison shown above it.
+    private var reviewFirstCycleAttempt: PracticeAttemptResult? {
+        guard let scratchType = routineSessionSetup.scratchType,
+              let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue),
+              let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0 else { return nil }
+        let bpm = Double(bpmValue)
+        guard let snapshot = currentRoutineNotationSnapshot,
+              !snapshot.recordMovementEvents.isEmpty else { return nil }
+        let countInBeats = routineSessionSetup.config.countInBeats
+        guard let clock = PerformanceBeatClock(
+            bpm: bpm, beatZeroTime: Double(countInBeats) * 60.0 / bpm
+        ) else { return nil }
+        guard let thresholds = PerformedFaderEdgeThresholds(
+            openAtOrAbove: Self.reviewFaderOpenAtOrAbove,
+            closedAtOrBelow: Self.reviewFaderClosedAtOrBelow
+        ) else { return nil }
+        let performed = PerformedScratchTimelineAdapter.makeTimeline(
+            movementEvents: snapshot.recordMovementEvents,
+            mixerMidiEvents: snapshot.mixerMidiEvents,
+            clock: clock,
+            faderThresholds: thresholds
+        )
+        // Same ±50 ms convention `reviewPerformanceComparison` uses, converted
+        // to beats at this session's tempo.
+        let toleranceBeats = NotationFeedbackState.lateOffsetThresholdMs * bpm / 60_000.0
+        return PracticeAttemptBuilder.attempt(
+            techniqueID: pattern.scratchID,
+            pattern: pattern,
+            bpm: bpm,
+            cycleIndex: 0,
+            performed: performed,
+            strokeCorrectToleranceBeats: toleranceBeats,
+            faderCorrectToleranceBeats: toleranceBeats
+        )
+    }
+
+    private func reviewGradeLabel(_ grade: PracticeAttemptGrade) -> String {
+        switch grade {
+        case .s: return "S"
+        case .a: return "A"
+        case .b: return "B"
+        case .c: return "C"
+        case .keepPracticing: return "Keep Practising"
+        }
+    }
+
     private var reviewPerformanceComparison: ReviewComparisonAvailability {
         guard let scratchType = routineSessionSetup.scratchType else {
             return .unavailable("Pick a scratch type to compare this take against its target pattern.")
@@ -5719,6 +5771,24 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 reviewComparisonScoreRows(model.score, faderChannel: model.faderChannel)
+
+                if let firstAttempt = reviewFirstCycleAttempt {
+                    Divider().overlay(Color.white.opacity(0.08))
+                    HStack(spacing: 8) {
+                        Text("First-cycle attempt · preview")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Spacer(minLength: 8)
+                        if let grade = firstAttempt.grade {
+                            Text(reviewGradeLabel(grade))
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white)
+                        }
+                        Text(firstAttempt.overallScore.map { String(format: "%.0f", $0) } ?? "—")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white)
+                    }
+                }
 
                 if !model.coaching.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
