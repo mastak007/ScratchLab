@@ -2036,20 +2036,43 @@ struct ScratchLabBabyScratchStrokeSegment: Equatable, Sendable {
     }
 }
 
-enum ScratchNotationDirection: String, Decodable, Equatable, Sendable {
+enum ScratchNotationDirection: String, Codable, Equatable, Sendable {
     case forward
     case backward
 }
 
-enum ScratchNotationSpeedClassification: String, Decodable, Equatable, Sendable {
+enum ScratchNotationSpeedClassification: String, Codable, Equatable, Sendable {
     case slow
     case medium
     case fast
 }
 
-enum ScratchNotationFaderState: String, Decodable, Equatable, Sendable {
+enum ScratchNotationFaderState: String, Codable, Equatable, Sendable {
     case open
     case closed
+}
+
+/// Which timing domain a `ScratchNotation` document's stroke times are
+/// authored in.
+///
+/// Timing AUTHORITY and TEMPO are separate concepts:
+///
+/// - `.seconds`: the historical schema — `startTime`/`endTime` are the
+///   authored values and any beat fields are non-authoritative annotations.
+///   Every bundled resource to date (including the legacy
+///   `beat_quantized_*` basis, whose beat metadata was never part of the
+///   decoded schema) resolves to this domain.
+/// - `.beats`: a beat-authored document — per-stroke `startBeat`/`endBeat`
+///   are authoritative. Beats-authorship is declared by `timingBasis`
+///   alone (the `ScratchNotation.beatAuthoredTimingBasisPrefix` marker),
+///   with or without a tempo: `bpm` is required only to *project* beats
+///   into seconds. Seconds on a beat-authored value are always derived
+///   cache/compatibility values for existing consumers — never authored,
+///   never authoritative. A tempo-free beat-authored pattern carries no
+///   seconds at all and lives in `ScratchNotation.BeatPattern`.
+enum ScratchNotationTimingDomain: String, Codable, Equatable, Sendable {
+    case seconds
+    case beats
 }
 
 enum ScratchMovementKind: String, Codable, Equatable, Sendable {
@@ -2073,13 +2096,58 @@ enum ScratchFaderEventKind: String, Codable, Equatable, Sendable {
     case unknown
 }
 
-struct ScratchNotation: Decodable, Equatable, Sendable {
-    struct Stroke: Decodable, Equatable, Sendable {
+/// The canonical, renderer-independent representation of a scratch gesture
+/// over time — the single type authored targets, detected previews, and both
+/// platforms' renderers converge on.
+///
+/// **Timing domains.** A document is authored in exactly one domain
+/// (`resolvedTimingDomain`): legacy documents in seconds, canonical documents
+/// in musical beats with seconds derived — see `ScratchNotationTimingDomain`.
+/// The in-memory `Stroke` always carries seconds so every existing renderer
+/// adapter (`LaneContent`, overlays, replay) keeps working unchanged.
+///
+/// **Holds.** A stationary/hold region is the implicit gap between one
+/// stroke's end and the next stroke's start (in whichever domain is
+/// authoritative). `strokeSegments` materialises the gaps as `holdAfter`
+/// values; there is deliberately no "hold stroke" kind.
+///
+/// **Fader/cuts.** Per-stroke `faderState` (open/closed, a cut readable as a
+/// boundary where the state flips) is sufficient for Baby Scratch — fader
+/// open throughout — but is intentionally NOT the final canonical channel
+/// for cut-heavy techniques (transform / crab / flare families), which need
+/// fader events denser than strokes. That richer channel
+/// (`ScratchFaderEventKind` vocabulary, `LaneContent.faderEvents` slot) is a
+/// deferred, separate slice.
+struct ScratchNotation: Codable, Equatable, Sendable {
+    struct Stroke: Codable, Equatable, Sendable {
         let startTime: TimeInterval
         let endTime: TimeInterval
         let direction: ScratchNotationDirection
         let speedClassification: ScratchNotationSpeedClassification
         let faderState: ScratchNotationFaderState
+        /// Beat-domain span of the stroke, in fractional beats from the
+        /// document origin (same convention as `ScratchRenderEvent`). Both
+        /// fields are `nil` on legacy seconds-authored strokes; when the
+        /// document resolves to `.beats` they are authoritative and the
+        /// seconds fields hold the projection (see `validationIssues()`).
+        let startBeat: Double?
+        let endBeat: Double?
+
+        init(startTime: TimeInterval,
+             endTime: TimeInterval,
+             direction: ScratchNotationDirection,
+             speedClassification: ScratchNotationSpeedClassification,
+             faderState: ScratchNotationFaderState,
+             startBeat: Double? = nil,
+             endBeat: Double? = nil) {
+            self.startTime = startTime
+            self.endTime = endTime
+            self.direction = direction
+            self.speedClassification = speedClassification
+            self.faderState = faderState
+            self.startBeat = startBeat
+            self.endBeat = endBeat
+        }
 
         var duration: TimeInterval {
             max(0, endTime - startTime)
@@ -2116,7 +2184,315 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
     let phraseStart: TimeInterval?
     let phraseEnd: TimeInterval?
     let timingBasis: String
+    /// Document tempo, in beats per minute. NOT part of timing authority —
+    /// beat-authorship is declared by `timingBasis` alone. `bpm` exists so
+    /// beat positions can be projected into seconds: a decoded beat-authored
+    /// JSON document must carry it (its materialized seconds cannot exist
+    /// otherwise), while a tempo-free beat-authored pattern lives in
+    /// `ScratchNotation.BeatPattern` until a caller materializes it.
+    /// `nil` on legacy seconds documents.
+    let bpm: Double?
+    /// Optional meter hint for beat-authored documents. Never affects
+    /// timing resolution.
+    let beatsPerBar: Int?
     let strokes: [Stroke]
+
+    init(version: Int,
+         scratchID: String,
+         demoStart: TimeInterval,
+         demoEnd: TimeInterval,
+         phraseStart: TimeInterval?,
+         phraseEnd: TimeInterval?,
+         timingBasis: String,
+         bpm: Double? = nil,
+         beatsPerBar: Int? = nil,
+         strokes: [Stroke]) {
+        self.version = version
+        self.scratchID = scratchID
+        self.demoStart = demoStart
+        self.demoEnd = demoEnd
+        self.phraseStart = phraseStart
+        self.phraseEnd = phraseEnd
+        self.timingBasis = timingBasis
+        self.bpm = bpm
+        self.beatsPerBar = beatsPerBar
+        self.strokes = strokes
+    }
+
+    // MARK: Timing-domain resolution
+
+    /// `timingBasis` marker declaring a beat-authored document. Note the
+    /// legacy `"beat_quantized_BPM79_body6beats_v4"` basis does NOT match —
+    /// that resource is seconds-authored (its beat metadata was never part
+    /// of the decoded schema) and must keep resolving to `.seconds`.
+    static let beatAuthoredTimingBasisPrefix = "beat_canonical"
+
+    /// Timing authority comes from the declared basis ALONE — a
+    /// `beat_canonical…` document is beat-authored even when it is
+    /// tempo-free (`bpm == nil`). Tempo is a projection concern, not an
+    /// authority concern.
+    static func resolvedTimingDomain(timingBasis: String) -> ScratchNotationTimingDomain {
+        timingBasis.hasPrefix(beatAuthoredTimingBasisPrefix) ? .beats : .seconds
+    }
+
+    var resolvedTimingDomain: ScratchNotationTimingDomain {
+        Self.resolvedTimingDomain(timingBasis: timingBasis)
+    }
+
+    // MARK: Codable
+
+    private enum CodingKeys: String, CodingKey {
+        case version, scratchID, demoStart, demoEnd, phraseStart, phraseEnd
+        case timingBasis, bpm, beatsPerBar, strokes
+    }
+
+    /// All-optional-timing stroke record so one decoder serves both domains.
+    private struct StrokeRecord: Decodable {
+        let startTime: TimeInterval?
+        let endTime: TimeInterval?
+        let startBeat: Double?
+        let endBeat: Double?
+        let direction: ScratchNotationDirection
+        let speedClassification: ScratchNotationSpeedClassification
+        let faderState: ScratchNotationFaderState
+    }
+
+    /// Seconds-domain documents decode byte-for-byte like the historical
+    /// schema (per-stroke seconds and demo bounds required, beat fields
+    /// riding along as annotations).
+    ///
+    /// Beat-authored documents (basis-declared) require per-stroke beats AND
+    /// a usable `bpm` — a beat-authored JSON document without a tempo cannot
+    /// materialize the seconds this type must carry, so decoding FAILS
+    /// rather than silently reclassifying the document as seconds-authored.
+    /// All seconds fields (stroke times, demo/phrase bounds) are derived
+    /// unconditionally from beats × 60/bpm; any seconds present in the JSON
+    /// are ignored, never trusted — beats are the only authority.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try container.decode(Int.self, forKey: .version)
+        let scratchID = try container.decode(String.self, forKey: .scratchID)
+        let timingBasis = try container.decode(String.self, forKey: .timingBasis)
+        let bpm = try container.decodeIfPresent(Double.self, forKey: .bpm)
+        let beatsPerBar = try container.decodeIfPresent(Int.self, forKey: .beatsPerBar)
+        let records = try container.decode([StrokeRecord].self, forKey: .strokes)
+
+        let strokes: [Stroke]
+        let demoStart: TimeInterval
+        let demoEnd: TimeInterval
+        let phraseStart: TimeInterval?
+        let phraseEnd: TimeInterval?
+
+        switch Self.resolvedTimingDomain(timingBasis: timingBasis) {
+        case .seconds:
+            strokes = try records.enumerated().map { index, record in
+                guard let startTime = record.startTime,
+                      let endTime = record.endTime else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .strokes,
+                        in: container,
+                        debugDescription: "Stroke \(index) is missing startTime/endTime in a seconds-domain document"
+                    )
+                }
+                return Stroke(startTime: startTime,
+                              endTime: endTime,
+                              direction: record.direction,
+                              speedClassification: record.speedClassification,
+                              faderState: record.faderState,
+                              startBeat: record.startBeat,
+                              endBeat: record.endBeat)
+            }
+            demoStart = try container.decode(TimeInterval.self, forKey: .demoStart)
+            demoEnd = try container.decode(TimeInterval.self, forKey: .demoEnd)
+            phraseStart = try container.decodeIfPresent(TimeInterval.self, forKey: .phraseStart)
+            phraseEnd = try container.decodeIfPresent(TimeInterval.self, forKey: .phraseEnd)
+        case .beats:
+            guard let bpm, bpm.isFinite, bpm > 0 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .bpm,
+                    in: container,
+                    debugDescription: "Beat-authored document (timingBasis \(timingBasis)) requires a finite bpm > 0 to materialize seconds"
+                )
+            }
+            let secondsPerBeat = 60.0 / bpm
+            strokes = try records.enumerated().map { index, record in
+                guard let startBeat = record.startBeat,
+                      let endBeat = record.endBeat else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .strokes,
+                        in: container,
+                        debugDescription: "Stroke \(index) is missing startBeat/endBeat in a beat-authored document"
+                    )
+                }
+                return Stroke(startTime: startBeat * secondsPerBeat,
+                              endTime: endBeat * secondsPerBeat,
+                              direction: record.direction,
+                              speedClassification: record.speedClassification,
+                              faderState: record.faderState,
+                              startBeat: startBeat,
+                              endBeat: endBeat)
+            }
+            demoStart = 0
+            demoEnd = strokes.map(\.endTime).max() ?? 0
+            phraseStart = 0
+            phraseEnd = demoEnd
+        }
+
+        self.init(version: version,
+                  scratchID: scratchID,
+                  demoStart: demoStart,
+                  demoEnd: demoEnd,
+                  phraseStart: phraseStart,
+                  phraseEnd: phraseEnd,
+                  timingBasis: timingBasis,
+                  bpm: bpm,
+                  beatsPerBar: beatsPerBar,
+                  strokes: strokes)
+    }
+
+    // MARK: Beat projection
+
+    /// Re-materializes a beat-authored notation's derived seconds at `bpm`.
+    ///
+    /// The result is STILL a beat-authored notation — it keeps its beat
+    /// `timingBasis`, its authoritative `startBeat`/`endBeat` fields, and
+    /// records the projection tempo in `bpm`. Only the derived seconds
+    /// cache changes; the timing domain does not. Pure and deterministic;
+    /// returns `nil` when `bpm` is unusable or any stroke lacks beat
+    /// fields.
+    func projectedToSeconds(bpm targetBPM: Double) -> ScratchNotation? {
+        // Only beat-AUTHORED notation may be reprojected: on a legacy
+        // seconds-authored document, incidental beat annotations are
+        // non-authoritative and must not be promoted into new seconds.
+        guard resolvedTimingDomain == .beats else { return nil }
+        guard targetBPM.isFinite, targetBPM > 0 else { return nil }
+        let secondsPerBeat = 60.0 / targetBPM
+        var projected: [Stroke] = []
+        projected.reserveCapacity(strokes.count)
+        for stroke in strokes {
+            guard let startBeat = stroke.startBeat,
+                  let endBeat = stroke.endBeat else { return nil }
+            projected.append(Stroke(startTime: startBeat * secondsPerBeat,
+                                    endTime: endBeat * secondsPerBeat,
+                                    direction: stroke.direction,
+                                    speedClassification: stroke.speedClassification,
+                                    faderState: stroke.faderState,
+                                    startBeat: startBeat,
+                                    endBeat: endBeat))
+        }
+        let maxEnd = projected.map(\.endTime).max() ?? 0
+        return ScratchNotation(version: version,
+                               scratchID: scratchID,
+                               demoStart: 0,
+                               demoEnd: maxEnd,
+                               phraseStart: 0,
+                               phraseEnd: maxEnd,
+                               timingBasis: timingBasis,
+                               bpm: targetBPM,
+                               beatsPerBar: beatsPerBar,
+                               strokes: projected)
+    }
+
+    // MARK: Validation
+
+    /// Tolerance for the seconds-vs-beat-projection agreement rule, per
+    /// stroke endpoint, in seconds.
+    static let secondsBeatAgreementTolerance: TimeInterval = 1e-6
+
+    /// Pure invariant check — deliberately NOT part of decoding (bundle
+    /// loaders treat any decode error as "no notation" and views silently
+    /// blank, so decoding stays tolerant and strictness lives here).
+    ///
+    /// Beyond structural checks, this enforces the no-silent-disagreement
+    /// rule for beat-authored values: a materialized beat-authored
+    /// `ScratchNotation` must carry a usable `bpm`, and every stroke's
+    /// derived seconds must equal the beat projection at that tempo within
+    /// `secondsBeatAgreementTolerance`. Tempo-free patterns are represented
+    /// by `ScratchNotation.BeatPattern`, never by this type.
+    /// Returns an ordered list of human-readable issues; empty means valid.
+    func validationIssues() -> [String] {
+        var issues: [String] = []
+        let tolerance = Self.secondsBeatAgreementTolerance
+
+        if !demoStart.isFinite || !demoEnd.isFinite {
+            issues.append("demoStart/demoEnd must be finite")
+        } else if demoEnd < demoStart {
+            issues.append("demoEnd (\(demoEnd)) precedes demoStart (\(demoStart))")
+        }
+        if let phraseStart, !phraseStart.isFinite {
+            issues.append("phraseStart must be finite")
+        }
+        if let phraseEnd, !phraseEnd.isFinite {
+            issues.append("phraseEnd must be finite")
+        }
+        if let phraseStart, let phraseEnd, phraseEnd < phraseStart {
+            issues.append("phraseEnd (\(phraseEnd)) precedes phraseStart (\(phraseStart))")
+        }
+        if let bpm, !bpm.isFinite || bpm <= 0 {
+            issues.append("bpm must be finite and > 0, got \(bpm)")
+        }
+        if let beatsPerBar, beatsPerBar <= 0 {
+            issues.append("beatsPerBar must be > 0, got \(beatsPerBar)")
+        }
+
+        for (index, stroke) in strokes.enumerated() {
+            if !stroke.startTime.isFinite || !stroke.endTime.isFinite {
+                issues.append("stroke \(index): startTime/endTime must be finite")
+                continue
+            }
+            if stroke.endTime < stroke.startTime {
+                issues.append("stroke \(index): endTime precedes startTime")
+            }
+            switch (stroke.startBeat, stroke.endBeat) {
+            case (nil, nil):
+                break
+            case (let startBeat?, let endBeat?):
+                if !startBeat.isFinite || !endBeat.isFinite {
+                    issues.append("stroke \(index): startBeat/endBeat must be finite")
+                } else if endBeat < startBeat {
+                    issues.append("stroke \(index): endBeat precedes startBeat")
+                }
+            default:
+                issues.append("stroke \(index): startBeat/endBeat must be both present or both absent")
+            }
+            if index > 0 {
+                let previous = strokes[index - 1]
+                if stroke.startTime < previous.startTime - tolerance {
+                    issues.append("stroke \(index): strokes are not sorted by startTime")
+                } else if stroke.startTime < previous.endTime - tolerance {
+                    issues.append("stroke \(index): overlaps stroke \(index - 1)")
+                }
+                if let startBeat = stroke.startBeat,
+                   let previousEndBeat = previous.endBeat,
+                   startBeat < previousEndBeat - tolerance {
+                    issues.append("stroke \(index): beat span overlaps stroke \(index - 1)")
+                }
+            }
+        }
+
+        if resolvedTimingDomain == .beats {
+            if let bpm, bpm.isFinite, bpm > 0 {
+                let secondsPerBeat = 60.0 / bpm
+                for (index, stroke) in strokes.enumerated() {
+                    guard let startBeat = stroke.startBeat,
+                          let endBeat = stroke.endBeat else {
+                        issues.append("stroke \(index): beat-authored notation requires startBeat/endBeat")
+                        continue
+                    }
+                    if abs(stroke.startTime - startBeat * secondsPerBeat) > tolerance {
+                        issues.append("stroke \(index): derived startTime disagrees with beat projection")
+                    }
+                    if abs(stroke.endTime - endBeat * secondsPerBeat) > tolerance {
+                        issues.append("stroke \(index): derived endTime disagrees with beat projection")
+                    }
+                }
+            } else {
+                issues.append("beat-authored ScratchNotation requires bpm — tempo-free patterns live in ScratchNotation.BeatPattern")
+            }
+        }
+
+        return issues
+    }
 
     var timelineDuration: TimeInterval {
         if let phraseEnd {
@@ -2284,6 +2660,145 @@ struct ScratchNotation: Decodable, Equatable, Sendable {
             strokes: strokes
         )
     }
+}
+
+extension ScratchNotation {
+
+    /// A beat-authored notation pattern with NO materialized seconds — the
+    /// representation of canonical musical notation before a tempo has been
+    /// selected. This is the explicit "unmaterialized" state:
+    ///
+    ///     BeatPattern (beats only, tempo-free)
+    ///         --- materialized(bpm:) --->
+    ///     ScratchNotation (beats authoritative + derived seconds + bpm)
+    ///
+    /// Because the type carries no `startTime`/`endTime` anywhere, a
+    /// tempo-free pattern cannot masquerade as seconds-ready notation:
+    /// seconds-domain consumers (LaneContent, overlays, playback) simply
+    /// cannot accept it. Selecting a tempo via `materialized(bpm:)` is the
+    /// only path to seconds.
+    struct BeatPattern: Codable, Equatable, Sendable {
+
+        struct BeatStroke: Codable, Equatable, Sendable {
+            let startBeat: Double
+            let endBeat: Double
+            let direction: ScratchNotationDirection
+            let speedClassification: ScratchNotationSpeedClassification
+            let faderState: ScratchNotationFaderState
+
+            var durationBeats: Double { max(0, endBeat - startBeat) }
+        }
+
+        let version: Int
+        let scratchID: String
+        /// Must carry `ScratchNotation.beatAuthoredTimingBasisPrefix` so the
+        /// materialized document resolves to the `.beats` domain
+        /// (`validationIssues()` enforces this).
+        let timingBasis: String
+        let beatsPerBar: Int?
+        let strokes: [BeatStroke]
+
+        /// Total span of the pattern, in beats.
+        var durationBeats: Double { strokes.map(\.endBeat).max() ?? 0 }
+
+        /// The ONLY path from musical time to seconds: materializes the
+        /// pattern at `bpm` as a beat-authored `ScratchNotation` whose
+        /// seconds are derived (`seconds = beats × 60 / bpm`) and whose
+        /// `bpm` records the projection tempo. Beats remain authoritative
+        /// in the result; re-projection at another tempo goes through
+        /// `ScratchNotation.projectedToSeconds(bpm:)`. Pure, deterministic;
+        /// `nil` when `bpm` is unusable or the pattern itself is
+        /// structurally invalid — this boundary never emits a seconds-ready
+        /// notation from a malformed pattern.
+        func materialized(bpm: Double) -> ScratchNotation? {
+            guard validationIssues().isEmpty else { return nil }
+            guard bpm.isFinite, bpm > 0 else { return nil }
+            let secondsPerBeat = 60.0 / bpm
+            let materializedStrokes = strokes.map { stroke in
+                Stroke(startTime: stroke.startBeat * secondsPerBeat,
+                       endTime: stroke.endBeat * secondsPerBeat,
+                       direction: stroke.direction,
+                       speedClassification: stroke.speedClassification,
+                       faderState: stroke.faderState,
+                       startBeat: stroke.startBeat,
+                       endBeat: stroke.endBeat)
+            }
+            let maxEnd = materializedStrokes.map(\.endTime).max() ?? 0
+            return ScratchNotation(version: version,
+                                   scratchID: scratchID,
+                                   demoStart: 0,
+                                   demoEnd: maxEnd,
+                                   phraseStart: 0,
+                                   phraseEnd: maxEnd,
+                                   timingBasis: timingBasis,
+                                   bpm: bpm,
+                                   beatsPerBar: beatsPerBar,
+                                   strokes: materializedStrokes)
+        }
+
+        /// Structural validation for the tempo-free pattern — no bpm
+        /// involved, per the authority/tempo separation.
+        func validationIssues() -> [String] {
+            var issues: [String] = []
+            if !timingBasis.hasPrefix(ScratchNotation.beatAuthoredTimingBasisPrefix) {
+                issues.append("timingBasis '\(timingBasis)' does not declare beat authorship")
+            }
+            if let beatsPerBar, beatsPerBar <= 0 {
+                issues.append("beatsPerBar must be > 0, got \(beatsPerBar)")
+            }
+            for (index, stroke) in strokes.enumerated() {
+                if !stroke.startBeat.isFinite || !stroke.endBeat.isFinite {
+                    issues.append("stroke \(index): startBeat/endBeat must be finite")
+                    continue
+                }
+                if stroke.endBeat < stroke.startBeat {
+                    issues.append("stroke \(index): endBeat precedes startBeat")
+                }
+                if index > 0 {
+                    let previous = strokes[index - 1]
+                    if stroke.startBeat < previous.startBeat {
+                        issues.append("stroke \(index): strokes are not sorted by startBeat")
+                    } else if stroke.startBeat < previous.endBeat {
+                        issues.append("stroke \(index): overlaps stroke \(index - 1)")
+                    }
+                }
+            }
+            return issues
+        }
+    }
+
+    /// The canonical Baby Scratch unit: ONE repeatable cycle in musical
+    /// time — forward for half a beat, backward for half a beat, contiguous
+    /// (no holds), fader open throughout. One cycle = 1.0 beat, agreeing
+    /// with the technique definition in `ScratchLibrary` ("baby_scratch":
+    /// 2 peaks, equal rhythm, `formulaDefaultBeats == 1.0`) and with
+    /// `BabyScratchPolarity` (first stroke forward, alternating).
+    ///
+    /// Tempo-free by type: a `BeatPattern` carries no seconds, so this value
+    /// cannot reach seconds-domain consumers until `materialized(bpm:)`
+    /// selects a session tempo. This is a TECHNIQUE definition, not a demo:
+    /// the bundled 76-stroke resources remain demo/performance timelines
+    /// conceptually built from repetitions of this cycle.
+    ///
+    /// Identity note: the cycle uses the repository's canonical TECHNIQUE
+    /// ID `"baby_scratch"` (`ScratchLibrary.Scratch.id`,
+    /// `CaptureSessionScratchType.babyScratch`), which is also what
+    /// detected/performed notations carry via `detectedPreview`. The
+    /// bundled authored resources still carry the legacy short ID
+    /// `"baby"` — a pre-existing inconsistency, deliberately not extended
+    /// to the canonical layer.
+    static let babyScratchCycle = BeatPattern(
+        version: 1,
+        scratchID: CaptureSessionScratchType.babyScratch.rawValue,
+        timingBasis: "beat_canonical_cycle_v1",
+        beatsPerBar: nil,
+        strokes: [
+            .init(startBeat: 0.0, endBeat: 0.5,
+                  direction: .forward, speedClassification: .medium, faderState: .open),
+            .init(startBeat: 0.5, endBeat: 1.0,
+                  direction: .backward, speedClassification: .medium, faderState: .open)
+        ]
+    )
 }
 
 /// Frame-anchored direction polarity for Baby Scratch.
