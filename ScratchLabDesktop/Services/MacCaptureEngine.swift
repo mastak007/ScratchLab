@@ -7539,6 +7539,153 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return capturedMidiCCEvents
     }
 
+    /// Deterministic MIDI 1.0 channel-voice byte-stream parser used by
+    /// `receiveMIDIPacketList`. Extracted from the inline packet loop so
+    /// bounds safety and message framing can be unit tested independently
+    /// of a live CoreMIDI callback.
+    ///
+    /// Stateless by design, matching CoreMIDI's own contract for
+    /// `MIDIPacket.data` (see `MIDIServices.h`): "Running status is not
+    /// allowed" and "the MIDI messages in the packet must always be
+    /// complete, except for system-exclusive." Consequently `parse` never
+    /// carries state between calls, between packets, or across a SysEx that
+    /// doesn't close within the current packet — each call starts fresh and
+    /// only ever reads bytes from the single packet it was given.
+    enum MIDIChannelMessageParser {
+        /// One fully-decoded channel-voice message. `channel`/message type
+        /// are derived from `status` (`status & 0x0F` / `status & 0xF0`).
+        /// `data2` is `nil` only for the two-byte types (Program Change,
+        /// Channel Pressure); for every other type it is always present —
+        /// `parse` never emits a message it could not fully decode.
+        /// `data1`/`data2`, when present, are always `< 0x80`: this parser
+        /// never hands out an impossible (>127) controller or value byte.
+        struct Message {
+            let status: UInt8
+            let data1: UInt8
+            let data2: UInt8?
+        }
+
+        private enum DataByteResult {
+            case byte(UInt8)
+            /// A byte `>= 0x80` was found where a data byte was expected —
+            /// either a new status byte arrived early, or (since running
+            /// status is never assumed) a bare data byte was mistaken for
+            /// one on a prior malformed read. The byte is NOT consumed, so
+            /// the caller's next loop iteration reprocesses it fresh.
+            case malformed
+            /// Ran out of bytes in this packet before the message
+            /// completed. Per CoreMIDI's contract this packet is malformed
+            /// (only SysEx may be incomplete) — the message is dropped,
+            /// never carried into the next packet.
+            case truncated
+        }
+
+        /// Parses every complete channel-voice message in `bytes` — a
+        /// single `MIDIPacket`'s payload — calling `onMessage` once per
+        /// message in stream order. Never reads past `bytes.count` and
+        /// never emits a message with an out-of-range data byte. A data
+        /// byte encountered with no immediately-preceding status byte is
+        /// treated as malformed and dropped (running status is not
+        /// supported, matching the CoreMIDI packet contract).
+        static func parse(_ bytes: UnsafeRawBufferPointer, onMessage: (Message) -> Void) {
+            var i = 0
+            let count = bytes.count
+            var sysExActive = false
+            while i < count {
+                let byte = bytes[i]
+
+                // Real-time bytes (Clock, Start, Continue, Stop, Active
+                // Sensing, Reset) have highest priority and may legally
+                // appear anywhere in the stream, including mid-message;
+                // they never affect SysEx state.
+                if byte >= 0xF8 {
+                    i += 1
+                    continue
+                }
+                if sysExActive {
+                    if byte == 0xF7 { sysExActive = false }
+                    i += 1
+                    continue
+                }
+                if byte == 0xF0 {
+                    // SysEx start. Rane's platter/pad/fader path never
+                    // emits SysEx; skip its body safely. If it doesn't
+                    // close with 0xF7 before this packet ends, `sysExActive`
+                    // is simply discarded — never carried into the next
+                    // packet — since ScratchLab does not consume SysEx.
+                    sysExActive = true
+                    i += 1
+                    continue
+                }
+                if byte >= 0xF1 {
+                    // System Common (0xF1–0xF7, minus 0xF0 handled above).
+                    // Rane never sends these on this path; skip the status
+                    // byte only rather than guess a length and risk
+                    // misalignment.
+                    i += 1
+                    continue
+                }
+                if byte >= 0x80 {
+                    // Fresh channel-voice status byte.
+                    i += 1
+                    if let message = readData(bytes, &i, count, status: byte) {
+                        onMessage(message)
+                    }
+                    continue
+                }
+                // A data byte with no immediately-preceding status byte:
+                // CoreMIDI packets never use running status, so this is
+                // malformed input (or a resync landing point) — drop the
+                // single byte and try the next one.
+                i += 1
+            }
+        }
+
+        /// Reads the data byte(s) for `status`, starting at `i` (which
+        /// already points at the first data-byte candidate) and advancing
+        /// `i` past whatever it consumes. Real-time bytes encountered in a
+        /// data position are skipped in place. Returns `nil` — consuming
+        /// nothing further — if the message is malformed or runs out of
+        /// bytes before this packet ends; the message is dropped rather
+        /// than emitted with a bad or incomplete byte.
+        private static func readData(
+            _ bytes: UnsafeRawBufferPointer,
+            _ i: inout Int,
+            _ count: Int,
+            status: UInt8
+        ) -> Message? {
+            let type = status & 0xF0
+            let needsTwoDataBytes = !(type == 0xC0 || type == 0xD0)
+
+            guard case .byte(let data1) = nextDataByte(bytes, &i, count) else { return nil }
+            guard needsTwoDataBytes else {
+                return Message(status: status, data1: data1, data2: nil)
+            }
+            guard case .byte(let data2) = nextDataByte(bytes, &i, count) else { return nil }
+            return Message(status: status, data1: data1, data2: data2)
+        }
+
+        private static func nextDataByte(
+            _ bytes: UnsafeRawBufferPointer,
+            _ i: inout Int,
+            _ count: Int
+        ) -> DataByteResult {
+            while i < count {
+                let b = bytes[i]
+                if b >= 0xF8 {
+                    i += 1  // real-time, interleaved: consume and keep looking
+                    continue
+                }
+                if b >= 0x80 {
+                    return .malformed  // do not consume — let it restart parsing
+                }
+                i += 1
+                return .byte(b)
+            }
+            return .truncated
+        }
+    }
+
     private func receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
         ScratchLabPerformanceSignpost.event(
             "MIDIReceived",
@@ -7550,152 +7697,222 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let deviceName = midiConnectedSourceName
         midiCaptureLock.unlock()
 
-        var packetPtr = withUnsafePointer(to: packetListPtr.pointee.packet) {
-            UnsafeMutablePointer(mutating: $0)
-        }
+        // CONFIRMED root cause: the original code obtained the first packet
+        // pointer via `withUnsafePointer(to: packetListPtr.pointee.packet)`.
+        // That passes the packet *by value* into a generic parameter — Swift
+        // copies it into a temporary, and the pointer `withUnsafePointer`
+        // hands back is only valid for that call's duration. The original
+        // code kept using it afterwards (in the loop below), which is a
+        // dangling-pointer read of whatever now occupies that stack slot.
+        // The invalid decoded values reported immediately before the crash
+        // (e.g. "CC ch11 cc134 val144") are consistent with exactly this:
+        // stale/reused stack bytes being read as if they were live MIDI
+        // data. The crash itself then trapped in `rawBytes[i]` inside
+        // `withUnsafeBytes(of: packetPtr.pointee.data)` — also reachable
+        // from that same dangling pointer, since whatever garbage occupied
+        // `.length` at that point could easily exceed the 256-byte capacity
+        // `withUnsafeBytes(of:)` can ever expose for the fixed-size `data`
+        // tuple declared in CoreMIDI's header.
+        //
+        // No captured diagnostic recorded the actual `MIDIPacket.length` at
+        // crash time, so it is NOT confirmed that Rane hardware itself ever
+        // delivers a real packet longer than 256 bytes — CoreMIDI's header
+        // does allow it ("[length] may be larger than 256 bytes if the
+        // packet is dynamically allocated"), so reading exactly `length`
+        // bytes from live storage below is correct defensive coverage of
+        // that documented possibility, not a claim that this is what Rane
+        // produced.
+        //
+        // The fix: never take the address of a `.pointee` value copy.
+        // Compute `packet`'s real byte offset within `MIDIPacketList` and
+        // point directly into CoreMIDI's own backing storage — mirroring
+        // the C reference pattern in CoreMIDI's own header
+        // (`&packetList->packet[0]`) and exactly how `data` below is read.
+        let packetFieldOffset = MemoryLayout<MIDIPacketList>.offset(of: \MIDIPacketList.packet)!
+        var packetPtr = UnsafeMutableRawPointer(mutating: UnsafeRawPointer(packetListPtr).advanced(by: packetFieldOffset))
+            .assumingMemoryBound(to: MIDIPacket.self)
         for _ in 0..<Int(packetListPtr.pointee.numPackets) {
             let length = Int(packetPtr.pointee.length)
-            if length >= 3 {
-                withUnsafeBytes(of: packetPtr.pointee.data) { rawBytes in
-                    var i = 0
-                    while i + 2 < length {
-                        let statusByte = Int(rawBytes[i])
-                        let rawChannel = Int(statusByte & 0x0F)
-                        let rawData1 = Int(rawBytes[i + 1])
-                        let rawData2 = Int(rawBytes[i + 2])
+            // Same fix applied to `data`: read exactly `length` bytes from
+            // the packet's live storage via its real field offset, rather
+            // than `withUnsafeBytes(of: packetPtr.pointee.data)`, which can
+            // only ever see the fixed 256-byte tuple `data` is declared
+            // with — regardless of the packet's actual `length`.
+            let dataOffset = MemoryLayout<MIDIPacket>.offset(of: \MIDIPacket.data)!
+            let rawBytes = UnsafeRawBufferPointer(
+                start: UnsafeRawPointer(packetPtr).advanced(by: dataOffset),
+                count: length
+            )
+            MIDIChannelMessageParser.parse(rawBytes) { [self] message in
+                dispatchMIDIChannelVoiceMessage(
+                    message,
+                    deviceName: deviceName,
+                    startTime: startTime,
+                    now: now
+                )
+            }
+            packetPtr = MIDIPacketNext(packetPtr)
+        }
+    }
 
-                        if statusByte & 0xF0 == 0xB0 {
-                            let channel = rawChannel
-                            let controller = rawData1
-                            let value = rawData2
+    #if DEBUG
+    /// Test-only seam: `receiveMIDIPacketList` is private and is the only
+    /// entry point that reads a real `MIDIPacketList`/`MIDIPacket`
+    /// allocation the way CoreMIDI actually delivers one — a synthetic
+    /// `[UInt8]` array cannot exercise the live-pointer fix above, so this
+    /// thin passthrough is unavoidable for regression coverage of the fixed
+    /// crash. DEBUG-only: never compiled into a Release build.
+    func testOnly_receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
+        receiveMIDIPacketList(packetListPtr)
+    }
+    #endif
 
-                            midiCaptureLock.lock()
-                            var currentMapping = persistedCrossfaderMapping
-                            midiCaptureLock.unlock()
+    /// Dispatches one fully-decoded channel-voice message to the existing
+    /// CC / Note-On pipelines. Behaviourally identical to the dispatch
+    /// logic that used to be inlined in `receiveMIDIPacketList`'s byte
+    /// loop — only how the bytes were extracted and framed has changed.
+    /// `message.data1`/`data2` are guaranteed `< 0x80` by
+    /// `MIDIChannelMessageParser`.
+    private func dispatchMIDIChannelVoiceMessage(
+        _ message: MIDIChannelMessageParser.Message,
+        deviceName: String,
+        startTime: CFTimeInterval,
+        now: CFTimeInterval
+    ) {
+        let statusByte = message.status
+        let rawChannel = Int(statusByte & 0x0F)
+        let rawData1 = Int(message.data1)
 
-                            let learnResult = evaluateMIDILearnForCC(channel: channel, controller: controller, value: value)
-                            if let overrideMapping = learnResult.crossfaderMapping {
-                                currentMapping = overrideMapping
-                            }
-                            evaluateCalibrationForCC(channel: channel, controller: controller, value: value)
+        if statusByte & 0xF0 == 0xB0 {
+            guard let data2 = message.data2 else { return }
+            let channel = rawChannel
+            let controller = rawData1
+            let value = Int(data2)
 
-                            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
-                            if mappedControl == "crossfader" {
-                                ScratchLabPerformanceSignpost.event("FaderMap", count: value)
-                            }
-                            // CC6 platter fast path: feed tracker → playback controller.
-                            // Verified Rane ONE MKII: left platter = ch=0 CC6,
-                            // right platter = ch=1 CC6. Pads are ch=4/ch=5 (NOT platter).
-                            // Both decks are tracked here for diagnostics, but only the
-                            // right platter (channel 1 / Deck 2) may ever drive the single
-                            // loaded scratch sample — product decision 2026-08-09. The left
-                            // platter (channel 0) stays tracked/diagnostic-only and never
-                            // reaches the playback controller.
-                            if controller == 6, channel == 0 || channel == 1 {
-                                platterTracker.ingest(channel: channel, value: value)
-                                let steps = platterTracker.accumulatedSteps(for: channel)
-                                let direction = platterTracker.recentDirection(for: channel)
-                                let now = CACurrentMediaTime()
-                                if now - lastScratchPlaybackBridgeLogTime >= scratchPlaybackBridgeLogInterval {
-                                    lastScratchPlaybackBridgeLogTime = now
-                                    print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
-                                }
-                                // Suppress the raw MIDI CC6 path while DVS/timecode
-                                // motion is driving playback, so the two sources never
-                                // publish to the playback controller at the same time.
-                                if channel == ScratchPlatterTracker.rightChannel, !dvsPlaybackDriveActive {
-                                    if scratchPlaybackController.midiUsesContinuousRenderer {
-                                        // The controller's own coalescing timer
-                                        // independently samples the tracker at a bounded
-                                        // cadence (see `configureMIDIPlatterProvider`) — no
-                                        // per-event forwarding, keeping this CoreMIDI
-                                        // receive callback bounded and non-blocking.
-                                    } else {
-                                        // Rate-limited inside the controller (~60 Hz); CC6
-                                        // events fire at ~800 Hz so the controller drops
-                                        // excess updates. Legacy grain rollback path only.
-                                        scratchPlaybackController.positionDidChange(
-                                            steps: steps,
-                                            direction: direction
-                                        )
-                                    }
-                                }
-                            }
-                            // CC8 crossfader: diagnostics/MIDI-learn only.
-                            // Not wired to scratch sample playback until the crossfader
-                            // feature is designed and approved. No audio-path side effects.
-                            recordReceivedMIDICCEvent(
-                                sourceName: deviceName,
-                                channel: channel,
-                                controller: controller,
-                                value: value,
-                                mappedControl: mappedControl,
-                                timestamp: now,
-                                recordingStartTime: startTime,
-                                consumedByLearn: learnResult.consumedByLearn
-                            )
-#if DEBUG
-                            // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
-                            // CC6 (platter) floods at ~800Hz and must never trigger UI updates.
-                            // Dispatched to main to avoid @Published contention on the MIDI thread.
-                            if controller != 6,
-                               currentMapping?.controller != controller {
-                                let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
-                                publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
-                                    self?.lastRawPadDiagnostic = diag
-                                }
-                                print("[RanePad] \(diag)")
-                            }
-#endif
-                            i += 3
-                        } else if statusByte >= 0x80 {
-                            switch statusByte & 0xF0 {
-                            case 0x80, 0x90, 0xA0, 0xE0:
-                                // Only route Note On events from known Rane pad channels to the pad preview path.
-                                // Start/Stop (note=0 ch=0/ch=1), PFL (note=27 ch=0/ch=1), SYNC (note=2
-                                // ch=1), and all PitchBend/PolyAT events must not enter the pad router.
-                                // Exception: while a hot-cue learn is active, route Note On from ANY
-                                // channel — a hot cue on a device other than the validated Rane pad
-                                // channels (e.g. a Pioneer S9) must still be learnable.
-                                if statusByte & 0xF0 == 0x90,
-                                   (rawChannel == 4 || rawChannel == 5 || rawChannel == 6
-                                    || isHotCueLearnSessionActive()) {
-                                    receiveNoteOnPadEvent(
-                                        channel: rawChannel,
-                                        noteNumber: rawData1,
-                                        velocity: rawData2
-                                    )
-                                }
-#if DEBUG
-                                // Raw diagnostic — only for pad channels to avoid flooding the
-                                // diagnostic label with transport/PFL/PitchBend events.
-                                if rawChannel == 4 || rawChannel == 5 || rawChannel == 6 {
-                                    let kind: String
-                                    switch statusByte & 0xF0 {
-                                    case 0x90: kind = "Note On"
-                                    case 0x80: kind = "Note Off"
-                                    case 0xA0: kind = "PolyAT"
-                                    case 0xE0: kind = "PitchBend"
-                                    default:   kind = "MIDI"
-                                    }
-                                    let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
-                                    publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
-                                        self?.lastRawPadDiagnostic = diag
-                                    }
-                                    print("[RanePad] \(diag)")
-                                }
-#endif
-                                i += 3
-                            case 0xC0, 0xD0: i += 2
-                            default: i += 1
-                            }
-                        } else {
-                            i += 1
-                        }
+            midiCaptureLock.lock()
+            var currentMapping = persistedCrossfaderMapping
+            midiCaptureLock.unlock()
+
+            let learnResult = evaluateMIDILearnForCC(channel: channel, controller: controller, value: value)
+            if let overrideMapping = learnResult.crossfaderMapping {
+                currentMapping = overrideMapping
+            }
+            evaluateCalibrationForCC(channel: channel, controller: controller, value: value)
+
+            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
+            if mappedControl == "crossfader" {
+                ScratchLabPerformanceSignpost.event("FaderMap", count: value)
+            }
+            // CC6 platter fast path: feed tracker → playback controller.
+            // Verified Rane ONE MKII: left platter = ch=0 CC6,
+            // right platter = ch=1 CC6. Pads are ch=4/ch=5 (NOT platter).
+            // Both decks are tracked here for diagnostics, but only the
+            // right platter (channel 1 / Deck 2) may ever drive the single
+            // loaded scratch sample — product decision 2026-08-09. The left
+            // platter (channel 0) stays tracked/diagnostic-only and never
+            // reaches the playback controller.
+            if controller == 6, channel == 0 || channel == 1 {
+                platterTracker.ingest(channel: channel, value: value)
+                let steps = platterTracker.accumulatedSteps(for: channel)
+                let direction = platterTracker.recentDirection(for: channel)
+                let bridgeNow = CACurrentMediaTime()
+                if bridgeNow - lastScratchPlaybackBridgeLogTime >= scratchPlaybackBridgeLogInterval {
+                    lastScratchPlaybackBridgeLogTime = bridgeNow
+                    print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
+                }
+                // Suppress the raw MIDI CC6 path while DVS/timecode
+                // motion is driving playback, so the two sources never
+                // publish to the playback controller at the same time.
+                if channel == ScratchPlatterTracker.rightChannel, !dvsPlaybackDriveActive {
+                    if scratchPlaybackController.midiUsesContinuousRenderer {
+                        // The controller's own coalescing timer
+                        // independently samples the tracker at a bounded
+                        // cadence (see `configureMIDIPlatterProvider`) — no
+                        // per-event forwarding, keeping this CoreMIDI
+                        // receive callback bounded and non-blocking.
+                    } else {
+                        // Rate-limited inside the controller (~60 Hz); CC6
+                        // events fire at ~800 Hz so the controller drops
+                        // excess updates. Legacy grain rollback path only.
+                        scratchPlaybackController.positionDidChange(
+                            steps: steps,
+                            direction: direction
+                        )
                     }
                 }
             }
-            packetPtr = MIDIPacketNext(packetPtr)
+            // CC8 crossfader: diagnostics/MIDI-learn only.
+            // Not wired to scratch sample playback until the crossfader
+            // feature is designed and approved. No audio-path side effects.
+            recordReceivedMIDICCEvent(
+                sourceName: deviceName,
+                channel: channel,
+                controller: controller,
+                value: value,
+                mappedControl: mappedControl,
+                timestamp: now,
+                recordingStartTime: startTime,
+                consumedByLearn: learnResult.consumedByLearn
+            )
+#if DEBUG
+            // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
+            // CC6 (platter) floods at ~800Hz and must never trigger UI updates.
+            // Dispatched to main to avoid @Published contention on the MIDI thread.
+            if controller != 6,
+               currentMapping?.controller != controller {
+                let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
+                publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
+                    self?.lastRawPadDiagnostic = diag
+                }
+                print("[RanePad] \(diag)")
+            }
+#endif
+        } else if statusByte >= 0x80 {
+            switch statusByte & 0xF0 {
+            case 0x80, 0x90, 0xA0, 0xE0:
+                guard let data2 = message.data2 else { return }
+                let rawData2 = Int(data2)
+                // Only route Note On events from known Rane pad channels to the pad preview path.
+                // Start/Stop (note=0 ch=0/ch=1), PFL (note=27 ch=0/ch=1), SYNC (note=2
+                // ch=1), and all PitchBend/PolyAT events must not enter the pad router.
+                // Exception: while a hot-cue learn is active, route Note On from ANY
+                // channel — a hot cue on a device other than the validated Rane pad
+                // channels (e.g. a Pioneer S9) must still be learnable.
+                if statusByte & 0xF0 == 0x90,
+                   (rawChannel == 4 || rawChannel == 5 || rawChannel == 6
+                    || isHotCueLearnSessionActive()) {
+                    receiveNoteOnPadEvent(
+                        channel: rawChannel,
+                        noteNumber: rawData1,
+                        velocity: rawData2
+                    )
+                }
+#if DEBUG
+                // Raw diagnostic — only for pad channels to avoid flooding the
+                // diagnostic label with transport/PFL/PitchBend events.
+                if rawChannel == 4 || rawChannel == 5 || rawChannel == 6 {
+                    let kind: String
+                    switch statusByte & 0xF0 {
+                    case 0x90: kind = "Note On"
+                    case 0x80: kind = "Note Off"
+                    case 0xA0: kind = "PolyAT"
+                    case 0xE0: kind = "PitchBend"
+                    default:   kind = "MIDI"
+                    }
+                    let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
+                    publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
+                        self?.lastRawPadDiagnostic = diag
+                    }
+                    print("[RanePad] \(diag)")
+                }
+#endif
+            default:
+                // 0xC0/0xD0 (Program Change / Channel Pressure) and any
+                // other status byte: no downstream action on this path
+                // today — matches original behaviour, which only ever
+                // consumed these bytes without dispatching them anywhere.
+                break
+            }
         }
     }
 
