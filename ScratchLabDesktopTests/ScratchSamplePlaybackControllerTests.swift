@@ -140,9 +140,16 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
 
         // Advance playback position so a reload would be detectable.
+        // 1_000 steps (not the sample-length-adjacent 9_000 this used to
+        // use): direct-MIDI geometry fix, 2026-08-10 — "ahhh"'s 196_980
+        // frames sit close enough to 9_000 steps' frame delta that the
+        // scale correction (3932→3600 steps/rev) pushed it from just
+        // under the sample-length cap to just over it, wrapping to
+        // exactly 0 instead of a detectable nonzero position. 1_000 steps
+        // stays comfortably under the cap regardless of scale.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.positionDidChange(steps: 1_000, direction: .forward)
         controller.waitForAudioQueue()
         let frameBeforeEnsure = controller.currentSampleFrame
         XCTAssertGreaterThan(frameBeforeEnsure, 0)
@@ -183,9 +190,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
+        // 1_000 steps, not 9_000 — see the comment in
+        // testEnsureLoadedForDVSDriveDoesNotReloadWhenAlreadyLoaded above.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.positionDidChange(steps: 1_000, direction: .forward)
         controller.waitForAudioQueue()
         XCTAssertGreaterThan(controller.currentSampleFrame, 0)
 
@@ -351,8 +360,13 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         // Move to just past the halfway point (uncapped, proportional movement) —
         // comfortably under the per-tick frame-delta cap, so this is a normal
-        // forward push, not a saturating one.
-        controller.positionDidChange(steps: 9_000, direction: .forward)
+        // forward push, not a saturating one. 6_000 steps (not 9_000 —
+        // direct-MIDI geometry fix, 2026-08-10: at the new 3600-step/rev
+        // scale, 9_000 steps' frame delta approached "ahhh"'s 196_980-frame
+        // length closely enough on the SECOND push below to risk landing
+        // exactly on a whole-loop multiple; 6_000/4_000 keep both pushes
+        // clear of that boundary while preserving the same test intent).
+        controller.positionDidChange(steps: 6_000, direction: .forward)
         controller.waitForAudioQueue()
         let nearEndFrame = controller.currentSampleFrame
         XCTAssertGreaterThan(nearEndFrame, controller.totalFrames / 2,
@@ -363,7 +377,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Push far enough forward to cross the loop end. The old
         // clamp-without-wrapping behavior stuck at totalFrames - 1; looping
         // instead wraps the excess motion back around to near the loop origin.
-        controller.positionDidChange(steps: 10_000, direction: .forward)
+        controller.positionDidChange(steps: 4_000, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertLessThan(controller.currentSampleFrame, nearEndFrame,
@@ -718,16 +732,18 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Move near the loop end, then cross it.
+        // Move near the loop end, then cross it. 6_000/4_000 (not
+        // 9_000/10_000 — direct-MIDI geometry fix, 2026-08-10): see the
+        // comment in testForwardMovementPastEndWrapsToStart above.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.positionDidChange(steps: 6_000, direction: .forward)
         controller.waitForAudioQueue()
         let nearEndFrame = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        controller.positionDidChange(steps: 10_000, direction: .forward)
+        controller.positionDidChange(steps: 4_000, direction: .forward)
         controller.waitForAudioQueue()
         let wrappedFrame = controller.currentSampleFrame
         XCTAssertLessThan(wrappedFrame, nearEndFrame, "Needle must have wrapped past the loop end")
@@ -737,7 +753,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Continued forward motion after the wrap must keep scheduling
         // normally from the new (wrapped) position — not skip as though
         // still pinned at a permanent boundary.
-        controller.positionDidChange(steps: 10_030, direction: .forward)
+        controller.positionDidChange(steps: 4_030, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNil(controller.lastScheduleSkippedReason,
@@ -937,10 +953,12 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
     func testTinyDeltaSkipsMinimumGrain() {
         // tinyGrain (frameDelta < 2) and nearStop (frameDelta < minAudibleFrameDelta)
-        // are independent gates. With framesPerStep≈20, a 1-step movement gives
-        // frameDelta≈20, which is >> tinyGrain threshold (2) but below nearStop
-        // threshold (≈182). The nearStop gate suppresses it; the needle still
-        // advances silently so the virtual stylus tracks the physical platter.
+        // are independent gates. With midiFramesPerStep≈22.05 (direct-MIDI
+        // geometry fix, 2026-08-10 — was ≈20.19 at the old 3932-step/rev
+        // scale), a 1-step movement gives frameDelta≈22, which is >>
+        // tinyGrain threshold (2) but below nearStop threshold (≈198). The
+        // nearStop gate suppresses it; the needle still advances silently
+        // so the virtual stylus tracks the physical platter.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
@@ -949,17 +967,17 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
         XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
 
-        // 1 step → frameDelta ≈ 20. Suppressed by nearStop, NOT by tinyGrain.
+        // 1 step → frameDelta ≈ 22. Suppressed by nearStop, NOT by tinyGrain.
         controller.positionDidChange(steps: 1, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "tinyGrain",
-            "Single-step forward (frameDelta≈20) must not be suppressed as tinyGrain")
+            "Single-step forward (frameDelta≈22) must not be suppressed as tinyGrain")
         XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop",
-            "Single-step forward (frameDelta≈20) must be suppressed as nearStop")
+            "Single-step forward (frameDelta≈22) must be suppressed as nearStop")
         // Needle advances silently through the near-stop gate.
-        XCTAssertEqual(controller.currentSampleFrame, 20,
-            "Near-stop gate must advance needle silently (20 frames for 1 step)")
+        XCTAssertEqual(controller.currentSampleFrame, 22,
+            "Near-stop gate must advance needle silently (22 frames for 1 step)")
     }
 
     func testBackwardMovementUsesMatchingVarispeedRate() {
@@ -992,11 +1010,27 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     func testTinyForwardDeltaAtMinRateThreshold() {
         // Verifies the varispeed rate clamp at the nearStop boundary when
         // two same-direction grains ensure no reversal compensation fires.
+        //
+        // Direct-MIDI geometry fix, 2026-08-10: at the old 3932-step/rev
+        // scale, a 9-step grain (the smallest that still passes the
+        // nearStop gate, since minAudibleFrameDelta = 9 * framesPerStep)
+        // produced frameDelta≈182 — just BELOW the varispeed floor's
+        // frame threshold (0.25 * 735 = 183.75), so it needed clamping.
+        // At the corrected 3600-step/rev scale, minAudibleFrameDelta =
+        // 9 * 22.05 ≈ 198, which is now ABOVE 183.75 — the same fixed
+        // minAudibleDeltaSteps(9) constant, unaffected by this fix,
+        // combined with the larger per-step frame rate, means the
+        // smallest audible grain no longer needs floor-clamping at all.
+        // No integer step count can any longer satisfy both "passes
+        // nearStop" and "needs the varispeed floor clamp" simultaneously
+        // — that degenerate window closed as a direct, correct
+        // consequence of the geometry correction. This test now verifies
+        // that new reality instead of a clamp that can no longer occur.
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // First forward grain: 20 steps → frameDelta≈404, establishes position.
+        // First forward grain: 20 steps → frameDelta = 441, establishes position.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
         controller.positionDidChange(steps: 20, direction: .forward)
@@ -1004,9 +1038,10 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Second forward grain: 9 steps → frameDelta≈182.
-        // Same direction → no reversal compensation.
-        // rawRate = 182/735 ≈ 0.248 → clamped to minVarispeedRate (0.25).
+        // Second forward grain: 9 steps (minAudibleDeltaSteps exactly) →
+        // frameDelta ≈ 198. Same direction → no reversal compensation.
+        // rawRate = 198/735 ≈ 0.269 — already at/above the varispeed
+        // floor on its own, no clamping needed.
         controller.positionDidChange(steps: 29, direction: .forward)
         controller.waitForAudioQueue()
 
@@ -1016,8 +1051,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             XCTFail("9-step same-direction grain must schedule")
             return
         }
-        XCTAssertEqual(rate, Float(0.25), accuracy: Float(0.01),
-            "9-step grain (frameDelta≈182) at threshold must clamp to min varispeed rate (0.25)")
+        XCTAssertGreaterThanOrEqual(rate, Float(0.25),
+            "The smallest audible grain (minAudibleDeltaSteps) must schedule at or above the varispeed floor")
     }
 
     // MARK: - Near-stop gate (anti-farting)
@@ -1451,14 +1486,15 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
 
-        // 3-step delta → frameDelta ≈ 61, below nearStop threshold.
-        // Needle should advance silently.
+        // 3-step delta → frameDelta ≈ 66, below nearStop threshold
+        // (direct-MIDI geometry fix, 2026-08-10 — was ≈61 at the old
+        // 3932-step/rev scale). Needle should advance silently.
         controller.positionDidChange(steps: 3, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop")
-        XCTAssertEqual(controller.currentSampleFrame, 61,
-            "Near-stop gate must advance needle silently (3 steps × ~20.19 frames/step, rounded)")
+        XCTAssertEqual(controller.currentSampleFrame, 66,
+            "Near-stop gate must advance needle silently (3 steps × ~22.05 frames/step, rounded)")
     }
 
     // MARK: - Reversal symmetry (Fix 2)
@@ -1468,18 +1504,21 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Forward push: 20 steps → frameDelta ≈ 404.
+        // Forward push: 20 steps → frameDelta = 441 exactly (direct-MIDI
+        // geometry fix, 2026-08-10 — was ≈404 at the old 3932-step/rev
+        // scale: 20 * 22.05 = 441.0).
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
         controller.positionDidChange(steps: 20, direction: .forward)
         controller.waitForAudioQueue()
         let frameAfterPush = controller.currentSampleFrame
-        XCTAssertEqual(frameAfterPush, 404)
+        XCTAssertEqual(frameAfterPush, 441)
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        // Reverse with 10 steps (starved) → raw frameDelta ≈ 202.
-        // Compensation: lastEffectiveFrameDelta=404 > 202 → borrow 404.
+        // Reverse with 10 steps (starved) → raw frameDelta ≈ 221
+        // (10 * 22.05 = 220.5, rounds away from zero to 221).
+        // Compensation: lastEffectiveFrameDelta=441 > 221 → borrow 441.
         controller.positionDidChange(steps: 10, direction: .backward)
         controller.waitForAudioQueue()
 
@@ -1487,9 +1526,9 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Backward grain at reversal must schedule")
         XCTAssertTrue(controller.lastReversalCompensated,
             "First backward grain after forward must be compensated")
-        XCTAssertEqual(controller.lastEffectiveFrameDelta, 404,
-            "Effective frameDelta must match the last forward grain (404)")
-        // With effectiveFrameDelta=404 and segmentFrames=min(404, pos+1),
+        XCTAssertEqual(controller.lastEffectiveFrameDelta, 441,
+            "Effective frameDelta must match the last forward grain (441)")
+        // With effectiveFrameDelta=441 and segmentFrames=min(441, pos+1),
         // pos returns to 0 (needle back at start).
         XCTAssertEqual(controller.currentSampleFrame, 0,
             "Compensated backward grain must return needle to start")
@@ -1564,9 +1603,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
 
         // Force needle near the loop end (uncapped, proportional movement).
+        // 6_000 (not 9_000 — direct-MIDI geometry fix, 2026-08-10): see
+        // the comment in testForwardMovementPastEndWrapsToStart above.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 9_000, direction: .forward)
+        controller.positionDidChange(steps: 6_000, direction: .forward)
         controller.waitForAudioQueue()
         let nearEnd = controller.currentSampleFrame
         XCTAssertGreaterThan(nearEnd, controller.totalFrames / 2, "Needle must be near the loop end")
@@ -1576,7 +1617,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Reverse with a compensated grain near the loop end — must retreat
         // (or wrap) safely, never crash or produce an invalid segment,
         // regardless of whether the compensated grain crosses the origin.
-        controller.positionDidChange(steps: 8_980, direction: .backward)
+        controller.positionDidChange(steps: 5_980, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "invalidSegment")
@@ -3193,6 +3234,31 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         var converter = TimecodeDriveStepConverter()
         let (steps, _) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 1.8)
         XCTAssertEqual(steps, 3932)
+    }
+
+    /// Direct-MIDI cue-lock drift fix (2026-08-10): `TimecodeDriveStepConverter`
+    /// belongs exclusively to the DVS/timecode path — its output feeds only
+    /// `ScratchSamplePlaybackController.positionDidChangeContinuous`, never
+    /// raw right-deck CC6 position or velocity — so it was correctly left
+    /// on the unchanged 3932-step DVS geometry rather than unified with the
+    /// new `raneOneMKIIDirectMIDIStepsPerRevolution` (3600) direct-MIDI
+    /// constant. This test exists as an explicit, fix-dated regression
+    /// guard alongside `testStepConverterRateOneForOneRevolutionMatchesStepsPerRevolution`
+    /// above (which already proves the same 3932 value) so a future reader
+    /// has direct evidence this specific adapter was deliberately excluded
+    /// from the direct-MIDI correction, not merely overlooked.
+    func testTimecodeDriveStepConverterUnaffectedByDirectMIDIGeometryFix() {
+        var converter = TimecodeDriveStepConverter()
+        let (steps, _) = converter.steps(forRate: 1.0, direction: .forward, elapsed: 1.8)
+        XCTAssertEqual(
+            steps, 3932,
+            "TimecodeDriveStepConverter is DVS-only and must remain on the 3932-step DVS geometry, " +
+            "not the 3600-step direct-MIDI geometry introduced by the 2026-08-10 cue-lock drift fix"
+        )
+        XCTAssertNotEqual(
+            steps, ScratchSamplePlaybackController.raneOneMKIIDirectMIDIStepsPerRevolution,
+            "Sanity check: the DVS and direct-MIDI geometries are intentionally different values"
+        )
     }
 
     func testStepConverterAccumulatesAcrossCalls() {

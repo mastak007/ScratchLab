@@ -216,9 +216,15 @@ final class ScratchSamplePlaybackController {
             dvsContinuousRenderer.publishIdle()
             // Rebase MIDI's own phase anchor to the position DVS left the
             // audible sample at, using the exact inverse of the mapping
-            // MIDI itself publishes through (`dvsLoopPhaseFrame`):
-            // frame = (steps * framesPerStep) mod loop, so
-            // steps = frame / framesPerStep reproduces that frame exactly.
+            // MIDI itself publishes through (`midiLoopPhaseFrame`):
+            // frame = (steps * midiFramesPerStep) mod loop, so
+            // steps = frame / midiFramesPerStep reproduces that frame
+            // exactly. Uses MIDI's own geometry (`midiFramesPerStep`), not
+            // DVS's (`framesPerStep`) — cue-lock drift fix, 2026-08-10 —
+            // because `midiCoalescingTick` immediately converts this same
+            // anchor back to a frame position via `midiLoopPhaseFrame`;
+            // rebasing with the wrong scale would produce a visible phase
+            // jump on every DVS→MIDI handoff.
             // `currentSampleFrame` is DVS's own control-side authoritative
             // phase (maintained on `audioQueue` by
             // `positionDidChangeOnQueue`/`renderContinuousDVSTick`, never
@@ -231,8 +237,8 @@ final class ScratchSamplePlaybackController {
             // toward. This only repoints MIDI's own control-side anchor —
             // the renderer's audible phase (never reset by an idle
             // publish) is untouched.
-            if framesPerStep > 0 {
-                midiContinuousAccumulatedSteps = Double(currentSampleFrame) / framesPerStep
+            if midiFramesPerStep > 0 {
+                midiContinuousAccumulatedSteps = Double(currentSampleFrame) / midiFramesPerStep
             }
             // MIDI resumes from a clean delta/time baseline — no stale
             // pre-handoff delta/time pair carried across the handoff, so
@@ -311,9 +317,9 @@ final class ScratchSamplePlaybackController {
 
         platterRenderOwner = .midi
         midiContinuousWasActive = true
-        let phase = dvsLoopPhaseFrame(forAccumulatedSteps: midiContinuousAccumulatedSteps)
+        let phase = midiLoopPhaseFrame(forAccumulatedSteps: midiContinuousAccumulatedSteps)
         dvsContinuousRenderer.publish(
-            velocity: result.velocity * framesPerStep,
+            velocity: result.velocity * midiFramesPerStep,
             authoritativePhase: phase,
             active: true
         )
@@ -410,6 +416,10 @@ final class ScratchSamplePlaybackController {
     private(set) var currentSampleFrame: Int = 0
     private var lastPlatterSteps: Double?
     private var framesPerStep: Double = 1
+    /// Direct-MIDI-only counterpart to `framesPerStep`, derived from
+    /// `raneOneMKIIDirectMIDIStepsPerRevolution` instead of
+    /// `stepsPerRevolution`. See that constant's doc comment.
+    private var midiFramesPerStep: Double = 1
 
     /// Last raw absolute step count passed to `positionDidChange(steps:
     /// Int, ...)` (MIDI CC6 path). Used only to compute this call's delta
@@ -758,7 +768,25 @@ final class ScratchSamplePlaybackController {
     private static let nominalVinylRPM: Double = 100.0 / 3.0
 
     /// Controller steps per platter revolution (Rane ONE MKII CC6).
+    /// DVS/timecode-only — see `raneOneMKIIDirectMIDIStepsPerRevolution`
+    /// for the direct-MIDI value. Left unchanged by the 2026-08-10
+    /// direct-MIDI geometry correction.
     private let stepsPerRevolution: Int = 3932
+
+    /// Direct-MIDI-only steps-per-revolution for the Rane ONE MKII right
+    /// platter (cue-lock drift fix, 2026-08-10). Measured from two
+    /// anomaly-free powered-rotation hardware runs (zero CoreMIDI delivery
+    /// gaps, signed/absolute ratio 1.0000, 20 revolutions each): 3602.95
+    /// and 3598.65 steps/rev, confirmed as 3600. `stepsPerRevolution`
+    /// above is tuned for DVS/timecode and does not describe this
+    /// device's direct-MIDI CC6 resolution — the two consistently
+    /// disagreed by ~8.4% in hardware measurement, which is what produced
+    /// the reported clockwise cue drift on direct-MIDI right-platter
+    /// scratching. Internal (not private): shared with
+    /// `MacCaptureEngine`'s direct-MIDI lap diagnostic and with tests via
+    /// `@testable import`, so the value 3600 exists as a literal in
+    /// exactly one place.
+    static let raneOneMKIIDirectMIDIStepsPerRevolution: Int = 3600
 
     /// Minimum CC6 step delta that produces a continuous-sounding grain.
     /// Below ~9 steps/slot at 33⅓ RPM, the varispeed floor (0.25) cannot
@@ -1509,6 +1537,15 @@ final class ScratchSamplePlaybackController {
         let vinylSecondsPerRevolution = 60.0 / Self.nominalVinylRPM
         let rate = Double(buffer.format.sampleRate)
         framesPerStep = max(1, (rate * vinylSecondsPerRevolution) / Double(stepsPerRevolution))
+        // Direct-MIDI-only per-step frame rate — same rate/RPM basis, just
+        // Rane's own measured direct-MIDI CC6 resolution instead of the
+        // DVS/timecode-tuned constant. `dvsLoopFrames` below is
+        // deliberately NOT duplicated for MIDI: it is exactly
+        // `rate * vinylSecondsPerRevolution` regardless of which
+        // steps-per-revolution constant is used to express it (the two
+        // cancel out), i.e. one physical revolution's real audio-frame
+        // duration — the same loop, shared correctly by both paths.
+        midiFramesPerStep = max(1, (rate * vinylSecondsPerRevolution) / Double(Self.raneOneMKIIDirectMIDIStepsPerRevolution))
         // Exactly one revolution's frame count at this sample's rate — see
         // the `dvsLoopFrames` doc comment.
         dvsLoopFrames = framesPerStep * Double(stepsPerRevolution)
@@ -1902,7 +1939,16 @@ final class ScratchSamplePlaybackController {
             }
         }
 
-        let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * framesPerStep).rounded())
+        // Legacy rollback geometry split (cue-lock drift fix, 2026-08-10):
+        // this function is shared by DVS's legacy grain path and direct
+        // MIDI's legacy rollback path (`positionDidChange`, active when
+        // `midiUsesContinuousRenderer == false`), discriminated the same
+        // way the rest of this function already discriminates DVS from
+        // MIDI ticks — `dvsWindow != nil` for DVS. Every geometry-dependent
+        // calculation below this point must use the direct-MIDI scale for
+        // MIDI ticks and the untouched DVS scale for DVS ticks.
+        let effectiveFramesPerStep = dvsWindow == nil ? midiFramesPerStep : framesPerStep
+        let frameDeltaDouble = min(Double(sourceTotalFrames), (deltaStepMagnitude * effectiveFramesPerStep).rounded())
         let frameDelta = max(1, Int(frameDeltaDouble))
         let consumedControlWindow = dvsWindow == nil
             ? segmentDuration
@@ -1935,7 +1981,7 @@ final class ScratchSamplePlaybackController {
         // scheduling slot. DVS calls provide an explicit `segmentWindow`; those
         // grains use deterministic software stretching below the varispeed floor
         // later in this method, preserving slow captured motion without gaps.
-        let minAudibleFrameDelta = max(1, Int(Double(minAudibleDeltaSteps) * framesPerStep))
+        let minAudibleFrameDelta = max(1, Int(Double(minAudibleDeltaSteps) * effectiveFramesPerStep))
         let permitsSoftwareSlowGrain = dvsWindow != nil
         guard frameDelta >= minAudibleFrameDelta || permitsSoftwareSlowGrain else {
             switch schedulingDirection {
@@ -2917,13 +2963,15 @@ final class ScratchSamplePlaybackController {
 
     // MARK: - Position → frame mapping
 
-    /// Map accumulated CC6 steps to a sample frame index.
-    /// Cycles within 0..<totalFrames. One full revolution (~3932 steps)
-    /// wraps the full sample; forward/backward advances at the
-    /// framesPerStep pace (driven by vinyl RPM, not sample length).
+    /// Map accumulated direct-MIDI CC6 steps to a sample frame index.
+    /// Cycles within 0..<totalFrames. One full revolution (~3600 steps,
+    /// Rane ONE MKII direct-MIDI geometry — cue-lock drift fix,
+    /// 2026-08-10) wraps the full sample; forward/backward advances at
+    /// the midiFramesPerStep pace (driven by vinyl RPM, not sample
+    /// length).
     func sampleFrame(for steps: Int) -> Int {
         guard totalFrames > 0 else { return 0 }
-        let scaled = (Double(steps) * Double(totalFrames)) / Double(stepsPerRevolution)
+        let scaled = (Double(steps) * Double(totalFrames)) / Double(Self.raneOneMKIIDirectMIDIStepsPerRevolution)
         var wrapped = scaled.truncatingRemainder(dividingBy: Double(totalFrames))
         if wrapped < 0 { wrapped += Double(totalFrames) }
         return min(max(Int(wrapped), 0), totalFrames - 1)
@@ -2937,6 +2985,20 @@ final class ScratchSamplePlaybackController {
         guard totalFrames > 0 else { return 0 }
         let wrapped = frame % totalFrames
         return wrapped < 0 ? wrapped + totalFrames : wrapped
+    }
+
+    /// Direct-MIDI-only counterpart to `dvsLoopPhaseFrame` (cue-lock drift
+    /// fix, 2026-08-10): identical formula, using `midiFramesPerStep`
+    /// (Rane ONE MKII direct-MIDI CC6 geometry) instead of `framesPerStep`
+    /// (DVS/timecode geometry). Shares `dvsLoopFrames` with the DVS path
+    /// deliberately — that value is the real one-revolution audio-frame
+    /// duration at this sample's rate, not a steps-per-revolution-derived
+    /// quantity, so both paths correctly wrap against the same loop.
+    private func midiLoopPhaseFrame(forAccumulatedSteps steps: Double) -> Double {
+        guard dvsLoopFrames > 0 else { return 0 }
+        var wrapped = (steps * midiFramesPerStep).truncatingRemainder(dividingBy: dvsLoopFrames)
+        if wrapped < 0 { wrapped += dvsLoopFrames }
+        return wrapped
     }
 
     // MARK: - DVS rotational loop (listening-fix #4, uncommitted)

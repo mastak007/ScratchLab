@@ -14,7 +14,10 @@ import AVFoundation
 final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
 
     private static let rate: Double = 44_100
-    private static let stepsPerRevolution: Double = 3_932
+    /// Direct-MIDI geometry (cue-lock drift fix, 2026-08-10) — derived from
+    /// the shared production constant rather than duplicating the literal
+    /// 3600 here, so this file and production code can never drift apart.
+    private static let stepsPerRevolution = Double(ScratchSamplePlaybackController.raneOneMKIIDirectMIDIStepsPerRevolution)
 
     private func makeSyntheticLoopBuffer(frames: Int = 8_000) throws -> AVAudioPCMBuffer {
         // Stereo, matching the player-node graph the legacy grain path
@@ -75,9 +78,37 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity), 0)
     }
 
-    // MARK: - Revolution / cue-mapping parity with DVS's calibration
+    /// Direct-MIDI geometry fix (2026-08-10): precise numeric check that
+    /// the published render velocity is `stepVelocity * midiFramesPerStep`
+    /// using the 3600-based direct-MIDI scale, not the DVS 3932-based
+    /// scale — the earlier tests above only assert sign, not magnitude.
+    /// `midiFramesPerStep = (rate * vinylSecondsPerRevolution) / 3600`
+    /// = `(44_100 * 1.8) / 3600` = `22.05` exactly for this synthetic
+    /// buffer's rate, so both sides of this check are exact rationals.
+    func testMIDIContinuousVelocityConversionUsesDirectMIDIScale() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        setNow(0.0); setSteps(0)
+        controller.testOnly_midiCoalescingTick() // priming
 
-    func testMIDIContinuousOneFullRevolutionReturnsPhaseToOrigin() throws {
+        setNow(1.0 / 60.0); setSteps(40)
+        controller.testOnly_midiCoalescingTick()
+
+        let stepVelocity = 40.0 / (1.0 / 60.0) // deltaSteps / elapsed
+        let vinylSecondsPerRevolution = 1.8
+        let midiFramesPerStep = (Self.rate * vinylSecondsPerRevolution) / Self.stepsPerRevolution
+        let expectedFrameVelocity = stepVelocity * midiFramesPerStep
+
+        XCTAssertEqual(
+            try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity),
+            expectedFrameVelocity,
+            accuracy: 0.01,
+            "Published velocity must use the direct-MIDI 3600-based frame scale, not DVS's 3932-based scale"
+        )
+    }
+
+    // MARK: - Revolution / cue-mapping parity with the Rane's direct-MIDI geometry
+
+    func testMIDIContinuousOneFullRevolutionForwardReturnsPhaseToOrigin() throws {
         let (controller, setNow, setSteps) = try makeController()
         setNow(0.0); setSteps(0)
         controller.testOnly_midiCoalescingTick() // priming
@@ -88,9 +119,109 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         XCTAssertEqual(
             controller.currentSampleFrame,
             0,
-            "Exactly one physical revolution of right-deck MIDI motion must return to the loop origin, " +
-            "matching the DVS path's calibration and 12 o'clock cue mapping"
+            "Exactly one physical revolution forward of right-deck MIDI motion must return to the loop " +
+            "origin, using the Rane's direct-MIDI (3600-step) geometry and 12 o'clock cue mapping"
         )
+    }
+
+    func testMIDIContinuousOneFullRevolutionBackwardReturnsPhaseToOrigin() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        setNow(0.0); setSteps(Int(Self.stepsPerRevolution))
+        controller.testOnly_midiCoalescingTick() // priming
+
+        setNow(1.0 / 60.0); setSteps(0)
+        controller.testOnly_midiCoalescingTick()
+
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            0,
+            "Exactly one physical revolution backward of right-deck MIDI motion must return to the loop origin"
+        )
+    }
+
+    func testMIDIContinuousTenRevolutionsForwardReturnToOrigin() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        setNow(0.0); setSteps(0)
+        controller.testOnly_midiCoalescingTick() // priming
+
+        setNow(1.0 / 60.0); setSteps(Int(Self.stepsPerRevolution) * 10)
+        controller.testOnly_midiCoalescingTick()
+
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            0,
+            "Ten physical revolutions forward of right-deck MIDI motion must return to the loop origin"
+        )
+    }
+
+    func testMIDIContinuousTenRevolutionsBackwardReturnToOrigin() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        setNow(0.0); setSteps(Int(Self.stepsPerRevolution) * 10)
+        controller.testOnly_midiCoalescingTick() // priming
+
+        setNow(1.0 / 60.0); setSteps(0)
+        controller.testOnly_midiCoalescingTick()
+
+        assertReturnsToLoopOrigin(
+            controller,
+            "Ten physical revolutions backward of right-deck MIDI motion must return to the loop origin"
+        )
+    }
+
+    func testMIDIContinuousTwentyRevolutionsForwardReturnToOrigin() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        setNow(0.0); setSteps(0)
+        controller.testOnly_midiCoalescingTick() // priming
+
+        setNow(1.0 / 60.0); setSteps(Int(Self.stepsPerRevolution) * 20)
+        controller.testOnly_midiCoalescingTick()
+
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            0,
+            "Twenty physical revolutions forward of right-deck MIDI motion must return to the loop origin " +
+            "(hardware-verification scale — matches the powered-rotation measurement protocol)"
+        )
+    }
+
+    func testMIDIContinuousTwentyRevolutionsBackwardReturnToOrigin() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        setNow(0.0); setSteps(Int(Self.stepsPerRevolution) * 20)
+        controller.testOnly_midiCoalescingTick() // priming
+
+        setNow(1.0 / 60.0); setSteps(0)
+        controller.testOnly_midiCoalescingTick()
+
+        assertReturnsToLoopOrigin(
+            controller,
+            "Twenty physical revolutions backward of right-deck MIDI motion must return to the loop origin"
+        )
+    }
+
+    /// A single large backward jump (10 or 20 revolutions in one synthetic
+    /// tick — never how real CC6 arrives) can land the wrapped phase one
+    /// frame short of the true origin (e.g. `dvsLoopFrames - 1` instead of
+    /// `0`): `AVAudioFormat.sampleRate` does not round-trip to a bit-exact
+    /// Double, and that sub-ULP deviation gets amplified by a large
+    /// negative multiplier before `truncatingRemainder`'s wrap correction.
+    /// This is a pre-existing floating-point characteristic of the shared
+    /// mod-based phase math (equally present in DVS's own
+    /// `dvsLoopPhaseFrame` for large accumulated step counts), not
+    /// something this fix introduced — 1 frame out of ~79,380 is
+    /// 0.0013% of a revolution, inaudible and irrelevant to real
+    /// incremental CC6 accumulation. Accepting a 1-frame tolerance here,
+    /// matching how the rest of this codebase treats phase-error
+    /// comparisons.
+    private func assertReturnsToLoopOrigin(
+        _ controller: ScratchSamplePlaybackController,
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let loopFrames = Int(controller.dvsLoopFrames)
+        let frame = controller.currentSampleFrame
+        let distanceFromOrigin = min(frame, loopFrames - frame)
+        XCTAssertLessThanOrEqual(distanceFromOrigin, 1, message, file: file, line: line)
     }
 
     func testMIDIContinuousTenBabyScratchesReturnToStartingPhase() throws {
@@ -291,6 +422,168 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         controller.waitForAudioQueue()
         XCTAssertEqual(controller.diagnosticsSnapshot().forwardScheduleCount, 1,
                         "Legacy grain scheduling must still work exactly as before")
+    }
+
+    // MARK: - Legacy rollback direct-MIDI geometry (cue-lock drift fix, 2026-08-10)
+    //
+    // `positionDidChangeOnQueue` is shared between DVS and this legacy
+    // MIDI rollback path (active when `midiUsesContinuousRenderer =
+    // false`), discriminated by `dvsWindow == nil`. These tests prove the
+    // legacy path now uses the direct-MIDI (3600-step) scale, not DVS's
+    // (3932-step) scale, for its frame-delta math — this path is
+    // compiled, reachable production code (not dead), so it needed the
+    // same correction as the continuous path.
+
+    func testLegacyRollbackForwardFrameDeltaUsesDirectMIDIScale() throws {
+        let (controller, setNow, _) = try makeController()
+        controller.midiUsesContinuousRenderer = false
+
+        // `positionDidChangeOnQueue`'s legacy-path rate limiter
+        // (`minScheduleInterval`) requires `now - lastScheduleTime >=
+        // 1/60`; `lastScheduleTime` starts at 0, so a priming call at
+        // `now = 0` is itself rate-limited away before it can even reach
+        // the priming logic. Starting at `now = 1/60` avoids that.
+        setNow(1.0 / 60.0)
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+
+        setNow(2.0 / 60.0)
+        controller.positionDidChange(steps: 100, direction: .forward)
+        controller.waitForAudioQueue()
+
+        // effectiveFramesPerStep = (44_100 * 1.8) / 3600 = 22.05 exactly;
+        // frameDelta = round(100 * 22.05) = 2205 — the direct-MIDI scale.
+        // DVS's ~20.19-based scale would instead give 2019.
+        XCTAssertEqual(controller.currentSampleFrame, 2205,
+            "Legacy rollback forward frameDelta must use the direct-MIDI (3600-step) scale, not DVS's")
+    }
+
+    func testLegacyRollbackBackwardFrameDeltaUsesDirectMIDIScale() throws {
+        let (controller, setNow, _) = try makeController()
+        controller.midiUsesContinuousRenderer = false
+
+        setNow(1.0 / 60.0)
+        controller.positionDidChange(steps: 0, direction: .backward)
+        controller.waitForAudioQueue()
+
+        setNow(2.0 / 60.0)
+        controller.positionDidChange(steps: -100, direction: .backward)
+        controller.waitForAudioQueue()
+
+        // frameDelta = round(100 * 22.05) = 2205, wrapped backward from
+        // frame 0 within the 8_000-frame synthetic loop: 8_000 - 2_205.
+        XCTAssertEqual(controller.currentSampleFrame, 5795,
+            "Legacy rollback backward frameDelta must use the direct-MIDI (3600-step) scale, not DVS's")
+    }
+
+    func testLegacyRollbackOneRevolutionForwardReturnsToOriginUsingDirectMIDIScale() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        let clock = Clock()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        controller.midiUsesContinuousRenderer = false
+        // Sized to exactly one physical revolution's worth of frames at
+        // 44.1kHz/33⅓RPM (rate * 1.8s = 79_380), so a full direct-MIDI
+        // revolution wraps this synthetic buffer's own loop exactly back
+        // to frame 0 — isolating the legacy path's frame-delta math from
+        // the buffer-length cap that would otherwise clamp a single large
+        // tick before it could demonstrate the full-revolution wrap.
+        let oneRevolutionFrames = 79_380
+        controller.testOnly_installSyntheticSample(
+            try makeSyntheticLoopBuffer(frames: oneRevolutionFrames),
+            sampleID: "legacy-one-revolution"
+        )
+
+        // See the rate-limiter note in testLegacyRollbackForwardFrameDeltaUsesDirectMIDIScale above.
+        clock.now = 1.0 / 60.0
+        controller.positionDidChange(steps: 0, direction: .forward)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.lastScheduleSkippedReason, "priming")
+
+        clock.now = 2.0 / 60.0
+        controller.positionDidChange(steps: Int(Self.stepsPerRevolution), direction: .forward)
+        controller.waitForAudioQueue()
+
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            0,
+            "One full direct-MIDI revolution (3600 steps) through the legacy rollback path must return " +
+            "to the loop origin, using the Rane's direct-MIDI geometry, not DVS's 3932-step geometry"
+        )
+    }
+
+    // MARK: - DVS legacy grain path unchanged (cue-lock drift fix, 2026-08-10)
+    //
+    // Explicit regression proof, not just "existing tests still pass".
+    // Two distinct DVS code paths both feed off `dvsWindow != nil`, and
+    // both are proven unchanged below:
+    //
+    // 1. `isDVSLoop == true` (the normal case — a short "ahh"-style
+    //    sample within one revolution): `currentSampleFrame` comes from
+    //    `dvsLoopPhaseFrame`, which was already unconditionally
+    //    DVS-only (`framesPerStep`) and untouched by this fix.
+    // 2. `isDVSLoop == false` (a sample at least as long as one
+    //    revolution — the documented long-sample DVS fallback): this is
+    //    exactly where my new `effectiveFramesPerStep = dvsWindow == nil
+    //    ? midiFramesPerStep : framesPerStep` conditional lives, so it
+    //    needs its own direct proof that `dvsWindow != nil` still
+    //    resolves to `framesPerStep`.
+
+    func testDVSLegacyGrainPathFrameDeltaRemainsUnchangedAt3932Scale() throws {
+        let (controller, setNow, _) = try makeController()
+        controller.dvsUsesContinuousRenderer = false
+
+        let tick = 1.0 / 60.0
+        setNow(0.0)
+        controller.positionDidChangeContinuous(steps: 0, direction: .forward, segmentWindow: tick)
+        controller.waitForAudioQueue()
+
+        setNow(tick)
+        controller.positionDidChangeContinuous(steps: 100, direction: .forward, segmentWindow: tick)
+        controller.waitForAudioQueue()
+
+        // isDVSLoop == true here (8_000-frame synthetic buffer fits
+        // within dvsLoopFrames), so currentSampleFrame comes from
+        // dvsLoopPhaseFrame: Int((100 * framesPerStep) mod dvsLoopFrames),
+        // truncating (not rounding) — framesPerStep = (44_100 * 1.8) /
+        // 3932 ≈ 20.188206..., 100 * that ≈ 2018.82 → truncates to 2018.
+        XCTAssertEqual(controller.currentSampleFrame, 2018,
+            "DVS's legacy grain path (isDVSLoop path) must remain on the unchanged 3932-step scale")
+    }
+
+    func testDVSLongSampleFallbackFrameDeltaRemainsUnchangedAt3932Scale() throws {
+        // A buffer at least as long as one revolution forces
+        // isDVSLoop == false even though dvsWindow != nil — the documented
+        // long-sample DVS fallback that shares `effectiveFrameDelta`'s
+        // `wrappedSampleFrame` update with the legacy MIDI rollback path,
+        // discriminated only by `dvsWindow`. This is the one test that
+        // directly exercises my new conditional for a DVS-originated tick.
+        final class Clock { var now: TimeInterval = 0 }
+        let clock = Clock()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        controller.dvsUsesContinuousRenderer = false
+        controller.testOnly_installSyntheticSample(
+            try makeSyntheticLoopBuffer(frames: 100_000),
+            sampleID: "dvs-long-sample-fallback"
+        )
+
+        let tick = 1.0 / 60.0
+        clock.now = 0.0
+        controller.positionDidChangeContinuous(steps: 0, direction: .forward, segmentWindow: tick)
+        controller.waitForAudioQueue()
+
+        clock.now = tick
+        controller.positionDidChangeContinuous(steps: 100, direction: .forward, segmentWindow: tick)
+        controller.waitForAudioQueue()
+
+        // effectiveFramesPerStep must resolve to framesPerStep (DVS,
+        // 3932-based) here since dvsWindow != nil: frameDelta =
+        // round(100 * 20.188206...) = 2019 (rounded, via the
+        // wrappedSampleFrame/effectiveFrameDelta path this time, not
+        // truncated dvsLoopPhaseFrame — a different rounding rule than
+        // the isDVSLoop==true test above, by design of the existing code).
+        XCTAssertEqual(controller.currentSampleFrame, 2019,
+            "DVS's long-sample fallback (isDVSLoop == false, dvsWindow != nil) must still use the " +
+            "unchanged 3932-step scale, not the direct-MIDI 3600-step scale")
     }
 
     // MARK: - DEFECT 1: DVS ownership must survive load/unload
