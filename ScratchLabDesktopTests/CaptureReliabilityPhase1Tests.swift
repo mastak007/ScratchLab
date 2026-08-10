@@ -12092,8 +12092,8 @@ final class PracticeTargetNotationChartTests: XCTestCase {
         // a LaneViewport via ScratchStrokeGeometry + ScratchMotionRenderer.
         XCTAssertTrue(view.contains("LaneContent(notation:"),
                       "Practice must build a LaneContent from the target notation")
-        XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
-                      "Target chart must read the existing bundled Baby Scratch notation")
+        XCTAssertTrue(view.contains("canonicalBeatPattern(forScratchID: scratch.id)"),
+                      "Target chart must read the canonical Baby Scratch technique pattern")
 
         // Open mode stays parked (static, no playhead). Auto-cut / Guided /
         // Coached loop the notation under the action line.
@@ -12165,9 +12165,9 @@ final class GuidedCutCueLayerTests: XCTestCase {
         XCTAssertTrue(view.contains("practiceAssistMode == .guided"),
                       "Cue layer must render only when assist mode is Guided")
 
-        // Uses existing target notation / faderState data.
-        XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
-                      "Cue must read the existing bundled target notation")
+        // Uses the canonical target notation / faderState data.
+        XCTAssertTrue(view.contains("canonicalBeatPattern(forScratchID: scratch.id)"),
+                      "Cue must read the canonical technique's target notation")
         XCTAssertTrue(view.contains("faderState"),
                       "Cue must derive state from existing stroke faderState data")
 
@@ -12249,9 +12249,9 @@ final class AutoCutVisualPlaybackTests: XCTestCase {
         XCTAssertTrue(view.contains("TimelineView(.periodic"),
                       "Auto-cut mode must use a TimelineView clock")
 
-        // Reuses the existing bundled target notation — no new data source.
-        XCTAssertTrue(view.contains("ScratchNotation.babyScratch"),
-                      "Auto-cut mode must reuse the existing bundled target notation")
+        // Reuses the shared canonical target-notation lookup — no new data source.
+        XCTAssertTrue(view.contains("canonicalBeatPattern(forScratchID: scratch.id)"),
+                      "Auto-cut mode must reuse the canonical target-notation lookup")
 
         // Honest copy — visual preview only, no audio playback.
         XCTAssertTrue(view.contains("Visual target preview. App playback is off for this mode."),
@@ -12320,9 +12320,15 @@ final class PracticeNotationPlaybackStatusTests: XCTestCase {
         // it survives view rebuilds (e.g. rotation) instead of resetting.
         XCTAssertTrue(view.contains("notationClockStartDate = Date()"),
                       "startSession must stamp the session-owned notation clock")
-        XCTAssertTrue(view.contains("clockStartDate: notationClockStartDate")
-                      && view.contains(".looping(start: notationClockStartDate"),
+        XCTAssertTrue(view.contains(".looping(start: notationClockStartDate"),
                       "Notation views must be driven by the shared session clock")
+        // The Guided cue layer takes the same LaneClock the motion lane
+        // builds from activeLane, rather than re-deriving its own loop
+        // position from a raw clockStartDate — one playhead timeline for
+        // both the platter curve and the cue.
+        XCTAssertTrue(view.contains("let clock = activeLane?.clock")
+                      && view.contains("GuidedCutCueLayer(notation: notation, clock: clock)"),
+                      "Guided cue layer must share activeLane's clock, not its own timer")
         XCTAssertFalse(view.contains("@State private var startDate = Date()"),
                        "Notation views must not own private free-running clocks")
     }

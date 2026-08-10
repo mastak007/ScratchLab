@@ -152,11 +152,15 @@ struct PracticeModeView: View {
         scratch
     }
 
-    // Target notation for the current scratch. Only Baby Scratch ships a
-    // bundled notation today; other scratches return nil so the target
-    // chart panel is omitted (graceful).
+    // Target notation for the current scratch, materialized from the
+    // canonical technique registry (`ScratchNotation.canonicalBeatPattern`)
+    // at the session's active BPM. Only techniques with a proven,
+    // evidence-backed `BeatPattern` — today, only Baby Scratch — resolve to
+    // a pattern; everything else stays nil so the target lane panel is
+    // omitted (graceful), never a guessed fallback.
     private var targetNotation: ScratchNotation? {
-        scratch.id == "baby_scratch" ? ScratchNotation.babyScratch : nil
+        ScratchNotation.canonicalBeatPattern(forScratchID: scratch.id)?
+            .materialized(bpm: Double(practiceBeatStore.bpmValue))
     }
 
     private var assistModeBinding: Binding<PracticeAssistMode> {
@@ -657,10 +661,13 @@ struct PracticeModeView: View {
                     feedbackBanner.padding(.bottom, 10)
                 }
 
-            // Guided mode keeps its crossfader cue beneath the lane.
-            if practiceAssistMode == .guided, let notation = targetNotation {
-                GuidedCutCueLayer(notation: notation,
-                                  clockStartDate: notationClockStartDate)
+            // Guided mode keeps its crossfader cue beneath the lane. Shares
+            // `activeLane`'s clock with the motion lane above it — one
+            // playhead timeline drives both the platter curve and this cue,
+            // instead of the cue re-deriving its own loop position.
+            if practiceAssistMode == .guided, let notation = targetNotation,
+               let clock = activeLane?.clock {
+                GuidedCutCueLayer(notation: notation, clock: clock)
             }
 
             practiceBottomHUD
@@ -2106,11 +2113,15 @@ struct SessionSetupOverlay: View {
 // wins; otherwise falls back to per-stroke `faderState`, unchanged from
 // before this channel existed) and renders a forward-looking visual guide.
 // It drives nothing — no playback, scoring, capture, export, or audio.
-// `clockStartDate` is the shared session-owned clock origin; the TimelineView
-// is only a render-side ticker.
+// `clock` is the same `LaneClock` driving the motion lane above it (built
+// from the session-owned `notationClockStartDate`); the TimelineView here is
+// only a render-side ticker, not an independent timing source.
 private struct GuidedCutCueLayer: View {
     let notation: ScratchNotation
-    let clockStartDate: Date
+    // The lane's own playhead clock (see `LaneClock` in TimingLane.swift) —
+    // shared with `ScratchMotionLane` so the cue and the platter motion
+    // never drift against each other or run their own timers.
+    let clock: LaneClock
 
     // Compact-vertical (iPhone landscape) trims the caption sentence and
     // tightens padding so the lane above can claim more height. The
@@ -2144,12 +2155,11 @@ private struct GuidedCutCueLayer: View {
     }
 
     var body: some View {
-        // TimelineView is a render-side ticker; the clock origin is the
-        // shared session-owned clockStartDate. ~10 Hz is smooth for a cue.
+        // TimelineView is a render-side ticker; the timing authority is the
+        // shared `clock`. ~10 Hz is smooth for a cue.
         TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
             let loopDuration = max(notation.timelineDuration, 0.1)
-            let elapsed = timeline.date.timeIntervalSince(clockStartDate)
-            let now = elapsed.truncatingRemainder(dividingBy: loopDuration)
+            let now = clock.now(at: timeline.date)
             let state = faderState(at: now, loopDuration: loopDuration)
 
             VStack(alignment: .leading, spacing: isCompactVertical ? 4 : 8) {

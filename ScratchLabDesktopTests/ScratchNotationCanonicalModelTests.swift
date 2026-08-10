@@ -341,19 +341,16 @@ struct ScratchNotationLegacyRegressionTests {
 // MARK: - Canonical technique registry boundaries
 
 /// Every `BeatPattern` this repository has authored evidence for, to date.
-/// This is deliberately test-local, not a production registry — there is
-/// exactly one call site (this suite) needing the enumeration, so a
-/// production-side registry type is not yet justified. Adding an entry here
-/// requires the same repository-evidence bar `babyScratchCycle` was held to
-/// (see the notation technique evidence-matrix audit): a repeatable cycle
-/// with anchored platter directions, beat positions, cycle duration, fader
-/// state, and a loop/reset state — no guessing from PatternSignature/tips
-/// alone. As of this audit, every other `ScratchLibrary` technique (19
-/// primitives + 5 combos) is PARTIAL or INSUFFICIENT; see the technique gap
-/// report.
-private let allCanonicalBeatPatterns: [ScratchNotation.BeatPattern] = [
-    ScratchNotation.babyScratchCycle
-]
+/// Now backed by the production registry (`ScratchNotation.canonicalBeatPatterns`,
+/// added when Practice Mode became a second call site needing the
+/// enumeration). Adding an entry there requires the same repository-evidence
+/// bar `babyScratchCycle` was held to (see the notation technique
+/// evidence-matrix audit): a repeatable cycle with anchored platter
+/// directions, beat positions, cycle duration, fader state, and a loop/reset
+/// state — no guessing from PatternSignature/tips alone. As of this audit,
+/// every other `ScratchLibrary` technique (19 primitives + 5 combos) is
+/// PARTIAL or INSUFFICIENT; see the technique gap report.
+private let allCanonicalBeatPatterns: [ScratchNotation.BeatPattern] = ScratchNotation.canonicalBeatPatterns
 
 @Suite("Canonical technique registry boundaries")
 struct CanonicalTechniqueRegistryTests {
@@ -406,5 +403,167 @@ struct CanonicalTechniqueRegistryTests {
         #expect(ScratchLibrary.shared.comboScratches.count == 5)
         let comboIDs = Set(ScratchLibrary.shared.comboScratches.map(\.id))
         #expect(canonicalIDs.isDisjoint(with: comboIDs))
+    }
+
+    @Test("Lookup by scratch ID returns the canonical pattern for baby_scratch")
+    func lookupReturnsCanonicalPatternForBabyScratch() {
+        let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: "baby_scratch")
+        #expect(pattern?.scratchID == "baby_scratch")
+        #expect(pattern == ScratchNotation.babyScratchCycle)
+    }
+
+    @Test("Lookup by scratch ID returns nil for evidence-insufficient and unknown techniques")
+    func lookupReturnsNilForUnsupportedTechniques() {
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "forward_scratch") == nil)
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "scribble") == nil)
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "not_a_real_scratch_id") == nil)
+    }
+}
+
+// MARK: - Canonical playhead (LaneClock over a materialized BeatPattern)
+
+/// Practice Mode's target-notation playhead is `LaneClock.looping`, fed the
+/// duration of a `BeatPattern` materialized at the session BPM — no separate
+/// playhead type or timer. These tests exercise that composition directly,
+/// pure and without SwiftUI.
+@Suite("Canonical playhead (LaneClock over a materialized BeatPattern)")
+struct CanonicalPlayheadTests {
+
+    private func approximatelyEqual(_ a: Double, _ b: Double, tolerance: Double = 1e-6) -> Bool {
+        abs(a - b) <= tolerance
+    }
+
+    @Test("Playhead position at the start, middle, and end of the loop")
+    func positionsAtStartMidEnd() throws {
+        let notation = try #require(ScratchNotation.babyScratchCycle.materialized(bpm: 120))
+        let content = LaneContent(notation: notation, beatsPerMinute: 120)
+        let start = Date()
+        let clock = LaneClock.looping(start: start, duration: content.duration)
+
+        #expect(approximatelyEqual(clock.now(at: start), 0))
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(content.duration / 2)),
+                                   content.duration / 2))
+        let almostEnd = content.duration * 0.999
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(almostEnd)), almostEnd))
+    }
+
+    @Test("The loop wraps exactly at the canonical pattern's duration, every cycle")
+    func loopWrapsAtExactBoundary() throws {
+        let notation = try #require(ScratchNotation.babyScratchCycle.materialized(bpm: 120))
+        let content = LaneContent(notation: notation, beatsPerMinute: 120)
+        let start = Date()
+        let clock = LaneClock.looping(start: start, duration: content.duration)
+
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(content.duration)), 0))
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(content.duration * 2)), 0))
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(content.duration * 5)), 0))
+    }
+
+    @Test("Restarting the clock resets the playhead deterministically")
+    func restartResetsPlayhead() throws {
+        let notation = try #require(ScratchNotation.babyScratchCycle.materialized(bpm: 120))
+        let content = LaneContent(notation: notation, beatsPerMinute: 120)
+        let firstStart = Date()
+        let midway = firstStart.addingTimeInterval(content.duration * 0.5)
+        let firstClock = LaneClock.looping(start: firstStart, duration: content.duration)
+        #expect(approximatelyEqual(firstClock.now(at: midway), content.duration * 0.5))
+
+        // A restart re-stamps the clock origin — exactly what
+        // PracticeModeView.startSession() does to notationClockStartDate.
+        // The same wall-clock instant now reads as phase 0 again, not
+        // wherever the previous session's clock had drifted to.
+        let restartedClock = LaneClock.looping(start: midway, duration: content.duration)
+        #expect(approximatelyEqual(restartedClock.now(at: midway), 0))
+    }
+
+    @Test("Changing BPM rescales the loop duration; the canonical pattern stays beat-relative")
+    func bpmChangeRescalesLoopDuration() throws {
+        let slow = try #require(ScratchNotation.babyScratchCycle.materialized(bpm: 60))
+        let fast = try #require(ScratchNotation.babyScratchCycle.materialized(bpm: 120))
+        // Same authored beats regardless of tempo — bpm only projects, never
+        // re-authors, the pattern.
+        #expect(slow.strokes[1].endBeat == fast.strokes[1].endBeat)
+
+        let slowContent = LaneContent(notation: slow, beatsPerMinute: 60)
+        let fastContent = LaneContent(notation: fast, beatsPerMinute: 120)
+        #expect(approximatelyEqual(slowContent.duration, 1.0))
+        #expect(approximatelyEqual(fastContent.duration, 0.5))
+
+        let start = Date()
+        let slowClock = LaneClock.looping(start: start, duration: slowContent.duration)
+        let fastClock = LaneClock.looping(start: start, duration: fastContent.duration)
+        // At the same wall-clock instant, the shorter (faster-tempo) loop has
+        // already wrapped once while the slower one has not.
+        let t = start.addingTimeInterval(0.6)
+        #expect(approximatelyEqual(slowClock.now(at: t), 0.6))
+        #expect(approximatelyEqual(fastClock.now(at: t), 0.1))
+    }
+
+    @Test("A pattern longer than one beat loops over its own full duration, not 1 beat")
+    func nonUnitBeatPatternLoopsOverItsOwnDuration() throws {
+        let twoBeatPattern = ScratchNotation.BeatPattern(
+            version: 1, scratchID: "test_two_beat",
+            timingBasis: "beat_canonical_test_fixture_v1", beatsPerBar: nil,
+            strokes: [.init(startBeat: 0, endBeat: 1.0, direction: .forward,
+                            speedClassification: .medium, faderState: .open),
+                      .init(startBeat: 1.0, endBeat: 2.0, direction: .backward,
+                            speedClassification: .medium, faderState: .open)])
+        #expect(approximatelyEqual(twoBeatPattern.durationBeats, 2.0))
+
+        let notation = try #require(twoBeatPattern.materialized(bpm: 120))
+        let content = LaneContent(notation: notation, beatsPerMinute: 120)
+        #expect(approximatelyEqual(content.duration, 1.0)) // 2 beats @ 120bpm = 1s
+
+        let start = Date()
+        let clock = LaneClock.looping(start: start, duration: content.duration)
+        // Wraps at 1s (2 beats), not at 0.5s (1 beat).
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(0.5)), 0.5))
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(1.0)), 0))
+    }
+
+    @Test("A fader edge inside the stroke span never shrinks the loop duration")
+    func faderWithinStrokeSpanDoesNotAlterDuration() throws {
+        let pattern = ScratchNotation.BeatPattern(
+            version: 1, scratchID: "test_fader_within",
+            timingBasis: "beat_canonical_test_fixture_v1", beatsPerBar: nil,
+            strokes: [.init(startBeat: 0, endBeat: 1.0, direction: .forward,
+                            speedClassification: .medium, faderState: .open),
+                      .init(startBeat: 1.0, endBeat: 2.0, direction: .backward,
+                            speedClassification: .medium, faderState: .open)],
+            faderEvents: [.init(beat: 0, state: .open),
+                          .init(beat: 1.5, state: .closed)])
+        // Fader's last edge (1.5) is inside the strokes' span (2.0) — the
+        // union is still driven by the strokes.
+        #expect(approximatelyEqual(pattern.durationBeats, 2.0))
+
+        let notation = try #require(pattern.materialized(bpm: 120))
+        let content = LaneContent(notation: notation, beatsPerMinute: 120)
+        #expect(approximatelyEqual(content.duration, 1.0))
+    }
+
+    @Test("A fader edge past the last stroke extends the loop — union of both streams")
+    func faderPastStrokesExtendsDuration() throws {
+        let pattern = ScratchNotation.BeatPattern(
+            version: 1, scratchID: "test_fader_extends",
+            timingBasis: "beat_canonical_test_fixture_v1", beatsPerBar: nil,
+            strokes: [.init(startBeat: 0, endBeat: 1.0, direction: .forward,
+                            speedClassification: .medium, faderState: .open)],
+            faderEvents: [.init(beat: 0, state: .open),
+                          .init(beat: 1.0, state: .closed),
+                          .init(beat: 2.5, state: .open)])
+        // Fader's last edge (2.5) extends past the last stroke (1.0) — the
+        // union-of-streams duration must be driven by the fader stream here.
+        #expect(approximatelyEqual(pattern.durationBeats, 2.5))
+
+        let notation = try #require(pattern.materialized(bpm: 120))
+        let content = LaneContent(notation: notation, beatsPerMinute: 120)
+        // 2.5 beats @ 120bpm = 1.25s — the loop must run this long, not stop
+        // at the stroke-only 0.5s.
+        #expect(approximatelyEqual(content.duration, 1.25))
+
+        let start = Date()
+        let clock = LaneClock.looping(start: start, duration: content.duration)
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(1.25)), 0))
+        #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(0.8)), 0.8))
     }
 }

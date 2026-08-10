@@ -3019,6 +3019,21 @@ extension ScratchNotation {
                   direction: .backward, speedClassification: .medium, faderState: .open)
         ]
     )
+
+    /// Every technique with a proven, SAFE-to-author `BeatPattern` (see the
+    /// evidence audit on `babyScratchCycle`). Adding an entry here requires
+    /// clearing the same bar: an anchored starting platter direction, exact
+    /// beat-positioned strokes, cycle duration, and fader state — never
+    /// guessed from `PatternSignature`/coach tips. Every other
+    /// `ScratchLibrary` technique intentionally has no entry.
+    static let canonicalBeatPatterns: [BeatPattern] = [babyScratchCycle]
+
+    /// The canonical technique unit for `scratchID`, or `nil` when no
+    /// evidenced `BeatPattern` exists for it yet — callers must treat `nil`
+    /// as "no canonical target notation", never fall back to a guess.
+    static func canonicalBeatPattern(forScratchID scratchID: String) -> BeatPattern? {
+        canonicalBeatPatterns.first { $0.scratchID == scratchID }
+    }
 }
 
 /// Frame-anchored direction polarity for Baby Scratch.
