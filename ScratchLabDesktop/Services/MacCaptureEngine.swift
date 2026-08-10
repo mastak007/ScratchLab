@@ -6986,6 +6986,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.activeMIDILearnAction = nil
             let fb = "Learned \(action.displayName): \(control.displayName)"
             if self.midiLearnFeedback != fb { self.midiLearnFeedback = fb }
+            // A fresh or replaced binding changes what CC (or none at all,
+            // until now) drives this control — its old value (if any) is
+            // not meaningful under the new binding, so reset to unity
+            // until the newly mapped CC actually sends a value.
+            if action == .crossfader {
+                self.scratchPlaybackController.resetCrossfaderGainToUnity()
+            } else if action == .rightUpfader {
+                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
+            }
         })
     }
 
@@ -7156,6 +7165,39 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    /// Evaluates whether this CC event matches the learned right-upfader or
+    /// crossfader mapping and, if so, forwards the calibrated/normalized
+    /// value (via the existing `MIDILearnedControl.normalizedValue(from:)` —
+    /// respecting min/max calibration and inversion exactly like every other
+    /// learned continuous control) to the playback controller as
+    /// scratch-sample audio gain. Matching is by EXACT (channel, controller),
+    /// same as `evaluateCalibrationForCC` above, so the platter's CC6 flood
+    /// can never match a fader binding.
+    ///
+    /// The left upfader intentionally has no audio effect (no supported beat
+    /// bus exists yet — see `MIDISemanticAction.leftUpfader`): it stays
+    /// mapped, persisted, and visible in diagnostics, but is never checked
+    /// here, so a learned left-upfader mapping simply never reaches the
+    /// playback controller.
+    ///
+    /// Called from the real CoreMIDI packet-parsing loop for every incoming
+    /// CC message; also callable directly from tests as a seam.
+    func evaluateUserMixerGainForCC(channel: Int, controller: Int, value: Int) {
+        guard let mapping = currentMIDIDeviceMapping else { return }
+        if let rightUpfader = mapping.control(for: .rightUpfader),
+           rightUpfader.messageType == .controlChange,
+           rightUpfader.channel == channel,
+           rightUpfader.controlNumber == controller {
+            scratchPlaybackController.setRightUpfaderGain(rightUpfader.normalizedValue(from: value))
+        }
+        if let crossfader = mapping.control(for: .crossfader),
+           crossfader.messageType == .controlChange,
+           crossfader.channel == channel,
+           crossfader.controlNumber == controller {
+            scratchPlaybackController.setCrossfaderPosition(crossfader.normalizedValue(from: value))
+        }
+    }
+
     /// Evaluates whether an active calibration session should accumulate this
     /// CC event's raw value. Only accumulates events on the EXACT (channel,
     /// controller) already learned for the action being calibrated — this is
@@ -7308,6 +7350,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             self.calibrationError = ""
+            // The control's raw-value-to-normalized mapping just changed —
+            // its last-known gain was computed under the OLD calibration
+            // and is no longer meaningful, so reset to unity until the
+            // next value arrives under the new range.
+            if action == .crossfader {
+                self.scratchPlaybackController.resetCrossfaderGainToUnity()
+            } else if action == .rightUpfader {
+                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
+            }
         })
     }
 
@@ -7315,7 +7366,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// action, independent of calibration — an explicit, standalone toggle.
     /// Runs the persistence on `midiMappingPersistenceQueue`, never on main.
     func setInversion(_ inverted: Bool, for action: MIDISemanticAction) {
-        guard currentMIDIDeviceMapping?.control(for: action) != nil else { return }
+        guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
+        // Cheap pre-check on the main-thread cache, mirroring the pattern
+        // already used above: only an ACTUAL flip changes what the
+        // control's raw values mean. A same-value call (e.g. a UI toggle
+        // round-tripping) must not audibly reset gain for nothing.
+        let didChange = existingBeforeChange.inverted != inverted
         let deviceID = selectedMIDIInputSourceID
         let deviceName = selectedMIDIInputSourceName
         mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
@@ -7337,7 +7393,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             )
             mapping.upsert(updated)
         }, completion: { [weak self] mapping in
-            self?.currentMIDIDeviceMapping = mapping
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            guard didChange else { return }
+            // Inversion flips how raw values map to gain — the control's
+            // last-known gain was computed under the OLD interpretation.
+            if action == .crossfader {
+                self.scratchPlaybackController.resetCrossfaderGainToUnity()
+            } else if action == .rightUpfader {
+                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
+            }
         })
     }
 
@@ -7355,6 +7420,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.midiCaptureLock.unlock()
                 UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
                 self.crossfaderCCMapping = nil
+                // The cleared control's last value must not keep muting
+                // audio — only this control resets; the other's current
+                // contribution is preserved.
+                self.scratchPlaybackController.resetCrossfaderGainToUnity()
+            } else if action == .rightUpfader {
+                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
             }
             if self.midiLearnState != .idle { self.midiLearnState = .idle }
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
@@ -7373,6 +7444,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.midiCaptureLock.unlock()
             UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
             self.crossfaderCCMapping = nil
+            // Neither control's mapping is trustworthy anymore.
+            self.scratchPlaybackController.resetUserMixerGainToUnity()
             if self.midiLearnState != .idle { self.midiLearnState = .idle }
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
@@ -7381,6 +7454,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Load the learned device mapping for the currently selected MIDI source.
     /// Called whenever the selected MIDI source changes.
     func loadDeviceMappingForCurrentSource() {
+        // A MIDI source change is a new session for the learned-mixer gain
+        // contributions, regardless of outcome below: empty source ID, a
+        // successful load (even one with mappings for both controls), or a
+        // load failure. Reset unconditionally, before any of those exit
+        // paths, so a stale value from the previous device (e.g. a
+        // crossfader last seen at 0) can never leak into the new session.
+        // Both controls stay at unity until a fresh matching CC event
+        // arrives under the (possibly new) mapping. Queued on `audioQueue`,
+        // so it is ordered after any gain-setting calls already enqueued
+        // from the previous device's last events and before any from the
+        // new one.
+        scratchPlaybackController.resetUserMixerGainToUnity()
+
         let deviceID = selectedMIDIInputSourceID
         guard !deviceID.isEmpty else {
             currentMIDIDeviceMapping = nil
@@ -7765,6 +7851,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func testOnly_receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
         receiveMIDIPacketList(packetListPtr)
     }
+
+    /// Test-only seam: `scratchPlaybackController` is private. Fader-gain
+    /// tests need to verify `evaluateUserMixerGainForCC` actually reached
+    /// it — there is no other observable effect to assert on from outside
+    /// this file. DEBUG-only: never compiled into a Release build.
+    var testOnly_scratchPlaybackController: ScratchSamplePlaybackController { scratchPlaybackController }
     #endif
 
     /// Dispatches one fully-decoded channel-voice message to the existing
@@ -7798,6 +7890,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 currentMapping = overrideMapping
             }
             evaluateCalibrationForCC(channel: channel, controller: controller, value: value)
+            evaluateUserMixerGainForCC(channel: channel, controller: controller, value: value)
 
             let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
             if mappedControl == "crossfader" {

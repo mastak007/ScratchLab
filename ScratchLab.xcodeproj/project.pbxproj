@@ -294,6 +294,9 @@
 		MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */; };
 		MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */; };
 		MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */; };
+		DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */; };
+		SPCUMG0TBF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */; };
+		MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */; };
 		MIDLRN0TBF0003 /* MIDILearnHangFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */; };
 		MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */; };
 		RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */; };
@@ -726,6 +729,9 @@
 		MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMappingTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnEngineTests.swift; sourceTree = "<group>"; };
 		MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPacketBoundsCrashFixTests.swift; sourceTree = "<group>"; };
+		DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSContinuousVinylRendererUserMixerGainTests.swift; sourceTree = "<group>"; };
+		SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerUserMixerGainTests.swift; sourceTree = "<group>"; };
+		MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIUserMixerGainTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnHangFixTests.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerificationModelTests.swift; sourceTree = "<group>"; };
 		RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2ProfileTests.swift; sourceTree = "<group>"; };
@@ -1030,6 +1036,9 @@
 				MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */,
 				MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */,
 				MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */,
+				DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */,
+				SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */,
+				MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */,
 				MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */,
 				MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */,
 				CTLPRF0TREF0001 /* ControllerProfileCatalogTests.swift */,
@@ -2241,6 +2250,9 @@
 				MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */,
 				MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */,
 				MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */,
+				DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */,
+				SPCUMG0TBF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift in Sources */,
+				MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */,
 				MIDLRN0TBF0003 /* MIDILearnHangFixTests.swift in Sources */,
 				MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */,
 				CTLPRF0TBF0001 /* ControllerProfileCatalogTests.swift in Sources */,

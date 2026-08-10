@@ -124,6 +124,14 @@ struct DVSContinuousVinylRenderCore {
     /// One-pole time constant for the click-free gain ramp driven by the
     /// pipeline's authoritative active/idle/stale decision.
     static let gainSmoothingSeconds: Double = 0.003
+    /// One-pole time constant for the click-free ramp applied to the
+    /// learned-mixer (crossfader × right-upfader) user gain. Deliberately
+    /// its own field/coefficient, separate from `gainSmoothingSeconds`
+    /// above: that ramp is the pipeline's own active/idle/stale decision
+    /// and must never be conflated with or overwritten by user mixer
+    /// input — the two are combined only at final output, never merged
+    /// into one state variable.
+    static let userMixerGainSmoothingSeconds: Double = 0.005
     /// Exponential time constant for converging on the authoritative
     /// platter phase published by the control side.
     static let phaseCorrectionSeconds: Double = 0.150
@@ -165,12 +173,24 @@ struct DVSContinuousVinylRenderCore {
     private(set) var velocity: Double = 0
     private(set) var gain: Double = 0
     private(set) var pendingPhaseCorrection: Double = 0
+    /// Last-ingested target for the learned-mixer user gain (crossfader ×
+    /// right upfader, already combined and clamped by the control side).
+    /// Starts at 1.0 (unity) so audio is never muted before any mixer
+    /// control has been learned or moved — matches the product rule that
+    /// an absent mapping must never mute audio.
+    private(set) var targetUserMixerGain: Double = 1.0
+    /// Click-free-ramped user mixer gain actually applied at output. Also
+    /// starts at unity, independent of and combined only multiplicatively
+    /// with the pipeline's own active/idle `gain` above — never merged
+    /// into it, never overwritten by it.
+    private(set) var userMixerGain: Double = 1.0
 
     // MARK: Derived per-instance constants
 
     let outputSampleRate: Double
     private let velocityCoefficient: Double
     private let gainCoefficient: Double
+    private let userMixerGainCoefficient: Double
     private let correctionCoefficient: Double
     private let staleControlFrames: Int
 
@@ -179,6 +199,7 @@ struct DVSContinuousVinylRenderCore {
         self.outputSampleRate = rate
         velocityCoefficient = 1 - exp(-1 / (Self.velocitySmoothingSeconds * rate))
         gainCoefficient = 1 - exp(-1 / (Self.gainSmoothingSeconds * rate))
+        userMixerGainCoefficient = 1 - exp(-1 / (Self.userMixerGainSmoothingSeconds * rate))
         correctionCoefficient = 1 - exp(-1 / (Self.phaseCorrectionSeconds * rate))
         staleControlFrames = Int(Self.staleControlSeconds * rate)
         // Start stale so nothing sounds before the first control publish.
@@ -230,6 +251,19 @@ struct DVSContinuousVinylRenderCore {
         }
     }
 
+    /// Applies the latest published learned-mixer user gain (crossfader ×
+    /// right upfader, already combined by the control side). Unlike
+    /// `ingest(snapshot:)`, this is not epoch-gated — the mixer gain is
+    /// independent of the velocity/phase/active triple, so every render
+    /// call simply reads whatever was last published; the ramp toward it
+    /// happens per-frame in `render`, so a stale-by-one-callback read is
+    /// inaudible by construction. Sanitized defensively here too (fails to
+    /// 0/silent, not 1/full-volume, on malformed input), mirroring the
+    /// existing `gain` field's own re-entry guard below.
+    mutating func ingestUserMixerGain(_ value: Double) {
+        targetUserMixerGain = value.isFinite ? min(max(value, 0), 1) : 0
+    }
+
     /// Clamps a velocity to finite, bounded values. Exposed for the
     /// publication-sanitization tests.
     static func sanitizedVelocity(_ velocity: Double, sourceSampleRate: Double) -> Double {
@@ -268,6 +302,8 @@ struct DVSContinuousVinylRenderCore {
         if !phase.isFinite { phase = 0 }
         if !velocity.isFinite { velocity = 0 }
         if !gain.isFinite || gain < 0 { gain = 0 }
+        if !userMixerGain.isFinite || userMixerGain < 0 { userMixerGain = 0 }
+        if !targetUserMixerGain.isFinite { targetUserMixerGain = 0 }
         if !pendingPhaseCorrection.isFinite { pendingPhaseCorrection = 0 }
 
         let loop = sampleLoopFrames
@@ -306,6 +342,14 @@ struct DVSContinuousVinylRenderCore {
             let targetGain: Double = engaged ? 1 : 0
             gain += (targetGain - gain) * gainCoefficient
 
+            // User mixer gain (learned crossfader × right upfader) ramps
+            // every frame regardless of active/idle state — never gated by
+            // `gain`'s early-continue below — so it is never left stale
+            // mid-ramp when motion resumes. Phase/velocity above have
+            // already advanced this frame either way: closing this fader
+            // (or the pipeline going idle) never stops position tracking.
+            userMixerGain += (targetUserMixerGain - userMixerGain) * userMixerGainCoefficient
+
             if gain < 0.000_001 {
                 left[i] = 0
                 right?[i] = 0
@@ -318,7 +362,11 @@ struct DVSContinuousVinylRenderCore {
             let index0 = index1 - 1 < 0 ? loopIndexCount - 1 : index1 - 1
             let index2 = index1 + 1 >= loopIndexCount ? 0 : index1 + 1
             let index3 = index2 + 1 >= loopIndexCount ? 0 : index2 + 1
-            let outputGain = Float(gain)
+            // Combined multiplicatively at the final output only — the two
+            // gain sources stay fully independent state (see the field
+            // doc comments above); neither is ever overwritten by the
+            // other.
+            let outputGain = Float(gain * userMixerGain)
 
             let leftValue = Self.catmullRom(
                 Self.loopSample(channel0, index0, contentFrames, fadeWidth),
@@ -409,6 +457,13 @@ private final class DVSVinylRenderMailbox {
     let phaseBits = Atomic<UInt64>(Double.zero.bitPattern)
     let activeWord = Atomic<UInt64>(0)
     let sampleTablePointer = Atomic<UnsafeMutableRawPointer?>(nil)
+    /// Learned-mixer user gain (crossfader × right upfader), already
+    /// combined and clamped by the control side. Independent of
+    /// `controlEpoch` — read directly every render call rather than
+    /// epoch-gated, since it has no correction/staleness semantics of its
+    /// own to coordinate with velocity/phase/active. Starts at unity so
+    /// audio is never muted before any mixer control is learned or moved.
+    let userMixerGainBits = Atomic<UInt64>(Double(1.0).bitPattern)
 
     /// Render-owned core; after init, touched only by the render path
     /// (`DVSContinuousVinylRenderer.performRender`).
@@ -475,6 +530,7 @@ final class DVSContinuousVinylRenderer {
     private(set) var lastPublishedVelocity: Double?
     private(set) var lastPublishedAuthoritativePhase: Double?
     private(set) var lastPublishedActive: Bool?
+    private(set) var lastPublishedUserMixerGain: Double?
 #endif
 
     init() {
@@ -540,6 +596,11 @@ final class DVSContinuousVinylRenderer {
             active: mailbox.activeWord.load(ordering: .relaxed) != 0
         )
         mailbox.core.pointee.ingest(snapshot: snapshot)
+        // Learned-mixer user gain: one relaxed atomic load, independent of
+        // the epoch above (see the mailbox field's doc comment).
+        mailbox.core.pointee.ingestUserMixerGain(
+            Double(bitPattern: mailbox.userMixerGainBits.load(ordering: .relaxed))
+        )
         return mailbox.core.pointee.render(left: left, right: right, frameCount: frameCount)
     }
 
@@ -639,6 +700,20 @@ final class DVSContinuousVinylRenderer {
 #endif
     }
 
+    /// Publishes the combined learned-mixer user gain (crossfader ×
+    /// right-upfader, already multiplied by the caller). Sanitized here
+    /// (and defensively again at ingest) so the render callback never sees
+    /// non-finite input; malformed input fails to silence, not full
+    /// volume. No epoch bump — see the mailbox field's doc comment for why
+    /// this is independent of the velocity/phase/active snapshot.
+    func publishUserMixerGain(_ gain: Double) {
+        let safeGain = gain.isFinite ? min(max(gain, 0), 1) : 0
+        mailbox.userMixerGainBits.store(safeGain.bitPattern, ordering: .relaxed)
+#if DEBUG
+        lastPublishedUserMixerGain = safeGain
+#endif
+    }
+
 #if DEBUG
     // MARK: - Test hooks (never used by production/hardware code paths)
 
@@ -667,5 +742,7 @@ final class DVSContinuousVinylRenderer {
     var testOnly_corePhase: Double { mailbox.core.pointee.phase }
     var testOnly_coreVelocity: Double { mailbox.core.pointee.velocity }
     var testOnly_coreGain: Double { mailbox.core.pointee.gain }
+    var testOnly_coreUserMixerGain: Double { mailbox.core.pointee.userMixerGain }
+    var testOnly_coreTargetUserMixerGain: Double { mailbox.core.pointee.targetUserMixerGain }
 #endif
 }

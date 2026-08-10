@@ -2742,6 +2742,126 @@ final class ScratchSamplePlaybackController {
         }
     }
 
+    // MARK: - Learned mixer gain (crossfader × right upfader)
+    //
+    // Applies learned, calibrated crossfader/right-upfader values as
+    // scratch-sample audio gain — scratchGain = rightUpfaderGain ×
+    // crossfaderRightDeckGain — published to `dvsContinuousRenderer`'s
+    // real-time-safe atomic mailbox, the single render callback both the
+    // direct-MIDI and DVS continuous-renderer paths already share (both
+    // `midiUsesContinuousRenderer` and `dvsUsesContinuousRenderer` default
+    // true), so the learned gain applies identically regardless of motion
+    // source. Deliberately separate from `crossfaderGate`/`setCrossfader`
+    // above (an earlier, unused CC8-hardcoded prototype with no learned-
+    // mapping awareness and a different, linear curve) and from
+    // `playerNode.volume` (owned exclusively by the click-free stop ramp)
+    // — this never reads or writes either.
+
+    /// Right (scratch-deck) upfader gain, 0...1, continuous. Defaults to
+    /// unity: an unmapped control, or one that hasn't received a value
+    /// this session, must never mute audio. Confined to `audioQueue`.
+    private var rightUpfaderGain: Double = 1.0
+
+    /// Crossfader's right-deck scratch gain after the cut curve, 0...1.
+    /// Same unity default and the same reason. Confined to `audioQueue`.
+    private var crossfaderRightDeckGain: Double = 1.0
+
+    /// Bounded cut-in region near the crossfader's left (closed) edge, as
+    /// a fraction of full throw. Below this fraction, right-deck gain
+    /// ramps linearly from 0 at the physical left edge to 1 at the
+    /// boundary; at and beyond it (center, right), gain is 1. Mirrors the
+    /// project's existing `crossfaderCutWidth` convention for Rane-style
+    /// crossfader geometry (`ScratchAnalysisCalibration`,
+    /// `TravelLaneDebugView`'s default of 0.05) — kept as its own
+    /// constant here since notation analysis and live audio gain are
+    /// otherwise independent subsystems.
+    static let crossfaderCutInWidth: Double = 0.05
+
+    /// Maps a normalized crossfader position (0 = physical left edge, 1 =
+    /// physical right edge) to the right deck's scratch-audio gain: a cut
+    /// curve, not a linear pan. Pure function — no state — so it is
+    /// trivially unit-testable in isolation from the controller/renderer.
+    static func crossfaderRightDeckGain(forNormalizedPosition normalized: Double) -> Double {
+        guard normalized.isFinite else { return 0 }
+        let clamped = min(max(normalized, 0), 1)
+        guard clamped > 0 else { return 0 }
+        guard clamped < crossfaderCutInWidth else { return 1 }
+        return clamped / crossfaderCutInWidth
+    }
+
+    /// Sets the learned right-upfader's normalized gain (0 = down/silence,
+    /// 1 = unity, continuous in between — already calibrated/inverted by
+    /// the caller via `MIDILearnedControl.normalizedValue(from:)`).
+    /// Dispatches to `audioQueue` and returns immediately; the click-free
+    /// ramp that avoids audible steps lives in the render callback, not
+    /// here — this only updates the target.
+    func setRightUpfaderGain(_ normalizedGain: Double) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.rightUpfaderGain = normalizedGain.isFinite ? min(max(normalizedGain, 0), 1) : 0
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Sets the learned crossfader's normalized physical position (0 =
+    /// left edge, 1 = right edge, already calibrated/inverted by the
+    /// caller) and applies the right-deck cut curve. Dispatches to
+    /// `audioQueue` and returns immediately.
+    func setCrossfaderPosition(_ normalizedPosition: Double) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            let sanitized = normalizedPosition.isFinite ? min(max(normalizedPosition, 0), 1) : 0
+            self.crossfaderRightDeckGain = Self.crossfaderRightDeckGain(forNormalizedPosition: sanitized)
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Resets the right-upfader gain contribution to unity: called
+    /// whenever its mapping is no longer trustworthy for the current
+    /// session — cleared, replaced/relearned, recalibrated, or
+    /// re-inverted — so a stale value (e.g. a fader last seen at 0)
+    /// cannot keep muting audio until a fresh CC event arrives under the
+    /// new interpretation. Dispatches to `audioQueue` and returns
+    /// immediately, same as the setter above.
+    func resetRightUpfaderGainToUnity() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.rightUpfaderGain = 1.0
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Resets the crossfader's right-deck gain contribution to unity. Same
+    /// rationale as `resetRightUpfaderGainToUnity`.
+    func resetCrossfaderGainToUnity() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.crossfaderRightDeckGain = 1.0
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Resets both mixer inputs to unity in one queued step (no
+    /// intermediate publish) — used when neither is trustworthy for the
+    /// current session: a MIDI source change, a mapping load (including
+    /// an empty/missing/failed load), or clearing every mapping for a
+    /// device.
+    func resetUserMixerGainToUnity() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.rightUpfaderGain = 1.0
+            self.crossfaderRightDeckGain = 1.0
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Combines the two independent mixer inputs and publishes the result
+    /// to the continuous renderer's atomic mailbox. Must run on
+    /// `audioQueue` (the mailbox's documented single-writer contract).
+    private func publishUserMixerGain() {
+        dvsContinuousRenderer.publishUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
+    }
+
     // MARK: - Queue drain (test seam and ordered shutdown)
 
     /// Block the caller until all pending audio-queue work completes.
