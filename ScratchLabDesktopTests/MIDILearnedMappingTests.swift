@@ -195,4 +195,110 @@ final class MIDILearnedMappingTests: XCTestCase {
         XCTAssertNil(store.load(deviceIdentifier: "midi_rane"), "The nil-swallowing convenience API stays nil on corruption")
         XCTAssertThrowsError(try store.loadOrThrow(deviceIdentifier: "midi_rane"))
     }
+
+    // MARK: - curveConfig tolerant decode
+    //
+    // `curveConfig` must decode as nil on ANY malformation (unknown preset,
+    // wrong JSON type, malformed nested capture) rather than throwing and
+    // discarding the whole control — let alone the whole device mapping's
+    // array of controls, which synthesized decoding would do. schemaVersion
+    // stays at 1 throughout: bumping it would reject every pre-existing
+    // mapping file outright.
+
+    private func controlJSON(
+        action: String = "crossfader",
+        messageType: String = "controlChange",
+        channel: Int = 15,
+        controlNumber: Int = 8,
+        curveConfigJSON: String? = nil
+    ) -> String {
+        let curveField = curveConfigJSON.map { ",\n  \"curveConfig\": \($0)" } ?? ""
+        return """
+        {
+          "action": "\(action)",
+          "messageType": "\(messageType)",
+          "channel": \(channel),
+          "controlNumber": \(controlNumber),
+          "minValue": 0,
+          "maxValue": 127,
+          "inverted": false,
+          "learnedAt": 700000000.0,
+          "isVerified": true\(curveField)
+        }
+        """
+    }
+
+    func testSchemaVersionUnchangedByCurveConfigAddition() {
+        XCTAssertEqual(MIDIDeviceMapping.currentSchemaVersion, 1)
+    }
+
+    func testLegacyControlJSONWithoutCurveConfigDecodesWithNilCurveConfig() throws {
+        let control = try JSONDecoder().decode(MIDILearnedControl.self, from: Data(controlJSON().utf8))
+        XCTAssertNil(control.curveConfig)
+        XCTAssertEqual(control.action, .crossfader)
+        XCTAssertEqual(control.controlNumber, 8)
+        XCTAssertEqual(control.resolvedCurveConfig, MIDIFaderCurveConfig.defaultConfig(for: .crossfader))
+    }
+
+    func testValidCurveConfigDecodes() throws {
+        let json = controlJSON(action: "rightUpfader", controlNumber: 21, curveConfigJSON: #"{"preset": "linear", "customCapture": null}"#)
+        let control = try JSONDecoder().decode(MIDILearnedControl.self, from: Data(json.utf8))
+        XCTAssertEqual(control.curveConfig, MIDIFaderCurveConfig(preset: .linear, customCapture: nil))
+    }
+
+    func testUnknownCurvePresetFallsBackToNil() throws {
+        let json = controlJSON(curveConfigJSON: #"{"preset": "someFuturePresetNotYetInvented", "customCapture": null}"#)
+        let control = try JSONDecoder().decode(MIDILearnedControl.self, from: Data(json.utf8))
+        XCTAssertNil(control.curveConfig, "an unknown preset string must fall back to nil, not throw")
+        XCTAssertEqual(control.channel, 15)
+        XCTAssertEqual(control.controlNumber, 8)
+        XCTAssertTrue(control.isVerified)
+    }
+
+    func testMalformedCurveConfigTypeFallsBackToNil() throws {
+        // curveConfig present but the WRONG JSON type entirely (a bare string, not an object).
+        let json = controlJSON(curveConfigJSON: "\"not-an-object\"")
+        let control = try JSONDecoder().decode(MIDILearnedControl.self, from: Data(json.utf8))
+        XCTAssertNil(control.curveConfig)
+        XCTAssertEqual(control.action, .crossfader)
+    }
+
+    func testMalformedNestedCaptureFallsBackToNil() throws {
+        // customCapture present but a string where an Int raw value belongs.
+        let json = controlJSON(action: "rightUpfader", curveConfigJSON: #"{"preset": "custom", "customCapture": {"closedRawValue": "not-a-number", "fullOnRawValue": 90}}"#)
+        let control = try JSONDecoder().decode(MIDILearnedControl.self, from: Data(json.utf8))
+        XCTAssertNil(control.curveConfig)
+    }
+
+    /// The central proof for Correction 2: a malformed curveConfig on ONE
+    /// control must not discard that control, and must not discard the
+    /// crossfader binding or any hot cue elsewhere in the same device
+    /// mapping — which is exactly what synthesized `[MIDILearnedControl]`
+    /// decoding would do (one bad array element fails the whole array).
+    func testCorruptCurveConfigDoesNotDiscardUnrelatedMappingsOrHotCues() throws {
+        let crossfaderJSON = controlJSON(action: "crossfader", controlNumber: 8)
+        let rightUpfaderJSON = controlJSON(action: "rightUpfader", channel: 0, controlNumber: 21, curveConfigJSON: "\"totally-malformed\"")
+        let hotCue1JSON = controlJSON(action: "hotCue1", messageType: "note", channel: 9, controlNumber: 60)
+        let hotCue2JSON = controlJSON(action: "hotCue2", messageType: "note", channel: 9, controlNumber: 61)
+
+        let mappingJSON = """
+        {
+          "schemaVersion": 1,
+          "deviceIdentifier": "midi_rane",
+          "deviceName": "Rane ONE MKII",
+          "controls": [\(crossfaderJSON), \(rightUpfaderJSON), \(hotCue1JSON), \(hotCue2JSON)],
+          "createdAt": 700000000.0,
+          "lastModifiedAt": 700000000.0
+        }
+        """
+
+        let mapping = try MIDIDeviceMapping.decode(from: Data(mappingJSON.utf8))
+        XCTAssertEqual(mapping.controls.count, 4, "a malformed curveConfig on ONE control must not discard the others")
+        XCTAssertNotNil(mapping.control(for: .crossfader))
+        let rightUpfader = try XCTUnwrap(mapping.control(for: .rightUpfader))
+        XCTAssertNil(rightUpfader.curveConfig, "the malformed curveConfig falls back to nil; the control itself survives")
+        XCTAssertEqual(rightUpfader.controlNumber, 21)
+        XCTAssertNotNil(mapping.control(for: .hotCue1))
+        XCTAssertNotNil(mapping.control(for: .hotCue2))
+    }
 }

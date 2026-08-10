@@ -154,6 +154,17 @@ struct MIDILearnedControl: Codable, Equatable, Identifiable {
     /// Whether this mapping was verified against real hardware (set by user action).
     let isVerified: Bool
 
+    /// Persisted fader-curve configuration for continuous actions
+    /// (crossfader, left/right upfader). `nil` means "no curve configured
+    /// yet" — resolves to `MIDIFaderCurveConfig.defaultConfig(for: action)`,
+    /// which is numerically identical to this app's pre-curve-feature
+    /// behavior. Always `nil` for hot-cue actions.
+    let curveConfig: MIDIFaderCurveConfig?
+
+    /// Convenience: `curveConfig`, falling back to this action's
+    /// migration-safe default when nothing has been configured yet.
+    var resolvedCurveConfig: MIDIFaderCurveConfig { curveConfig ?? .defaultConfig(for: action) }
+
     init(
         action: MIDISemanticAction,
         messageType: LearnedMIDIMessageType,
@@ -165,7 +176,8 @@ struct MIDILearnedControl: Codable, Equatable, Identifiable {
         inverted: Bool = false,
         assignedSampleID: String? = nil,
         learnedAt: Date = Date(),
-        isVerified: Bool = false
+        isVerified: Bool = false,
+        curveConfig: MIDIFaderCurveConfig? = nil
     ) {
         self.action = action
         self.messageType = messageType
@@ -178,6 +190,43 @@ struct MIDILearnedControl: Codable, Equatable, Identifiable {
         self.assignedSampleID = assignedSampleID
         self.learnedAt = learnedAt
         self.isVerified = isVerified
+        self.curveConfig = curveConfig
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action, messageType, channel, controlNumber, deck, minValue, maxValue,
+             inverted, assignedSampleID, learnedAt, isVerified, curveConfig
+    }
+
+    /// Custom decoder so a corrupt/unknown `curveConfig` (unknown preset
+    /// string, wrong JSON type, malformed nested capture) can never fail
+    /// this control's decode — let alone the whole device mapping's array
+    /// of controls, which is what synthesized decoding would do (one bad
+    /// array element throws for the entire `[MIDILearnedControl]`,
+    /// discarding every other control including the crossfader binding and
+    /// all eight hot cues). Every OTHER field still decodes normally and
+    /// still throws normally if malformed — tolerance is scoped to
+    /// `curveConfig` only, the narrowest boundary that satisfies "a bad
+    /// optional curve must decode as nil, not destroy the mapping."
+    /// `Encodable.encode(to:)` remains synthesized.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        action = try container.decode(MIDISemanticAction.self, forKey: .action)
+        messageType = try container.decode(LearnedMIDIMessageType.self, forKey: .messageType)
+        channel = try container.decode(Int.self, forKey: .channel)
+        controlNumber = try container.decode(Int.self, forKey: .controlNumber)
+        deck = try container.decodeIfPresent(Int.self, forKey: .deck)
+        minValue = try container.decode(Int.self, forKey: .minValue)
+        maxValue = try container.decode(Int.self, forKey: .maxValue)
+        inverted = try container.decode(Bool.self, forKey: .inverted)
+        assignedSampleID = try container.decodeIfPresent(String.self, forKey: .assignedSampleID)
+        learnedAt = try container.decode(Date.self, forKey: .learnedAt)
+        isVerified = try container.decode(Bool.self, forKey: .isVerified)
+        // `try?` flattens: key absent -> nil; key present and valid -> the
+        // value; key present and malformed (throws) -> nil. All three
+        // collapse to the same safe fallback (the action's default curve
+        // at resolve time), never to a thrown error.
+        curveConfig = try? container.decodeIfPresent(MIDIFaderCurveConfig.self, forKey: .curveConfig)
     }
 
     /// Normalize a raw MIDI value (0–127) through this control's observed range and

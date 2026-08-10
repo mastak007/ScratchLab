@@ -2142,6 +2142,74 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Set when a calibration is rejected (unusably narrow range / no movement).
     @Published private(set) var calibrationError: String = ""
 
+    // MARK: - Fader Curve Custom Capture State
+    //
+    // "Set closed" / "Set full-on" discrete capture, distinct from the
+    // continuous-sweep min/max calibration above. Mutually exclusive with
+    // both MIDI Learn and calibration (same lock-protected guard pattern).
+    // A session only ever records the LATEST raw value seen on the
+    // EXACT (messageType, channel, controller) already learned for the
+    // action — never starts Learn, never replaces the binding, never
+    // performs persistence from the CoreMIDI callback.
+
+    /// Lock-protected realtime state, mirrors the calibration fields above.
+    private var isCurveCapturing = false
+    private var curveCaptureAction: MIDISemanticAction? = nil
+    /// Latest raw value observed on the captured action's exact binding
+    /// this session. Not persisted; read only by `captureCurveClosedPoint`/
+    /// `captureCurveFullOnPoint` when the user presses those buttons.
+    private var curveCaptureLastRawValue: Int? = nil
+    /// Pending (not yet persisted) capture points.
+    private var curveCapturePendingClosedRawValue: Int? = nil
+    private var curveCapturePendingFullOnRawValue: Int? = nil
+    /// Generation token — bumped on every start/cancel/finish, same
+    /// stale-publish protection as `calibrationGeneration`.
+    private var curveCaptureGeneration: UInt64 = 0
+    private var isCurveCapturePublishPending = false
+    private var lastCurveCapturePublishTime: CFTimeInterval = 0
+    /// Same bounded rate as calibration's observed-value publish.
+    private let curveCapturePublishInterval: CFTimeInterval = 0.25
+
+    /// The exact (messageType, channel, controlNumber) a curve-capture
+    /// session is watching — frozen at `startCurveCalibration` time, not
+    /// re-read from `currentMIDIDeviceMapping` on every event. Prevents a
+    /// mid-session relearn/replace from silently retargeting the session
+    /// at a different physical control.
+    private struct CurveCaptureBindingIdentity: Equatable {
+        let messageType: LearnedMIDIMessageType
+        let channel: Int
+        let controlNumber: Int
+    }
+    /// Device the session started on. Finish refuses to persist if the
+    /// selected source has since changed, even if by coincidence a
+    /// same-named control exists on the new device too.
+    private var curveCaptureDeviceID: String? = nil
+    private var curveCaptureBindingIdentity: CurveCaptureBindingIdentity? = nil
+
+    /// Which continuous action is currently being curve-captured, if any.
+    @Published private(set) var activeCurveCaptureAction: MIDISemanticAction? = nil
+    /// UI-facing mirrors of whether each pending point has been captured
+    /// this session — the raw values themselves are not exposed to the UI,
+    /// which never needs to display normalized/engineering values.
+    @Published private(set) var curveCaptureHasClosedPoint: Bool = false
+    @Published private(set) var curveCaptureHasFullOnPoint: Bool = false
+    /// True once at least one matching CC event has arrived this capture
+    /// session — lets the UI show "ready to capture" vs. "move the
+    /// control" without ever surfacing the raw/normalized value itself.
+    @Published private(set) var curveCaptureHasLiveValue: Bool = false
+    /// True only when both points are captured, differ, AND resolve
+    /// through the current learned control's min/max/inversion to a
+    /// finite, non-degenerate span — recomputed after every capture. The
+    /// Finish button's enabled state must be driven from this, not merely
+    /// "both points captured", since two distinct raw values can still
+    /// normalize to the same (or a degenerate) endpoint under narrow
+    /// calibration or extreme inversion.
+    @Published private(set) var curveCaptureCanFinish: Bool = false
+    /// Set when a curve-capture action is rejected (not yet learned, no
+    /// value observed yet, Finish attempted while invalid, or the
+    /// captured binding/device changed mid-session).
+    @Published private(set) var curveCaptureError: String = ""
+
     // MARK: - Scratch Bank Pad Preview Gate
     // Diagnostic-only gate. Default OFF. No scoring. No audio routing.
     // Caller injects a sample-preview callback; on macOS the callback is nil
@@ -6707,10 +6775,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func startMIDILearn(for action: MIDISemanticAction) {
         midiCaptureLock.lock()
         let calibrating = isCalibrating
+        let curveCapturing = isCurveCapturing
         midiCaptureLock.unlock()
-        // Learning and calibration must never run at the same time — a fresh
-        // learn request always wins and abandons any in-progress calibration.
+        // Learning, calibration, and curve capture must never run at the
+        // same time — a fresh learn request always wins and abandons any
+        // in-progress calibration or curve-capture session.
         if calibrating { cancelCalibration() }
+        if curveCapturing { cancelCurveCalibration() }
 
         midiCaptureLock.lock()
         learnSessionAction = action
@@ -6972,6 +7043,46 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// (file I/O + JSON) runs on `midiMappingPersistenceQueue`, never on the
     /// CoreMIDI callback or main, and all `@Published` UI-state writes happen
     /// only in the main-dispatched completion.
+    /// Resolves `control`'s curve config against itself and pushes it to
+    /// the playback controller, atomically resetting that control's gain
+    /// contribution to unity in the same step (see
+    /// `ScratchSamplePlaybackController.applyCrossfaderCurve`/
+    /// `applyRightUpfaderCurve`). The controller never sees a
+    /// `MIDIFaderCurveConfig` or performs any resolution itself — this is
+    /// the single choke point where the persisted mapping (source of
+    /// truth) is turned into the resolved runtime value the audio queue
+    /// needs. A no-op for `.leftUpfader` and hot-cue actions: no audio
+    /// call site consumes their curve in this branch.
+    ///
+    /// Must be called from every engine-side mutation that can change what
+    /// curve applies to `.crossfader`/`.rightUpfader` — a fresh learn, a
+    /// min/max recalibration, an inversion flip, a device switch/load, an
+    /// explicit preset change, or a finished custom capture. Recalibration
+    /// and inversion need this too (not just explicit curve edits):
+    /// `resolvedResponse(for:)` re-derives a custom capture through the
+    /// control's CURRENT min/max/inversion on every call, so the
+    /// controller's cached resolved value goes stale the moment either
+    /// changes unless it is re-pushed here. For the default (non-custom)
+    /// curve this push resolves to the exact same fixed constants every
+    /// time, so it is behaviorally invisible for any mapping that hasn't
+    /// configured a custom curve.
+    private func pushResolvedCurve(for control: MIDILearnedControl) {
+        // Switch on the action FIRST — curve resolution is only ever
+        // computed for the two actions that actually consume it. Hot cues
+        // and `.unassigned` never reach `resolvedResponse(for:)` from
+        // here at all (that function is also independently guarded
+        // against them — see its own doc comment — but there is no reason
+        // to compute a value this call site immediately discards).
+        switch control.action {
+        case .crossfader:
+            scratchPlaybackController.applyCrossfaderCurve(control.resolvedCurveConfig.resolvedResponse(for: control))
+        case .rightUpfader:
+            scratchPlaybackController.applyRightUpfaderCurve(control.resolvedCurveConfig.resolvedResponse(for: control))
+        default:
+            break
+        }
+    }
+
     private func applyLearnedMapping(_ control: MIDILearnedControl) {
         let action = control.action
         let deviceID = selectedMIDIInputSourceID
@@ -6988,13 +7099,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             if self.midiLearnFeedback != fb { self.midiLearnFeedback = fb }
             // A fresh or replaced binding changes what CC (or none at all,
             // until now) drives this control — its old value (if any) is
-            // not meaningful under the new binding, so reset to unity
-            // until the newly mapped CC actually sends a value.
-            if action == .crossfader {
-                self.scratchPlaybackController.resetCrossfaderGainToUnity()
-            } else if action == .rightUpfader {
-                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
-            }
+            // not meaningful under the new binding, so resolve+push its
+            // (freshly-learned, curveConfig == nil -> default) curve,
+            // which also resets gain to unity until the newly mapped CC
+            // actually sends a value.
+            self.pushResolvedCurve(for: control)
         })
     }
 
@@ -7029,7 +7138,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             maxValue: 127,
             inverted: false,
             learnedAt: Date(),
-            isVerified: true
+            isVerified: true,
+            curveConfig: nil   // hot-cue action: curve never applies
         )
         applyLearnedMapping(learned)
         return true
@@ -7095,7 +7205,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             maxValue: 127,
             inverted: false,
             learnedAt: Date(),
-            isVerified: true
+            isVerified: true,
+            curveConfig: nil   // fresh binding: any curve customized for a PREVIOUS binding on this action must not carry over
         )
         applyLearnedMapping(learned)
 
@@ -7120,8 +7231,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         let learning = learnSessionAction != nil
         let alreadyCalibrating = isCalibrating
+        let alreadyCurveCapturing = isCurveCapturing
         midiCaptureLock.unlock()
-        guard !learning, !alreadyCalibrating else { return }
+        guard !learning, !alreadyCalibrating, !alreadyCurveCapturing else { return }
         guard currentMIDIDeviceMapping?.control(for: action) != nil else {
             publishOnMainAsync(field: "calibrationError") { [weak self] in
                 self?.calibrationError = "Learn \(action.displayName) before calibrating it."
@@ -7163,6 +7275,455 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.calibrationObservedMin = nil
             self.calibrationObservedMax = nil
         }
+    }
+
+    // MARK: - Fader Curve Configuration
+    //
+    // Preset selection and custom "Set closed" / "Set full-on" capture.
+    // Layered entirely on top of the existing learn/calibration machinery:
+    // never touches a control's binding, min/max, or inversion. See
+    // `pushResolvedCurve(for:)` above for how a change here reaches the
+    // playback controller.
+
+    /// Sets (and immediately persists) a non-custom preset for an
+    /// already-learned continuous action. `.custom` is deliberately
+    /// rejected here — selecting Custom must go through
+    /// `startCurveCalibration`/`finishCurveCalibration` instead, so an
+    /// incomplete custom configuration can never be persisted. Cancels any
+    /// in-progress capture session for this action first (the user chose a
+    /// complete preset instead of finishing the pending capture).
+    func setCurvePreset(_ preset: FaderCurvePreset, for action: MIDISemanticAction) {
+        guard preset != .custom else { return }
+        guard action.hotCueIndex == nil else { return }
+        guard FaderCurvePreset.availablePresets(for: action).contains(preset) else { return }
+
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
+        guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
+        // Cheap pre-check (mirrors `setInversion`): selecting the preset
+        // that's ALREADY effectively applied — whether explicitly
+        // persisted or resolved from a nil `curveConfig`'s default — must
+        // be a true no-op. Bailing out here, before ever enqueuing a
+        // mutation, guarantees no write, no controller push, and no gain
+        // reset happen (Defect 3) — not just that the eventual write is
+        // skipped while the completion still acts as if something changed.
+        guard existingBeforeChange.resolvedCurveConfig.preset != preset else { return }
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // Derive from the in-queue mapping — see `finishCalibration`.
+            guard let existing = mapping.control(for: action) else { return }
+            let newConfig = MIDIFaderCurveConfig(preset: preset, customCapture: nil)
+            guard existing.curveConfig != newConfig else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: newConfig
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Resets an action's curve to its migration-safe default (Sharp
+    /// Scratch for the crossfader, Linear for upfaders), discarding any
+    /// custom capture. A separate, explicit action from Cancel — unlike
+    /// Cancel, this DOES persist immediately. Cancels any in-progress
+    /// capture session for this action first.
+    func resetCurve(for action: MIDISemanticAction) {
+        guard action.hotCueIndex == nil else { return }
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
+        guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
+        // Same true-no-op discipline as `setCurvePreset` (Defect 3's
+        // class of bug applies here identically): resetting a curve
+        // that's already at its default must not push/reset anything.
+        guard existingBeforeChange.curveConfig != nil else { return }
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            guard let existing = mapping.control(for: action), existing.curveConfig != nil else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: nil   // nil resolves to the action's default
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Begins a pending custom-curve capture session for an already-learned
+    /// continuous action. Deliberately does NOT change what curve is
+    /// currently applied — the existing persisted preset/curve (if any)
+    /// remains active, both in the saved mapping and in the controller,
+    /// until `finishCurveCalibration()` succeeds. Mutually exclusive with
+    /// MIDI Learn and min/max calibration (same lock-protected guard
+    /// pattern as `startCalibration`). Freezes the device and exact
+    /// binding identity the session watches — see `CurveCaptureBindingIdentity`.
+    func startCurveCalibration(for action: MIDISemanticAction) {
+        guard action.hotCueIndex == nil else { return }
+        midiCaptureLock.lock()
+        let learning = learnSessionAction != nil
+        let calibrating = isCalibrating
+        let alreadyCapturing = isCurveCapturing
+        midiCaptureLock.unlock()
+        guard !learning, !calibrating, !alreadyCapturing else { return }
+        guard let existingControl = currentMIDIDeviceMapping?.control(for: action) else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Learn \(action.displayName) before setting a custom curve."
+            }
+            return
+        }
+        let deviceID = selectedMIDIInputSourceID
+        let binding = CurveCaptureBindingIdentity(
+            messageType: existingControl.messageType,
+            channel: existingControl.channel,
+            controlNumber: existingControl.controlNumber
+        )
+        midiCaptureLock.lock()
+        isCurveCapturing = true
+        curveCaptureAction = action
+        curveCaptureDeviceID = deviceID
+        curveCaptureBindingIdentity = binding
+        curveCaptureLastRawValue = nil
+        curveCapturePendingClosedRawValue = nil
+        curveCapturePendingFullOnRawValue = nil
+        curveCaptureGeneration &+= 1
+        isCurveCapturePublishPending = false
+        lastCurveCapturePublishTime = 0
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.activeCurveCaptureAction = action
+            self.curveCaptureHasClosedPoint = false
+            self.curveCaptureHasFullOnPoint = false
+            self.curveCaptureHasLiveValue = false
+            self.curveCaptureCanFinish = false
+            self.curveCaptureError = ""
+        }
+    }
+
+    /// CoreMIDI-thread seam: records the latest raw value for an active
+    /// capture session, if this CC event matches the session's FROZEN
+    /// binding identity — captured once at `startCurveCalibration`, never
+    /// re-read from `currentMIDIDeviceMapping` for this comparison. This
+    /// is what makes the session immune to a mid-session relearn/replace
+    /// of the same action silently retargeting it at a different physical
+    /// control, and avoids touching the `@Published` mapping from the
+    /// CoreMIDI thread entirely. The platter's CC6 flood and every
+    /// unrelated fader/pad are ignored by construction (the frozen
+    /// binding can never itself be CC6). Never writes to disk, never
+    /// starts or affects MIDI Learn, never touches the learned binding.
+    /// Bounded-rate UI publish, same throttle discipline as calibration's
+    /// observed-value publish.
+    ///
+    /// Called from the real CoreMIDI packet-parsing loop for every
+    /// incoming CC message; also callable directly from tests as a seam.
+    func evaluateCurveCaptureForCC(channel: Int, controller: Int, value: Int) {
+        midiCaptureLock.lock()
+        let capturing = isCurveCapturing
+        let binding = curveCaptureBindingIdentity
+        midiCaptureLock.unlock()
+        guard capturing, let binding else { return }
+        guard binding.messageType == .controlChange,
+              binding.channel == channel,
+              binding.controlNumber == controller
+        else { return }
+
+        let now = CACurrentMediaTime()
+        midiCaptureLock.lock()
+        curveCaptureLastRawValue = value
+        let shouldPublish = !isCurveCapturePublishPending
+            && (now - lastCurveCapturePublishTime >= curveCapturePublishInterval)
+        let generation = curveCaptureGeneration
+        if shouldPublish {
+            lastCurveCapturePublishTime = now
+            isCurveCapturePublishPending = true
+        }
+        midiCaptureLock.unlock()
+
+        guard shouldPublish else { return }
+
+        publishOnMainAsync(field: "curveCaptureObserved") { [weak self] in
+            guard let self else { return }
+            self.midiCaptureLock.lock()
+            let currentGeneration = self.curveCaptureGeneration
+            self.isCurveCapturePublishPending = false
+            self.midiCaptureLock.unlock()
+            // A stale publication — enqueued before a Cancel, Finish, or a
+            // new session started — must never resurrect this UI state.
+            guard currentGeneration == generation else { return }
+            if !self.curveCaptureHasLiveValue { self.curveCaptureHasLiveValue = true }
+        }
+    }
+
+    /// Recomputes `curveCaptureCanFinish` from the current pending points
+    /// and the active session's action, resolved against the CURRENT
+    /// learned control's min/max/inversion. Main-thread only (reads/
+    /// writes only `@Published` state). True only when both points exist,
+    /// differ, and produce a finite, non-degenerate span — the identical
+    /// guard `FaderCurveResponse.gain` itself applies, computed here so
+    /// the UI can gate Finish before `finishCurveCalibration()` is ever
+    /// called, per Defect 1.
+    private func refreshCurveCaptureCanFinish() {
+        midiCaptureLock.lock()
+        let action = curveCaptureAction
+        let closed = curveCapturePendingClosedRawValue
+        let fullOn = curveCapturePendingFullOnRawValue
+        midiCaptureLock.unlock()
+        guard let action, let closed, let fullOn, closed != fullOn,
+              let control = currentMIDIDeviceMapping?.control(for: action)
+        else {
+            curveCaptureCanFinish = false
+            return
+        }
+        let zeroAt = control.normalizedValue(from: min(max(closed, 0), 127))
+        let oneAt = control.normalizedValue(from: min(max(fullOn, 0), 127))
+        curveCaptureCanFinish = zeroAt.isFinite && oneAt.isFinite && abs(oneAt - zeroAt) >= 1e-6
+    }
+
+    /// "Set closed" button: stashes whatever the latest matching raw value
+    /// is RIGHT NOW as the pending closed point. Pending state only — no
+    /// persistence.
+    func captureCurveClosedPoint() {
+        midiCaptureLock.lock()
+        guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
+            midiCaptureLock.unlock()
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Move the control to its closed position first."
+            }
+            return
+        }
+        curveCapturePendingClosedRawValue = raw
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.curveCaptureHasClosedPoint = true
+            self.curveCaptureError = ""
+            self.refreshCurveCaptureCanFinish()
+        }
+    }
+
+    /// "Set full-on" button — mirrors `captureCurveClosedPoint`.
+    func captureCurveFullOnPoint() {
+        midiCaptureLock.lock()
+        guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
+            midiCaptureLock.unlock()
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Move the control to its full-on position first."
+            }
+            return
+        }
+        curveCapturePendingFullOnRawValue = raw
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.curveCaptureHasFullOnPoint = true
+            self.curveCaptureError = ""
+            self.refreshCurveCaptureCanFinish()
+        }
+    }
+
+    /// Fully ends the active curve-capture session (Finish-succeeded or
+    /// Cancel path): clears realtime session state under the lock, bumps
+    /// the generation token, and resets every UI-facing mirror on main via
+    /// `publishOnMainAsync` — the same dispatch discipline every other
+    /// `@Published` mutation in this file uses, regardless of whether the
+    /// caller happens to already be on main. `errorMessage` is published
+    /// in the SAME main-thread block as the reset (nil leaves
+    /// `curveCaptureError` untouched — used by the Finish-success path,
+    /// which clears it itself afterward with fresh persisted state
+    /// already applied).
+    private func clearCurveCaptureSession(errorMessage: String? = nil) {
+        midiCaptureLock.lock()
+        isCurveCapturing = false
+        curveCaptureAction = nil
+        curveCaptureDeviceID = nil
+        curveCaptureBindingIdentity = nil
+        curveCaptureGeneration &+= 1
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.activeCurveCaptureAction = nil
+            self.curveCaptureHasClosedPoint = false
+            self.curveCaptureHasFullOnPoint = false
+            self.curveCaptureHasLiveValue = false
+            self.curveCaptureCanFinish = false
+            if let errorMessage {
+                self.curveCaptureError = errorMessage
+            }
+        }
+    }
+
+    /// Requires two distinct captured raw positions that resolve to a
+    /// finite, non-degenerate span through the CURRENT learned control's
+    /// calibration, AND that the session's frozen device/binding identity
+    /// still matches what's actually learned right now. Atomically
+    /// persists `.custom` + the capture, then resolves and pushes it to
+    /// the controller — this is the ONLY place a custom curve actually
+    /// becomes active; selecting Custom or capturing individual points
+    /// never does.
+    ///
+    /// Validation happens BEFORE the session is touched (Defect 1): an
+    /// invalid Finish (missing/identical points, a degenerate resolved
+    /// span, or a stale device/binding) leaves `isCurveCapturing`,
+    /// `curveCaptureAction`, and every pending point exactly as they were
+    /// — the capture UI stays open with a visible, actionable error, and
+    /// the user can correct one point and Finish again without
+    /// restarting, or Cancel. The session is cleared ONLY once the queued
+    /// persistence mutation has actually applied the intended write; if a
+    /// race causes that write to be silently skipped, the session is left
+    /// active (never torn down early) so the completion's failure branch
+    /// still has a live session to report against.
+    func finishCurveCalibration() {
+        midiCaptureLock.lock()
+        let action = curveCaptureAction
+        let closed = curveCapturePendingClosedRawValue
+        let fullOn = curveCapturePendingFullOnRawValue
+        let capturedDeviceID = curveCaptureDeviceID
+        let capturedBinding = curveCaptureBindingIdentity
+        midiCaptureLock.unlock()
+
+        // No active session at all — nothing to validate or end.
+        guard let action else { return }
+
+        guard let closed, let fullOn else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Set both closed and full-on before finishing."
+            }
+            return
+        }
+        guard closed != fullOn else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Closed and full-on were the same position — move the control before capturing full-on, then try again."
+            }
+            return
+        }
+
+        // Identity check (Defect 2): the device and exact binding this
+        // session started on must still be what's actually learned now.
+        guard let capturedDeviceID, let capturedBinding,
+              selectedMIDIInputSourceID == capturedDeviceID,
+              let control = currentMIDIDeviceMapping?.control(for: action),
+              control.messageType == capturedBinding.messageType,
+              control.channel == capturedBinding.channel,
+              control.controlNumber == capturedBinding.controlNumber
+        else {
+            clearCurveCaptureSession(errorMessage: "The MIDI mapping changed during capture — start again.")
+            return
+        }
+
+        // Degeneracy check (Defect 1): distinct raw values can still
+        // normalize to the same, or a near-identical, endpoint under
+        // narrow calibration or extreme inversion — reject exactly like
+        // `FaderCurveResponse.gain`'s own span guard would.
+        let clampedClosed = min(max(closed, 0), 127)
+        let clampedFullOn = min(max(fullOn, 0), 127)
+        let zeroAt = control.normalizedValue(from: clampedClosed)
+        let oneAt = control.normalizedValue(from: clampedFullOn)
+        guard zeroAt.isFinite, oneAt.isFinite, abs(oneAt - zeroAt) >= 1e-6 else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Closed and full-on normalize to the same position under the current calibration — move the control further and capture full-on again."
+            }
+            return
+        }
+
+        let expectedConfig = MIDIFaderCurveConfig(
+            preset: .custom,
+            customCapture: FaderCurveCapture(closedRawValue: closed, fullOnRawValue: fullOn)
+        )
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // Re-verify the frozen identity against the in-queue mapping —
+            // never a main-thread snapshot that may predate an earlier
+            // enqueued write (see `finishCalibration`). A mismatch here
+            // means the binding changed between this call and the queued
+            // write actually running; skip the write rather than
+            // corrupting a different binding's curve.
+            guard let existing = mapping.control(for: action),
+                  existing.messageType == capturedBinding.messageType,
+                  existing.channel == capturedBinding.channel,
+                  existing.controlNumber == capturedBinding.controlNumber
+            else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: expectedConfig
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            guard mapping.control(for: action)?.curveConfig == expectedConfig else {
+                // The transform's identity re-check bailed: something
+                // changed underneath this Finish between validation and
+                // the queued write actually running. Nothing was
+                // persisted — leave the session exactly as it was (never
+                // torn down early, per Defect 1 point 5/6) so the error is
+                // visible and the user can retry or Cancel.
+                self.curveCaptureError = "The MIDI mapping changed while saving — try Finish again or Cancel."
+                return
+            }
+            self.clearCurveCaptureSession(errorMessage: "")
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Discards pending capture state. No persistence write — the
+    /// previously persisted curve (if any) and the controller's
+    /// currently-applied resolved curve are both left byte-identical to
+    /// before this session started.
+    func cancelCurveCalibration() {
+        clearCurveCaptureSession(errorMessage: "")
     }
 
     /// Evaluates whether this CC event matches the learned right-upfader or
@@ -7343,21 +7904,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 inverted: existing.inverted,
                 assignedSampleID: existing.assignedSampleID,
                 learnedAt: existing.learnedAt,
-                isVerified: existing.isVerified
+                isVerified: existing.isVerified,
+                curveConfig: existing.curveConfig   // calibration doesn't touch the curve, only what raw values mean
             )
             mapping.upsert(calibrated)
         }, completion: { [weak self] mapping in
             guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             self.calibrationError = ""
-            // The control's raw-value-to-normalized mapping just changed —
-            // its last-known gain was computed under the OLD calibration
-            // and is no longer meaningful, so reset to unity until the
-            // next value arrives under the new range.
-            if action == .crossfader {
-                self.scratchPlaybackController.resetCrossfaderGainToUnity()
-            } else if action == .rightUpfader {
-                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
+            // The control's raw-value-to-normalized mapping just changed.
+            // A custom curve's endpoints are derived from raw values
+            // through THIS mapping, so they must be re-resolved now, not
+            // just reset to unity — pushResolvedCurve does both atomically.
+            // For the default/fixed presets this resolves to the exact
+            // same constants as before, so non-custom mappings see no
+            // behavior change here.
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
             }
         })
     }
@@ -7389,19 +7952,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 inverted: inverted,
                 assignedSampleID: existing.assignedSampleID,
                 learnedAt: existing.learnedAt,
-                isVerified: existing.isVerified
+                isVerified: existing.isVerified,
+                curveConfig: existing.curveConfig   // inversion doesn't touch the curve, only what raw values mean
             )
             mapping.upsert(updated)
         }, completion: { [weak self] mapping in
             guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             guard didChange else { return }
-            // Inversion flips how raw values map to gain — the control's
-            // last-known gain was computed under the OLD interpretation.
-            if action == .crossfader {
-                self.scratchPlaybackController.resetCrossfaderGainToUnity()
-            } else if action == .rightUpfader {
-                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
+            // Inversion flips how raw values map to gain — a custom
+            // curve's endpoints depend on that mapping, so re-resolve and
+            // push (also resets to unity), same reasoning as
+            // `finishCalibration`.
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
             }
         })
     }
@@ -7409,6 +7973,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Clear a learned mapping for a specific action, removing it from the
     /// device profile and persisting the change.
     func clearMapping(for action: MIDISemanticAction) {
+        // A pending curve-capture session for this action refers to a
+        // binding that's about to be removed — it can never be finished
+        // meaningfully. Cancel it; nothing was persisted from it, so
+        // there's nothing to roll back beyond the session state itself.
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
         let deviceID = selectedMIDIInputSourceID
         enqueueRemoveAction(deviceID: deviceID, action: action) { [weak self] mapping in
             guard let self else { return }
@@ -7434,6 +8007,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// Clear ALL learned mappings for the current device.
     func clearDeviceMappings() {
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
         let deviceID = selectedMIDIInputSourceID
         enqueueDeleteDevice(deviceID: deviceID) { [weak self] in
             guard let self else { return }
@@ -7454,6 +8032,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Load the learned device mapping for the currently selected MIDI source.
     /// Called whenever the selected MIDI source changes.
     func loadDeviceMappingForCurrentSource() {
+        // A source change or mapping reload invalidates any in-progress
+        // curve-capture session unconditionally (Defect 2) — its frozen
+        // device ID can no longer be trusted to mean "the currently
+        // selected device", regardless of which action it was capturing.
+        // Same unconditional-regardless-of-action precedent as
+        // `clearDeviceMappings`'s existing cancellation below.
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture {
+            clearCurveCaptureSession(errorMessage: "The MIDI source changed during capture — start again.")
+        }
+
         // A MIDI source change is a new session for the learned-mixer gain
         // contributions, regardless of outcome below: empty source ID, a
         // successful load (even one with mappings for both controls), or a
@@ -7490,6 +8081,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             midiCaptureLock.unlock()
             crossfaderCCMapping = legacy
         }
+
+        // The new device may have an entirely different curve configured
+        // than the previous one — push each control's resolved curve now,
+        // rather than leaving the controller holding the PREVIOUS device's
+        // stale resolved response until its next CC event happens to
+        // arrive. Controls this device hasn't learned stay at the unity
+        // reset already performed above (curve is moot while unmapped).
+        if let crossfaderControl = currentMIDIDeviceMapping?.control(for: .crossfader) {
+            pushResolvedCurve(for: crossfaderControl)
+        }
+        if let rightUpfaderControl = currentMIDIDeviceMapping?.control(for: .rightUpfader) {
+            pushResolvedCurve(for: rightUpfaderControl)
+        }
     }
 
     // MARK: - Hot-Cue Sample Assignment
@@ -7520,7 +8124,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 inverted: existing.inverted,
                 assignedSampleID: sampleID,
                 learnedAt: existing.learnedAt,
-                isVerified: existing.isVerified
+                isVerified: existing.isVerified,
+                curveConfig: existing.curveConfig   // always nil for a hot-cue action; threaded for consistency
             )
             mapping.upsert(updated)
         }, completion: { [weak self] mapping in
@@ -7890,6 +8495,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 currentMapping = overrideMapping
             }
             evaluateCalibrationForCC(channel: channel, controller: controller, value: value)
+            evaluateCurveCaptureForCC(channel: channel, controller: controller, value: value)
             evaluateUserMixerGainForCC(channel: channel, controller: controller, value: value)
 
             let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil

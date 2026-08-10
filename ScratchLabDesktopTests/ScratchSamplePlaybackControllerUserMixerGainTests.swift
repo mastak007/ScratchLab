@@ -247,4 +247,86 @@ final class ScratchSamplePlaybackControllerUserMixerGainTests: XCTestCase {
         XCTAssertEqual(ScratchSamplePlaybackController.crossfaderRightDeckGain(forNormalizedPosition: -5.0), 0)
         XCTAssertEqual(ScratchSamplePlaybackController.crossfaderRightDeckGain(forNormalizedPosition: 5.0), 1.0)
     }
+
+    // MARK: - Configurable fader curves
+
+    func testApplyCrossfaderCurveChangesShapeAppliedToSubsequentPositions() throws {
+        let (controller, _, _) = try makeController()
+        // Full-width Blend curve instead of the default narrow Sharp Scratch cut-in.
+        controller.applyCrossfaderCurve(FaderCurveResponse(zeroAt: 0, oneAt: 1, shape: .linear))
+        controller.waitForAudioQueue()
+        controller.setCrossfaderPosition(0.5)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 0.5, accuracy: 0.001,
+            "under a full-width Blend curve, midpoint gain must be 0.5 — the default Sharp Scratch curve would have already saturated to 1.0 here")
+    }
+
+    func testApplyRightUpfaderCurveChangesShapeAppliedToSubsequentPositions() throws {
+        let (controller, _, _) = try makeController()
+        // Sharp Cut instead of the default full-width Linear.
+        let sharpCut = FaderCurvePreset.sharpCut.fixedResponse!
+        controller.applyRightUpfaderCurve(sharpCut)
+        controller.waitForAudioQueue()
+        controller.setRightUpfaderGain(sharpCut.oneAt)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 1.0, accuracy: 0.001,
+            "Sharp Cut reaches unity at its narrow boundary, unlike the default Linear curve")
+    }
+
+    /// A curve change resets ONLY the affected control to unity — the
+    /// other fader's current contribution is preserved (Correction 3).
+    func testCurveChangeResetsOnlyAffectedControlToUnity() throws {
+        let (controller, _, _) = try makeController()
+        controller.setRightUpfaderGain(0.4)
+        controller.waitForAudioQueue()
+        controller.setCrossfaderPosition(1.0) // fully open -> cut curve gain 1.0
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 0.4, accuracy: 0.001)
+
+        // Changing the CROSSFADER's curve must reset only the crossfader's
+        // contribution — the right-upfader's 0.4 must survive untouched.
+        controller.applyCrossfaderCurve(FaderCurveResponse(zeroAt: 0, oneAt: 1, shape: .linear))
+        controller.waitForAudioQueue()
+        // Crossfader's own contribution reset to unity; combined with the
+        // UNCHANGED right-upfader 0.4 the product must still read 0.4.
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 0.4, accuracy: 0.001,
+            "right-upfader's current contribution must be untouched by a crossfader curve change")
+    }
+
+    /// A curve change must never recompute gain from a stale prior
+    /// position — only the NEXT matching event applies the new curve
+    /// (Correction 3).
+    func testCurveChangeDoesNotRecomputeFromStalePosition() throws {
+        let (controller, _, _) = try makeController()
+        // Position the crossfader deep in "open" territory under the default curve.
+        controller.setCrossfaderPosition(1.0)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 1.0, accuracy: 0.001)
+
+        // Swap to a curve where 1.0 is still fully open — but the point is
+        // that the controller must not "remember" the 1.0 and recompute;
+        // it must simply reset to unity until a fresh event arrives.
+        controller.applyCrossfaderCurve(FaderCurveResponse(zeroAt: 0.9, oneAt: 0.95, shape: .linear))
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 1.0, accuracy: 0.001,
+            "reset-to-unity, not a replay of the last position under the new curve")
+
+        // A fresh matching event now applies the new curve.
+        controller.setCrossfaderPosition(0.925) // midpoint of the new [0.9, 0.95] window
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 0.5, accuracy: 0.01)
+    }
+
+    func testCombinedGainWithNonDefaultCurvesRemainsMultiplicative() throws {
+        let (controller, _, _) = try makeController()
+        controller.applyRightUpfaderCurve(FaderCurvePreset.linear.fixedResponse!)
+        controller.applyCrossfaderCurve(FaderCurvePreset.blend.fixedResponse!)
+        controller.waitForAudioQueue()
+
+        controller.setRightUpfaderGain(0.6)
+        controller.waitForAudioQueue()
+        controller.setCrossfaderPosition(0.5)
+        controller.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(controller), 0.6 * 0.5, accuracy: 0.001)
+    }
 }

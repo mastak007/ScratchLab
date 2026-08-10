@@ -2735,6 +2735,137 @@ struct MacAnalyzerView: View {
         }
     }
 
+    /// Resolved (persisted or migration-default) preset for a fader-curve
+    /// action, or nil if the action has no learned binding yet.
+    private func resolvedCurvePreset(for action: MIDISemanticAction) -> FaderCurvePreset? {
+        captureEngine.currentMIDIDeviceMapping?.control(for: action)?.resolvedCurveConfig.preset
+    }
+
+    /// Picker selection for a fader-curve row. While a custom-capture
+    /// session is active for THIS action, shows Custom regardless of the
+    /// still-persisted preset — selecting Custom is transactional
+    /// (`startCurveCalibration`/`finishCurveCalibration`), so the
+    /// persisted value deliberately hasn't changed yet.
+    private func curvePickerSelection(for action: MIDISemanticAction) -> FaderCurvePreset {
+        if captureEngine.activeCurveCaptureAction == action { return .custom }
+        return resolvedCurvePreset(for: action) ?? .linear
+    }
+
+    /// One action's curve row: a preset picker, plus (only while
+    /// progressively disclosed) either the Custom capture controls or a
+    /// Reset-to-default affordance for an already-custom curve. No
+    /// engineering terms (normalized values, transfer functions) ever
+    /// appear here — presets are named, captured points are shown only as
+    /// captured/not-captured state.
+    @ViewBuilder
+    private func faderCurveRow(for action: MIDISemanticAction, title: String) -> some View {
+        if captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil {
+            let isCapturingThis = captureEngine.activeCurveCaptureAction == action
+            let sessionBusy = captureEngine.activeMIDILearnAction != nil
+                || captureEngine.activeCalibrationAction != nil
+                || (captureEngine.activeCurveCaptureAction != nil && !isCapturingThis)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { curvePickerSelection(for: action) },
+                        set: { newPreset in
+                            if newPreset == .custom {
+                                captureEngine.startCurveCalibration(for: action)
+                            } else {
+                                captureEngine.setCurvePreset(newPreset, for: action)
+                            }
+                        }
+                    )) {
+                        ForEach(FaderCurvePreset.availablePresets(for: action), id: \.self) { preset in
+                            Text(preset.displayName).tag(preset)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(maxWidth: 140)
+                    .disabled(sessionBusy)
+                }
+
+                if isCapturingThis {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Move the control to where it should go quiet, then tap Set closed. Move it to where it should reach full volume, then tap Set full-on.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button(captureEngine.curveCaptureHasClosedPoint ? "Closed ✓" : "Set closed") {
+                                captureEngine.captureCurveClosedPoint()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!captureEngine.curveCaptureHasLiveValue)
+
+                            Button(captureEngine.curveCaptureHasFullOnPoint ? "Full-on ✓" : "Set full-on") {
+                                captureEngine.captureCurveFullOnPoint()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!captureEngine.curveCaptureHasLiveValue)
+
+                            Spacer()
+
+                            Button("Finish") { captureEngine.finishCurveCalibration() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .disabled(!captureEngine.curveCaptureCanFinish)
+
+                            Button("Cancel") { captureEngine.cancelCurveCalibration() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        if !captureEngine.curveCaptureError.isEmpty {
+                            Label(captureEngine.curveCaptureError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color(nsColor: .systemOrange))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else if resolvedCurvePreset(for: action) == .custom {
+                    HStack(spacing: 8) {
+                        Text("Custom cut calibrated.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Recalibrate") { captureEngine.startCurveCalibration(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sessionBusy)
+                        Button("Reset to default") { captureEngine.resetCurve(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sessionBusy)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compact "Fader curves" section — Crossfader and Right Upfader only.
+    /// Left upfader's curve is intentionally never shown here: the model
+    /// and persistence support it for a future beat bus, but exposing a
+    /// control with no audible effect would mislead a learner. Its
+    /// existing MIDI mapping stays visible in the rows above; only its
+    /// curve editor is hidden.
+    @ViewBuilder
+    private var faderCurveSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Fader Curves")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            faderCurveRow(for: .crossfader, title: "Crossfader")
+            faderCurveRow(for: .rightUpfader, title: "Right Upfader")
+        }
+    }
+
     @ViewBuilder
     private var mixerAndHotCueMappingSection: some View {
         DisclosureGroup {
@@ -2764,6 +2895,10 @@ struct MacAnalyzerView: View {
                 calibrationRow(for: .leftUpfader)
                 midiLearnActionRow(.rightUpfader, title: "Right Upfader")
                 calibrationRow(for: .rightUpfader)
+
+                Divider()
+
+                faderCurveSection
 
                 Divider()
 

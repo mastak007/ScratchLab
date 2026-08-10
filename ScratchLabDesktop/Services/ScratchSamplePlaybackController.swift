@@ -2820,44 +2820,94 @@ final class ScratchSamplePlaybackController {
     /// crossfader geometry (`ScratchAnalysisCalibration`,
     /// `TravelLaneDebugView`'s default of 0.05) — kept as its own
     /// constant here since notation analysis and live audio gain are
-    /// otherwise independent subsystems.
-    static let crossfaderCutInWidth: Double = 0.05
+    /// otherwise independent subsystems. Forwards to the centralized
+    /// fader-curve constant so there is one source of truth for this
+    /// width (`MIDIFaderCurveConstants.sharpScratchCutInWidth`).
+    static let crossfaderCutInWidth: Double = MIDIFaderCurveConstants.sharpScratchCutInWidth
 
     /// Maps a normalized crossfader position (0 = physical left edge, 1 =
-    /// physical right edge) to the right deck's scratch-audio gain: a cut
-    /// curve, not a linear pan. Pure function — no state — so it is
-    /// trivially unit-testable in isolation from the controller/renderer.
+    /// physical right edge) to the right deck's scratch-audio gain using
+    /// the fixed Sharp Scratch cut curve. Pure function — no state — so it
+    /// is trivially unit-testable in isolation from the controller/
+    /// renderer. Kept as its own named entry point for the pre-existing
+    /// test suite; delegates entirely to the shared, fully-defensive
+    /// `FaderCurveResponse.gain`, so behavior (including non-finite/
+    /// out-of-range input handling) is byte-identical to before.
     static func crossfaderRightDeckGain(forNormalizedPosition normalized: Double) -> Double {
-        guard normalized.isFinite else { return 0 }
-        let clamped = min(max(normalized, 0), 1)
-        guard clamped > 0 else { return 0 }
-        guard clamped < crossfaderCutInWidth else { return 1 }
-        return clamped / crossfaderCutInWidth
+        FaderCurveResponse.gain(
+            forNormalizedPosition: normalized,
+            response: FaderCurveResponse(zeroAt: 0, oneAt: crossfaderCutInWidth, shape: .linear)
+        )
     }
+
+    /// The resolved curve currently applied to the right-upfader's raw
+    /// normalized value. Migration-safe default: today's linear
+    /// pass-through (0...1), matching pre-feature behavior exactly.
+    /// Confined to `audioQueue`. The controller holds ONLY this resolved
+    /// value — never a `MIDIFaderCurveConfig` or any persistence
+    /// awareness; `MIDIDeviceMapping` on disk remains the sole source of
+    /// truth, per `MacCaptureEngine`.
+    private var rightUpfaderCurveResponse = FaderCurveResponse(zeroAt: 0, oneAt: 1, shape: .linear)
+
+    /// The resolved curve currently applied to the crossfader's raw
+    /// normalized position. Migration-safe default: today's Sharp Scratch
+    /// cut-in, matching pre-feature behavior exactly. Confined to
+    /// `audioQueue`.
+    private var crossfaderCurveResponse = FaderCurveResponse(zeroAt: 0, oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth, shape: .linear)
 
     /// Sets the learned right-upfader's normalized gain (0 = down/silence,
     /// 1 = unity, continuous in between — already calibrated/inverted by
-    /// the caller via `MIDILearnedControl.normalizedValue(from:)`).
-    /// Dispatches to `audioQueue` and returns immediately; the click-free
-    /// ramp that avoids audible steps lives in the render callback, not
-    /// here — this only updates the target.
+    /// the caller via `MIDILearnedControl.normalizedValue(from:)`) through
+    /// the currently-applied fader curve. Dispatches to `audioQueue` and
+    /// returns immediately; the click-free ramp that avoids audible steps
+    /// lives in the render callback, not here — this only updates the
+    /// target. Position sanitization (non-finite -> silence) happens
+    /// inside `FaderCurveResponse.gain` itself; this call site relies on
+    /// that rather than duplicating the guard.
     func setRightUpfaderGain(_ normalizedGain: Double) {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            self.rightUpfaderGain = normalizedGain.isFinite ? min(max(normalizedGain, 0), 1) : 0
+            self.rightUpfaderGain = FaderCurveResponse.gain(forNormalizedPosition: normalizedGain, response: self.rightUpfaderCurveResponse)
             self.publishUserMixerGain()
         }
     }
 
     /// Sets the learned crossfader's normalized physical position (0 =
     /// left edge, 1 = right edge, already calibrated/inverted by the
-    /// caller) and applies the right-deck cut curve. Dispatches to
-    /// `audioQueue` and returns immediately.
+    /// caller) and applies the currently-applied fader curve. Dispatches
+    /// to `audioQueue` and returns immediately.
     func setCrossfaderPosition(_ normalizedPosition: Double) {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            let sanitized = normalizedPosition.isFinite ? min(max(normalizedPosition, 0), 1) : 0
-            self.crossfaderRightDeckGain = Self.crossfaderRightDeckGain(forNormalizedPosition: sanitized)
+            self.crossfaderRightDeckGain = FaderCurveResponse.gain(forNormalizedPosition: normalizedPosition, response: self.crossfaderCurveResponse)
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Updates the right-upfader's resolved curve AND resets its gain
+    /// contribution to unity in one atomic `audioQueue` step — never a
+    /// gain value computed under the OLD curve's interpretation. The
+    /// crossfader's current contribution is untouched (multiplicative
+    /// combination is unaffected by an update to the OTHER factor). The
+    /// caller (`MacCaptureEngine`) must wait for the next matching MIDI
+    /// event to actually apply the new curve — this method does not
+    /// recompute from any prior raw value.
+    func applyRightUpfaderCurve(_ response: FaderCurveResponse) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.rightUpfaderCurveResponse = response
+            self.rightUpfaderGain = 1.0
+            self.publishUserMixerGain()
+        }
+    }
+
+    /// Crossfader analogue of `applyRightUpfaderCurve`. Same atomicity and
+    /// same "other fader untouched" guarantee.
+    func applyCrossfaderCurve(_ response: FaderCurveResponse) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.crossfaderCurveResponse = response
+            self.crossfaderRightDeckGain = 1.0
             self.publishUserMixerGain()
         }
     }
