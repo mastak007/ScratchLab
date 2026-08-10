@@ -337,3 +337,74 @@ struct ScratchNotationLegacyRegressionTests {
         #expect(legacyWithAnnotations.projectedToSeconds(bpm: 100) == nil)
     }
 }
+
+// MARK: - Canonical technique registry boundaries
+
+/// Every `BeatPattern` this repository has authored evidence for, to date.
+/// This is deliberately test-local, not a production registry — there is
+/// exactly one call site (this suite) needing the enumeration, so a
+/// production-side registry type is not yet justified. Adding an entry here
+/// requires the same repository-evidence bar `babyScratchCycle` was held to
+/// (see the notation technique evidence-matrix audit): a repeatable cycle
+/// with anchored platter directions, beat positions, cycle duration, fader
+/// state, and a loop/reset state — no guessing from PatternSignature/tips
+/// alone. As of this audit, every other `ScratchLibrary` technique (19
+/// primitives + 5 combos) is PARTIAL or INSUFFICIENT; see the technique gap
+/// report.
+private let allCanonicalBeatPatterns: [ScratchNotation.BeatPattern] = [
+    ScratchNotation.babyScratchCycle
+]
+
+@Suite("Canonical technique registry boundaries")
+struct CanonicalTechniqueRegistryTests {
+
+    @Test("Canonical technique IDs are unique")
+    func canonicalIDsAreUnique() {
+        let ids = allCanonicalBeatPatterns.map(\.scratchID)
+        #expect(ids.count == Set(ids).count)
+    }
+
+    @Test("Every canonical pattern maps to a real ScratchLibrary technique")
+    func canonicalPatternsMapToRealTechniques() {
+        for pattern in allCanonicalBeatPatterns {
+            #expect(ScratchLibrary.shared.scratch(byID: pattern.scratchID) != nil)
+        }
+    }
+
+    @Test("Only baby_scratch is canonical today — evidence-insufficient techniques stay unauthored")
+    func onlyEvidencedTechniqueIsCanonical() {
+        #expect(allCanonicalBeatPatterns.count == 1)
+        #expect(allCanonicalBeatPatterns.map(\.scratchID) == ["baby_scratch"])
+
+        // ScratchLibrary carries 20 primitive techniques; 19 of them remain
+        // without a canonical BeatPattern because the repository does not
+        // establish an anchored starting platter direction, an exact
+        // audible/silent-return beat split, or an exact fader-edge beat
+        // position for them (PatternSignature.rhythmPattern/waveformPattern
+        // are audio-matching aids, not beat-position authorities — the
+        // detector's own reference pattern for baby_scratch uses different
+        // waveform values than ScratchLibrary's, confirming the two are not
+        // interchangeable evidence sources).
+        #expect(ScratchLibrary.shared.allScratches.count == 20)
+
+        let nonCanonicalIDsWithPartialEvidence: Set<String> = [
+            "forward_scratch", "backward_scratch", "release_scratch", "tear",
+            "chirp", "scribble", "stab", "transform", "crab", "flare_1click",
+            "orbit", "flare_2click", "twiddle", "boomerang", "hydroplane",
+            "flare_3click", "autobahn", "military", "prizm"
+        ]
+        #expect(nonCanonicalIDsWithPartialEvidence.count == 19)
+        let canonicalIDs = Set(allCanonicalBeatPatterns.map(\.scratchID))
+        #expect(canonicalIDs.isDisjoint(with: nonCanonicalIDsWithPartialEvidence))
+        for id in nonCanonicalIDsWithPartialEvidence {
+            #expect(ScratchLibrary.shared.scratch(byID: id) != nil, "\(id) should still be a real technique, just not canonical yet")
+        }
+
+        // Combo scratches carry component references only (no timing/
+        // direction/fader data at all), so they were never evidence
+        // candidates in the first place.
+        #expect(ScratchLibrary.shared.comboScratches.count == 5)
+        let comboIDs = Set(ScratchLibrary.shared.comboScratches.map(\.id))
+        #expect(canonicalIDs.isDisjoint(with: comboIDs))
+    }
+}
