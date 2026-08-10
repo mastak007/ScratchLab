@@ -145,6 +145,39 @@ extension LaneSegment {
     }
 }
 
+// MARK: - Fader span
+
+/// A contiguous open/closed crossfader span on the lane timeline, adapted
+/// from canonical `ScratchNotation.FaderEvent` edges. Renderer-neutral: it
+/// carries no captured/detected-data fields (no confidence, source, control,
+/// or ramp value) — those belong to `CaptureCore.DetectedNotationFaderEvent`,
+/// a completely separate captured-data type this one does not replace.
+struct LaneFaderSpan: Equatable, Sendable {
+    let startTime: TimeInterval
+    let endTime: TimeInterval
+    let state: ScratchNotationFaderState
+}
+
+extension LaneFaderSpan {
+    /// Adapts canonical fader-event edges (sorted, strictly increasing —
+    /// guaranteed by `ScratchNotation.validationIssues()`) into contiguous
+    /// spans. Each edge's state holds from its own time until the next
+    /// edge's time; the final edge's span extends to `documentEnd`. Empty
+    /// input yields an empty result — no default state is invented.
+    static func spans(
+        from canonicalEvents: [ScratchNotation.FaderEvent],
+        documentEnd: TimeInterval
+    ) -> [LaneFaderSpan] {
+        guard !canonicalEvents.isEmpty else { return [] }
+        let edges = canonicalEvents.sorted { $0.time < $1.time }
+        return edges.indices.map { index in
+            let edge = edges[index]
+            let end = index + 1 < edges.count ? edges[index + 1].time : documentEnd
+            return LaneFaderSpan(startTime: edge.time, endTime: end, state: edge.state)
+        }
+    }
+}
+
 // MARK: - User-attempt event
 
 /// A single user-attempt mark for the timing-comparison overlay.
@@ -165,8 +198,9 @@ struct LaneUserEvent: Equatable, Sendable {
 /// adapter from a Demo `PracticeReelTimeline` or a scored `ScratchNotation`.
 ///
 /// Phase 2 adds two **optional** channels — `platterTimeline` (a raw integrated
-/// `(t, position)` stream) and `faderEvents` (the captured crossfader event
-/// stream). Both default to nil/empty so every existing call site stays
+/// `(t, position)` stream) and `faderEvents` (a renderer-neutral crossfader
+/// span stream, adapted from canonical `ScratchNotation.faderEvents` edges).
+/// Both default to nil/empty so every existing call site stays
 /// behaviourally identical: the renderer's classified-stroke fallback is used
 /// whenever the raw timeline is absent or fails `shouldRenderRawTrace(...)`,
 /// and the crossfader ribbon is omitted when no events are attached.
@@ -189,11 +223,14 @@ struct LaneContent: Equatable, Sendable {
     /// no producer yet; this stays nil on every shipping call path until
     /// Phase 3 lands a live producer or Phase 4 ships a bundled fixture.
     let platterTimeline: PlatterPositionTimeline?
-    /// Optional captured crossfader event stream. The lane materialises a
-    /// `CrossfaderStateTimeline` from this and draws the open/closed ribbon
-    /// + cut/pulse/flare ticks along the lane's bottom (portrait) or
-    /// trailing (landscape) edge. Empty ⇒ no ribbon drawn.
-    let faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+    /// Optional crossfader span stream, adapted from canonical
+    /// `ScratchNotation.faderEvents` edges (see `LaneFaderSpan.spans`). The
+    /// lane materialises a `CrossfaderStateTimeline` from this and draws the
+    /// open/closed ribbon along the lane's bottom (portrait) or trailing
+    /// (landscape) edge. Empty ⇒ no ribbon drawn. This is a renderer-neutral
+    /// authored-data channel, distinct from `CaptureCore.DetectedNotationFaderEvent`
+    /// (captured/detected data, used elsewhere — e.g. `DetectedNotationSnapshot`).
+    let faderEvents: [LaneFaderSpan]
 
     /// Designated initialiser. The two Phase 2 fields default to nil/empty so
     /// every existing call site (including `init(reel:)` and `init(notation:)`)
@@ -204,7 +241,7 @@ struct LaneContent: Equatable, Sendable {
          duration: TimeInterval,
          loops: Bool,
          platterTimeline: PlatterPositionTimeline? = nil,
-         faderEvents: [CaptureCore.DetectedNotationFaderEvent] = []) {
+         faderEvents: [LaneFaderSpan] = []) {
         self.strokes = strokes
         self.segments = segments
         self.beatsPerMinute = beatsPerMinute
@@ -283,13 +320,19 @@ extension LaneContent {
 
     /// Builds lane content from a scored-mode target pattern. There are no
     /// demo/copy segments and no ghosts; the pattern loops so the learner can
-    /// practise it against the action line repeatedly.
+    /// practise it against the action line repeatedly. When `notation`
+    /// carries a canonical `faderEvents` edge stream, it is authoritative and
+    /// adapted into contiguous `LaneFaderSpan`s; when empty, `faderEvents`
+    /// stays empty and the ribbon is omitted, exactly as before this channel
+    /// existed.
     init(notation: ScratchNotation, beatsPerMinute: Double? = nil) {
+        let duration = max(notation.timelineDuration, 0.1)
         self.init(strokes: notation.strokes.map(LaneStroke.init(notationStroke:)),
                   segments: [],
                   beatsPerMinute: beatsPerMinute,
-                  duration: max(notation.timelineDuration, 0.1),
-                  loops: true)
+                  duration: duration,
+                  loops: true,
+                  faderEvents: LaneFaderSpan.spans(from: notation.faderEvents, documentEnd: duration))
     }
 }
 

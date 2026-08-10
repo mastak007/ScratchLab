@@ -263,6 +263,26 @@ struct CrossfaderStateTimeline: Equatable, Sendable {
         }
     }
 
+    /// Build from a renderer-neutral canonical fader-span stream (typically
+    /// `LaneContent.faderEvents`, adapted from `ScratchNotation.faderEvents`
+    /// edges). Each span becomes one segment; `.open`/`.closed` map directly
+    /// — there is no `.transitioning` case here, since authored spans carry
+    /// no ramp/from-value data. This overload is independent of the
+    /// `DetectedNotationFaderEvent` one above, which remains the path for
+    /// captured/detected data. Uses the `spans:` label (not `from:`) so an
+    /// empty-array-literal call site isn't ambiguous between the two
+    /// overloads.
+    init(spans: [LaneFaderSpan], coverage: ClosedRange<TimeInterval>?) {
+        self.segments = spans.map { span in
+            Segment(
+                startTime: span.startTime,
+                endTime: span.endTime,
+                state: CrossfaderStateTimeline.state(for: span)
+            )
+        }
+        self.coverage = coverage
+    }
+
     // MARK: Internal mapping
 
     private static func state(
@@ -277,6 +297,13 @@ struct CrossfaderStateTimeline: Equatable, Sendable {
             return .transitioning(progress: event.toValue)
         case .unknown:
             return .closed
+        }
+    }
+
+    private static func state(for span: LaneFaderSpan) -> State {
+        switch span.state {
+        case .open: return .open
+        case .closed: return .closed
         }
     }
 }

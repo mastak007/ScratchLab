@@ -71,7 +71,7 @@ struct ScratchMotionLane: View {
             ? 0...content.duration
             : nil
         self.crossfaderTimeline = CrossfaderStateTimeline(
-            from: content.faderEvents,
+            spans: content.faderEvents,
             coverage: coverage
         )
     }
@@ -131,8 +131,8 @@ struct ScratchMotionLane: View {
     /// split. The strip only exists when `content.faderEvents` is
     /// non-empty, so the no-events path collapses the VStack back to a
     /// single full-height motion canvas (visually identical to
-    /// pre-Phase-2). The chosen height is enough to read open/closed
-    /// fills + tick marks without crowding the motion area above.
+    /// pre-Phase-2). The chosen height is enough to read the open/closed
+    /// fill without crowding the motion area above.
     private static let ribbonStripHeight: CGFloat = 14
 
     // MARK: Palette — one shared language across both orientations
@@ -204,12 +204,12 @@ struct ScratchMotionLane: View {
             actionLineFraction: ribbonActionLineFraction(for: axis),
             secondsAhead: secondsAhead(for: axis))
         Canvas { context, _ in
+            // Ticks (drawCrossfaderTicks) mark cut/pulse/transform/flare
+            // events — a vocabulary `LaneFaderSpan` doesn't carry (it's
+            // open/closed only, adapted from canonical authored data). The
+            // open/closed ribbon fill fully represents this channel.
             ScratchMotionRenderer.drawCrossfaderRibbon(
                 crossfaderTimeline, in: context, viewport: viewport,
-                style: .target
-            )
-            ScratchMotionRenderer.drawCrossfaderTicks(
-                content.faderEvents, in: context, viewport: viewport,
                 style: .target
             )
         }
