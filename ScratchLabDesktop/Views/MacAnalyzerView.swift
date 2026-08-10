@@ -5313,6 +5313,7 @@ struct MacAnalyzerView: View {
 
                 reviewTargetNotationStageCard
                 reviewCapturedNotationStageCard
+                reviewTargetVsPerformedStageCard
                 reviewOverlayDiffStageCard
                 reviewAudioOnsetPreviewStageCard
                 reviewSummaryFooterCard
@@ -5533,6 +5534,255 @@ struct MacAnalyzerView: View {
         }
         .padding(16)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // MARK: - Review: target vs performed comparison
+
+    /// Everything the target-vs-performed Review card renders, assembled once
+    /// per evaluation from the canonical comparison pipeline
+    /// (`ScratchPerformanceComparison.swift`): the tiled target notation for
+    /// the chart, the seconds-domain overlay marks, the inspectable
+    /// sub-scores, and the comparison-driven coaching lines.
+    private struct ReviewPerformanceComparisonModel {
+        let notation: ScratchNotation
+        let overlay: ScratchComparisonOverlay
+        let score: ScratchPerformanceScore
+        let coaching: [String]
+        let faderChannel: FaderChannelComparison
+        let bpm: Double
+        let cycles: Int
+    }
+
+    private enum ReviewComparisonAvailability {
+        case ready(ReviewPerformanceComparisonModel)
+        /// User-facing reason the comparison cannot run — graceful, never a
+        /// guessed target or invented notation.
+        case unavailable(String)
+    }
+
+    /// Schmitt thresholds for deriving performed open/closed fader edges from
+    /// raw crossfader MIDI in this Review preview. UI-side configuration (the
+    /// comparison model deliberately takes these as required parameters):
+    /// a symmetric band around mid-travel wide enough (0.4–0.6) that jitter
+    /// inside the band never oscillates the derived state.
+    private static let reviewFaderOpenAtOrAbove = 0.6
+    private static let reviewFaderClosedAtOrBelow = 0.4
+    /// Cap on how many technique cycles the Review comparison tiles — a
+    /// defensive bound for very long takes; 64 one-beat cycles is ~42 s at
+    /// 90 BPM, beyond any Review take this surface handles.
+    private static let reviewComparisonMaxCycles = 64
+
+    private var reviewPerformanceComparison: ReviewComparisonAvailability {
+        guard let scratchType = routineSessionSetup.scratchType else {
+            return .unavailable("Pick a scratch type to compare this take against its target pattern.")
+        }
+        guard let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue) else {
+            return .unavailable("No canonical target pattern exists for \(scratchType.title) yet — comparison stays off rather than guessing one.")
+        }
+        guard let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0 else {
+            return .unavailable("Set a session BPM to compare timing against the target pattern.")
+        }
+        let bpm = Double(bpmValue)
+        guard let snapshot = currentRoutineNotationSnapshot,
+              !snapshot.recordMovementEvents.isEmpty else {
+            return .unavailable("No captured movement evidence in this take to compare.")
+        }
+        // Beat 0 of the click (incl. count-in) is at take-relative 0 in both
+        // click engines; the target phrase starts on the first post-count-in
+        // beat, so the anchor skips the configured count-in.
+        let countInBeats = routineSessionSetup.config.countInBeats
+        guard let clock = PerformanceBeatClock(
+            bpm: bpm,
+            beatZeroTime: Double(countInBeats) * 60.0 / bpm
+        ) else {
+            return .unavailable("Session tempo is unusable for beat alignment.")
+        }
+        guard let thresholds = PerformedFaderEdgeThresholds(
+            openAtOrAbove: Self.reviewFaderOpenAtOrAbove,
+            closedAtOrBelow: Self.reviewFaderClosedAtOrBelow
+        ) else {
+            return .unavailable("Fader thresholds are misconfigured.")
+        }
+
+        let performed = PerformedScratchTimelineAdapter.makeTimeline(
+            movementEvents: snapshot.recordMovementEvents,
+            mixerMidiEvents: snapshot.mixerMidiEvents,
+            clock: clock,
+            faderThresholds: thresholds
+        )
+        guard !performed.strokes.isEmpty else {
+            return .unavailable("Captured events carried no usable strokes to compare.")
+        }
+
+        let cycleBeats = pattern.durationBeats
+        guard cycleBeats > 0 else {
+            return .unavailable("Target pattern has no duration.")
+        }
+        let evidenceEndBeat = performed.strokes.map(\.endBeat).max() ?? 0
+        let cycles = max(1, min(Self.reviewComparisonMaxCycles,
+                                Int((evidenceEndBeat / cycleBeats).rounded())))
+        guard let target = TargetScratchPhrase.phrase(repeating: pattern, cycles: cycles) else {
+            return .unavailable("Target pattern failed validation.")
+        }
+        // Correctness tolerance reuses the repository's only established
+        // timing-verdict convention (±50 ms, `NotationFeedbackState`),
+        // converted to beats at the session tempo; match windows derive from
+        // the target phrase's own beat spacing.
+        let toleranceBeats = NotationFeedbackState.lateOffsetThresholdMs * bpm / 60_000.0
+        guard let windows = ScratchComparisonWindows.derived(
+            from: target,
+            strokeCorrectToleranceBeats: toleranceBeats,
+            faderCorrectToleranceBeats: toleranceBeats
+        ) else {
+            return .unavailable("Target pattern is too sparse to derive matching windows.")
+        }
+        guard let result = ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: bpm
+        ) else {
+            return .unavailable("Comparison could not run at this tempo.")
+        }
+        guard let notation = target.materializedNotation(
+            bpm: bpm,
+            scratchID: pattern.scratchID,
+            timingBasis: pattern.timingBasis,
+            beatsPerBar: pattern.beatsPerBar,
+            version: pattern.version
+        ) else {
+            return .unavailable("Target pattern failed to materialize at this tempo.")
+        }
+        let overlay = ScratchComparisonOverlay.overlay(
+            result: result, target: target, performed: performed, clock: clock
+        )
+        // The chart draws in take-relative seconds; overlay marks already are.
+        // Shift them so beat 0 of the phrase (post-count-in) lands at the
+        // chart's time 0 — the same origin the materialized notation uses.
+        let shifted = ScratchComparisonOverlay(
+            strokeMarks: overlay.strokeMarks.map {
+                ScratchComparisonOverlay.StrokeMark(
+                    startTime: $0.startTime - clock.beatZeroTime,
+                    endTime: $0.endTime - clock.beatZeroTime,
+                    kind: $0.kind,
+                    offsetMilliseconds: $0.offsetMilliseconds,
+                    direction: $0.direction)
+            },
+            faderMarks: overlay.faderMarks.map {
+                ScratchComparisonOverlay.FaderMark(
+                    time: $0.time - clock.beatZeroTime,
+                    state: $0.state,
+                    kind: $0.kind,
+                    offsetMilliseconds: $0.offsetMilliseconds)
+            }
+        )
+        return .ready(ReviewPerformanceComparisonModel(
+            notation: notation,
+            overlay: shifted,
+            score: ScratchPerformanceScore.score(result: result, windows: windows),
+            coaching: NotationFeedbackState.coachingMessages(for: result, limit: 3),
+            faderChannel: result.faderChannel,
+            bpm: bpm,
+            cycles: cycles
+        ))
+    }
+
+    private var reviewTargetVsPerformedStageCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Target vs performed")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Text("Preview · estimated from captured evidence")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            switch reviewPerformanceComparison {
+            case .unavailable(let reason):
+                Text(reason)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                    .padding(12)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            case .ready(let model):
+                ScratchPhraseChartView(
+                    source: .target(model.notation),
+                    bpm: model.bpm,
+                    comparisonOverlay: model.overlay
+                )
+                .frame(height: 170)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                Text("Dots at stroke starts: green on time · amber early · orange late · red wrong direction · hollow missed · white extra. Slashes show what you played; cyan/rose is the target.")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                reviewComparisonScoreRows(model.score, faderChannel: model.faderChannel)
+
+                if !model.coaching.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(model.coaching, id: \.self) { line in
+                            Text(line)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                    }
+                }
+
+                Text("On-device motion and timing comparison over \(model.cycles) target cycle\(model.cycles == 1 ? "" : "s"). Not saved, scored records, or exported — captured notation remains the source of truth.")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func reviewComparisonScoreRows(_ score: ScratchPerformanceScore,
+                                           faderChannel: FaderChannelComparison) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            reviewComparisonScoreRow("Platter timing", score.platterTiming,
+                                     detail: "\(score.matchedStrokeCount) matched")
+            reviewComparisonScoreRow(
+                "Platter direction / completeness", score.platterCompleteness,
+                detail: "\(score.missingStrokeCount) missed · \(score.extraStrokeCount) extra · \(score.wrongDirectionCount) wrong way")
+            switch faderChannel {
+            case .noCanonicalFaderChannel:
+                reviewComparisonScoreRow("Fader", nil,
+                                         detail: "target authors no fader channel")
+            case .noPerformedFaderCapture:
+                reviewComparisonScoreRow("Fader", nil,
+                                         detail: "no crossfader capture in this take")
+            case .compared:
+                reviewComparisonScoreRow("Fader timing", score.faderTiming,
+                                         detail: "\(score.matchedFaderEdgeCount) matched")
+                reviewComparisonScoreRow(
+                    "Fader completeness", score.faderCompleteness,
+                    detail: "\(score.missingFaderEdgeCount) missed · \(score.extraFaderEdgeCount) extra")
+            }
+            reviewComparisonScoreRow("Overall accuracy", score.overall,
+                                     detail: "mean of available sub-scores")
+        }
+    }
+
+    private func reviewComparisonScoreRow(_ label: String, _ value: Double?,
+                                          detail: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.66))
+            Spacer(minLength: 8)
+            Text(detail)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+            Text(value.map { String(format: "%.0f", $0) } ?? "—")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .frame(minWidth: 30, alignment: .trailing)
+        }
     }
 
     private var reviewCapturedNotationStageCard: some View {

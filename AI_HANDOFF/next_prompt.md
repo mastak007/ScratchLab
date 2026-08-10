@@ -1,6 +1,5 @@
 Read `AI_HANDOFF.md` first.
 Read `SOUL.md` and `PROFILE.md`.
-Read the approved plan at `/Users/karlwatson/.claude/plans/unified-frolicking-iverson.md`.
 Do not assume memory.
 Report `git status --short --branch`.
 Identify any pre-existing dirty files and do not stage them.
@@ -10,17 +9,48 @@ No `Co-Authored-By` trailer (per `feedback_no_coauthor_trailer.md`).
 
 ---
 
-# DO NOT START PHASE 4
+# Current state (2026-08-11)
+
+The target-vs-performed batch (visualization + coaching + scoring +
+practice expansion) is COMMITTED locally on
+`feature/notation-canonical-model-20260811` and NOT pushed. See the top
+entry of `AI_HANDOFF.md` for the full slice record, verification table,
+and the Phase-5 debt audit.
+
+## Awaiting Karl's decisions
+
+1. **Push approval** for the local commit on this branch.
+2. **Category-D deletion**: `ScratchLabDesktop/Services/ScratchNotationTimeline.swift`
+   has zero production consumers (only its own test file). Removing it
+   needs a `project.pbxproj` diff, which requires Karl's separate manual
+   approval — do NOT delete it without that approval.
+3. **New canonical techniques**: every comparison surface is
+   registry-driven; the only way to expand technique support is
+   authoring a new evidenced `BeatPattern` into
+   `ScratchNotation.canonicalBeatPatterns` (same evidence bar as
+   baby_scratch — never guessed from `PatternSignature`/coach tips).
+
+## Standing rules that still apply to the comparison surfaces
+
+- Do **NOT** wire `ScratchMotionLane.userEvents` to a live source on
+  iOS: Practice has no per-stroke capture source (camera is
+  preview-only; mic analysis yields IOI scalars, not per-stroke
+  alignment). `ScratchComparisonOverlay` is the prepared feed if/when a
+  real capture source exists on iOS.
+- Do **NOT** re-author bundled notation resources; the 76-stroke `baby`
+  demo timeline is a demo performance, not the technique definition.
+
+---
+
+# DO NOT START Stage-D travel-lane Phase 4 (carried forward, still blocked)
 
 Phase 4 (companion loader + non-bundled fixture) remains **blocked**.
 
 Karl has not yet provided or commissioned a real `baby_platter.json`
 fixture. See the `AI_HANDOFF.md` "Phase 4 BLOCKED" entry for the
-full rationale. The Phase 3 → 3.1 → 3.2 → 3.3 chain now ships
-end-to-end on `origin/main` (once Phase 3.3 is committed), so the
-producer side is fully wired and the Review UX no longer falsely
-claims "no motion" when raw motion was captured. Phase 4's role is
-exclusively to add a loader + tests for an externally-authored
+full rationale. The Phase 3 → 3.1 → 3.2 → 3.3 chain ships end-to-end
+on `origin/main`, so the producer side is fully wired. Phase 4's role
+is exclusively to add a loader + tests for an externally-authored
 fixture; nothing about the live capture path requires it.
 
 ## Hard "do not" list for any agent reading this
@@ -68,37 +98,6 @@ Before doing any work, confirm ALL of the following hold:
 If any item fails, **stop** and surface what's missing. Do not
 start work.
 
-## Manual smoke test still useful
-
-Whether or not Phase 4 resumes, the most valuable verification
-right now is exercising the Phase 3.3 mixed-state copy against the
-exact take that prompted it:
-
-1. Build and run `ScratchLabDesktop` on macOS.
-2. Reproduce the take from the Phase 3.2 confirmation (or any take
-   that produces raw motion samples + zero classified strokes).
-3. Switch to the **Review** tab.
-4. Inspect:
-   - **Captured evidence card** (right-side stage) header: should
-     read `Raw motion · no classified strokes` instead of
-     `Audio-only take`.
-   - **Captured evidence card** subtitle: should read `Raw platter
-     motion was captured but couldn't be converted into notation.`
-     and `Motion captured for diagnostics only.`
-   - **Raw platter timeline (debug) card** (sidebar, DEBUG-only):
-     unchanged — still shows Present / Sample count / Time range /
-     Duration / Position range / Source.
-   - **Sidebar decision summary / availability label**: should
-     read `No classified strokes · Raw motion captured for
-     diagnostics only` instead of `Audio-only take · No record
-     movement detected.`
-5. If the take instead has BOTH raw motion AND classified strokes
-   → no copy should change; Review behaves identically to before
-   Phase 3.3.
-6. If the take has NO raw motion AND no classified strokes (true
-   audio-only) → copy must remain `Audio-only take` / `Hand motion
-   wasn't detected — review timing only.` unchanged.
-
 ## Scope clarifications (carried forward for when Phase 4 resumes)
 
 - **Bundle membership**: NOT bundled.
@@ -110,28 +109,20 @@ exact take that prompted it:
   `ScratchLabDesktopTests/PlatterPositionTimelineResourceTests.swift`
   (flat path, matches Phase 1/2/3 convention).
 
-## Verification (when Phase 4 eventually runs)
+## Verification for any future app-target slice
 
 Per `feedback_verification_scope.md`:
 
 1. `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS'`
-   succeeds.
+   succeeds (add `CODE_SIGNING_ALLOWED=NO`; Watch-target provisioning
+   mismatch is pre-existing).
 2. `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'`
    succeeds.
 3. `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'`
    succeeds.
-4. All prior phases' tests (Phase 1 + Phase 2 + Phase 3) still pass
-   plus the new Phase 4 loader tests.
+4. Full test bundle via the `xcrun xctest` dylib-symlink recipe (bundle
+   lives at `ScratchLab.app/Contents/PlugIns/ScratchLabDesktopTests.xctest`);
+   swift-testing suites must be all-green; XCTest bundled-resource
+   failures are environmental in that mode.
 
 `Tools/TrainModels swift test` is NOT required.
-
-## On completion (when Phase 4 eventually completes)
-
-- Update `AI_HANDOFF.md` removing the Phase 4 BLOCKED top entry
-  and replacing it with a `## YYYY-MM-DD — Phase 4 …` slice entry
-  matching the prior phases' format.
-- Rewrite `AI_HANDOFF/next_prompt.md` to point at the captured-user
-  overlay slice (per plan §13 ordering) — or, if Phase 4 was
-  rejected mid-flight, summarise the rejection reason and stop.
-- Report back with the exact `git status --short --branch` snapshot,
-  the `git diff --stat`, and the verification command outputs.

@@ -703,3 +703,273 @@ struct ScratchPerformanceEndToEndTests {
         #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == true })
     }
 }
+
+// MARK: - Window derivation
+
+@Suite("ScratchComparisonWindows derivation")
+struct ScratchComparisonWindowsDerivationTests {
+
+    @Test("Windows derive from the target's own beat spacing (half min gap)")
+    func derivedFromBabyPhrase() throws {
+        let target = babyPhrase(cycles: 2)
+        let windows = try #require(ScratchComparisonWindows.derived(
+            from: target,
+            strokeCorrectToleranceBeats: 0.08,
+            faderCorrectToleranceBeats: 0.08))
+        // Baby strokes start every 0.5 beat → window = 0.25 beats.
+        #expect(abs(windows.strokeMatchWindowBeats - 0.25) < 1e-12)
+        #expect(abs(windows.strokeCorrectToleranceBeats - 0.08) < 1e-12)
+        // No fader-edge geometry (baby authors no channel) → stroke window reused.
+        #expect(abs(windows.faderMatchWindowBeats - 0.25) < 1e-12)
+    }
+
+    @Test("Tolerance wider than the derived window is clamped, not a failure")
+    func toleranceClamped() throws {
+        let target = babyPhrase(cycles: 1)
+        let windows = try #require(ScratchComparisonWindows.derived(
+            from: target,
+            strokeCorrectToleranceBeats: 5.0,
+            faderCorrectToleranceBeats: 5.0))
+        #expect(windows.strokeCorrectToleranceBeats == windows.strokeMatchWindowBeats)
+        #expect(windows.faderCorrectToleranceBeats == windows.faderMatchWindowBeats)
+    }
+
+    @Test("Fader-edge geometry tightens the fader window when authored")
+    func faderedPatternDerivesFaderWindow() throws {
+        let target = try #require(TargetScratchPhrase.phrase(repeating: faderedPattern, cycles: 2))
+        let windows = try #require(ScratchComparisonWindows.derived(
+            from: target,
+            strokeCorrectToleranceBeats: 0.05,
+            faderCorrectToleranceBeats: 0.05))
+        // Edges at 0, 0.5, (1.0 dropped as repeat), 1.5 → min gap 0.5 → 0.25.
+        #expect(abs(windows.faderMatchWindowBeats - 0.25) < 1e-12)
+    }
+
+    @Test("A single-stroke phrase has no derivable spacing")
+    func singleStrokeReturnsNil() throws {
+        let single = ScratchNotation.BeatPattern(
+            version: 1, scratchID: "test_single",
+            timingBasis: "beat_canonical_cycle_v1", beatsPerBar: nil,
+            strokes: [.init(startBeat: 0, endBeat: 1,
+                            direction: .forward, speedClassification: .medium,
+                            faderState: .open)])
+        let target = try #require(TargetScratchPhrase.phrase(repeating: single, cycles: 1))
+        #expect(ScratchComparisonWindows.derived(
+            from: target,
+            strokeCorrectToleranceBeats: 0.05,
+            faderCorrectToleranceBeats: 0.05) == nil)
+    }
+}
+
+// MARK: - Target phrase materialization
+
+@Suite("TargetScratchPhrase materialization")
+struct TargetScratchPhraseMaterializationTests {
+
+    @Test("A tiled phrase materializes through the canonical boundary")
+    func tiledPhraseMaterializes() throws {
+        let target = babyPhrase(cycles: 2)
+        let notation = try #require(target.materializedNotation(
+            bpm: 120,
+            scratchID: ScratchNotation.babyScratchCycle.scratchID,
+            timingBasis: ScratchNotation.babyScratchCycle.timingBasis,
+            beatsPerBar: ScratchNotation.babyScratchCycle.beatsPerBar,
+            version: ScratchNotation.babyScratchCycle.version))
+        #expect(notation.strokes.count == 4)
+        // 120 BPM → 0.5 s per beat; cycle 2's first stroke starts at beat 1.
+        #expect(abs(notation.strokes[2].startTime - 0.5) < 1e-9)
+        #expect(abs(notation.timelineDuration - 1.0) < 1e-9)
+    }
+
+    @Test("Materialization refuses an unusable tempo")
+    func refusesBadTempo() {
+        let target = babyPhrase(cycles: 1)
+        #expect(target.materializedNotation(
+            bpm: 0,
+            scratchID: "x", timingBasis: "beat_canonical_cycle_v1",
+            beatsPerBar: nil, version: 1) == nil)
+    }
+}
+
+// MARK: - Presentation overlay
+
+@Suite("ScratchComparisonOverlay")
+struct ScratchComparisonOverlayTests {
+
+    @Test("Matched, missing, and extra strokes project to seconds with verdicts")
+    func overlayMarks() throws {
+        let target = babyPhrase(cycles: 1) // fwd 0–0.5, back 0.5–1.0
+        let clock = fixtureClock()
+        // Performed: fwd matched 0.1 beat late; second slot unplayed; one
+        // extra far-off stroke.
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.1, end: 0.6, direction: .forward),
+            performedStroke(start: 3.0, end: 3.4, direction: .forward)
+        ])
+        let windows = fixtureWindows()
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let overlay = ScratchComparisonOverlay.overlay(
+            result: result, target: target, performed: performed, clock: clock)
+
+        #expect(overlay.strokeMarks.count == 3)
+        // Sorted by start time: matched (0.1 beat), missing (0.5 beat), extra (3.0).
+        let matched = overlay.strokeMarks[0]
+        #expect(matched.kind == .matched(timing: .late, directionCorrect: true))
+        #expect(abs(matched.startTime - clock.seconds(fromBeats: 0.1)) < 1e-9)
+        #expect(abs((matched.offsetMilliseconds ?? 0) - 60.0) < 1e-6)
+        #expect(matched.direction == .forward)
+
+        let missing = overlay.strokeMarks[1]
+        #expect(missing.kind == .missingTarget)
+        #expect(abs(missing.startTime - clock.seconds(fromBeats: 0.5)) < 1e-9)
+        #expect(missing.direction == .backward) // target direction, not invented
+        #expect(missing.offsetMilliseconds == nil)
+
+        let extra = overlay.strokeMarks[2]
+        #expect(extra.kind == .extraPerformed)
+        #expect(abs(extra.startTime - clock.seconds(fromBeats: 3.0)) < 1e-9)
+
+        // Baby authors no fader channel — no fader marks are fabricated.
+        #expect(overlay.faderMarks.isEmpty)
+        #expect(result.faderChannel == .noCanonicalFaderChannel)
+    }
+
+    @Test("A compared fader channel yields verdict-carrying fader marks")
+    func faderMarks() throws {
+        let target = try #require(TargetScratchPhrase.phrase(repeating: faderedPattern, cycles: 1))
+        let clock = fixtureClock()
+        let performed = performedTimeline(
+            strokes: perfectPerformance(of: target),
+            faderEdges: [
+                .init(beat: 0.0, state: .open, source: "midi"),
+                .init(beat: 0.6, state: .closed, source: "midi") // 0.1 beat late
+            ],
+            hasFaderCapture: true)
+        let windows = fixtureWindows()
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let overlay = ScratchComparisonOverlay.overlay(
+            result: result, target: target, performed: performed, clock: clock)
+
+        #expect(overlay.faderMarks.count == 2)
+        #expect(overlay.faderMarks[0].kind == .matched(timing: .correct, directionCorrect: nil))
+        #expect(overlay.faderMarks[1].kind == .matched(timing: .late, directionCorrect: nil))
+        #expect(abs(overlay.faderMarks[1].time - clock.seconds(fromBeats: 0.6)) < 1e-9)
+        #expect(overlay.faderMarks[1].state == .closed)
+    }
+
+    @Test("An indeterminate performed direction stays unassessed in the mark")
+    func indeterminateDirection() throws {
+        let target = babyPhrase(cycles: 1)
+        let clock = fixtureClock()
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.0, end: 0.5, direction: nil)
+        ])
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(),
+            bpm: fixtureBPM))
+        let overlay = ScratchComparisonOverlay.overlay(
+            result: result, target: target, performed: performed, clock: clock)
+        #expect(overlay.strokeMarks[0].kind
+                == .matched(timing: .correct, directionCorrect: nil))
+        #expect(overlay.strokeMarks[0].direction == nil)
+    }
+}
+
+// MARK: - Scoring
+
+@Suite("ScratchPerformanceScore")
+struct ScratchPerformanceScoreTests {
+
+    @Test("A perfect performance scores 100 on every comparable axis")
+    func perfectScore() throws {
+        let target = babyPhrase(cycles: 2)
+        let performed = performedTimeline(strokes: perfectPerformance(of: target))
+        let windows = fixtureWindows()
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let score = ScratchPerformanceScore.score(result: result, windows: windows)
+
+        #expect(score.matchedStrokeCount == 4)
+        #expect(score.missingStrokeCount == 0)
+        #expect(score.extraStrokeCount == 0)
+        #expect(score.wrongDirectionCount == 0)
+        #expect(abs((score.platterTiming ?? 0) - 100) < 1e-9)
+        #expect(abs((score.platterCompleteness ?? 0) - 100) < 1e-9)
+        // Baby authors no fader channel — those axes are absent, not zero.
+        #expect(score.faderTiming == nil)
+        #expect(score.faderCompleteness == nil)
+        #expect(abs((score.overall ?? 0) - 100) < 1e-9)
+    }
+
+    @Test("Timing quality normalizes offsets against the match window")
+    func timingNormalization() throws {
+        let target = babyPhrase(cycles: 1)
+        let windows = fixtureWindows(strokeWindow: 0.2, strokeTolerance: 0.05)
+        // Both strokes matched exactly half the window off → per-stroke 50.
+        let performed = performedTimeline(
+            strokes: perfectPerformance(of: target, shiftBeats: 0.1))
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let score = ScratchPerformanceScore.score(result: result, windows: windows)
+        #expect(abs((score.platterTiming ?? 0) - 50) < 1e-9)
+    }
+
+    @Test("Missing, extra, and wrong-direction strokes each cost completeness")
+    func completenessArithmetic() throws {
+        let target = babyPhrase(cycles: 2) // 4 target strokes
+        // Slot 0 matched correct-direction; slot 1 matched WRONG direction;
+        // slots 2+3 unplayed; one extra stroke far away.
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .forward),
+            performedStroke(start: 5.0, end: 5.4, direction: .forward)
+        ])
+        let windows = fixtureWindows()
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let score = ScratchPerformanceScore.score(result: result, windows: windows)
+
+        #expect(score.matchedStrokeCount == 2)
+        #expect(score.missingStrokeCount == 2)
+        #expect(score.extraStrokeCount == 1)
+        #expect(score.wrongDirectionCount == 1)
+        #expect(score.assessedDirectionCount == 2)
+        // (2 matched − 1 wrong-way) / (4 targets + 1 extra) = 20.
+        #expect(abs((score.platterCompleteness ?? 0) - 20) < 1e-9)
+    }
+
+    @Test("No matched strokes means timing is unassessable, not zero")
+    func noMatchesNilTiming() throws {
+        let target = babyPhrase(cycles: 1)
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 9.0, end: 9.5, direction: .forward)
+        ])
+        let windows = fixtureWindows()
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let score = ScratchPerformanceScore.score(result: result, windows: windows)
+        #expect(score.platterTiming == nil)
+        #expect(abs((score.platterCompleteness ?? -1) - 0) < 1e-9)
+        // Overall still reports from the axes that ARE comparable.
+        #expect(score.overall != nil)
+    }
+
+    @Test("Fader sub-scores appear only when the channel was compared")
+    func faderSubScores() throws {
+        let target = try #require(TargetScratchPhrase.phrase(repeating: faderedPattern, cycles: 1))
+        let performed = performedTimeline(
+            strokes: perfectPerformance(of: target),
+            faderEdges: [.init(beat: 0.0, state: .open, source: "midi")],
+            hasFaderCapture: true)
+        let windows = fixtureWindows()
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: fixtureBPM))
+        let score = ScratchPerformanceScore.score(result: result, windows: windows)
+        #expect(score.matchedFaderEdgeCount == 1)
+        #expect(score.missingFaderEdgeCount == 1) // closed edge unplayed
+        #expect(abs((score.faderTiming ?? 0) - 100) < 1e-9)
+        #expect(abs((score.faderCompleteness ?? 0) - 50) < 1e-9)
+    }
+}

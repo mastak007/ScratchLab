@@ -145,6 +145,114 @@ extension NotationFeedbackState {
         return "Slow it down and focus on one smooth forward-and-back motion."
     }
 
+    // MARK: - Comparison-driven feedback (target vs performed)
+
+    /// Maps a target-vs-performed comparison result to one aggregate feedback
+    /// state for a take.
+    ///
+    /// Unlike the scalar `from(accuracy:isOnBeat:beatOffset:)` factory (whose
+    /// beatOffset is an IOI-derived estimate), every comparison signal here is
+    /// a direct per-stroke measurement, so the precedence ladder orders by how
+    /// fundamental the correction is — this preserves, and extends, the
+    /// existing rule that a needed correction always outranks praise:
+    ///
+    /// 1. Any matched stroke with a determinately wrong direction → `.wrongDirection`.
+    /// 2. More target strokes missed than matched → `.missed`.
+    /// 3. Off-tolerance matches outnumber correct ones → dominant of
+    ///    `.early`/`.late` (tie → `.early`, matching the scalar factory's
+    ///    early-before-late check order).
+    /// 4. Otherwise praise tiers reuse the established accuracy thresholds
+    ///    against the correct-match fraction: every stroke correct with
+    ///    nothing missing/extra → `.excellent`; correct fraction ≥ 70% →
+    ///    `.correct`; else `.close`.
+    ///
+    /// Returns `.neutral` when there is nothing to assess at all (no matches,
+    /// no missing targets — e.g. an empty phrase).
+    static func from(comparison result: ScratchPerformanceComparisonResult) -> NotationFeedbackState {
+        let matched = result.matchedStrokes
+        let missingCount = result.missingTargetStrokeIndices.count
+        if matched.isEmpty && missingCount == 0 { return .neutral }
+
+        if matched.contains(where: { $0.directionCorrect == false }) {
+            return .wrongDirection
+        }
+        if missingCount > matched.count { return .missed }
+
+        let earlyCount = matched.filter { $0.timing == .early }.count
+        let lateCount = matched.filter { $0.timing == .late }.count
+        let correctCount = matched.filter { $0.timing == .correct }.count
+        if earlyCount + lateCount > correctCount {
+            return earlyCount >= lateCount ? .early : .late
+        }
+
+        guard !matched.isEmpty else { return .missed }
+        let correctFraction = Double(correctCount) / Double(matched.count) * 100
+        if correctFraction >= excellentAccuracyThreshold,
+           missingCount == 0,
+           result.extraPerformedStrokeIndices.isEmpty,
+           correctCount == matched.count {
+            return .excellent
+        }
+        if correctFraction >= correctAccuracyThreshold { return .correct }
+        return .close
+    }
+
+    /// Concise beginner coaching lines derived from comparison primitives —
+    /// same engine, second signal source: this reuses the states and message
+    /// voice of `coachingMessage(accuracy:isOnBeat:beatOffset:)` rather than
+    /// introducing a parallel feedback vocabulary. Messages are emitted in
+    /// the same fundamental-first precedence as `from(comparison:)`, with
+    /// the fader channel after the platter (a cut error is meaningless until
+    /// the strokes themselves are close), capped at `limit`.
+    static func coachingMessages(
+        for result: ScratchPerformanceComparisonResult,
+        limit: Int = 2
+    ) -> [String] {
+        guard limit > 0 else { return [] }
+        var messages: [String] = []
+        let matched = result.matchedStrokes
+
+        if matched.contains(where: { $0.directionCorrect == false }) {
+            messages.append("One or more strokes went the wrong way. Follow the target direction.")
+        }
+        if !result.missingTargetStrokeIndices.isEmpty {
+            messages.append("You missed a movement. Keep the pattern going through every stroke.")
+        }
+        if !result.extraPerformedStrokeIndices.isEmpty {
+            messages.append("Extra movement detected. Stick to the target strokes.")
+        }
+
+        let earlyCount = matched.filter { $0.timing == .early }.count
+        let lateCount = matched.filter { $0.timing == .late }.count
+        if earlyCount > 0 || lateCount > 0 {
+            if earlyCount >= lateCount {
+                messages.append("You were slightly early. Let the beat arrive before starting the motion.")
+            } else {
+                messages.append("You were slightly late. Begin the motion a little sooner.")
+            }
+        }
+
+        if case .compared(let matchedEdges, let missingEdges, _) = result.faderChannel {
+            if !missingEdges.isEmpty {
+                messages.append("You missed a cut. Move the fader on the mark.")
+            }
+            let earlyEdges = matchedEdges.filter { $0.timing == .early }.count
+            let lateEdges = matchedEdges.filter { $0.timing == .late }.count
+            if earlyEdges > 0 || lateEdges > 0 {
+                if earlyEdges >= lateEdges {
+                    messages.append("Your cut was early. Hold the fader a touch longer.")
+                } else {
+                    messages.append("Your cut was late. Cut a little sooner.")
+                }
+            }
+        }
+
+        if messages.isEmpty, !matched.isEmpty {
+            messages.append("Good timing and a clean match.")
+        }
+        return Array(messages.prefix(limit))
+    }
+
     /// How quickly the effect decays, in seconds. Independent of render settings
     /// so callers can schedule a reset without holding a style reference.
     var decayDuration: TimeInterval {

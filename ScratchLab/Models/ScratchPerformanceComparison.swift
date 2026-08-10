@@ -12,7 +12,10 @@
 //   `ScratchAnalysisNotationComparison.compare(..., timingToleranceSeconds:)`
 //   convention.
 // - Pure value transformation, deterministic, Foundation-only. No SwiftUI, no
-//   rendering, no clock reads, no I/O, no UI strings, no aggregate score.
+//   rendering, no clock reads, no I/O, no UI strings. Scoring exposes
+//   inspectable sub-scores only — fundamentally different errors (timing vs
+//   direction vs completeness vs fader) are never hidden inside one opaque
+//   number; `overall` is a documented mean of the named sub-scores.
 
 import Foundation
 
@@ -511,5 +514,353 @@ enum ScratchPerformanceAlignment {
             if let chosen { claimed.insert(chosen) }
             return chosen
         }
+    }
+}
+
+// MARK: - Window derivation
+
+extension ScratchComparisonWindows {
+
+    /// Derives matching windows from the target phrase's own geometry — no
+    /// technique-specific constant is invented; the window IS the authored
+    /// beat spacing. The match window is half the smallest gap between
+    /// consecutive target stroke start beats (the documented safe bound on
+    /// `strokeMatchWindowBeats`, so a performed stroke can never be claimed
+    /// by the wrong neighbour). The fader window derives the same way from
+    /// the target fader-edge stream when it has 2+ edges, otherwise it
+    /// reuses the stroke window (edges then have no tighter geometry of
+    /// their own). Correctness tolerances remain caller judgment — they are
+    /// clamped to the derived windows so construction cannot fail on a
+    /// tight phrase.
+    ///
+    /// `nil` when the phrase has fewer than 2 strokes (no derivable stroke
+    /// spacing — the caller must then supply explicit windows) or when the
+    /// derived spacing is degenerate (identical start beats).
+    static func derived(from target: TargetScratchPhrase,
+                        strokeCorrectToleranceBeats: Double,
+                        faderCorrectToleranceBeats: Double) -> ScratchComparisonWindows? {
+        let starts = target.strokes.map(\.startBeat)
+        guard starts.count >= 2 else { return nil }
+        var minStrokeGap = Double.infinity
+        for index in 1..<starts.count {
+            minStrokeGap = min(minStrokeGap, starts[index] - starts[index - 1])
+        }
+        guard minStrokeGap.isFinite, minStrokeGap > 0 else { return nil }
+        let strokeWindow = minStrokeGap / 2
+
+        var faderWindow = strokeWindow
+        let edgeBeats = target.faderEdges.map(\.beat)
+        if edgeBeats.count >= 2 {
+            var minEdgeGap = Double.infinity
+            for index in 1..<edgeBeats.count {
+                minEdgeGap = min(minEdgeGap, edgeBeats[index] - edgeBeats[index - 1])
+            }
+            if minEdgeGap.isFinite, minEdgeGap > 0 {
+                faderWindow = minEdgeGap / 2
+            }
+        }
+
+        return ScratchComparisonWindows(
+            strokeMatchWindowBeats: strokeWindow,
+            strokeCorrectToleranceBeats: min(max(strokeCorrectToleranceBeats, 0), strokeWindow),
+            faderMatchWindowBeats: faderWindow,
+            faderCorrectToleranceBeats: min(max(faderCorrectToleranceBeats, 0), faderWindow)
+        )
+    }
+}
+
+// MARK: - Target phrase materialization
+
+extension TargetScratchPhrase {
+
+    /// Materializes the tiled phrase as a seconds-ready `ScratchNotation`
+    /// through the canonical `BeatPattern.materialized(bpm:)` boundary — the
+    /// repository's ONLY beats→seconds path — so a comparison surface can
+    /// render the exact phrase the alignment compared against. Rebuilding a
+    /// `BeatPattern` from the tiled streams keeps its structural validation
+    /// in force: a phrase that somehow tiled into an invalid pattern
+    /// materializes as `nil`, never as fake seconds.
+    func materializedNotation(bpm: Double,
+                              scratchID: String,
+                              timingBasis: String,
+                              beatsPerBar: Int?,
+                              version: Int) -> ScratchNotation? {
+        ScratchNotation.BeatPattern(
+            version: version,
+            scratchID: scratchID,
+            timingBasis: timingBasis,
+            beatsPerBar: beatsPerBar,
+            strokes: strokes,
+            faderEvents: faderEdges
+        ).materialized(bpm: bpm)
+    }
+}
+
+// MARK: - Presentation overlay (seconds domain)
+
+/// Renderer-neutral target-vs-performed marks, projected into the seconds
+/// domain via a `PerformanceBeatClock` so existing seconds-domain notation
+/// surfaces can draw them with their own visual language. Pure data — no
+/// colors, no geometry, no UI strings. Matched and extra marks sit at the
+/// PERFORMED time (what the user actually did); missing marks sit at the
+/// TARGET time (the slot that went unplayed) — no time is ever invented.
+struct ScratchComparisonOverlay: Equatable, Sendable {
+
+    enum MarkKind: Equatable, Sendable {
+        /// Performed evidence matched to a target slot. `directionCorrect`
+        /// stays `nil` when the performed direction was indeterminate —
+        /// unassessed, never assumed right or wrong.
+        case matched(timing: StrokeTimingVerdict, directionCorrect: Bool?)
+        /// A target slot no performed evidence claimed.
+        case missingTarget
+        /// Performed evidence no target slot claimed.
+        case extraPerformed
+    }
+
+    struct StrokeMark: Equatable, Sendable {
+        let startTime: TimeInterval
+        let endTime: TimeInterval
+        let kind: MarkKind
+        /// Signed performed−target offset for matched marks; `nil` otherwise.
+        let offsetMilliseconds: Double?
+        /// The direction the mark should render with: performed direction
+        /// for matched/extra evidence (nil when indeterminate), target
+        /// direction for a missing slot.
+        let direction: ScratchNotationDirection?
+    }
+
+    struct FaderMark: Equatable, Sendable {
+        let time: TimeInterval
+        let state: ScratchNotationFaderState
+        let kind: MarkKind
+        let offsetMilliseconds: Double?
+    }
+
+    /// Sorted by `startTime` (ties keep matched → missing → extra stable).
+    let strokeMarks: [StrokeMark]
+    /// Empty whenever the fader channel was not `.compared` — the
+    /// channel-level reason lives on the comparison result, and no fader
+    /// marks are fabricated for an unauthored or uncaptured channel.
+    let faderMarks: [FaderMark]
+
+    /// Builds the overlay for a comparison result. Deterministic: output
+    /// order is a pure function of the inputs. `clock` must be the same
+    /// clock the performed timeline was normalized with, so performed beats
+    /// project back to the take-relative seconds they came from.
+    static func overlay(
+        result: ScratchPerformanceComparisonResult,
+        target: TargetScratchPhrase,
+        performed: PerformedScratchTimeline,
+        clock: PerformanceBeatClock
+    ) -> ScratchComparisonOverlay {
+        var strokeMarks: [ScratchComparisonOverlay.StrokeMark] = []
+
+        for match in result.matchedStrokes {
+            guard target.strokes.indices.contains(match.targetIndex),
+                  performed.strokes.indices.contains(match.performedIndex) else { continue }
+            let performedStroke = performed.strokes[match.performedIndex]
+            strokeMarks.append(StrokeMark(
+                startTime: clock.seconds(fromBeats: performedStroke.startBeat),
+                endTime: clock.seconds(fromBeats: performedStroke.endBeat),
+                kind: .matched(timing: match.timing,
+                               directionCorrect: match.directionCorrect),
+                offsetMilliseconds: match.offsetMilliseconds,
+                direction: performedStroke.direction
+            ))
+        }
+        for index in result.missingTargetStrokeIndices
+        where target.strokes.indices.contains(index) {
+            let stroke = target.strokes[index]
+            strokeMarks.append(StrokeMark(
+                startTime: clock.seconds(fromBeats: stroke.startBeat),
+                endTime: clock.seconds(fromBeats: stroke.endBeat),
+                kind: .missingTarget,
+                offsetMilliseconds: nil,
+                direction: stroke.direction
+            ))
+        }
+        for index in result.extraPerformedStrokeIndices
+        where performed.strokes.indices.contains(index) {
+            let stroke = performed.strokes[index]
+            strokeMarks.append(StrokeMark(
+                startTime: clock.seconds(fromBeats: stroke.startBeat),
+                endTime: clock.seconds(fromBeats: stroke.endBeat),
+                kind: .extraPerformed,
+                offsetMilliseconds: nil,
+                direction: stroke.direction
+            ))
+        }
+        strokeMarks.sort { lhs, rhs in
+            if lhs.startTime != rhs.startTime { return lhs.startTime < rhs.startTime }
+            return markOrder(lhs.kind) < markOrder(rhs.kind)
+        }
+
+        var faderMarks: [ScratchComparisonOverlay.FaderMark] = []
+        if case .compared(let matched, let missingIndices, let extraIndices) = result.faderChannel {
+            for match in matched
+            where target.faderEdges.indices.contains(match.targetIndex)
+                && performed.faderEdges.indices.contains(match.performedIndex) {
+                let edge = performed.faderEdges[match.performedIndex]
+                faderMarks.append(FaderMark(
+                    time: clock.seconds(fromBeats: edge.beat),
+                    state: edge.state,
+                    kind: .matched(timing: match.timing, directionCorrect: nil),
+                    offsetMilliseconds: match.offsetMilliseconds
+                ))
+            }
+            for index in missingIndices where target.faderEdges.indices.contains(index) {
+                let edge = target.faderEdges[index]
+                faderMarks.append(FaderMark(
+                    time: clock.seconds(fromBeats: edge.beat),
+                    state: edge.state,
+                    kind: .missingTarget,
+                    offsetMilliseconds: nil
+                ))
+            }
+            for index in extraIndices where performed.faderEdges.indices.contains(index) {
+                let edge = performed.faderEdges[index]
+                faderMarks.append(FaderMark(
+                    time: clock.seconds(fromBeats: edge.beat),
+                    state: edge.state,
+                    kind: .extraPerformed,
+                    offsetMilliseconds: nil
+                ))
+            }
+            faderMarks.sort { lhs, rhs in
+                if lhs.time != rhs.time { return lhs.time < rhs.time }
+                return markOrder(lhs.kind) < markOrder(rhs.kind)
+            }
+        }
+
+        return ScratchComparisonOverlay(strokeMarks: strokeMarks, faderMarks: faderMarks)
+    }
+
+    private static func markOrder(_ kind: MarkKind) -> Int {
+        switch kind {
+        case .matched: return 0
+        case .missingTarget: return 1
+        case .extraPerformed: return 2
+        }
+    }
+}
+
+// MARK: - Scoring
+
+/// Inspectable sub-scores derived from a comparison result — never from a
+/// second detection pass. Each axis is its own number (or `nil` when that
+/// axis was not comparable, which is reported, not defaulted): timing
+/// quality of the strokes that matched, completeness/direction of the
+/// stroke stream, and the same two axes for the fader channel. `overall`
+/// is the plain mean of the non-`nil` sub-scores — documented here, not an
+/// opaque blend, so a surprising overall is always explainable from the
+/// visible sub-scores.
+struct ScratchPerformanceScore: Equatable, Sendable {
+
+    // Inspectable counts the sub-scores are computed from.
+    let matchedStrokeCount: Int
+    let missingStrokeCount: Int
+    let extraStrokeCount: Int
+    /// Matched strokes whose performed direction was determinate and wrong.
+    let wrongDirectionCount: Int
+    /// Matched strokes whose performed direction was determinate at all —
+    /// the denominator context for `wrongDirectionCount`.
+    let assessedDirectionCount: Int
+    let matchedFaderEdgeCount: Int
+    let missingFaderEdgeCount: Int
+    let extraFaderEdgeCount: Int
+
+    /// 0–100. Mean per-matched-stroke timing quality:
+    /// `1 − |offsetBeats| / strokeMatchWindowBeats`. `nil` when no stroke
+    /// matched (timing is then unassessable, not zero).
+    let platterTiming: Double?
+    /// 0–100. Matched-with-direction-not-wrong strokes over
+    /// `targetCount + extraCount`: a missing stroke, an extra stroke, and a
+    /// wrong-direction stroke all cost this axis. `nil` when the target had
+    /// no strokes.
+    let platterCompleteness: Double?
+    /// 0–100. Mean per-matched-edge timing quality against the fader match
+    /// window. `nil` unless the fader channel was `.compared` and at least
+    /// one edge matched.
+    let faderTiming: Double?
+    /// 0–100. Matched fader edges over `targetEdgeCount + extraEdgeCount`.
+    /// `nil` unless the fader channel was `.compared`.
+    let faderCompleteness: Double?
+    /// Plain mean of the non-`nil` sub-scores; `nil` when nothing was
+    /// comparable at all.
+    let overall: Double?
+
+    /// Derives the score. `windows` must be the same windows the comparison
+    /// ran with — offsets are normalized against the match window that
+    /// admitted them, so a just-inside-the-window match scores near 0 on
+    /// that stroke and an exact hit scores 100.
+    static func score(
+        result: ScratchPerformanceComparisonResult,
+        windows: ScratchComparisonWindows
+    ) -> ScratchPerformanceScore {
+        let matched = result.matchedStrokes
+        let missingCount = result.missingTargetStrokeIndices.count
+        let extraCount = result.extraPerformedStrokeIndices.count
+        let targetCount = matched.count + missingCount
+
+        let wrongDirectionCount = matched.filter { $0.directionCorrect == false }.count
+        let assessedDirectionCount = matched.filter { $0.directionCorrect != nil }.count
+
+        var platterTiming: Double?
+        if !matched.isEmpty, windows.strokeMatchWindowBeats > 0 {
+            let total = matched.reduce(0.0) { sum, match in
+                sum + max(0, 1 - abs(match.offsetBeats) / windows.strokeMatchWindowBeats)
+            }
+            platterTiming = total / Double(matched.count) * 100
+        }
+
+        var platterCompleteness: Double?
+        if targetCount > 0 {
+            let completed = matched.count - wrongDirectionCount
+            platterCompleteness = Double(completed) / Double(targetCount + extraCount) * 100
+        }
+
+        var faderTiming: Double?
+        var faderCompleteness: Double?
+        var matchedEdgeCount = 0
+        var missingEdgeCount = 0
+        var extraEdgeCount = 0
+        if case .compared(let matchedEdges, let missingEdges, let extraEdges) = result.faderChannel {
+            matchedEdgeCount = matchedEdges.count
+            missingEdgeCount = missingEdges.count
+            extraEdgeCount = extraEdges.count
+            if !matchedEdges.isEmpty, windows.faderMatchWindowBeats > 0 {
+                let total = matchedEdges.reduce(0.0) { sum, match in
+                    sum + max(0, 1 - abs(match.offsetBeats) / windows.faderMatchWindowBeats)
+                }
+                faderTiming = total / Double(matchedEdges.count) * 100
+            }
+            let targetEdgeCount = matchedEdges.count + missingEdges.count
+            if targetEdgeCount + extraEdges.count > 0 {
+                faderCompleteness = Double(matchedEdges.count)
+                    / Double(targetEdgeCount + extraEdges.count) * 100
+            }
+        }
+
+        let subScores = [platterTiming, platterCompleteness, faderTiming, faderCompleteness]
+            .compactMap { $0 }
+        let overall = subScores.isEmpty
+            ? nil
+            : subScores.reduce(0, +) / Double(subScores.count)
+
+        return ScratchPerformanceScore(
+            matchedStrokeCount: matched.count,
+            missingStrokeCount: missingCount,
+            extraStrokeCount: extraCount,
+            wrongDirectionCount: wrongDirectionCount,
+            assessedDirectionCount: assessedDirectionCount,
+            matchedFaderEdgeCount: matchedEdgeCount,
+            missingFaderEdgeCount: missingEdgeCount,
+            extraFaderEdgeCount: extraEdgeCount,
+            platterTiming: platterTiming,
+            platterCompleteness: platterCompleteness,
+            faderTiming: faderTiming,
+            faderCompleteness: faderCompleteness,
+            overall: overall
+        )
     }
 }

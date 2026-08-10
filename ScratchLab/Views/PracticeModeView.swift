@@ -1015,7 +1015,22 @@ struct PracticeModeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
-            Spacer(minLength: 0)
+            // Graceful no-target state: this technique has no canonical
+            // `BeatPattern` in `ScratchNotation.canonicalBeatPatterns`, so no
+            // target lane is rendered — never an invented or guessed pattern.
+            // The slot keeps its layout size (like the Spacer it replaces).
+            VStack(spacing: 6) {
+                Text("Target notation isn't available for \(activeScratch.name) yet.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.75))
+                    .multilineTextAlignment(.center)
+                Text("Practice freely — a notation lane appears once this technique has a verified target pattern.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

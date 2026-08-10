@@ -407,3 +407,174 @@ final class CoachingMessageTests: XCTestCase {
         XCTAssertFalse(joined.contains("clipped"), "Must not claim clipped motion")
     }
 }
+
+// MARK: - Comparison-driven feedback (target vs performed)
+
+/// Tests for the comparison-signal factory and coaching lines. Unlike the
+/// scalar factory above (IOI-derived estimates), these consume direct
+/// per-stroke measurements, so per-stroke and fader claims ARE permitted.
+final class NotationFeedbackComparisonTests: XCTestCase {
+
+    // MARK: - Fixture builders (hand-built comparison results)
+
+    private func match(
+        target: Int, performed: Int,
+        offsetBeats: Double = 0,
+        timing: StrokeTimingVerdict = .correct,
+        directionCorrect: Bool? = true
+    ) -> MatchedStrokeComparison {
+        MatchedStrokeComparison(targetIndex: target, performedIndex: performed,
+                                offsetBeats: offsetBeats,
+                                offsetMilliseconds: offsetBeats * 600,
+                                timing: timing,
+                                directionCorrect: directionCorrect)
+    }
+
+    private func result(
+        matched: [MatchedStrokeComparison] = [],
+        missing: [Int] = [],
+        extra: [Int] = [],
+        faderChannel: FaderChannelComparison = .noCanonicalFaderChannel
+    ) -> ScratchPerformanceComparisonResult {
+        ScratchPerformanceComparisonResult(
+            matchedStrokes: matched,
+            missingTargetStrokeIndices: missing,
+            extraPerformedStrokeIndices: extra,
+            faderChannel: faderChannel,
+            bpm: 100)
+    }
+
+    private func faderMatch(
+        target: Int, performed: Int,
+        offsetBeats: Double = 0,
+        timing: StrokeTimingVerdict = .correct
+    ) -> MatchedFaderEdgeComparison {
+        MatchedFaderEdgeComparison(targetIndex: target, performedIndex: performed,
+                                   offsetBeats: offsetBeats,
+                                   offsetMilliseconds: offsetBeats * 600,
+                                   timing: timing)
+    }
+
+    // MARK: - from(comparison:) precedence ladder
+
+    func testWrongDirectionOutranksEverything() {
+        let r = result(
+            matched: [match(target: 0, performed: 0, timing: .late,
+                            directionCorrect: false)],
+            missing: [1, 2],
+            extra: [3])
+        XCTAssertEqual(NotationFeedbackState.from(comparison: r), .wrongDirection)
+    }
+
+    func testMoreMissedThanMatchedMapsToMissed() {
+        let r = result(matched: [match(target: 0, performed: 0)], missing: [1, 2])
+        XCTAssertEqual(NotationFeedbackState.from(comparison: r), .missed)
+    }
+
+    func testNothingPerformedMapsToMissed() {
+        let r = result(missing: [0, 1])
+        XCTAssertEqual(NotationFeedbackState.from(comparison: r), .missed)
+    }
+
+    func testDominantEarlyMapsToEarly() {
+        let r = result(matched: [
+            match(target: 0, performed: 0, offsetBeats: -0.1, timing: .early),
+            match(target: 1, performed: 1, offsetBeats: -0.1, timing: .early),
+            match(target: 2, performed: 2)
+        ])
+        XCTAssertEqual(NotationFeedbackState.from(comparison: r), .early)
+    }
+
+    func testDominantLateMapsToLate() {
+        let r = result(matched: [
+            match(target: 0, performed: 0, offsetBeats: 0.1, timing: .late),
+            match(target: 1, performed: 1, offsetBeats: 0.1, timing: .late),
+            match(target: 2, performed: 2)
+        ])
+        XCTAssertEqual(NotationFeedbackState.from(comparison: r), .late)
+    }
+
+    func testCleanFullMatchMapsToExcellent() {
+        let r = result(matched: [
+            match(target: 0, performed: 0),
+            match(target: 1, performed: 1)
+        ])
+        XCTAssertEqual(NotationFeedbackState.from(comparison: r), .excellent)
+    }
+
+    func testExtraStrokeBlocksExcellent() {
+        let r = result(
+            matched: [match(target: 0, performed: 0),
+                      match(target: 1, performed: 1)],
+            extra: [2])
+        let state = NotationFeedbackState.from(comparison: r)
+        XCTAssertNotEqual(state, .excellent)
+        XCTAssertEqual(state, .correct)
+    }
+
+    func testEmptyComparisonStaysNeutral() {
+        XCTAssertEqual(NotationFeedbackState.from(comparison: result()), .neutral)
+    }
+
+    // MARK: - coachingMessages(for:) priority and content
+
+    func testCoachingPriorityDirectionThenMissing() {
+        let r = result(
+            matched: [match(target: 0, performed: 0, directionCorrect: false)],
+            missing: [1])
+        let messages = NotationFeedbackState.coachingMessages(for: r, limit: 2)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertTrue(messages[0].localizedCaseInsensitiveContains("wrong way"))
+        XCTAssertTrue(messages[1].localizedCaseInsensitiveContains("missed a movement"))
+    }
+
+    func testCoachingLimitCapsOutput() {
+        let r = result(
+            matched: [match(target: 0, performed: 0, directionCorrect: false)],
+            missing: [1],
+            extra: [2])
+        XCTAssertEqual(NotationFeedbackState.coachingMessages(for: r, limit: 1).count, 1)
+    }
+
+    func testCoachingEarlyReusesEstablishedVoice() {
+        let r = result(matched: [
+            match(target: 0, performed: 0, offsetBeats: -0.1, timing: .early)
+        ])
+        let messages = NotationFeedbackState.coachingMessages(for: r)
+        XCTAssertTrue(messages.contains(
+            "You were slightly early. Let the beat arrive before starting the motion."))
+    }
+
+    func testCoachingMissedCutAndLateCut() {
+        let missedCut = result(
+            matched: [match(target: 0, performed: 0)],
+            faderChannel: .compared(matched: [], missingTargetIndices: [0],
+                                    extraPerformedIndices: []))
+        XCTAssertTrue(NotationFeedbackState.coachingMessages(for: missedCut, limit: 3)
+            .contains { $0.localizedCaseInsensitiveContains("missed a cut") })
+
+        let lateCut = result(
+            matched: [match(target: 0, performed: 0)],
+            faderChannel: .compared(
+                matched: [faderMatch(target: 0, performed: 0,
+                                     offsetBeats: 0.1, timing: .late)],
+                missingTargetIndices: [], extraPerformedIndices: []))
+        XCTAssertTrue(NotationFeedbackState.coachingMessages(for: lateCut, limit: 3)
+            .contains { $0.localizedCaseInsensitiveContains("cut was late") })
+    }
+
+    func testCleanPerformancePraisesOnce() {
+        let r = result(matched: [match(target: 0, performed: 0)])
+        XCTAssertEqual(NotationFeedbackState.coachingMessages(for: r),
+                       ["Good timing and a clean match."])
+    }
+
+    func testUncomparableFaderChannelYieldsNoFaderCoaching() {
+        let r = result(matched: [match(target: 0, performed: 0)],
+                       faderChannel: .noPerformedFaderCapture)
+        let joined = NotationFeedbackState.coachingMessages(for: r, limit: 5)
+            .joined(separator: " ")
+        XCTAssertFalse(joined.localizedCaseInsensitiveContains("cut"),
+                       "No fader advice may be fabricated from an uncompared channel")
+    }
+}

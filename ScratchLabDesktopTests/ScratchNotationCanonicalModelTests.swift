@@ -567,3 +567,49 @@ struct CanonicalPlayheadTests {
         #expect(approximatelyEqual(clock.now(at: start.addingTimeInterval(0.8)), 0.8))
     }
 }
+
+// MARK: - Registry-driven comparison surfaces (source-string regression)
+
+/// Pins the Phase-4 rule that every target-vs-performed surface keys off the
+/// canonical registry — never a hardcoded technique — so a future technique
+/// added to `canonicalBeatPatterns` lights up Practice and Review comparison
+/// with no per-surface edits, and unsupported techniques fail gracefully.
+@Suite("Registry-driven comparison surfaces")
+struct RegistryDrivenComparisonSurfaceTests {
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(contentsOf: canonicalTestsRepoRoot()
+            .appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    @Test("Review comparison card resolves its target through the registry")
+    func reviewCardUsesRegistry() throws {
+        let mac = try source("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        #expect(mac.contains(
+            "ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue)"))
+        // Graceful refusal, never a guessed target.
+        #expect(mac.contains("comparison stays off rather than guessing one"))
+    }
+
+    @Test("Review comparison derives windows and tolerances, no magic beats")
+    func reviewCardDerivesWindows() throws {
+        let mac = try source("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        #expect(mac.contains("ScratchComparisonWindows.derived("))
+        #expect(mac.contains("NotationFeedbackState.lateOffsetThresholdMs"))
+    }
+
+    @Test("Practice's no-target branch is a graceful placeholder, not invented notation")
+    func practicePlaceholderIsGraceful() throws {
+        let practice = try source("ScratchLab/Views/PracticeModeView.swift")
+        #expect(practice.contains("Target notation isn't available for"))
+        // The target lane still resolves through the registry alone.
+        #expect(practice.contains(
+            "ScratchNotation.canonicalBeatPattern(forScratchID: scratch.id)"))
+    }
+
+    @Test("Chart overlay defaults nil so pre-existing charts render unchanged")
+    func chartOverlayDefaultsNil() throws {
+        let chart = try source("ScratchLabDesktop/Views/ScratchPhraseChartView.swift")
+        #expect(chart.contains("var comparisonOverlay: ScratchComparisonOverlay? = nil"))
+    }
+}

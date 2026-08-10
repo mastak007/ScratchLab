@@ -1,5 +1,107 @@
 # AI Handoff
 
+## 2026-08-11 — Target-vs-performed batch: visualization + coaching + scoring + practice expansion (branch `feature/notation-canonical-model-20260811`, committed locally, NOT pushed)
+
+The canonical target/performed comparison foundation (`6ede816`) is now
+wired into user-facing surfaces: a Review "Target vs performed" card
+(macOS), comparison-driven coaching and inspectable sub-scores, and
+graceful Practice behaviour for techniques without a canonical pattern.
+Zero new files, zero pbxproj changes (per the standing rule that pbxproj
+diffs need separate manual approval).
+
+### What landed
+
+- `ScratchLab/Models/ScratchPerformanceComparison.swift`:
+  - `ScratchComparisonWindows.derived(from:...)` — match windows derived
+    from the target phrase's own beat spacing (half min inter-stroke start
+    gap); correctness tolerances stay caller-supplied, clamped to windows.
+  - `TargetScratchPhrase.materializedNotation(bpm:...)` — tiled phrase →
+    `ScratchNotation` through the canonical `BeatPattern.materialized`
+    boundary only.
+  - `ScratchComparisonOverlay` — renderer-neutral seconds-domain marks
+    (matched/missing/extra strokes with timing + direction verdicts;
+    fader-edge marks only when the channel was `.compared`). Matched and
+    extra marks sit at PERFORMED times; missing marks at TARGET times.
+  - `ScratchPerformanceScore` — inspectable sub-scores: platterTiming,
+    platterCompleteness, faderTiming, faderCompleteness (each nil when
+    unassessable, never zeroed), overall = documented mean of non-nil
+    sub-scores, plus all raw counts.
+- `ScratchLab/Models/NotationFeedbackState.swift`:
+  - `from(comparison:)` — aggregate state with a fundamental-first
+    precedence ladder (wrongDirection > missed > dominant early/late >
+    accuracy-threshold praise tiers reusing the existing 70/90 constants).
+  - `coachingMessages(for:limit:)` — concise beginner lines (wrong way,
+    missed movement, extra movement, early/late reusing the established
+    voice verbatim, missed cut, cut early/late). No fader advice unless
+    the channel was actually compared.
+- `ScratchLabDesktop/Views/ScratchPhraseChartView.swift`: optional
+  `comparisonOverlay` on the `.target` chart — performed slashes in the
+  captured chart's direction language (flat dash when direction was
+  indeterminate — never invented), verdict dots (same colours as
+  `NotationFeedbackStyle`), hollow marks for missing slots, fader-edge
+  verdict ticks in the crossfader sub-lane. Nil ⇒ byte-identical chart.
+- `ScratchLabDesktop/Views/MacAnalyzerView.swift`: new
+  `reviewTargetVsPerformedStageCard` between the captured-evidence and
+  overlay-diff cards. Registry-driven
+  (`canonicalBeatPattern(forScratchID:)`), beat anchor = count-in skip
+  (`countInBeats * 60 / bpm`; beat 0 incl. count-in at take-relative 0),
+  Schmitt fader thresholds 0.6/0.4 (UI-side constants), cycle count from
+  evidence length (rounded, capped 64), tolerance ±50 ms via the
+  established `NotationFeedbackState` constants converted to beats.
+  Graceful `unavailable` reasons for: no scratch type, no canonical
+  pattern, no BPM, no movement evidence. Preview-only copy; nothing
+  saved/scored-persistently/exported.
+- `ScratchLab/Views/PracticeModeView.swift`: unsupported techniques get a
+  graceful "Target notation isn't available…" placeholder instead of a
+  silent Spacer. Target lane still resolves through the registry alone.
+
+### Verification (all green, 2026-08-11)
+
+| Gate | Result |
+| --- | --- |
+| `xcodebuild build -scheme ScratchLab -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO` | `** BUILD SUCCEEDED **` |
+| `xcodebuild build -scheme ScratchLabDesktop -destination 'platform=macOS'` | `** BUILD SUCCEEDED **` |
+| `xcodebuild build-for-testing -scheme ScratchLabDesktop -destination 'platform=macOS'` | `** TEST BUILD SUCCEEDED **` |
+| `xcrun xctest` full bundle (dylib-symlink recipe; bundle is at `ScratchLab.app/Contents/PlugIns/`) | 259 swift-testing tests / 34 suites ALL PASSED (incl. 4 new comparison suites + registry source-string suite) |
+| `xcrun xctest -XCTest …NotationFeedbackComparisonTests` | 14/14 passed |
+| `xcrun xctest -XCTest …NotationFeedbackStateTests` | 23/23 passed |
+| XCTest bundled-resource failures (31 across 7 classes) | Pre-existing environmental (`Bundle.main` is the xctest runner) — same classes as before this diff |
+| `git diff --check` | clean |
+
+### Debt audit (Phase 5) — categorized, nothing removed
+
+- **A (required):** comparison/canonical model, TimingLane/ScratchMotionLane
+  substrate, ReviewOverlayTimeline/OverlayReplayController, CXLNotationCapture,
+  bundled `ScratchNotation.babyScratch` demo-timeline consumers (macOS Review
+  target card, Notation Lab, coach).
+- **B (adapter/compat):** bundled 76-stroke `babyScratch` demo timeline
+  itself (legacy `"baby"` ID; technique ≠ demo timeline), per-stroke
+  `faderState` legacy fader fallback, `ScratchNotation.detectedPreview`.
+- **C (debug/verification-only):** `ScratchLab/Models/Notation/` tree
+  (~4.1k lines — Grammar/Semantics/Timing/Phrasing/Coaching/Presentation;
+  all consumers `#if DEBUG`), `TravelLaneDebugView`,
+  `ScratchAnalysisFixtureAdapter` (offline C++-core proof, test-consumed
+  by design), `ScratchNotationIntent` diagnostic comparison/exports.
+- **D (obsolete candidate, deletion DEFERRED):**
+  `ScratchLabDesktop/Services/ScratchNotationTimeline.swift` — zero
+  production consumers (only its own test file). Deleting it requires a
+  pbxproj edit, which needs Karl's separate manual approval — flagged,
+  not removed.
+- `LaneUserEvent` scaffold intentionally kept inert: iOS Practice has no
+  per-stroke capture source (camera is preview-only; mic gives IOI
+  scalars), so wiring the lane overlay there would fabricate data.
+  `ScratchComparisonOverlay` is the ready-made feed once an iOS capture
+  source exists.
+
+### Still lacking ground truth
+
+Only `baby_scratch` has a canonical `BeatPattern`. All other techniques
+show the graceful placeholder (Practice) / unavailable reason (Review).
+Adding a technique to `canonicalBeatPatterns` lights up every surface
+with no per-surface edits (pinned by the "Registry-driven comparison
+surfaces" test suite).
+
+
 ## 2026-07-07 — DVS sample auto-load slice LANDED (commit `4d5157c`, pushed, in sync with `origin/main`)
 
 DVS-driven sample playback now auto-loads the `"ahhh"` sample before

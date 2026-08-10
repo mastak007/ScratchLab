@@ -31,6 +31,13 @@ struct ScratchPhraseChartView: View {
     var targetWindow: ClosedRange<TimeInterval>? = nil
     var playheadTime: TimeInterval = 0
     var showPlayhead: Bool = false
+    /// Optional target-vs-performed overlay drawn on top of the `.target`
+    /// chart: performed strokes in the captured chart's own visual language
+    /// (green forward `/`, orange backward `\` slashes), per-mark verdict
+    /// dots on the baseline, and performed fader-edge ticks in the
+    /// crossfader sub-lane. `nil` (every pre-existing call site) renders the
+    /// chart byte-identically to before. Ignored by `.captured`/`.empty`.
+    var comparisonOverlay: ScratchComparisonOverlay? = nil
 
     // Background and grid palette — shared across both target/captured paths.
     private let bgColor    = Color(white: 0.10)
@@ -111,6 +118,12 @@ struct ScratchPhraseChartView: View {
                                   windowStart: windowStart, windowEnd: windowEnd,
                                   pps: pps, strokeRegionTop: strokeRegionHeight)
 
+        if let overlay = comparisonOverlay {
+            drawComparisonOverlay(ctx: ctx, size: size, overlay: overlay,
+                                  windowStart: windowStart, windowEnd: windowEnd,
+                                  pps: pps, strokeRegionHeight: strokeRegionHeight)
+        }
+
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size,
                          x: CGFloat(playheadTime - windowStart) * pps)
@@ -165,6 +178,116 @@ struct ScratchPhraseChartView: View {
 
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime) * pps)
+        }
+    }
+
+    // MARK: - Target-vs-performed overlay
+
+    /// Verdict palette — the SAME colours `NotationFeedbackStyle` uses for the
+    /// iOS lane's live feedback overlay, so a verdict reads identically on
+    /// both surfaces. Missing marks are the dim `.missed` white; extra marks
+    /// the neutral user-mark white.
+    private static let verdictCorrectCol = Color(red: 0.20, green: 0.88, blue: 0.55)
+    private static let verdictEarlyCol   = Color(red: 0.85, green: 0.65, blue: 0.15)
+    private static let verdictLateCol    = Color(red: 1.00, green: 0.55, blue: 0.10)
+    private static let verdictWrongDirCol = Color(red: 0.80, green: 0.35, blue: 0.35)
+    private static let verdictMissingCol = Color(white: 0.40)
+    private static let verdictExtraCol   = Color(white: 0.85)
+
+    /// Fixed amplitude for performed-stroke slashes. Beat-domain comparison
+    /// marks carry no travel evidence (the normalization deliberately drops
+    /// positions), so a constant mid-band height states "when and which way",
+    /// never a fabricated "how far".
+    private static let overlayTravelFraction: CGFloat = 0.62
+
+    private func verdictColor(for kind: ScratchComparisonOverlay.MarkKind) -> Color {
+        switch kind {
+        case .matched(let timing, let directionCorrect):
+            if directionCorrect == false { return Self.verdictWrongDirCol }
+            switch timing {
+            case .correct: return Self.verdictCorrectCol
+            case .early:   return Self.verdictEarlyCol
+            case .late:    return Self.verdictLateCol
+            }
+        case .missingTarget:  return Self.verdictMissingCol
+        case .extraPerformed: return Self.verdictExtraCol
+        }
+    }
+
+    /// Draws the performed side of a target-vs-performed comparison over the
+    /// target chart: each performed mark is a single diagonal slash in the
+    /// captured chart's direction language (green `/` forward, orange `\`
+    /// backward; direction-indeterminate marks draw a flat dash — no
+    /// direction is invented), with a verdict dot at the mark's start on the
+    /// baseline. Missing target slots draw a hollow verdict circle at the
+    /// unplayed slot instead of a slash — nothing was performed there.
+    /// Performed fader edges draw as verdict-coloured ticks in the
+    /// crossfader sub-lane; missing target edges draw hollow.
+    private func drawComparisonOverlay(ctx: GraphicsContext, size: CGSize,
+                                       overlay: ScratchComparisonOverlay,
+                                       windowStart: Double, windowEnd: Double,
+                                       pps: CGFloat, strokeRegionHeight: CGFloat) {
+        let baseline = strokeRegionHeight * CGFloat(CapturedNotationStrokeGeometry.baselineFraction)
+        let maxBand = strokeRegionHeight * CGFloat(CapturedNotationStrokeGeometry.maxBandFraction)
+        let peakRise = maxBand * Self.overlayTravelFraction
+        let dotRadius: CGFloat = 3.5
+
+        for mark in overlay.strokeMarks {
+            guard mark.endTime > windowStart, mark.startTime < windowEnd else { continue }
+            let x1 = CGFloat(mark.startTime - windowStart) * pps
+            let x2 = CGFloat(mark.endTime - windowStart) * pps
+            let color = verdictColor(for: mark.kind)
+
+            if case .missingTarget = mark.kind {
+                // Unplayed slot: hollow circle at the slot start, no slash.
+                let rect = CGRect(x: x1 - dotRadius, y: baseline - dotRadius,
+                                  width: dotRadius * 2, height: dotRadius * 2)
+                ctx.stroke(Path(ellipseIn: rect), with: .color(color), lineWidth: 1.5)
+                continue
+            }
+
+            // Performed slash — captured-chart language.
+            let peak = baseline - peakRise
+            var slash = Path()
+            switch mark.direction {
+            case .forward:
+                slash.move(to: CGPoint(x: x1, y: baseline))
+                slash.addLine(to: CGPoint(x: max(x2, x1 + 1), y: peak))
+            case .backward:
+                slash.move(to: CGPoint(x: x1, y: peak))
+                slash.addLine(to: CGPoint(x: max(x2, x1 + 1), y: baseline))
+            case nil:
+                // Direction indeterminate — a flat mid-band dash, no slope.
+                let mid = baseline - peakRise * 0.5
+                slash.move(to: CGPoint(x: x1, y: mid))
+                slash.addLine(to: CGPoint(x: max(x2, x1 + 1), y: mid))
+            }
+            let slashColor: Color = mark.direction == .backward ? backCol : forwardCol
+            ctx.stroke(slash, with: .color(slashColor.opacity(0.85)),
+                       style: StrokeStyle(lineWidth: 2.5, lineCap: .round,
+                                          dash: mark.direction == nil ? [4, 3] : []))
+
+            // Verdict dot at the mark start, on the baseline.
+            let dot = CGRect(x: x1 - dotRadius, y: baseline - dotRadius,
+                             width: dotRadius * 2, height: dotRadius * 2)
+            ctx.fill(Path(ellipseIn: dot), with: .color(color))
+        }
+
+        // Performed fader edges — ticks in the crossfader sub-lane.
+        let laneTop = strokeRegionHeight + 2
+        let laneBottom = size.height - 2
+        for mark in overlay.faderMarks {
+            guard mark.time >= windowStart, mark.time <= windowEnd,
+                  laneBottom > laneTop else { continue }
+            let x = CGFloat(mark.time - windowStart) * pps
+            let color = verdictColor(for: mark.kind)
+            let tick = CGRect(x: x - 1, y: laneTop, width: 2, height: laneBottom - laneTop)
+            if case .missingTarget = mark.kind {
+                ctx.stroke(Path(roundedRect: tick, cornerRadius: 1),
+                           with: .color(color), lineWidth: 1)
+            } else {
+                ctx.fill(Path(roundedRect: tick, cornerRadius: 1), with: .color(color))
+            }
         }
     }
 
