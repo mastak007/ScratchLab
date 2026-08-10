@@ -604,6 +604,11 @@ struct MacAnalyzerView: View {
     /// attempt at a time — cancelled and replaced, never left to stack, so
     /// retry can never leave two stop timers scheduled.
     @State private var practiceAttemptAutoStopWorkItem: DispatchWorkItem?
+    /// Set when a completed take carried no usable movement evidence to
+    /// score — `PracticeAttemptEvidenceResolver` correctly refused to guess,
+    /// but the card still needs to tell the learner why nothing happened
+    /// and that the loop is free to try again, not stuck.
+    @State private var practiceScoredAttemptUnavailableMessage: String?
     @State private var routineCountInBeat: Int?
     // Demo with Beat transport state
     @State private var isDemoWithBeatMode = false
@@ -6926,7 +6931,15 @@ struct MacAnalyzerView: View {
             guard case .copying = practiceCoordinator.state, let snapshot else { return }
             practiceAttemptAutoStopWorkItem?.cancel()
             practiceAttemptAutoStopWorkItem = nil
-            practiceCoordinator.completeAttempt(snapshot: snapshot)
+            if practiceCoordinator.completeAttempt(snapshot: snapshot) != nil {
+                practiceScoredAttemptUnavailableMessage = nil
+            } else {
+                // Never fabricate a result from thin evidence — but never
+                // leave the loop silently stuck in "Copying" either.
+                practiceScoredAttemptUnavailableMessage =
+                    "That take didn't capture usable movement evidence — try again with clearer motion in view."
+                practiceCoordinator.abortAttempt()
+            }
         }
     }
 
@@ -6940,6 +6953,12 @@ struct MacAnalyzerView: View {
                      : "Ready when you are.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
+                if let message = practiceScoredAttemptUnavailableMessage {
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: 10) {
                     Button("Watch demo") {
                         practiceCoordinator.beginWatch()
@@ -7009,6 +7028,7 @@ struct MacAnalyzerView: View {
         guard let pattern = practiceCanonicalPattern,
               let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0,
               !captureEngine.isRoutineRecording else { return }
+        practiceScoredAttemptUnavailableMessage = nil
         practiceCoordinator.beginAttempt(
             pattern: pattern, bpm: Double(bpmValue),
             countInBeats: routineSessionSetup.config.countInBeats
@@ -7016,11 +7036,18 @@ struct MacAnalyzerView: View {
         handleMainCaptureAction()
     }
 
+    /// The manual escape hatch: stops real recording if it's still running,
+    /// AND always frees the coordinator from `.copying` — unlike the
+    /// auto-stop path, this must work even when `isRoutineRecording` has
+    /// already gone false (e.g. the take already finalized with unusable
+    /// evidence), which is exactly the state a stuck attempt is found in.
     private func stopPracticeScoredAttempt() {
         practiceAttemptAutoStopWorkItem?.cancel()
         practiceAttemptAutoStopWorkItem = nil
-        guard captureEngine.isRoutineRecording else { return }
-        handleMainCaptureAction()
+        if captureEngine.isRoutineRecording {
+            handleMainCaptureAction()
+        }
+        practiceCoordinator.abortAttempt()
     }
 
     /// Schedules the ONE pending auto-stop for the active attempt,
@@ -7038,6 +7065,7 @@ struct MacAnalyzerView: View {
     /// "Retry" and "Next Attempt" are the same operation today — there is
     /// no progression yet to advance to (single canonical technique/BPM).
     private func retryPracticeScoredAttempt() {
+        practiceScoredAttemptUnavailableMessage = nil
         practiceCoordinator.retry()
         handleMainCaptureAction()
     }

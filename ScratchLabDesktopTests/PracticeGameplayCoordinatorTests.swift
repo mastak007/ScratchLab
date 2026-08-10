@@ -192,6 +192,41 @@ struct PracticeGameplayCoordinatorTests {
         #expect(attempt.completionScore != nil) // a real, assessed 0% — not "no data"
     }
 
+    @Test("Abort frees a stuck copying attempt without fabricating a result")
+    func abortFreesAStuckAttempt() {
+        // The real-world trigger: a take finished (evidence resolution
+        // already returned nil, e.g. no usable movement evidence) and the
+        // coordinator is left in .copying with nothing to complete it.
+        let coordinator = PracticeGameplayCoordinator()
+        beginBaby(coordinator)
+        guard case .copying = coordinator.state else {
+            Issue.record("expected .copying"); return
+        }
+        coordinator.abortAttempt()
+        #expect(coordinator.state == .ready)
+        #expect(coordinator.currentResult == nil)
+
+        // From .ready, a fresh attempt can start immediately — abort is a
+        // real escape hatch, not a dead end.
+        beginBaby(coordinator)
+        guard case .copying = coordinator.state else {
+            Issue.record("expected a fresh .copying after abort"); return
+        }
+    }
+
+    @Test("Abort is a no-op outside .copying, including after a real result")
+    func abortIsNoOpOutsideCopying() {
+        let coordinator = PracticeGameplayCoordinator()
+        coordinator.abortAttempt()
+        #expect(coordinator.state == .idle)
+
+        beginBaby(coordinator)
+        let result = try! #require(coordinator.completeAttempt(snapshot: perfectSnapshot()))
+        coordinator.abortAttempt()
+        // The result must survive an abort call that doesn't apply to it.
+        #expect(coordinator.currentResult == result)
+    }
+
     @Test("WATCH never produces a score")
     func watchNeverScores() {
         let coordinator = PracticeGameplayCoordinator()

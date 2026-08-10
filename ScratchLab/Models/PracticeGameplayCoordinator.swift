@@ -151,4 +151,16 @@ final class PracticeGameplayCoordinator: ObservableObject {
         lastSession = freshSession
         state = .copying(freshSession)
     }
+
+    /// copying → ready. Unconditionally leaves an open attempt window — the
+    /// escape hatch for when the underlying evidence never arrives usable
+    /// (e.g. `completeAttempt` kept returning `nil`, or the host view's
+    /// manual stop finds capture already idle). Never fabricates or
+    /// discards a `PracticeAttemptResult` — there isn't one yet. A no-op
+    /// from any state other than `.copying`; in particular it never touches
+    /// an already-produced `.result`.
+    func abortAttempt() {
+        guard isCopying else { return }
+        state = .ready
+    }
 }
