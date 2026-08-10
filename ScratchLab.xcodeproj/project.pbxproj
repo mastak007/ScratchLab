@@ -382,6 +382,9 @@
 		SGAM001000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */; };
 		SGAM002000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */; };
 		SGAT001000SGAT01SGAT0001 /* ScratchGameplayAttemptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGAT000000SGAT01SGAT0001 /* ScratchGameplayAttemptTests.swift */; };
+		PGCO001000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */; };
+		PGCO002000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */; };
+		PGCT001000PGCT01PGCT0001 /* PracticeGameplayCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PGCT000000PGCT01PGCT0001 /* PracticeGameplayCoordinatorTests.swift */; };
 		LFSA001000LFSA01LFSA0001 /* LaneFaderSpanAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LFSA000000LFSA01LFSA0001 /* LaneFaderSpanAdapterTests.swift */; };
 		NV00010001NV0001NV000001 /* NotationVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NV00000001NV0001NV000001 /* NotationVisualizerView.swift */; };
 		NVW1001000NVW001NVW00001 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
@@ -820,6 +823,8 @@
 		SPCT000000SPCT01SPCT0001 /* ScratchPerformanceComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPerformanceComparisonTests.swift; sourceTree = "<group>"; };
 		SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchGameplayAttempt.swift; sourceTree = "<group>"; };
 		SGAT000000SGAT01SGAT0001 /* ScratchGameplayAttemptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchGameplayAttemptTests.swift; sourceTree = "<group>"; };
+		PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeGameplayCoordinator.swift; sourceTree = "<group>"; };
+		PGCT000000PGCT01PGCT0001 /* PracticeGameplayCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PracticeGameplayCoordinatorTests.swift; sourceTree = "<group>"; };
 		LFSA000000LFSA01LFSA0001 /* LaneFaderSpanAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneFaderSpanAdapterTests.swift; sourceTree = "<group>"; };
 		NV00000001NV0001NV000001 /* NotationVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationVisualizerView.swift; sourceTree = "<group>"; };
 		NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationViewportWindow.swift; sourceTree = "<group>"; };
@@ -995,6 +1000,7 @@
 				SNFE000000SNFE01SNFE0001 /* ScratchNotationFaderEventTests.swift */,
 				SPCT000000SPCT01SPCT0001 /* ScratchPerformanceComparisonTests.swift */,
 				SGAT000000SGAT01SGAT0001 /* ScratchGameplayAttemptTests.swift */,
+				PGCT000000PGCT01PGCT0001 /* PracticeGameplayCoordinatorTests.swift */,
 				LFSA000000LFSA01LFSA0001 /* LaneFaderSpanAdapterTests.swift */,
 				SCR0000000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift */,
 				STT0000000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift */,
@@ -1260,6 +1266,7 @@
 				D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */,
 				SPCM000000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift */,
 				SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */,
+				PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */,
 				PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */,
 				DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */,
 				PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */,
@@ -1829,6 +1836,7 @@
 				433D3D9F190ABCBD2FDF84E5 /* CaptureCore.swift in Sources */,
 				SPCM001000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift in Sources */,
 				SGAM001000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift in Sources */,
+				PGCO001000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift in Sources */,
 				PVM0001000PVM001PVM00001 /* PhraseViewportModel.swift in Sources */,
 				DAC0001000DAC001DAC00001 /* DemoAudioClock.swift in Sources */,
 				SRT0001000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */,
@@ -2020,6 +2028,7 @@
 				D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */,
 				SPCM002000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift in Sources */,
 				SGAM002000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift in Sources */,
+				PGCO002000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift in Sources */,
 				PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */,
 				DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */,
 				SRT0002000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */,
@@ -2200,6 +2209,7 @@
 				SNFE001000SNFE01SNFE0001 /* ScratchNotationFaderEventTests.swift in Sources */,
 				SPCT001000SPCT01SPCT0001 /* ScratchPerformanceComparisonTests.swift in Sources */,
 				SGAT001000SGAT01SGAT0001 /* ScratchGameplayAttemptTests.swift in Sources */,
+				PGCT001000PGCT01PGCT0001 /* PracticeGameplayCoordinatorTests.swift in Sources */,
 				LFSA001000LFSA01LFSA0001 /* LaneFaderSpanAdapterTests.swift in Sources */,
 				SCR0001000SCR001SCR00001 /* ScratchClassifierRegistryTests.swift in Sources */,
 				STT0001000STT001STT00001 /* ScratchTypeMetadataSafetyTests.swift in Sources */,

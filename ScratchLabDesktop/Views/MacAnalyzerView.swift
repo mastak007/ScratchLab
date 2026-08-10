@@ -574,6 +574,11 @@ struct MacAnalyzerView: View {
     /// practice-beat engine so mode switches don't stomp each other.
     @StateObject private var demoWithBeatEngine = ScratchLabBeatEngine()
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
+    /// WATCH → COPY → RESULT state for one deterministic, canonical-cycle
+    /// scored attempt (`practiceScoredAttemptCard`). Independent of the
+    /// legacy timed `practiceRunCard` above it — this coordinator never
+    /// reads `captureEngine.lastScratchDetection`.
+    @StateObject private var practiceCoordinator = PracticeGameplayCoordinator()
     // REMOVED: @ObservedObject private var runtimeDiagnostics — see Fix 1.
     // ScratchLabRuntimeDiagnostics.shared is read directly in leaf computed
     // properties so the root MacAnalyzerView.body is not invalidated at
@@ -595,6 +600,10 @@ struct MacAnalyzerView: View {
     @State private var practiceLastSavedAccuracy = 0.0
     @State private var practiceLastSavedDuration: TimeInterval = 0
     @State private var practiceTimer: Timer?
+    /// Exactly one pending auto-stop for the active `practiceCoordinator`
+    /// attempt at a time — cancelled and replaced, never left to stack, so
+    /// retry can never leave two stop timers scheduled.
+    @State private var practiceAttemptAutoStopWorkItem: DispatchWorkItem?
     @State private var routineCountInBeat: Int?
     // Demo with Beat transport state
     @State private var isDemoWithBeatMode = false
@@ -1236,6 +1245,7 @@ struct MacAnalyzerView: View {
                 practiceHeaderCard
                 practiceCoachCard
                 practiceRunCard
+                practiceScoredAttemptCard
                 practiceBeatTrainerCard
 
                 DisclosureGroup {
@@ -5583,34 +5593,16 @@ struct MacAnalyzerView: View {
         guard let scratchType = routineSessionSetup.scratchType,
               let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue),
               let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0 else { return nil }
-        let bpm = Double(bpmValue)
-        guard let snapshot = currentRoutineNotationSnapshot,
-              !snapshot.recordMovementEvents.isEmpty else { return nil }
-        let countInBeats = routineSessionSetup.config.countInBeats
-        guard let clock = PerformanceBeatClock(
-            bpm: bpm, beatZeroTime: Double(countInBeats) * 60.0 / bpm
-        ) else { return nil }
-        guard let thresholds = PerformedFaderEdgeThresholds(
-            openAtOrAbove: Self.reviewFaderOpenAtOrAbove,
-            closedAtOrBelow: Self.reviewFaderClosedAtOrBelow
-        ) else { return nil }
-        let performed = PerformedScratchTimelineAdapter.makeTimeline(
-            movementEvents: snapshot.recordMovementEvents,
-            mixerMidiEvents: snapshot.mixerMidiEvents,
-            clock: clock,
-            faderThresholds: thresholds
-        )
-        // Same ±50 ms convention `reviewPerformanceComparison` uses, converted
-        // to beats at this session's tempo.
-        let toleranceBeats = NotationFeedbackState.lateOffsetThresholdMs * bpm / 60_000.0
-        return PracticeAttemptBuilder.attempt(
-            techniqueID: pattern.scratchID,
+        guard let snapshot = currentRoutineNotationSnapshot else { return nil }
+        // Delegates to the same evidence-resolution path the live practice
+        // coordinator uses (`PracticeGameplayCoordinator`/`ScratchGameplayAttempt.swift`)
+        // so a completed take's post-hoc preview and a live attempt agree on
+        // clock/threshold conventions rather than keeping two copies.
+        return PracticeAttemptEvidenceResolver.firstCycleAttempt(
             pattern: pattern,
-            bpm: bpm,
-            cycleIndex: 0,
-            performed: performed,
-            strokeCorrectToleranceBeats: toleranceBeats,
-            faderCorrectToleranceBeats: toleranceBeats
+            bpm: Double(bpmValue),
+            countInBeats: routineSessionSetup.config.countInBeats,
+            snapshot: snapshot
         )
     }
 
@@ -6491,6 +6483,200 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // MARK: - Scored attempt (WATCH → COPY → RESULT)
+    //
+    // A separate, deterministic sibling to `practiceRunCard` above: that
+    // card is the pre-existing timed run scored from
+    // `captureEngine.lastScratchDetection` (the live classifier signal);
+    // this card produces one `PracticeAttemptResult` from
+    // `ScratchGameplayAttempt`/`ScratchPerformanceComparison` — the same
+    // deterministic engine the Review "Target vs performed" card previews.
+    // Neither card touches the other's state.
+    //
+    // COPY reuses the existing routine-recording action verbatim
+    // (`handleMainCaptureAction`, the same function the main Start/Stop
+    // Recording button calls) rather than a second capture-start path —
+    // this file does not add any new detector/DVS/MIDI logic. Evidence for
+    // an attempt is only available once that recording finalizes
+    // (`captureEngine.lastRoutineDetectedNotation`), so the attempt window
+    // is closed by an auto-stop timer anchored to when recording actually
+    // starts (`captureEngine.isRoutineRecording` flipping true), not by
+    // watching live evidence — macOS has no live evidence stream to watch.
+
+    /// `nil` unless the selected scratch type has a canonical `BeatPattern`
+    /// — today, Baby Scratch alone. `nil` means the scored loop stays off
+    /// rather than guessing a target for an unevidenced technique.
+    private var practiceCanonicalPattern: ScratchNotation.BeatPattern? {
+        routineSessionSetup.scratchType.flatMap {
+            ScratchNotation.canonicalBeatPattern(forScratchID: $0.rawValue)
+        }
+    }
+
+    private var practiceScoredAttemptStartDisabled: Bool {
+        routineCountInBeat != nil
+            || routineStartDisabled
+            || captureEngine.isRoutineRecording
+            || practiceCanonicalPattern == nil
+            || routineSessionSetup.bpmValue == nil
+    }
+
+    private var practiceScoredAttemptCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Scored attempt")
+                        .font(.headline)
+                    Text("Watch the demo above, then Copy one Baby Scratch cycle for a real, deterministic score.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                if case .copying = practiceCoordinator.state {
+                    Label("Copying", systemImage: "record.circle.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color(nsColor: .systemRed))
+                }
+            }
+
+            if practiceCanonicalPattern == nil {
+                Text("Choose Baby Scratch as the scratch type above to unlock a scored attempt — no other technique has a trustworthy target pattern yet.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                practiceScoredAttemptBody
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onChange(of: captureEngine.isRoutineRecording) { _, isRecording in
+            guard case .copying(let session) = practiceCoordinator.state else { return }
+            if isRecording {
+                schedulePracticeAttemptAutoStop(after: session.closesAfterSeconds)
+            }
+        }
+        .onChange(of: captureEngine.lastRoutineDetectedNotation) { _, snapshot in
+            guard case .copying = practiceCoordinator.state, let snapshot else { return }
+            practiceAttemptAutoStopWorkItem?.cancel()
+            practiceAttemptAutoStopWorkItem = nil
+            practiceCoordinator.completeAttempt(snapshot: snapshot)
+        }
+    }
+
+    @ViewBuilder
+    private var practiceScoredAttemptBody: some View {
+        switch practiceCoordinator.state {
+        case .idle, .watching, .ready:
+            VStack(alignment: .leading, spacing: 10) {
+                Text(practiceCoordinator.state == .watching
+                     ? "Watching the demo above."
+                     : "Ready when you are.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button("Watch demo") {
+                        practiceCoordinator.beginWatch()
+                        startMacDemo()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Start Copying") {
+                        startPracticeScoredAttempt()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(practiceScoredAttemptStartDisabled)
+                }
+            }
+
+        case .copying(let session):
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Copying one cycle — closes automatically in about \(String(format: "%.1f", session.closesAfterSeconds))s.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Button("Stop now") {
+                    stopPracticeScoredAttempt()
+                }
+                .buttonStyle(.bordered)
+            }
+
+        case .result(let result):
+            practiceScoredAttemptResultView(result)
+        }
+    }
+
+    private func practiceScoredAttemptResultView(_ result: PracticeAttemptResult) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if let grade = result.grade {
+                    Text(reviewGradeLabel(grade))
+                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                }
+                Text(result.overallScore.map { String(format: "%.0f", $0) } ?? "—")
+                    .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+            }
+
+            reviewComparisonScoreRows(result.score, faderChannel: result.comparison.faderChannel)
+
+            if let coaching = result.coaching.first {
+                Text(coaching)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Button("Retry") { retryPracticeScoredAttempt() }
+                    .buttonStyle(.bordered)
+                Button("Next Attempt") { retryPracticeScoredAttempt() }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    /// Mirrors the main Start/Stop Recording button's action
+    /// (`handleMainCaptureAction`) verbatim — no second capture-start path.
+    private func startPracticeScoredAttempt() {
+        guard let pattern = practiceCanonicalPattern,
+              let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0,
+              !captureEngine.isRoutineRecording else { return }
+        practiceCoordinator.beginAttempt(
+            pattern: pattern, bpm: Double(bpmValue),
+            countInBeats: routineSessionSetup.config.countInBeats
+        )
+        handleMainCaptureAction()
+    }
+
+    private func stopPracticeScoredAttempt() {
+        practiceAttemptAutoStopWorkItem?.cancel()
+        practiceAttemptAutoStopWorkItem = nil
+        guard captureEngine.isRoutineRecording else { return }
+        handleMainCaptureAction()
+    }
+
+    /// Schedules the ONE pending auto-stop for the active attempt,
+    /// cancelling any previous one first — retry can never leave two
+    /// stop timers scheduled.
+    private func schedulePracticeAttemptAutoStop(after seconds: TimeInterval) {
+        practiceAttemptAutoStopWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            stopPracticeScoredAttempt()
+        }
+        practiceAttemptAutoStopWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, seconds), execute: workItem)
+    }
+
+    /// "Retry" and "Next Attempt" are the same operation today — there is
+    /// no progression yet to advance to (single canonical technique/BPM).
+    private func retryPracticeScoredAttempt() {
+        practiceCoordinator.retry()
+        handleMainCaptureAction()
     }
 
     private var practiceBeatTrainerCard: some View {

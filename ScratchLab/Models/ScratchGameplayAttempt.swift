@@ -207,3 +207,67 @@ enum PracticeAttemptBuilder {
         )
     }
 }
+
+// MARK: - Evidence resolution (capture snapshot → attempt)
+
+/// Turns a captured `CaptureCore.DetectedNotationSnapshot` — macOS's only
+/// evidence source, populated once a take finishes (see
+/// `MacCaptureEngine.lastRoutineDetectedNotation`) — into one cycle-0
+/// `PracticeAttemptResult`. This is the single place the clock/threshold
+/// conventions `MacAnalyzerView`'s Review preview originated are decided, so
+/// every consumer (the post-hoc Review preview and the live gameplay
+/// coordinator) agrees, rather than two independent copies that could
+/// drift apart.
+enum PracticeAttemptEvidenceResolver {
+
+    /// Schmitt-trigger thresholds for deriving performed open/closed fader
+    /// edges from raw crossfader MIDI: a symmetric band (0.4–0.6) around
+    /// mid-travel, wide enough that jitter inside it never oscillates the
+    /// derived state. No repository-wide open/closed cut point exists —
+    /// this is the one place it's decided for live/attempt evidence.
+    static let faderOpenAtOrAbove = 0.6
+    static let faderClosedAtOrBelow = 0.4
+
+    /// Builds the cycle-0 attempt for `pattern` from a finished take's
+    /// evidence. `nil` under the same "never guess" conditions
+    /// `PracticeAttemptBuilder`/`PerformanceBeatClock` already report as
+    /// unavailable (unusable tempo, no movement evidence in the take at
+    /// all, unusable clock/threshold construction) — callers present that
+    /// as "not assessable yet", never a zero-score attempt.
+    static func firstCycleAttempt(
+        pattern: ScratchNotation.BeatPattern,
+        bpm: Double,
+        countInBeats: Int,
+        snapshot: CaptureCore.DetectedNotationSnapshot
+    ) -> PracticeAttemptResult? {
+        guard bpm.isFinite, bpm > 0 else { return nil }
+        guard !snapshot.recordMovementEvents.isEmpty else { return nil }
+        // Beat 0 of the click (incl. count-in) is at take-relative 0 in both
+        // click engines; the target phrase starts on the first post-count-in
+        // beat, so the anchor skips the configured count-in.
+        guard let clock = PerformanceBeatClock(
+            bpm: bpm, beatZeroTime: Double(countInBeats) * 60.0 / bpm
+        ) else { return nil }
+        guard let thresholds = PerformedFaderEdgeThresholds(
+            openAtOrAbove: faderOpenAtOrAbove, closedAtOrBelow: faderClosedAtOrBelow
+        ) else { return nil }
+        let performed = PerformedScratchTimelineAdapter.makeTimeline(
+            movementEvents: snapshot.recordMovementEvents,
+            mixerMidiEvents: snapshot.mixerMidiEvents,
+            clock: clock,
+            faderThresholds: thresholds
+        )
+        // Same ±50 ms convention `NotationFeedbackState` already establishes,
+        // converted to beats at this session's tempo.
+        let toleranceBeats = NotationFeedbackState.lateOffsetThresholdMs * bpm / 60_000.0
+        return PracticeAttemptBuilder.attempt(
+            techniqueID: pattern.scratchID,
+            pattern: pattern,
+            bpm: bpm,
+            cycleIndex: 0,
+            performed: performed,
+            strokeCorrectToleranceBeats: toleranceBeats,
+            faderCorrectToleranceBeats: toleranceBeats
+        )
+    }
+}
