@@ -178,6 +178,38 @@ extension LaneFaderSpan {
     }
 }
 
+extension ScratchNotation {
+    /// The single authority rule every fader-state consumer (canvas/chart
+    /// renderers, guided practice cues) resolves against: non-empty
+    /// canonical `faderEvents` wins outright — adapted into contiguous
+    /// `LaneFaderSpan`s that cover `[0, documentEnd)` — and per-stroke
+    /// `faderState` becomes legacy/compatibility data, read only when
+    /// `faderEvents` is empty. The legacy fallback yields one span per
+    /// stroke (its own `startTime`/`endTime`/`faderState`), matching every
+    /// consumer's pre-existing per-stroke reads exactly: gaps between
+    /// strokes carry no span, never an invented state.
+    func faderAuthoritySpans(documentEnd: TimeInterval) -> [LaneFaderSpan] {
+        guard faderEvents.isEmpty else {
+            return LaneFaderSpan.spans(from: faderEvents, documentEnd: documentEnd)
+        }
+        return strokes.map { stroke in
+            LaneFaderSpan(startTime: stroke.startTime, endTime: stroke.endTime, state: stroke.faderState)
+        }
+    }
+
+    /// Authoritative fader state at `time`, per `faderAuthoritySpans`. A
+    /// span's `startTime` is inclusive and `endTime` exclusive, so an exact
+    /// canonical edge time resolves to the NEW state. Returns `nil` when no
+    /// span covers `time` — always possible in the legacy fallback (gaps
+    /// between strokes), never with a non-empty canonical stream since its
+    /// spans cover `[0, documentEnd)` exhaustively.
+    func faderState(at time: TimeInterval, documentEnd: TimeInterval) -> ScratchNotationFaderState? {
+        faderAuthoritySpans(documentEnd: documentEnd)
+            .first { time >= $0.startTime && time < $0.endTime }?
+            .state
+    }
+}
+
 // MARK: - User-attempt event
 
 /// A single user-attempt mark for the timing-comparison overlay.

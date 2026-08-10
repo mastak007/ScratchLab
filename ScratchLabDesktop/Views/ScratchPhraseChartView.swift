@@ -107,6 +107,7 @@ struct ScratchPhraseChartView: View {
 
         drawLaneDivider(ctx: ctx, size: size, y: strokeRegionHeight)
         drawTargetCrossfaderLane(ctx: ctx, size: size, notation: notation,
+                                  documentEnd: full,
                                   windowStart: windowStart, windowEnd: windowEnd,
                                   pps: pps, strokeRegionTop: strokeRegionHeight)
 
@@ -232,6 +233,7 @@ struct ScratchPhraseChartView: View {
 
     private func drawTargetCrossfaderLane(ctx: GraphicsContext, size: CGSize,
                                            notation: ScratchNotation,
+                                           documentEnd: Double,
                                            windowStart: Double,
                                            windowEnd: Double,
                                            pps: CGFloat,
@@ -241,20 +243,24 @@ struct ScratchPhraseChartView: View {
         let barTop = strokeRegionTop + inset
         let barHeight = max(0, laneHeight - inset * 2)
 
-        // Merge adjacent same-fader-state intervals so the crossfader
-        // lane reads as continuous bars instead of per-stroke blocks.
-        // A small merge gap (150 ms) ensures that close-together strokes
-        // with identical fader state (e.g. every Baby Scratch stroke) form
-        // one smooth bar rather than separate rounded rects.
+        // Merge adjacent same-state intervals so the crossfader lane reads
+        // as continuous bars instead of per-span blocks. A small merge gap
+        // (150 ms) ensures that close-together spans with identical state
+        // (e.g. every Baby Scratch stroke's own `faderState`, in the legacy
+        // fallback) form one smooth bar rather than separate rounded rects.
+        // Non-empty canonical `faderEvents` is authoritative here too — see
+        // `ScratchNotation.faderAuthoritySpans(documentEnd:)`.
         let mergeGap: Double = 0.150
         typealias FaderInterval = (start: Double, end: Double, isOpen: Bool)
         var merged: [FaderInterval] = []
-        for stroke in notation.strokes.sorted(by: { $0.startTime < $1.startTime }) {
-            guard stroke.endTime > windowStart, stroke.startTime < windowEnd,
-                  stroke.endTime > stroke.startTime else { continue }
-            let clampedStart = max(stroke.startTime, windowStart)
-            let clampedEnd = min(stroke.endTime, windowEnd)
-            let isOpen = stroke.faderState == .open
+        let faderSpans = notation.faderAuthoritySpans(documentEnd: documentEnd)
+            .sorted(by: { $0.startTime < $1.startTime })
+        for span in faderSpans {
+            guard span.endTime > windowStart, span.startTime < windowEnd,
+                  span.endTime > span.startTime else { continue }
+            let clampedStart = max(span.startTime, windowStart)
+            let clampedEnd = min(span.endTime, windowEnd)
+            let isOpen = span.state == .open
 
             if let last = merged.last, last.isOpen == isOpen,
                clampedStart - last.end <= mergeGap {

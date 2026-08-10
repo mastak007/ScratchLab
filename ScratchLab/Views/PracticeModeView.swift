@@ -2101,8 +2101,10 @@ struct SessionSetupOverlay: View {
     }
 }
 
-// Guided assist-mode crossfader cue layer. UI-only: reads `faderState` from
-// the existing target notation and renders a forward-looking visual guide.
+// Guided assist-mode crossfader cue layer. UI-only: resolves fader state via
+// `ScratchNotation.faderAuthoritySpans` (non-empty canonical `faderEvents`
+// wins; otherwise falls back to per-stroke `faderState`, unchanged from
+// before this channel existed) and renders a forward-looking visual guide.
 // It drives nothing — no playback, scoring, capture, export, or audio.
 // `clockStartDate` is the shared session-owned clock origin; the TimelineView
 // is only a render-side ticker.
@@ -2128,11 +2130,12 @@ private struct GuidedCutCueLayer: View {
 
     private enum CueState { case open, cutSoon, closed }
 
-    private var closedStrokes: [ScratchNotation.Stroke] {
-        notation.strokes.filter { $0.faderState == .closed }
+    private var closedFaderSpans: [LaneFaderSpan] {
+        notation.faderAuthoritySpans(documentEnd: max(notation.timelineDuration, 0.1))
+            .filter { $0.state == .closed }
     }
 
-    private var hasCuts: Bool { !closedStrokes.isEmpty }
+    private var hasCuts: Bool { !closedFaderSpans.isEmpty }
 
     private var caption: String {
         hasCuts
@@ -2178,17 +2181,17 @@ private struct GuidedCutCueLayer: View {
     }
 
     private func faderState(at t: TimeInterval, loopDuration: TimeInterval) -> CueState {
-        // A closed stroke covering `t` (checked in this loop and the next so
+        // A closed span covering `t` (checked in this loop and the next so
         // the result is correct across the loop boundary).
-        let active = closedStrokes.contains { stroke in
-            (t >= stroke.startTime && t < stroke.endTime) ||
-            (t + loopDuration >= stroke.startTime && t + loopDuration < stroke.endTime)
+        let active = closedFaderSpans.contains { span in
+            (t >= span.startTime && t < span.endTime) ||
+            (t + loopDuration >= span.startTime && t + loopDuration < span.endTime)
         }
         if active { return .closed }
 
-        let soon = closedStrokes.contains { stroke in
-            let lead = stroke.startTime - t
-            let wrappedLead = stroke.startTime + loopDuration - t
+        let soon = closedFaderSpans.contains { span in
+            let lead = span.startTime - t
+            let wrappedLead = span.startTime + loopDuration - t
             return (lead > 0 && lead <= cutLeadSeconds) ||
                    (wrappedLead > 0 && wrappedLead <= cutLeadSeconds)
         }
@@ -2223,8 +2226,8 @@ private struct GuidedCutCueLayer: View {
                     .fill(openColor.opacity(0.45))
 
                 // Closed (cut) windows intersecting [now, now + window].
-                ForEach(Array(closedStrokes.enumerated()), id: \.offset) { _, stroke in
-                    ForEach(segmentRects(for: stroke, now: now,
+                ForEach(Array(closedFaderSpans.enumerated()), id: \.offset) { _, span in
+                    ForEach(segmentRects(for: span, now: now,
                                          loopDuration: loopDuration, width: width),
                             id: \.minX) { rect in
                         RoundedRectangle(cornerRadius: 4)
@@ -2242,14 +2245,15 @@ private struct GuidedCutCueLayer: View {
         }
     }
 
-    // Visible rectangles for a closed stroke — checked in this loop and the
-    // next so cuts near the loop boundary still scroll in correctly.
-    private func segmentRects(for stroke: ScratchNotation.Stroke,
+    // Visible rectangles for a closed fader span — checked in this loop and
+    // the next so cuts near the loop boundary still scroll in correctly.
+    private func segmentRects(for span: LaneFaderSpan,
                               now: TimeInterval,
                               loopDuration: TimeInterval,
                               width: CGFloat) -> [(minX: CGFloat, width: CGFloat)] {
-        [stroke.startTime, stroke.startTime + loopDuration].compactMap { start in
-            let end = start + stroke.duration
+        let duration = span.endTime - span.startTime
+        return [span.startTime, span.startTime + loopDuration].compactMap { start in
+            let end = start + duration
             let visibleStart = max(start, now)
             let visibleEnd   = min(end, now + windowSeconds)
             guard visibleEnd > visibleStart else { return nil }

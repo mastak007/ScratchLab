@@ -128,10 +128,14 @@ struct ScratchNotationCanvasView: View {
                         shifted, in: ctx, viewport: viewport, style: .target)
                 }
 
-                // Crossfader sub-lane (macOS affordance, kept).
+                // Crossfader sub-lane (macOS affordance, kept). Non-empty
+                // canonical `faderEvents` is authoritative; otherwise this
+                // falls back to one span per stroke's own `faderState` —
+                // visually identical to the pre-canonical per-stroke draw.
+                let faderSpans = notation.faderAuthoritySpans(documentEnd: content.duration)
                 for loopOffset in tileOffsets {
-                    for stroke in notation.strokes {
-                        drawFaderMarker(ctx: ctx, stroke: stroke,
+                    for span in faderSpans {
+                        drawFaderMarker(ctx: ctx, span: span,
                                         loopOffset: loopOffset, now: now,
                                         phX: phX, pps: pps,
                                         laneRect: faderRect, canvasWidth: size.width)
@@ -210,7 +214,7 @@ struct ScratchNotationCanvasView: View {
 
     private func drawFaderMarker(
         ctx: GraphicsContext,
-        stroke: ScratchNotation.Stroke,
+        span: LaneFaderSpan,
         loopOffset: Double,
         now: Double,
         phX: CGFloat,
@@ -218,15 +222,15 @@ struct ScratchNotationCanvasView: View {
         laneRect: CGRect,
         canvasWidth: CGFloat
     ) {
-        let x1 = phX + CGFloat(stroke.startTime + loopOffset - now) * pps
-        let x2 = phX + CGFloat(stroke.endTime   + loopOffset - now) * pps
+        let x1 = phX + CGFloat(span.startTime + loopOffset - now) * pps
+        let x2 = phX + CGFloat(span.endTime   + loopOffset - now) * pps
         guard x2 >= -60, x1 <= canvasWidth + 60 else { return }
 
         let midY   = laneRect.midY
         let halfH  = laneRect.height * 0.38
         let isPast = x2 < phX
 
-        switch stroke.faderState {
+        switch span.state {
         case .open:
             var bar = Path()
             bar.move(to: CGPoint(x: x1, y: midY - halfH))
