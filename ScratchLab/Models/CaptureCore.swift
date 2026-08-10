@@ -2177,6 +2177,28 @@ struct ScratchNotation: Codable, Equatable, Sendable {
         }
     }
 
+    /// A materialized fader-state edge: "at `time` (derived from `beat`
+    /// when beat-authored), the fader becomes `state`." This is the
+    /// canonical high-resolution fader timeline — see
+    /// `BeatPattern.faderEvents` for the authority rule against per-stroke
+    /// `Stroke.faderState` (non-empty `faderEvents` is authoritative;
+    /// empty means no canonical edge channel was authored, never
+    /// implicitly open or closed).
+    struct FaderEvent: Codable, Equatable, Sendable {
+        let time: TimeInterval
+        let state: ScratchNotationFaderState
+        /// Beat position, in fractional beats from the document origin.
+        /// `nil` on legacy seconds-authored events; authoritative when the
+        /// document resolves to `.beats` (see `validationIssues()`).
+        let beat: Double?
+
+        init(time: TimeInterval, state: ScratchNotationFaderState, beat: Double? = nil) {
+            self.time = time
+            self.state = state
+            self.beat = beat
+        }
+    }
+
     let version: Int
     let scratchID: String
     let demoStart: TimeInterval
@@ -2196,6 +2218,16 @@ struct ScratchNotation: Codable, Equatable, Sendable {
     /// timing resolution.
     let beatsPerBar: Int?
     let strokes: [Stroke]
+    /// The canonical high-resolution fader-state timeline, as edge
+    /// transitions. Non-empty ⇒ authoritative over every stroke's
+    /// `faderState`, which becomes a legacy/compatibility snapshot. Empty ⇒
+    /// no canonical fader edge channel was authored — NEVER treat this as
+    /// implicitly open or closed; per-stroke `faderState` remains the sole
+    /// fader description in that case (true of every notation shipped
+    /// today, including `ScratchNotation.babyScratchCycle`). See
+    /// `BeatPattern.faderEvents` for the authoring-side rules this
+    /// timeline must satisfy.
+    let faderEvents: [FaderEvent]
 
     init(version: Int,
          scratchID: String,
@@ -2206,7 +2238,8 @@ struct ScratchNotation: Codable, Equatable, Sendable {
          timingBasis: String,
          bpm: Double? = nil,
          beatsPerBar: Int? = nil,
-         strokes: [Stroke]) {
+         strokes: [Stroke],
+         faderEvents: [FaderEvent] = []) {
         self.version = version
         self.scratchID = scratchID
         self.demoStart = demoStart
@@ -2217,6 +2250,7 @@ struct ScratchNotation: Codable, Equatable, Sendable {
         self.bpm = bpm
         self.beatsPerBar = beatsPerBar
         self.strokes = strokes
+        self.faderEvents = faderEvents
     }
 
     // MARK: Timing-domain resolution
@@ -2243,7 +2277,7 @@ struct ScratchNotation: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, scratchID, demoStart, demoEnd, phraseStart, phraseEnd
-        case timingBasis, bpm, beatsPerBar, strokes
+        case timingBasis, bpm, beatsPerBar, strokes, faderEvents
     }
 
     /// All-optional-timing stroke record so one decoder serves both domains.
@@ -2255,6 +2289,14 @@ struct ScratchNotation: Codable, Equatable, Sendable {
         let direction: ScratchNotationDirection
         let speedClassification: ScratchNotationSpeedClassification
         let faderState: ScratchNotationFaderState
+    }
+
+    /// All-optional-timing fader-event record so one decoder serves both
+    /// domains, mirroring `StrokeRecord`.
+    private struct FaderEventRecord: Decodable {
+        let time: TimeInterval?
+        let beat: Double?
+        let state: ScratchNotationFaderState
     }
 
     /// Seconds-domain documents decode byte-for-byte like the historical
@@ -2276,8 +2318,10 @@ struct ScratchNotation: Codable, Equatable, Sendable {
         let bpm = try container.decodeIfPresent(Double.self, forKey: .bpm)
         let beatsPerBar = try container.decodeIfPresent(Int.self, forKey: .beatsPerBar)
         let records = try container.decode([StrokeRecord].self, forKey: .strokes)
+        let faderEventRecords = try container.decodeIfPresent([FaderEventRecord].self, forKey: .faderEvents) ?? []
 
         let strokes: [Stroke]
+        let faderEvents: [FaderEvent]
         let demoStart: TimeInterval
         let demoEnd: TimeInterval
         let phraseStart: TimeInterval?
@@ -2302,6 +2346,20 @@ struct ScratchNotation: Codable, Equatable, Sendable {
                               startBeat: record.startBeat,
                               endBeat: record.endBeat)
             }
+            faderEvents = try faderEventRecords.enumerated().map { index, record in
+                guard let time = record.time else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .faderEvents,
+                        in: container,
+                        debugDescription: "Fader event \(index) is missing time in a seconds-domain document"
+                    )
+                }
+                return FaderEvent(time: time, state: record.state, beat: record.beat)
+            }
+            // Author-declared document bounds are trusted as-is in the
+            // seconds domain — never recomputed from strokes or fader
+            // events here (that recomputation only applies to the
+            // beat-authored branch below, which has no authored bounds).
             demoStart = try container.decode(TimeInterval.self, forKey: .demoStart)
             demoEnd = try container.decode(TimeInterval.self, forKey: .demoEnd)
             phraseStart = try container.decodeIfPresent(TimeInterval.self, forKey: .phraseStart)
@@ -2332,8 +2390,25 @@ struct ScratchNotation: Codable, Equatable, Sendable {
                               startBeat: startBeat,
                               endBeat: endBeat)
             }
+            // `time` is never trusted here even when present in the JSON —
+            // beats are the only authority for a beat-authored document, so
+            // it is always re-derived from `beat × secondsPerBeat`.
+            faderEvents = try faderEventRecords.enumerated().map { index, record in
+                guard let beat = record.beat else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .faderEvents,
+                        in: container,
+                        debugDescription: "Fader event \(index) is missing beat in a beat-authored document"
+                    )
+                }
+                return FaderEvent(time: beat * secondsPerBeat, state: record.state, beat: beat)
+            }
             demoStart = 0
-            demoEnd = strokes.map(\.endTime).max() ?? 0
+            // The canonical time horizon is the union of BOTH authored
+            // streams, not strokes alone — a fader event may end after the
+            // last stroke.
+            demoEnd = max(strokes.map(\.endTime).max() ?? 0,
+                          faderEvents.map(\.time).max() ?? 0)
             phraseStart = 0
             phraseEnd = demoEnd
         }
@@ -2347,7 +2422,8 @@ struct ScratchNotation: Codable, Equatable, Sendable {
                   timingBasis: timingBasis,
                   bpm: bpm,
                   beatsPerBar: beatsPerBar,
-                  strokes: strokes)
+                  strokes: strokes,
+                  faderEvents: faderEvents)
     }
 
     // MARK: Beat projection
@@ -2358,8 +2434,8 @@ struct ScratchNotation: Codable, Equatable, Sendable {
     /// `timingBasis`, its authoritative `startBeat`/`endBeat` fields, and
     /// records the projection tempo in `bpm`. Only the derived seconds
     /// cache changes; the timing domain does not. Pure and deterministic;
-    /// returns `nil` when `bpm` is unusable or any stroke lacks beat
-    /// fields.
+    /// returns `nil` when `bpm` is unusable, any stroke lacks beat fields,
+    /// or any fader event lacks a beat field.
     func projectedToSeconds(bpm targetBPM: Double) -> ScratchNotation? {
         // Only beat-AUTHORED notation may be reprojected: on a legacy
         // seconds-authored document, incidental beat annotations are
@@ -2380,7 +2456,18 @@ struct ScratchNotation: Codable, Equatable, Sendable {
                                     startBeat: startBeat,
                                     endBeat: endBeat))
         }
-        let maxEnd = projected.map(\.endTime).max() ?? 0
+        var projectedFaderEvents: [FaderEvent] = []
+        projectedFaderEvents.reserveCapacity(faderEvents.count)
+        for event in faderEvents {
+            guard let beat = event.beat else { return nil }
+            projectedFaderEvents.append(FaderEvent(time: beat * secondsPerBeat,
+                                                    state: event.state,
+                                                    beat: beat))
+        }
+        // The canonical time horizon is the union of BOTH authored streams,
+        // not strokes alone.
+        let maxEnd = max(projected.map(\.endTime).max() ?? 0,
+                         projectedFaderEvents.map(\.time).max() ?? 0)
         return ScratchNotation(version: version,
                                scratchID: scratchID,
                                demoStart: 0,
@@ -2390,7 +2477,8 @@ struct ScratchNotation: Codable, Equatable, Sendable {
                                timingBasis: timingBasis,
                                bpm: targetBPM,
                                beatsPerBar: beatsPerBar,
-                               strokes: projected)
+                               strokes: projected,
+                               faderEvents: projectedFaderEvents)
     }
 
     // MARK: Validation
@@ -2488,6 +2576,68 @@ struct ScratchNotation: Codable, Equatable, Sendable {
                 }
             } else {
                 issues.append("beat-authored ScratchNotation requires bpm — tempo-free patterns live in ScratchNotation.BeatPattern")
+            }
+        }
+
+        // Fader-event structural checks — independent of stroke boundaries
+        // by design (no cross-check against `strokes`). Which field is
+        // authoritative for ordering/initial-state depends entirely on the
+        // notation's resolved timing domain: a seconds-authored document's
+        // incidental `beat` annotations are never used to validate
+        // ordering, exactly mirroring the authority rule that governs
+        // strokes.
+        switch resolvedTimingDomain {
+        case .seconds:
+            for (index, event) in faderEvents.enumerated() {
+                if !event.time.isFinite {
+                    issues.append("faderEvent \(index): time must be finite")
+                    continue
+                }
+                if event.time < 0 {
+                    issues.append("faderEvent \(index): time must be >= 0, got \(event.time)")
+                }
+                if index == 0, event.time != 0 {
+                    issues.append("faderEvent 0: first fader event must be at time 0, got \(event.time)")
+                }
+                if index > 0 {
+                    let previous = faderEvents[index - 1]
+                    if event.time <= previous.time {
+                        issues.append("faderEvent \(index): time must strictly increase over faderEvent \(index - 1)")
+                    }
+                    if event.state == previous.state {
+                        issues.append("faderEvent \(index): adjacent fader events must not repeat the same state")
+                    }
+                }
+            }
+        case .beats:
+            let secondsPerBeat: Double?
+            if let bpm, bpm.isFinite, bpm > 0 {
+                secondsPerBeat = 60.0 / bpm
+            } else {
+                secondsPerBeat = nil
+            }
+            for (index, event) in faderEvents.enumerated() {
+                guard let beat = event.beat, beat.isFinite else {
+                    issues.append("faderEvent \(index): beat-authored notation requires a finite beat")
+                    continue
+                }
+                if beat < 0 {
+                    issues.append("faderEvent \(index): beat must be >= 0, got \(beat)")
+                }
+                if index == 0, beat != 0 {
+                    issues.append("faderEvent 0: first fader event must be at beat 0, got \(beat)")
+                }
+                if index > 0, let previousBeat = faderEvents[index - 1].beat, beat <= previousBeat {
+                    issues.append("faderEvent \(index): beat must strictly increase over faderEvent \(index - 1)")
+                }
+                if index > 0, event.state == faderEvents[index - 1].state {
+                    issues.append("faderEvent \(index): adjacent fader events must not repeat the same state")
+                }
+                if !event.time.isFinite {
+                    issues.append("faderEvent \(index): time must be finite")
+                } else if let secondsPerBeat, abs(event.time - beat * secondsPerBeat) > tolerance {
+                    issues.append("faderEvent \(index): derived time disagrees with beat projection")
+                }
             }
         }
 
@@ -2689,6 +2839,14 @@ extension ScratchNotation {
             var durationBeats: Double { max(0, endBeat - startBeat) }
         }
 
+        /// A tempo-free fader-state edge: "at `beat`, the fader becomes
+        /// `state`." See `faderEvents` for the authority rule against
+        /// `BeatStroke.faderState`.
+        struct BeatFaderEvent: Codable, Equatable, Sendable {
+            let beat: Double
+            let state: ScratchNotationFaderState
+        }
+
         let version: Int
         let scratchID: String
         /// Must carry `ScratchNotation.beatAuthoredTimingBasisPrefix` so the
@@ -2697,9 +2855,38 @@ extension ScratchNotation {
         let timingBasis: String
         let beatsPerBar: Int?
         let strokes: [BeatStroke]
+        /// The canonical high-resolution fader-state edge stream, in beats.
+        /// AUTHORITY RULE: when non-empty, this is the authoritative fader
+        /// description and each stroke's `BeatStroke.faderState` becomes a
+        /// legacy/compatibility snapshot only — the two channels are never
+        /// independently canonical. When empty (every pattern authored in
+        /// this slice, including `babyScratchCycle`), NO canonical fader
+        /// edge channel exists — never read that as implicitly open or
+        /// closed; per-stroke `faderState` remains the sole fader
+        /// description and is fully sufficient on its own.
+        let faderEvents: [BeatFaderEvent]
 
-        /// Total span of the pattern, in beats.
-        var durationBeats: Double { strokes.map(\.endBeat).max() ?? 0 }
+        init(version: Int,
+             scratchID: String,
+             timingBasis: String,
+             beatsPerBar: Int?,
+             strokes: [BeatStroke],
+             faderEvents: [BeatFaderEvent] = []) {
+            self.version = version
+            self.scratchID = scratchID
+            self.timingBasis = timingBasis
+            self.beatsPerBar = beatsPerBar
+            self.strokes = strokes
+            self.faderEvents = faderEvents
+        }
+
+        /// Total span of the pattern, in beats — the union of BOTH
+        /// authored streams, since fader timing is independent of stroke
+        /// boundaries and may extend past the last stroke.
+        var durationBeats: Double {
+            max(strokes.map(\.endBeat).max() ?? 0,
+                faderEvents.map(\.beat).max() ?? 0)
+        }
 
         /// The ONLY path from musical time to seconds: materializes the
         /// pattern at `bpm` as a beat-authored `ScratchNotation` whose
@@ -2723,7 +2910,15 @@ extension ScratchNotation {
                        startBeat: stroke.startBeat,
                        endBeat: stroke.endBeat)
             }
-            let maxEnd = materializedStrokes.map(\.endTime).max() ?? 0
+            let materializedFaderEvents = faderEvents.map { event in
+                ScratchNotation.FaderEvent(time: event.beat * secondsPerBeat,
+                                           state: event.state,
+                                           beat: event.beat)
+            }
+            // The canonical time horizon is the union of BOTH authored
+            // streams, not strokes alone.
+            let maxEnd = max(materializedStrokes.map(\.endTime).max() ?? 0,
+                             materializedFaderEvents.map(\.time).max() ?? 0)
             return ScratchNotation(version: version,
                                    scratchID: scratchID,
                                    demoStart: 0,
@@ -2733,11 +2928,15 @@ extension ScratchNotation {
                                    timingBasis: timingBasis,
                                    bpm: bpm,
                                    beatsPerBar: beatsPerBar,
-                                   strokes: materializedStrokes)
+                                   strokes: materializedStrokes,
+                                   faderEvents: materializedFaderEvents)
         }
 
         /// Structural validation for the tempo-free pattern — no bpm
-        /// involved, per the authority/tempo separation.
+        /// involved, per the authority/tempo separation. `faderEvents` are
+        /// checked independently of `strokes` — no cross-stream ordering
+        /// constraint; a fader edge may freely share a beat with a stroke
+        /// boundary.
         func validationIssues() -> [String] {
             var issues: [String] = []
             if !timingBasis.hasPrefix(ScratchNotation.beatAuthoredTimingBasisPrefix) {
@@ -2760,6 +2959,27 @@ extension ScratchNotation {
                         issues.append("stroke \(index): strokes are not sorted by startBeat")
                     } else if stroke.startBeat < previous.endBeat {
                         issues.append("stroke \(index): overlaps stroke \(index - 1)")
+                    }
+                }
+            }
+            for (index, event) in faderEvents.enumerated() {
+                if !event.beat.isFinite {
+                    issues.append("faderEvent \(index): beat must be finite")
+                    continue
+                }
+                if event.beat < 0 {
+                    issues.append("faderEvent \(index): beat must be >= 0, got \(event.beat)")
+                }
+                if index == 0, event.beat != 0 {
+                    issues.append("faderEvent 0: first fader event must be at beat 0, got \(event.beat)")
+                }
+                if index > 0 {
+                    let previous = faderEvents[index - 1]
+                    if event.beat <= previous.beat {
+                        issues.append("faderEvent \(index): beat must strictly increase over faderEvent \(index - 1)")
+                    }
+                    if event.state == previous.state {
+                        issues.append("faderEvent \(index): adjacent fader events must not repeat the same state")
                     }
                 }
             }
