@@ -48,6 +48,19 @@ struct TimecodeDriveStepConverter {
 
     private var accumulatedSteps: Double = 0
 
+    /// Listening-fix #2 (Option 2, uncommitted): continuous fractional
+    /// cumulative steps. Returns the running fractional step total so the
+    /// scheduler can emit a grain EVERY tick from real (sub-step) motion —
+    /// whole-step quantization previously batch-played near-stop motion
+    /// (up to ~154ms of audio lag) or skipped it (13ms gap clicks).
+    mutating func continuousSteps(
+        forRate rate: Double,
+        elapsed: TimeInterval
+    ) -> Double {
+        accumulatedSteps += rate * Self.stepsPerSecondAtRate1 * elapsed
+        return accumulatedSteps
+    }
+
     mutating func steps(
         forRate rate: Double,
         direction: TimecodeDirection,
@@ -675,6 +688,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case idle
         case listening
         case learned(CrossfaderCCMapping)
+        case listeningFor(MIDISemanticAction)
+    }
+
+    /// Result of evaluating a CC event against the active MIDI Learn session.
+    struct MIDILearnCCConsumeResult: Equatable {
+        /// True if this exact event was atomically claimed by an active learn
+        /// session (any action). Callers must not also resolve this same
+        /// event as a hot-cue press or any other production action.
+        let consumedByLearn: Bool
+        /// The effective crossfader mapping to use for the rest of this
+        /// event's processing — set only when this event just learned the
+        /// crossfader specifically.
+        let crossfaderMapping: CrossfaderCCMapping?
     }
 
     private enum DirectCaptureRoute {
@@ -2054,6 +2080,136 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastMIDICCMessage: String = "CC -- Ch -- Value --"
     @Published private(set) var midiLearnFeedback: String = ""
 
+    // MARK: - Expanded MIDI Learn State (Phase 3)
+    /// The mapping store for per-device learned MIDI mappings.
+    private let midiMappingStore = MIDILearnedMappingStore.default
+    /// Bounded serial queue for ALL learned-mapping persistence (JSON encode +
+    /// file write/delete) — learn, clear, hot-cue sample assignment, calibration,
+    /// and inversion all funnel through here. Never touched from the CoreMIDI
+    /// callback or the main queue: callers only capture value-type arguments and
+    /// enqueue a block. Because the queue is serial, mutations apply in the exact
+    /// order they were requested, so a later mapping change can never be
+    /// clobbered by an earlier, still-in-flight write that read a stale
+    /// on-disk/in-memory snapshot.
+    private let midiMappingPersistenceQueue = DispatchQueue(label: "scratchlab.midi.mapping.persistence", qos: .utility)
+    /// The current device's learned mapping profile, keyed by the selected source.
+    @Published private(set) var currentMIDIDeviceMapping: MIDIDeviceMapping? = nil
+    /// Set when loading, saving, or resolving a device mapping fails (corrupt file,
+    /// unsupported schema, or a hot-cue's assigned sample no longer exists). Cleared
+    /// on the next successful operation. Surfaced in the MIDI Learn UI.
+    @Published private(set) var midiMappingError: String = ""
+    /// Which semantic action is currently being learned (nil when idle).
+    /// UI-facing mirror ONLY — this `@Published` property is set exclusively on
+    /// main (via `publishOnMainAsync` or main-thread call sites) and must never
+    /// be read or written from the CoreMIDI callback or while holding
+    /// `midiCaptureLock`. The realtime source of truth is the plain,
+    /// lock-protected `learnSessionAction`.
+    @Published private(set) var activeMIDILearnAction: MIDISemanticAction? = nil
+
+    // MARK: - Continuous Control Calibration State
+    /// Minimum accepted calibrated range (raw 0-127 units) — narrower than this
+    /// is rejected as unusably imprecise for normalization.
+    private static let minimumCalibrationRange = 20
+    /// Lock-protected: mirrors `activeCalibrationAction`/`calibrationObserved*`
+    /// but readable/writable from the CoreMIDI thread while accumulating the
+    /// observed range, matching the `learnSessionAction`/`activeMIDILearnAction` split.
+    private var isCalibrating = false
+    private var calibratingAction: MIDISemanticAction? = nil
+    private var calibrationMinAccumulator = 0
+    private var calibrationMaxAccumulator = 0
+    private var calibrationSawAnyEvent = false
+    /// Generation token for the active calibration session — bumped on every
+    /// start/cancel/finish. A calibration-observed UI publish captures this
+    /// at enqueue time and re-checks it at execution time, so a stale,
+    /// already-enqueued publication (from a session that has since been
+    /// cancelled, finished, or superseded by a new one) detects the mismatch
+    /// and never restores or overwrites the current calibration UI state.
+    private var calibrationGeneration: UInt64 = 0
+    /// True while a coalesced calibration-observed publish is already queued
+    /// on main. Gates re-entry so at most one `DispatchQueue.main.async` is
+    /// ever pending for this channel — matches `isMidiMonitorPublishPending`.
+    private var isCalibrationObservedPublishPending = false
+    /// Last time a calibration-observed publish was actually enqueued.
+    private var lastCalibrationObservedPublishTime: CFTimeInterval = 0
+    /// Calibration-observed UI publish throttle (4 Hz) — within the required
+    /// "no faster than 15 Hz" bound; matches the existing MIDI-monitor rate.
+    private let calibrationPublishInterval: CFTimeInterval = 0.25
+    /// Which continuous action is currently being calibrated, if any.
+    @Published private(set) var activeCalibrationAction: MIDISemanticAction? = nil
+    /// Live accumulated raw range observed during the active calibration session.
+    @Published private(set) var calibrationObservedMin: Int? = nil
+    @Published private(set) var calibrationObservedMax: Int? = nil
+    /// Set when a calibration is rejected (unusably narrow range / no movement).
+    @Published private(set) var calibrationError: String = ""
+
+    // MARK: - Fader Curve Custom Capture State
+    //
+    // "Set closed" / "Set full-on" discrete capture, distinct from the
+    // continuous-sweep min/max calibration above. Mutually exclusive with
+    // both MIDI Learn and calibration (same lock-protected guard pattern).
+    // A session only ever records the LATEST raw value seen on the
+    // EXACT (messageType, channel, controller) already learned for the
+    // action — never starts Learn, never replaces the binding, never
+    // performs persistence from the CoreMIDI callback.
+
+    /// Lock-protected realtime state, mirrors the calibration fields above.
+    private var isCurveCapturing = false
+    private var curveCaptureAction: MIDISemanticAction? = nil
+    /// Latest raw value observed on the captured action's exact binding
+    /// this session. Not persisted; read only by `captureCurveClosedPoint`/
+    /// `captureCurveFullOnPoint` when the user presses those buttons.
+    private var curveCaptureLastRawValue: Int? = nil
+    /// Pending (not yet persisted) capture points.
+    private var curveCapturePendingClosedRawValue: Int? = nil
+    private var curveCapturePendingFullOnRawValue: Int? = nil
+    /// Generation token — bumped on every start/cancel/finish, same
+    /// stale-publish protection as `calibrationGeneration`.
+    private var curveCaptureGeneration: UInt64 = 0
+    private var isCurveCapturePublishPending = false
+    private var lastCurveCapturePublishTime: CFTimeInterval = 0
+    /// Same bounded rate as calibration's observed-value publish.
+    private let curveCapturePublishInterval: CFTimeInterval = 0.25
+
+    /// The exact (messageType, channel, controlNumber) a curve-capture
+    /// session is watching — frozen at `startCurveCalibration` time, not
+    /// re-read from `currentMIDIDeviceMapping` on every event. Prevents a
+    /// mid-session relearn/replace from silently retargeting the session
+    /// at a different physical control.
+    private struct CurveCaptureBindingIdentity: Equatable {
+        let messageType: LearnedMIDIMessageType
+        let channel: Int
+        let controlNumber: Int
+    }
+    /// Device the session started on. Finish refuses to persist if the
+    /// selected source has since changed, even if by coincidence a
+    /// same-named control exists on the new device too.
+    private var curveCaptureDeviceID: String? = nil
+    private var curveCaptureBindingIdentity: CurveCaptureBindingIdentity? = nil
+
+    /// Which continuous action is currently being curve-captured, if any.
+    @Published private(set) var activeCurveCaptureAction: MIDISemanticAction? = nil
+    /// UI-facing mirrors of whether each pending point has been captured
+    /// this session — the raw values themselves are not exposed to the UI,
+    /// which never needs to display normalized/engineering values.
+    @Published private(set) var curveCaptureHasClosedPoint: Bool = false
+    @Published private(set) var curveCaptureHasFullOnPoint: Bool = false
+    /// True once at least one matching CC event has arrived this capture
+    /// session — lets the UI show "ready to capture" vs. "move the
+    /// control" without ever surfacing the raw/normalized value itself.
+    @Published private(set) var curveCaptureHasLiveValue: Bool = false
+    /// True only when both points are captured, differ, AND resolve
+    /// through the current learned control's min/max/inversion to a
+    /// finite, non-degenerate span — recomputed after every capture. The
+    /// Finish button's enabled state must be driven from this, not merely
+    /// "both points captured", since two distinct raw values can still
+    /// normalize to the same (or a degenerate) endpoint under narrow
+    /// calibration or extreme inversion.
+    @Published private(set) var curveCaptureCanFinish: Bool = false
+    /// Set when a curve-capture action is rejected (not yet learned, no
+    /// value observed yet, Finish attempted while invalid, or the
+    /// captured binding/device changed mid-session).
+    @Published private(set) var curveCaptureError: String = ""
+
     // MARK: - Scratch Bank Pad Preview Gate
     // Diagnostic-only gate. Default OFF. No scoring. No audio routing.
     // Caller injects a sample-preview callback; on macOS the callback is nil
@@ -2062,6 +2218,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastScratchBankPadLabel: String = ""
 #if DEBUG
     @Published private(set) var lastRawPadDiagnostic: String = ""
+    /// Debug-only: outcome of the most recent `loadPlatterTestSample()`
+    /// request — "loaded: <id>" or "load failed: <reason>" — so a silent
+    /// load failure is never mistaken for a platter/MIDI hardware problem.
+    @Published private(set) var platterTestLoadStatus: String = ""
 #endif
     var scratchBankPadPreviewCallback: ((String) -> Void)?
 
@@ -2077,21 +2237,91 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// below is suppressed so the two sources never drive playback at once.
     /// Defaults to false — MIDI CC6 behavior is unchanged unless the DVS
     /// panel explicitly enables the bridge.
-    @Published var dvsPlaybackDriveActive: Bool = false
+    @Published private var publishedDVSPlaybackDriveActive: Bool = false
+    private let dvsPlaybackDriveStateLock = NSLock()
+    private var dvsPlaybackDriveActiveStorage = false
+
+    var dvsPlaybackDriveActive: Bool {
+        dvsPlaybackDriveStateLock.lock()
+        defer { dvsPlaybackDriveStateLock.unlock() }
+        return dvsPlaybackDriveActiveStorage
+    }
+
+    /// Updates the scheduling gate synchronously on any caller queue while
+    /// mirroring the user-facing state asynchronously on the main queue.
+    /// DVS decode/playback must not wait behind a stalled SwiftUI run loop.
+    func setDVSPlaybackDriveActive(_ isActive: Bool) {
+        dvsPlaybackDriveStateLock.lock()
+        let changed = dvsPlaybackDriveActiveStorage != isActive
+        dvsPlaybackDriveActiveStorage = isActive
+        dvsPlaybackDriveStateLock.unlock()
+        guard changed else { return }
+
+        // Right-deck MIDI continuous drive ownership: DVS always outranks
+        // MIDI. This is the single authoritative signal both the legacy
+        // raw-CC6 suppression below and the continuous-renderer ownership
+        // arbitration are driven from.
+        scratchPlaybackController.setDVSOwnership(active: isActive)
+
+        if !isActive {
+            // Deactivating Drive must not leave a trusted drive or dropout
+            // count from this session around to be replayed as inferred
+            // motion if Drive is re-enabled later — `clearDVSDriveHoldState`
+            // takes `dvsDriveHoldStateLock`, safe to call from any thread
+            // (this setter is not confined to the DVS control queue).
+            // `lastForwardedContinuousSteps` is deliberately untouched.
+            clearDVSDriveHoldState()
+        }
+
+        let publish = { [weak self] in
+            guard let self,
+                  self.publishedDVSPlaybackDriveActive != isActive else { return }
+            self.publishedDVSPlaybackDriveActive = isActive
+        }
+        // Dispatch asynchronously: writing @Published state synchronously
+        // from the main thread is the known gap flagged in the
+        // publishDVSDriveDiagnosticsIfNeeded comment block.  This alone is
+        // not sufficient to eliminate the "Modifying state during view
+        // update" warning — hardware proved publishOnMainAsync (which
+        // already dispatches async) still warns.  The identical-value guard
+        // above (publishedDVSPlaybackDriveActive != isActive) avoids the
+        // most common unnecessary republish case.
+        DispatchQueue.main.async(execute: publish)
+    }
 
     /// Timestamp of the most recent DVS-driven `positionDidChange` call —
     /// diagnostic only. `nil` means no DVS motion has reached playback yet
     /// this session (bridge inactive, gated off, or never evaluated).
-    @Published private(set) var lastTimecodeDriveAppliedAt: Date?
+    var lastTimecodeDriveAppliedAt: Date? {
+        dvsDriveDiagnosticState.lastTimecodeDriveAppliedAt
+    }
 
     /// Diagnostic only: whether an auto-load of the DVS drive sample has
     /// been requested this session (does not mean it necessarily
     /// succeeded — see `dvsSampleLoadFailed`).
-    @Published private(set) var dvsAutoLoadAttempted: Bool = false
+    var dvsAutoLoadAttempted: Bool {
+        dvsDriveDiagnosticState.autoLoadAttempted
+    }
 
     /// Diagnostic only: true if the most recent DVS auto-load request
     /// failed (sample ID unknown or WAV missing from the bundle).
-    @Published private(set) var dvsSampleLoadFailed: Bool = false
+    var dvsSampleLoadFailed: Bool {
+        dvsDriveDiagnosticState.sampleLoadFailed
+    }
+
+    /// CACurrentMediaTime of the most recent forwardTimecodeDrive call (DEBUG).
+    private static var _lastDriveCADate: TimeInterval = 0
+
+#if DEBUG
+    /// CACurrentMediaTime of the entry to the most recent forwardTimecodeDrive call — for
+    /// measuring inter-call interval at this layer. Used by [DVS-TRACE:3].
+    private static var _lastForwardEntryTime: TimeInterval = 0
+
+    /// Number of forwardTimecodeDrive calls currently in flight (incremented at entry,
+    /// decremented after positionDidChange returns). Since execution is synchronous this
+    /// is always 0 or 1; a value >1 would indicate unexpected re-entrancy.
+    private static var _pendingDriveOps: Int = 0
+#endif
 
     /// Diagnostic only: whether `scratchPlaybackController` currently has
     /// any sample loaded (of any source — DVS, MIDI pad, or debug button).
@@ -2105,13 +2335,99 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// One tick behind the schedule call within the same
     /// `forwardTimecodeDrive` invocation (the schedule itself is queued
     /// async), but continuously refreshed at the ~10 Hz tick rate.
-    @Published private(set) var dvsPlaybackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics?
+    var dvsPlaybackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics? {
+        dvsDriveDiagnosticState.playbackDiagnostics
+    }
 
-    /// Sample ID armed for DVS-driven playback. Matches the "ahhh" sample
-    /// used elsewhere (hot-cue pads, debug preview button).
-    private static let dvsDriveSampleID = "ahhh"
+    /// Test-only: synchronous, unthrottled snapshot of the playback
+    /// controller's diagnostics, bypassing `dvsPlaybackDiagnostics`'s
+    /// 200ms publish throttle and main-queue async hop. Deterministic tests
+    /// asserting on the effect of a single `forwardTimecodeDrive` tick need
+    /// the state immediately after that call returns, not eventually.
+    func testOnly_scratchPlaybackDiagnosticsSnapshot() -> ScratchSamplePlaybackController.DVSPlaybackDiagnostics {
+        scratchPlaybackController.diagnosticsSnapshot()
+    }
+
+    /// Test-only: blocks until the playback controller's audio queue is
+    /// idle — e.g. after `ensureLoadedForDVSDrive`'s async sample load,
+    /// which `forwardTimecodeDrive` itself does not wait for.
+    func testOnly_waitForPlaybackQueue() {
+        scratchPlaybackController.waitForAudioQueue()
+    }
+
+    /// Test-only passthrough for asserting the bridge-to-playback
+    /// continuity fix does not cause repeated/duplicate stop ramps — see
+    /// `ScratchSamplePlaybackController.dvsAutoStopRampStartCount`.
+    var testOnly_scratchAutoStopRampStartCount: Int {
+        scratchPlaybackController.dvsAutoStopRampStartCount
+    }
+
+    private struct DVSDriveDiagnosticState: Equatable {
+        var lastTimecodeDriveAppliedAt: Date?
+        var autoLoadAttempted = false
+        var sampleLoadFailed = false
+        var playbackDiagnostics: ScratchSamplePlaybackController.DVSPlaybackDiagnostics?
+    }
+
+    @Published private var dvsDriveDiagnosticState = DVSDriveDiagnosticState()
+    private var lastDVSDriveDiagnosticPublishUptime: TimeInterval = -.infinity
+    private static let dvsDriveDiagnosticPublishInterval: TimeInterval = 0.2
+
+    /// Sample ID armed for DVS-driven playback. Uses the short, continuous
+    /// VirtualPlatter Ahhh rather than the pad sample's long silent tail.
+    private static let dvsDriveSampleID = "dvs_ahhh"
 
     private var timecodeDriveStepConverter = TimecodeDriveStepConverter()
+
+    /// Guards `lastTrustedTimecodeDrive` and `consecutiveTransientDropoutTicks`
+    /// only — `forwardTimecodeDrive` itself is confined to the DVS control
+    /// queue (`DVSControlProcessingLoop`'s serial `com.scratchlab.dvsControl`
+    /// queue), but `setDVSPlaybackDriveActive` is callable from any thread
+    /// (e.g. a main-thread SwiftUI toggle) and must be able to clear this
+    /// hold state without racing a concurrent `forwardTimecodeDrive` tick.
+    /// `lastForwardedContinuousSteps` is read/written only from
+    /// `forwardTimecodeDrive`'s own queue and is deliberately not guarded by
+    /// this lock.
+    private let dvsDriveHoldStateLock = NSLock()
+
+    /// Bridge-to-playback continuity fix (2026-08-09 near-stop burst/static):
+    /// last `.driving` drive, held for at most one transient bridge-dropout
+    /// tick — see `forwardTimecodeDrive`'s decision handling. Cleared (not
+    /// just left stale) on `.unknownDirection`, after a second consecutive
+    /// transient failure gives up holding, and whenever DVS drive is
+    /// deactivated — a stale trusted drive from before a genuine stop must
+    /// never be replayed as inferred motion by a later transient tick.
+    /// Access only through `dvsDriveHoldStateLock`.
+    private var lastTrustedTimecodeDrive: TimecodePlaybackDrive?
+
+    /// Cumulative continuous platter steps most recently forwarded to the
+    /// playback controller — the position anchor a no-direction tick must
+    /// reuse. `positionDidChangeContinuous(steps:)` expects the caller's own
+    /// running total, not a delta, so a real "no motion" tick must resend
+    /// this rather than fabricate `steps: 0`. Never reset merely because
+    /// motion became unavailable — only `forwardTrustedDrive` advances it.
+    private var lastForwardedContinuousSteps: Double = 0
+
+    /// Consecutive *transient* bridge-dropout ticks (unusableSignalHealth /
+    /// lowConfidence / missingTimeline / validationRequired / staleSignal).
+    /// Reset to 0 by any `.driving` tick, by `.unknownDirection`, and when
+    /// DVS drive is deactivated. At 0→1 the last trusted drive is held for
+    /// exactly this one tick (inferred motion bounded to this tick's own
+    /// `elapsed`, ~16–17ms at 60 Hz); from 1 onward, holding stops and every
+    /// further tick forwards one no-direction tick instead — see
+    /// `forwardTimecodeDrive`. Access only through `dvsDriveHoldStateLock`.
+    private var consecutiveTransientDropoutTicks = 0
+
+    /// Clears the held-drive/dropout-hold state — see
+    /// `lastTrustedTimecodeDrive`'s and `consecutiveTransientDropoutTicks`'s
+    /// doc comments for the three call sites this covers. Deliberately does
+    /// not touch `lastForwardedContinuousSteps`.
+    private func clearDVSDriveHoldState() {
+        dvsDriveHoldStateLock.lock()
+        lastTrustedTimecodeDrive = nil
+        consecutiveTransientDropoutTicks = 0
+        dvsDriveHoldStateLock.unlock()
+    }
 
     /// Forwards an already-gated `TimecodePlaybackDrive` (validated by
     /// `TimecodePlaybackBridge.evaluate`) into the existing platter-driven
@@ -2123,21 +2439,187 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// before the first valid motion arrives. `ensureLoadedForDVSDrive` is
     /// idempotent and safe to call every tick: it does not reload or reset
     /// `currentSampleFrame` once the sample is already loaded.
-    func forwardTimecodeDrive(_ drive: TimecodePlaybackDrive?, elapsed: TimeInterval) {
+    ///
+    /// - Parameter decision: `timecodeBridge.lastDecision` for this same
+    ///   evaluation. A nil `drive` alone cannot distinguish "genuinely no
+    ///   motion" (`.unknownDirection`) from "signal transiently untrusted"
+    ///   (e.g. `.unusableSignalHealth`) from "hard-gated off"
+    ///   (`.disabled`/`.replayActive`/…) — those three call for different
+    ///   handling below, and previously all three silently produced no call
+    ///   into the playback controller at all, which is what let its queued
+    ///   grain expire into digital silence with no tick for the settling
+    ///   hysteresis to ever see (2026-08-09 hardware capture correlation).
+    func forwardTimecodeDrive(
+        _ drive: TimecodePlaybackDrive?,
+        decision: TimecodePlaybackBridgeDecision,
+        elapsed: TimeInterval
+    ) {
         guard dvsPlaybackDriveActive else { return }
-        defer { dvsPlaybackDiagnostics = scratchPlaybackController.diagnosticsSnapshot() }
+        let driveEntryUptime = CACurrentMediaTime()
+
+#if DEBUG
+        let traceSeq = DVSTrace.current
+        let tFwdEntry = driveEntryUptime
+        let fwdDt = tFwdEntry - Self._lastForwardEntryTime
+        Self._lastForwardEntryTime = tFwdEntry
+        let pendingOps = Self._pendingDriveOps
+        Self._pendingDriveOps += 1
+        defer { Self._pendingDriveOps -= 1 }
+        let _dirStr = drive.map { $0.direction.rawValue } ?? "nil"
+        let _thr = Thread.current.isMainThread ? "main" : "bg"
+        DVSTrace.log("[DVS-TRACE:3] captureEngine forward seq=\(traceSeq) monotonic=\(tFwdEntry) fwdDt=\(fwdDt)s pendingOps=\(pendingOps) elapsed=\(elapsed)s dir=\(_dirStr) rate=\(drive.map { $0.rate } ?? 0) segmentWindow=\(elapsed) decision=\(decision.rawValue) thread=\(_thr)")
+#endif
+
+        #if DEBUG
+        let now = CACurrentMediaTime()
+        let dt = now - Self._lastDriveCADate
+        Self._lastDriveCADate = now
+        if dt > 0.15 {
+            print("[DVS] ⏱ drive dt=\(String(format: "%.0f", dt * 1000))ms elapsed=\(String(format: "%.0f", elapsed * 1000))ms rate=\(drive.map { String(format: "%.2f", $0.rate) } ?? "nil") dir=\(drive.map { "\($0.direction)" } ?? "nil") decision=\(decision.rawValue)")
+        }
+        #endif
+
         let loadOK = scratchPlaybackController.ensureLoadedForDVSDrive(sampleID: Self.dvsDriveSampleID)
-        dvsAutoLoadAttempted = true
-        dvsSampleLoadFailed = !loadOK
-        guard let drive else { return }
-        let (steps, direction) = timecodeDriveStepConverter.steps(
+        let driveApplied: Bool
+
+        switch decision {
+        case .driving:
+            // Expected to carry a drive; if it somehow doesn't, fail safe
+            // exactly like the pre-fix nil-drive path (no motion inferred).
+            if let drive {
+                dvsDriveHoldStateLock.lock()
+                consecutiveTransientDropoutTicks = 0
+                lastTrustedTimecodeDrive = drive
+                dvsDriveHoldStateLock.unlock()
+                forwardTrustedDrive(drive, elapsed: elapsed)
+                driveApplied = true
+            } else {
+                forwardNoDirectionTick(elapsed: elapsed)
+                driveApplied = false
+            }
+
+        case .unknownDirection:
+            // Genuine stationary/no-direction tick: never inferred motion,
+            // never held — let the existing stop ramp and settling
+            // hysteresis (untouched by this fix) see it immediately. Then
+            // clear the hold: a genuine stop must not leave a stale trusted
+            // drive for a later transient tick to replay as inferred motion.
+            forwardNoDirectionTick(elapsed: elapsed)
+            driveApplied = false
+            clearDVSDriveHoldState()
+
+        case .unusableSignalHealth, .lowConfidence, .missingTimeline, .validationRequired, .staleSignal:
+            // Transient: the signal is momentarily untrusted, not proven
+            // absent. Hold the last trusted drive for exactly one tick so a
+            // single flapped gate cannot open a digital-silence hole; a
+            // second consecutive transient tick gives up holding (bounded —
+            // see `consecutiveTransientDropoutTicks`'s doc comment), reports
+            // genuine no-direction instead, and clears the trusted drive —
+            // further transient ticks must never infer motion again until a
+            // new genuine `.driving` result stores a fresh trusted drive.
+            dvsDriveHoldStateLock.lock()
+            let ticksSoFar = consecutiveTransientDropoutTicks
+            let trusted = lastTrustedTimecodeDrive
+            if ticksSoFar == 0, let trusted {
+                consecutiveTransientDropoutTicks = 1
+                dvsDriveHoldStateLock.unlock()
+                forwardTrustedDrive(trusted, elapsed: elapsed)
+                driveApplied = true
+            } else {
+                consecutiveTransientDropoutTicks = ticksSoFar + 1
+                lastTrustedTimecodeDrive = nil
+                dvsDriveHoldStateLock.unlock()
+                forwardNoDirectionTick(elapsed: elapsed)
+                driveApplied = false
+            }
+
+        case .disabled, .pipelineDisabled, .diagnosticsOnly, .replayActive, .liveTapOff, .notEvaluated:
+            // Hard configuration/safety gate: no signal to hold or infer
+            // from. Forward no-direction immediately and drop any hold.
+            clearDVSDriveHoldState()
+            forwardNoDirectionTick(elapsed: elapsed)
+            driveApplied = false
+        }
+
+        publishDVSDriveDiagnosticsIfNeeded(
+            uptime: driveEntryUptime,
+            loadFailed: !loadOK,
+            driveApplied: driveApplied
+        )
+    }
+
+    /// Advances the step converter by `elapsed` at `drive`'s rate, records
+    /// the resulting cumulative steps as `lastForwardedContinuousSteps`, and
+    /// forwards `drive`'s direction to the playback controller. Used both
+    /// for a genuine `.driving` tick and for the at-most-one-tick
+    /// transient-dropout hold in `forwardTimecodeDrive`.
+    private func forwardTrustedDrive(_ drive: TimecodePlaybackDrive, elapsed: TimeInterval) {
+        let steps = timecodeDriveStepConverter.continuousSteps(
             forRate: drive.rate,
-            direction: drive.direction,
             elapsed: elapsed
         )
-        scratchPlaybackController.positionDidChange(steps: steps, direction: direction)
-        lastTimecodeDriveAppliedAt = Date()
+        lastForwardedContinuousSteps = steps
+        let direction: ScratchPlatterDirection? = {
+            switch drive.direction {
+            case .forward:  return .forward
+            case .backward: return .backward
+            case .unknown:  return nil
+            }
+        }()
+        // Pass the real tick interval as the scheduling window so the grain's
+        // varispeed rate reflects true platter speed instead of the fixed
+        // 1/60s slot sized for MIDI CC6's much faster call cadence — see
+        // the doc comment on `positionDidChange(steps:direction:segmentWindow:)`.
+        scratchPlaybackController.positionDidChangeContinuous(steps: steps, direction: direction, segmentWindow: elapsed)
     }
+
+    /// Forwards a genuine no-motion tick at the last known cumulative step
+    /// position — never a fabricated `steps: 0` — so the playback
+    /// controller's existing (untouched) stop-ramp / settling hysteresis
+    /// sees a real "no direction" tick instead of receiving no call at all.
+    /// Deliberately does not advance `timecodeDriveStepConverter`: there is
+    /// no trusted rate to integrate for a tick with no direction.
+    private func forwardNoDirectionTick(elapsed: TimeInterval) {
+        scratchPlaybackController.positionDidChangeContinuous(
+            steps: lastForwardedContinuousSteps,
+            direction: nil,
+            segmentWindow: elapsed
+        )
+    }
+
+    private func publishDVSDriveDiagnosticsIfNeeded(
+        uptime: TimeInterval,
+        loadFailed: Bool,
+        driveApplied: Bool
+    ) {
+        guard uptime - lastDVSDriveDiagnosticPublishUptime >=
+                Self.dvsDriveDiagnosticPublishInterval else {
+            return
+        }
+        lastDVSDriveDiagnosticPublishUptime = uptime
+
+        var next = dvsDriveDiagnosticState
+        next.autoLoadAttempted = true
+        next.sampleLoadFailed = loadFailed
+        next.playbackDiagnostics = scratchPlaybackController.diagnosticsSnapshot()
+        if driveApplied {
+            next.lastTimecodeDriveAppliedAt = Date()
+        }
+        let publish = { [weak self] in
+            guard let self, self.dvsDriveDiagnosticState != next else { return }
+            print("[SwiftUIStateGuard] publish · source=MacCaptureEngine.publishDVSDriveDiagnosticsIfNeeded field=dvsDriveDiagnosticState thread=\(Thread.isMainThread ? "main" : "background") time=\(String(format: "%.6f", CACurrentMediaTime()))")
+            self.dvsDriveDiagnosticState = next
+        }
+        // Dispatch asynchronously: the prior `Thread.isMainThread` shortcut
+        // was a known gap (documented in the since-removed comment block
+        // above).  This alone is not sufficient to eliminate the SwiftUI
+        // warning — hardware proved publishOnMainAsync (which already
+        // dispatches async) still warns.  The identical-value guard and the
+        // async dispatch reduce unnecessary republishes but are
+        // hardware-unverified as a complete fix.
+        DispatchQueue.main.async(execute: publish)
+    }
+
 #if DEBUG
     /// Evaluates the independent DVS notation trust gate against `pipeline`
     /// and, only when trusted and a routine take is actively recording with
@@ -2967,11 +3449,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var batchedMidiCCMessage: String = ""
     private var batchedMidiSummary: String = "No MIDI received yet"
     private let midiMonitorPublishInterval: CFTimeInterval = 0.25
+    /// True while a coalesced MIDI-monitor publish is already queued on main.
+    /// Gates re-entry so at most one `DispatchQueue.main.async` is ever
+    /// pending for this channel — the queued block re-reads the batched state
+    /// at execution time, so later events are folded into it rather than
+    /// queuing additional blocks.
+    private var isMidiMonitorPublishPending: Bool = false
     private var lastScratchPlaybackBridgeLogTime: CFTimeInterval = 0
     private let scratchPlaybackBridgeLogInterval: CFTimeInterval = 0.10
     private var lastSwiftUIStateGuardLogTime: CFTimeInterval = 0
     private let swiftUIStateGuardLogInterval: CFTimeInterval = 1.0
-    private var isMIDILearning: Bool = false
+    /// Plain, lock-protected MIDI Learn session storage — the CoreMIDI-thread-
+    /// safe source of truth. `nil` when idle. Deliberately NOT `@Published`:
+    /// only ever read/written under `midiCaptureLock`, never touching
+    /// SwiftUI/Combine machinery (which is not safe to touch from CoreMIDI).
+    /// `activeMIDILearnAction` below is a separate, main-thread-only mirror
+    /// for the UI.
+    private var learnSessionAction: MIDISemanticAction? = nil
+    /// Generation/request ID for the active learn session — bumped every time
+    /// a session starts, is claimed, or is cancelled, so stale async work
+    /// (e.g. a queued "no MIDI received" warning) can detect it no longer
+    /// applies. Lock-protected alongside `learnSessionAction`.
     private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
@@ -3025,6 +3523,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             print("[RanePad] loading sample · sampleID=\(sampleID)")
             self.scratchPlaybackController.load(sampleID: sampleID)
         }
+
+        // Right-deck (channel 1) MIDI continuous platter drive (2026-08-09):
+        // the single loaded scratch sample is owned exclusively by the Rane
+        // ONE MKII right platter / Deck 2, per product decision. The
+        // coalescing timer inside `scratchPlaybackController` samples this
+        // provider on its own bounded cadence — it never reads the left
+        // deck (channel 0), which stays tracked/diagnostic-only.
+        scratchPlaybackController.configureMIDIPlatterProvider(
+            rightDeckAccumulatedSteps: { [platterTracker] in
+                platterTracker.accumulatedSteps(for: ScratchPlatterTracker.rightChannel)
+            }
+        )
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleWorkspaceApplicationChange(_:)),
@@ -3058,8 +3568,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         if let mapping = persistedCrossfaderMapping {
             publishOnMainAsync(field: "midiLearn.initialMapping") { [weak self] in
-                self?.crossfaderCCMapping = mapping
-                self?.midiLearnState = .learned(mapping)
+                guard let self,
+                      self.midiLearnState != .learned(mapping) else { return }
+                self.crossfaderCCMapping = mapping
+                self.midiLearnState = .learned(mapping)
             }
         }
 
@@ -6258,36 +6770,108 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         timer.resume()
     }
 
-    func startMIDILearn() {
+    // MARK: - MIDI Learn (Extended)
+
+    /// Start learning a specific semantic action from incoming MIDI events.
+    /// Replaces the legacy crossfader-only `startMIDILearn()`.
+    func startMIDILearn(for action: MIDISemanticAction) {
         midiCaptureLock.lock()
-        isMIDILearning = true
+        let calibrating = isCalibrating
+        let curveCapturing = isCurveCapturing
+        midiCaptureLock.unlock()
+        // Learning, calibration, and curve capture must never run at the
+        // same time — a fresh learn request always wins and abandons any
+        // in-progress calibration or curve-capture session.
+        if calibrating { cancelCalibration() }
+        if curveCapturing { cancelCurveCalibration() }
+
+        midiCaptureLock.lock()
+        learnSessionAction = action
         midiLearnRequestID &+= 1
         let learnRequestID = midiLearnRequestID
         let eventCountAtStart = midiEventsReceivedCount
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiLearn") { [weak self] in
-            self?.midiLearnState = .listening
-            self?.midiLearnFeedback = "Listening..."
+            guard let self else { return }
+            self.activeMIDILearnAction = action
+            // Crossfader keeps the original `.listening` state/feedback text so the
+            // pre-existing crossfader-only UI and tests continue to see the same
+            // behaviour as before multi-action learn was added.
+            if action == .crossfader {
+                if self.midiLearnState != .listening { self.midiLearnState = .listening }
+                if self.midiLearnFeedback != "Listening..." { self.midiLearnFeedback = "Listening..." }
+            } else {
+                let nextState = MIDILearnState.listeningFor(action)
+                if self.midiLearnState != nextState { self.midiLearnState = nextState }
+                let fb = "Learn \(action.displayName): move the control now…"
+                if self.midiLearnFeedback != fb { self.midiLearnFeedback = fb }
+            }
         }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard let self else { return }
             let shouldWarn = self.midiCaptureLock.withLock {
-                self.isMIDILearning
+                self.learnSessionAction != nil
                     && self.midiLearnRequestID == learnRequestID
                     && self.midiEventsReceivedCount == eventCountAtStart
             }
             guard shouldWarn else { return }
+            let warning = action == .crossfader
+                ? "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
+                : "No MIDI received. Check your controller is connected and sending MIDI."
             self.publishOnMainAsync(field: "midiLearnFeedback") { [weak self] in
-                self?.midiLearnFeedback = "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
+                guard let self, self.midiLearnFeedback != warning else { return }
+                self.midiLearnFeedback = warning
             }
         }
     }
 
-    func playScratchSampleDiagnostic(sampleID: String) {
-        print("[ScratchSamplePlaybackBridge] TEMP UI direct load · sampleID=\(sampleID)")
-        scratchPlaybackController.load(sampleID: sampleID)
+    /// Backward-compatible start — starts legacy crossfader-only learn.
+    func startMIDILearn() {
+        startMIDILearn(for: .crossfader)
     }
+
+#if DEBUG
+    /// Debug-only right-deck platter test: loads the validated
+    /// one-revolution `dvs_ahhh` asset (`VirtualPlatter/ahhh.wav`,
+    /// ~1.0474 s) with no automatic preview/playback — only loads it into
+    /// `scratchPlaybackController`. Moving the right platter (channel 1
+    /// CC6) is what produces audio, through the same direct-MIDI
+    /// continuous drive DVS's renderer uses.
+    ///
+    /// Deliberately hardcoded, not parameterized: the hot-cue pad asset
+    /// `ahhh.wav` (~4.4667 s) is longer than one physical platter
+    /// revolution (`dvsLoopFrames`, ~1.8 s) and is rejected by
+    /// `midiCoalescingTick`'s loop-fit guard — this button must always
+    /// load the short, validated asset. Supporting longer samples on the
+    /// direct-MIDI path is out of scope here (hot-cue/sample-mapping
+    /// design, later).
+    func loadPlatterTestSample() {
+        let sampleID = "dvs_ahhh"
+        print("[ScratchSamplePlaybackBridge] platter test load requested · sampleID=\(sampleID)")
+        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false)
+        guard requested else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "not found: \(sampleID)"
+            }
+            return
+        }
+        // Bounded: `load` only queues a small bundled-WAV read on the
+        // controller's own audio queue; draining it here (debug tool only,
+        // main-thread button action) lets the status reflect the real
+        // outcome instead of just "a request was queued".
+        scratchPlaybackController.waitForAudioQueue()
+        let snapshot = scratchPlaybackController.diagnosticsSnapshot()
+        publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+            guard let self else { return }
+            if snapshot.loadedSampleID == sampleID {
+                self.platterTestLoadStatus = "loaded: \(sampleID)"
+            } else {
+                self.platterTestLoadStatus = "load failed: \(snapshot.lastLoadError ?? "unknown")"
+            }
+        }
+    }
+#endif
 
     private func publishOnMainAsync(field: String, _ update: @escaping () -> Void) {
         let requestTime = CACurrentMediaTime()
@@ -6308,41 +6892,1324 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     func cancelMIDILearn() {
         midiCaptureLock.lock()
-        isMIDILearning = false
+        learnSessionAction = nil
+        midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
-            self.midiLearnState = self.crossfaderCCMapping.map { .learned($0) } ?? .idle
-            self.midiLearnFeedback = ""
+            self.activeMIDILearnAction = nil
+            let nextState: MIDILearnState = self.crossfaderCCMapping.map { .learned($0) } ?? .idle
+            if self.midiLearnState != nextState { self.midiLearnState = nextState }
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
     }
 
     func clearCrossfaderMapping() {
         midiCaptureLock.lock()
         persistedCrossfaderMapping = nil
-        isMIDILearning = false
+        learnSessionAction = nil
+        midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
         UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
         publishOnMainAsync(field: "midiLearn") { [weak self] in
-            self?.crossfaderCCMapping = nil
-            self?.midiLearnState = .idle
-            self?.midiLearnFeedback = ""
+            guard let self else { return }
+            self.activeMIDILearnAction = nil
+            self.crossfaderCCMapping = nil
+            if self.midiLearnState != .idle { self.midiLearnState = .idle }
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
     }
 
+    /// Legacy-compatibility adapter, NOT the authoritative UI-state
+    /// publisher: writes the standalone pre-generalized-learn crossfader
+    /// store (`persistedCrossfaderMapping` + the single-key
+    /// `crossfaderMIDIMapping` UserDefaults entry) that launch-restore
+    /// (`init`, `startDeviceDiscoveryAfterViewMount`) and
+    /// `recordReceivedMIDICCEvent`'s mapped-control detection still read.
+    /// Called at most once per learn session — the caller
+    /// (`evaluateMIDILearnForCC`) has already atomically claimed and ended
+    /// the session before calling this, so no session-state mutation
+    /// happens here.
+    ///
+    /// Does NOT touch `crossfaderCCMapping`, `midiLearnState`, or
+    /// `midiLearnFeedback` — `applyLearnedMapping`'s completion (run via
+    /// `mutateDeviceMapping` on the same serial persistence queue) is the
+    /// single authoritative publisher of those for every learned action,
+    /// crossfader included. Publishing them here too raced that
+    /// completion: `mutateDeviceMapping` round-trips through
+    /// `midiMappingPersistenceQueue` before reaching main, so this
+    /// function's now-removed direct `publishOnMainAsync` used to land on
+    /// main *first* despite being called *second*, only for the delayed
+    /// generic completion to overwrite it back to `.idle` moments later.
     private func applyLearnedCrossfaderMapping(_ mapping: CrossfaderCCMapping) {
         midiCaptureLock.lock()
         persistedCrossfaderMapping = mapping
-        isMIDILearning = false
         midiCaptureLock.unlock()
-        if let data = try? JSONEncoder().encode(mapping) {
-            UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        midiMappingPersistenceQueue.async {
+            if let data = try? JSONEncoder().encode(mapping) {
+                UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+            }
         }
-        publishOnMainAsync(field: "midiLearn") { [weak self] in
-            self?.crossfaderCCMapping = mapping
-            self?.midiLearnState = .learned(mapping)
-            self?.midiLearnFeedback = "Learned Xfader: \(mapping.displayName)"
+    }
+
+    // MARK: - Persistence Queue Helpers
+
+    /// Enqueues a read-modify-write mutation of `deviceID`'s learned mapping on
+    /// `midiMappingPersistenceQueue`. The load, `transform`, and save all run on
+    /// that queue — never on the CoreMIDI callback or main — then `completion`
+    /// is dispatched to main with the resulting mapping. Safe to call from the
+    /// CoreMIDI callback: only captures value-type arguments and enqueues a
+    /// block; performs no I/O itself.
+    ///
+    /// Because the queue is serial, calling this repeatedly in quick succession
+    /// (even from different threads) always applies the mutations in the exact
+    /// order they were enqueued — each one loads the result of the previous one,
+    /// so a later mutation can never be overwritten by an earlier, still-in-flight
+    /// write that captured a stale snapshot.
+    private func mutateDeviceMapping(
+        deviceID: String,
+        deviceName: String,
+        transform: @escaping (inout MIDIDeviceMapping) -> Void,
+        completion: @escaping (MIDIDeviceMapping) -> Void
+    ) {
+        midiMappingPersistenceQueue.async { [weak self] in
+            guard let self else { return }
+            var mapping = self.midiMappingStore.load(deviceIdentifier: deviceID)
+                ?? MIDIDeviceMapping(deviceIdentifier: deviceID, deviceName: deviceName)
+            mapping.deviceName = deviceName  // refresh name in case device renamed
+            transform(&mapping)
+            self.midiMappingStore.save(mapping)
+            DispatchQueue.main.async {
+                completion(mapping)
+            }
         }
+    }
+
+    /// Enqueues removal of a single action's mapping for `deviceID`, on the same
+    /// serial queue as `mutateDeviceMapping` so ordering against in-flight writes
+    /// is preserved. If no mappings remain afterward, the device's file is
+    /// deleted entirely. `completion` receives the resulting mapping, or nil if
+    /// the device now has no mappings (or never had any).
+    private func enqueueRemoveAction(
+        deviceID: String,
+        action: MIDISemanticAction,
+        completion: @escaping (MIDIDeviceMapping?) -> Void
+    ) {
+        midiMappingPersistenceQueue.async { [weak self] in
+            guard let self else { return }
+            guard var mapping = self.midiMappingStore.load(deviceIdentifier: deviceID) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            mapping.remove(action: action)
+            if mapping.isEmpty {
+                self.midiMappingStore.delete(deviceIdentifier: deviceID)
+                DispatchQueue.main.async { completion(nil) }
+            } else {
+                self.midiMappingStore.save(mapping)
+                DispatchQueue.main.async { completion(mapping) }
+            }
+        }
+    }
+
+    /// Enqueues deletion of ALL learned mappings for `deviceID`, on the same
+    /// serial queue as the other mutation helpers.
+    private func enqueueDeleteDevice(deviceID: String, completion: @escaping () -> Void) {
+        midiMappingPersistenceQueue.async { [weak self] in
+            self?.midiMappingStore.delete(deviceIdentifier: deviceID)
+            DispatchQueue.main.async { completion() }
+        }
+    }
+
+    /// Test-only: blocks until every mutation enqueued on
+    /// `midiMappingPersistenceQueue` so far has completed its file I/O (the
+    /// main-thread `completion` callback may still be pending one more run-loop
+    /// turn after this returns — tests should follow with a brief `RunLoop.main.run`).
+    func testOnly_waitForMappingPersistenceQueue() {
+        midiMappingPersistenceQueue.sync {}
+    }
+
+    /// Test-only: counts how many times the coalesced MIDI-monitor publish
+    /// block in `recordReceivedMIDICCEvent` has actually executed on main
+    /// (not just been enqueued) — used to assert the flood-safety bound.
+    private(set) var testOnly_midiMonitorPublishCount = 0
+
+    /// Test-only: counts how many times the coalesced calibration-observed
+    /// publish block in `evaluateCalibrationForCC` has actually executed on
+    /// main (including stale-generation runs that bailed out without
+    /// applying values) — used to assert the flood-safety bound.
+    private(set) var testOnly_calibrationObservedPublishCount = 0
+
+    // MARK: - New Multi-Action MIDI Learn Methods (Phase 3)
+
+    /// Apply a learned mapping for any semantic action (crossfader, upfader, hot cue).
+    /// Persists per-device via `MIDILearnedMappingStore`.
+    /// Called at most once per learn session — the caller
+    /// (`evaluateMIDILearnForCC` / `learnHotCueFromNote`) has already
+    /// atomically claimed and ended the session before calling this, so no
+    /// session-state mutation happens here. The mapping load/merge/save
+    /// (file I/O + JSON) runs on `midiMappingPersistenceQueue`, never on the
+    /// CoreMIDI callback or main, and all `@Published` UI-state writes happen
+    /// only in the main-dispatched completion.
+    /// Resolves `control`'s curve config against itself and pushes it to
+    /// the playback controller, atomically resetting that control's gain
+    /// contribution to unity in the same step (see
+    /// `ScratchSamplePlaybackController.applyCrossfaderCurve`/
+    /// `applyRightUpfaderCurve`). The controller never sees a
+    /// `MIDIFaderCurveConfig` or performs any resolution itself — this is
+    /// the single choke point where the persisted mapping (source of
+    /// truth) is turned into the resolved runtime value the audio queue
+    /// needs. A no-op for `.leftUpfader` and hot-cue actions: no audio
+    /// call site consumes their curve in this branch.
+    ///
+    /// Must be called from every engine-side mutation that can change what
+    /// curve applies to `.crossfader`/`.rightUpfader` — a fresh learn, a
+    /// min/max recalibration, an inversion flip, a device switch/load, an
+    /// explicit preset change, or a finished custom capture. Recalibration
+    /// and inversion need this too (not just explicit curve edits):
+    /// `resolvedResponse(for:)` re-derives a custom capture through the
+    /// control's CURRENT min/max/inversion on every call, so the
+    /// controller's cached resolved value goes stale the moment either
+    /// changes unless it is re-pushed here. For the default (non-custom)
+    /// curve this push resolves to the exact same fixed constants every
+    /// time, so it is behaviorally invisible for any mapping that hasn't
+    /// configured a custom curve.
+    private func pushResolvedCurve(for control: MIDILearnedControl) {
+        // Switch on the action FIRST — curve resolution is only ever
+        // computed for the two actions that actually consume it. Hot cues
+        // and `.unassigned` never reach `resolvedResponse(for:)` from
+        // here at all (that function is also independently guarded
+        // against them — see its own doc comment — but there is no reason
+        // to compute a value this call site immediately discards).
+        switch control.action {
+        case .crossfader:
+            scratchPlaybackController.applyCrossfaderCurve(control.resolvedCurveConfig.resolvedResponse(for: control))
+        case .rightUpfader:
+            scratchPlaybackController.applyRightUpfaderCurve(control.resolvedCurveConfig.resolvedResponse(for: control))
+        default:
+            break
+        }
+    }
+
+    private func applyLearnedMapping(_ control: MIDILearnedControl) {
+        let action = control.action
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            mapping.upsert(control)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            self.midiMappingError = ""
+            self.activeMIDILearnAction = nil
+            // Single authoritative state transition for every learned
+            // action. Crossfader keeps its original `.learned(mapping)`
+            // state and "Learned Xfader: ..." wording — the pre-existing
+            // crossfader-only UI, `midiCrossfaderMappingStatus`, and the
+            // `473c3a3` regression test all key off that exact shape —
+            // rather than the generic `.idle` this closure uses for every
+            // other action. `applyLearnedCrossfaderMapping` (called just
+            // before this by `evaluateMIDILearnForCC`, synchronously for
+            // its legacy-persistence side effects) no longer publishes UI
+            // state itself, so there is exactly one publish here.
+            if action == .crossfader {
+                let crossfaderMapping = CrossfaderCCMapping(channel: control.channel, controller: control.controlNumber)
+                self.crossfaderCCMapping = crossfaderMapping
+                let nextState = MIDILearnState.learned(crossfaderMapping)
+                let nextFeedback = "Learned Xfader: \(crossfaderMapping.displayName)"
+                if self.midiLearnState != nextState { self.midiLearnState = nextState }
+                if self.midiLearnFeedback != nextFeedback { self.midiLearnFeedback = nextFeedback }
+            } else {
+                self.midiLearnState = .idle
+                let fb = "Learned \(action.displayName): \(control.displayName)"
+                if self.midiLearnFeedback != fb { self.midiLearnFeedback = fb }
+            }
+            // A fresh or replaced binding changes what CC (or none at all,
+            // until now) drives this control — its old value (if any) is
+            // not meaningful under the new binding, so resolve+push its
+            // (freshly-learned, curveConfig == nil -> default) curve,
+            // which also resets gain to unity until the newly mapped CC
+            // actually sends a value.
+            self.pushResolvedCurve(for: control)
+        })
+    }
+
+    /// Atomically claims and ends the active hot-cue learn session (if any)
+    /// under a single lock acquisition — at most one Note On event can ever
+    /// win a given session, even under a burst of near-simultaneous presses —
+    /// then learns the given Note On as that action's binding.
+    ///
+    /// - Returns: true if a hot-cue learn session was actually claimed by
+    ///   this event (callers must not also resolve it as a production press).
+    @discardableResult
+    private func learnHotCueFromNote(channel: Int, noteNumber: Int) -> Bool {
+        midiCaptureLock.lock()
+        let claimedAction: MIDISemanticAction?
+        if let action = learnSessionAction, action.hotCueIndex != nil {
+            learnSessionAction = nil
+            midiLearnRequestID &+= 1
+            claimedAction = action
+        } else {
+            claimedAction = nil
+        }
+        midiCaptureLock.unlock()
+        guard let action = claimedAction else { return false }
+
+        let learned = MIDILearnedControl(
+            action: action,
+            messageType: .note,
+            channel: channel,
+            controlNumber: noteNumber,
+            deck: nil,
+            minValue: 0,
+            maxValue: 127,
+            inverted: false,
+            learnedAt: Date(),
+            isVerified: true,
+            curveConfig: nil   // hot-cue action: curve never applies
+        )
+        applyLearnedMapping(learned)
+        return true
+    }
+
+    /// Lock-protected, CoreMIDI-thread-safe read-only check: is a hot-cue
+    /// learn session currently active? Does not claim or end the session —
+    /// used only to decide whether to route a Note On event at all.
+    private func isHotCueLearnSessionActive() -> Bool {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return learnSessionAction?.hotCueIndex != nil
+    }
+
+    /// Evaluates whether an active MIDI Learn session should consume this
+    /// Control Change event (fader or hot-cue-via-CC learn), applying and
+    /// persisting the mapping if so.
+    ///
+    /// The platter's CC6 flood (~800 Hz) is excluded before the lock is even
+    /// touched — CC6 can never end or steal a Learn session. Every other
+    /// controller number remains learnable (CC8, the Rane ONE MKII
+    /// crossfader, included) — filtering is action-aware, not a blanket
+    /// controller-number ban.
+    ///
+    /// Consumption is atomic: the active session is claimed-and-ended under a
+    /// single lock acquisition, so at most one event can ever win it, even
+    /// under a flood of near-simultaneous events.
+    ///
+    /// Called from the real CoreMIDI packet-parsing loop for every incoming
+    /// CC message (except CC6-filtered ones); also callable directly from
+    /// tests as a seam, since `receiveMIDIPacketList` itself is private and
+    /// operates on raw `MIDIPacketList` bytes.
+    func evaluateMIDILearnForCC(channel: Int, controller: Int, value: Int) -> MIDILearnCCConsumeResult {
+        guard controller != 6 else {
+            return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
+        }
+
+        midiCaptureLock.lock()
+        let claimedAction = learnSessionAction
+        if claimedAction != nil {
+            learnSessionAction = nil
+            midiLearnRequestID &+= 1
+        }
+        midiCaptureLock.unlock()
+
+        guard let learnAction = claimedAction else {
+            return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
+        }
+
+        let deck: Int?
+        switch learnAction {
+        case .leftUpfader:  deck = 0
+        case .rightUpfader: deck = 1
+        default:            deck = nil
+        }
+        let learned = MIDILearnedControl(
+            action: learnAction,
+            messageType: .controlChange,
+            channel: channel,
+            controlNumber: controller,
+            deck: deck,
+            minValue: 0,
+            maxValue: 127,
+            inverted: false,
+            learnedAt: Date(),
+            isVerified: true,
+            curveConfig: nil   // fresh binding: any curve customized for a PREVIOUS binding on this action must not carry over
+        )
+        applyLearnedMapping(learned)
+
+        guard learnAction == .crossfader else {
+            return MIDILearnCCConsumeResult(consumedByLearn: true, crossfaderMapping: nil)
+        }
+        // Also apply legacy crossfader mapping for backward compat.
+        let crossfaderMapping = CrossfaderCCMapping(channel: channel, controller: controller)
+        applyLearnedCrossfaderMapping(crossfaderMapping)
+        return MIDILearnCCConsumeResult(consumedByLearn: true, crossfaderMapping: crossfaderMapping)
+    }
+
+    // MARK: - Continuous Control Calibration
+
+    /// Begin a calibration session for an already-learned continuous action
+    /// (crossfader, left/right upfader). No-op for hot-cue actions. Refuses to
+    /// start while a MIDI Learn session or another calibration is active, or
+    /// before the action has been learned at all — there is no binding to
+    /// calibrate yet.
+    func startCalibration(for action: MIDISemanticAction) {
+        guard action.hotCueIndex == nil else { return }
+        midiCaptureLock.lock()
+        let learning = learnSessionAction != nil
+        let alreadyCalibrating = isCalibrating
+        let alreadyCurveCapturing = isCurveCapturing
+        midiCaptureLock.unlock()
+        guard !learning, !alreadyCalibrating, !alreadyCurveCapturing else { return }
+        guard currentMIDIDeviceMapping?.control(for: action) != nil else {
+            publishOnMainAsync(field: "calibrationError") { [weak self] in
+                self?.calibrationError = "Learn \(action.displayName) before calibrating it."
+            }
+            return
+        }
+        midiCaptureLock.lock()
+        isCalibrating = true
+        calibratingAction = action
+        calibrationMinAccumulator = 0
+        calibrationMaxAccumulator = 0
+        calibrationSawAnyEvent = false
+        calibrationGeneration &+= 1
+        isCalibrationObservedPublishPending = false
+        // A fresh session's first live value must not be gated by leftover
+        // throttle timing from a just-cancelled/finished session.
+        lastCalibrationObservedPublishTime = 0
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "calibration") { [weak self] in
+            guard let self else { return }
+            self.activeCalibrationAction = action
+            self.calibrationObservedMin = nil
+            self.calibrationObservedMax = nil
+            self.calibrationError = ""
+        }
+    }
+
+    /// Cancel the active calibration session without persisting anything — the
+    /// control's existing min/max/inversion (if any) are left untouched.
+    func cancelCalibration() {
+        midiCaptureLock.lock()
+        isCalibrating = false
+        calibratingAction = nil
+        calibrationGeneration &+= 1
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "calibration") { [weak self] in
+            guard let self else { return }
+            self.activeCalibrationAction = nil
+            self.calibrationObservedMin = nil
+            self.calibrationObservedMax = nil
+        }
+    }
+
+    // MARK: - Fader Curve Configuration
+    //
+    // Preset selection and custom "Set closed" / "Set full-on" capture.
+    // Layered entirely on top of the existing learn/calibration machinery:
+    // never touches a control's binding, min/max, or inversion. See
+    // `pushResolvedCurve(for:)` above for how a change here reaches the
+    // playback controller.
+
+    /// Sets (and immediately persists) a non-custom preset for an
+    /// already-learned continuous action. `.custom` is deliberately
+    /// rejected here — selecting Custom must go through
+    /// `startCurveCalibration`/`finishCurveCalibration` instead, so an
+    /// incomplete custom configuration can never be persisted. Cancels any
+    /// in-progress capture session for this action first (the user chose a
+    /// complete preset instead of finishing the pending capture).
+    func setCurvePreset(_ preset: FaderCurvePreset, for action: MIDISemanticAction) {
+        guard preset != .custom else { return }
+        guard action.hotCueIndex == nil else { return }
+        guard FaderCurvePreset.availablePresets(for: action).contains(preset) else { return }
+
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
+        guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
+        // Cheap pre-check (mirrors `setInversion`): selecting the preset
+        // that's ALREADY effectively applied — whether explicitly
+        // persisted or resolved from a nil `curveConfig`'s default — must
+        // be a true no-op. Bailing out here, before ever enqueuing a
+        // mutation, guarantees no write, no controller push, and no gain
+        // reset happen (Defect 3) — not just that the eventual write is
+        // skipped while the completion still acts as if something changed.
+        guard existingBeforeChange.resolvedCurveConfig.preset != preset else { return }
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // Derive from the in-queue mapping — see `finishCalibration`.
+            guard let existing = mapping.control(for: action) else { return }
+            let newConfig = MIDIFaderCurveConfig(preset: preset, customCapture: nil)
+            guard existing.curveConfig != newConfig else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: newConfig
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Resets an action's curve to its migration-safe default (Sharp
+    /// Scratch for the crossfader, Linear for upfaders), discarding any
+    /// custom capture. A separate, explicit action from Cancel — unlike
+    /// Cancel, this DOES persist immediately. Cancels any in-progress
+    /// capture session for this action first.
+    func resetCurve(for action: MIDISemanticAction) {
+        guard action.hotCueIndex == nil else { return }
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
+        guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
+        // Same true-no-op discipline as `setCurvePreset` (Defect 3's
+        // class of bug applies here identically): resetting a curve
+        // that's already at its default must not push/reset anything.
+        guard existingBeforeChange.curveConfig != nil else { return }
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            guard let existing = mapping.control(for: action), existing.curveConfig != nil else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: nil   // nil resolves to the action's default
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Begins a pending custom-curve capture session for an already-learned
+    /// continuous action. Deliberately does NOT change what curve is
+    /// currently applied — the existing persisted preset/curve (if any)
+    /// remains active, both in the saved mapping and in the controller,
+    /// until `finishCurveCalibration()` succeeds. Mutually exclusive with
+    /// MIDI Learn and min/max calibration (same lock-protected guard
+    /// pattern as `startCalibration`). Freezes the device and exact
+    /// binding identity the session watches — see `CurveCaptureBindingIdentity`.
+    func startCurveCalibration(for action: MIDISemanticAction) {
+        guard action.hotCueIndex == nil else { return }
+        midiCaptureLock.lock()
+        let learning = learnSessionAction != nil
+        let calibrating = isCalibrating
+        let alreadyCapturing = isCurveCapturing
+        midiCaptureLock.unlock()
+        guard !learning, !calibrating, !alreadyCapturing else { return }
+        guard let existingControl = currentMIDIDeviceMapping?.control(for: action) else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Learn \(action.displayName) before setting a custom curve."
+            }
+            return
+        }
+        let deviceID = selectedMIDIInputSourceID
+        let binding = CurveCaptureBindingIdentity(
+            messageType: existingControl.messageType,
+            channel: existingControl.channel,
+            controlNumber: existingControl.controlNumber
+        )
+        midiCaptureLock.lock()
+        isCurveCapturing = true
+        curveCaptureAction = action
+        curveCaptureDeviceID = deviceID
+        curveCaptureBindingIdentity = binding
+        curveCaptureLastRawValue = nil
+        curveCapturePendingClosedRawValue = nil
+        curveCapturePendingFullOnRawValue = nil
+        curveCaptureGeneration &+= 1
+        isCurveCapturePublishPending = false
+        lastCurveCapturePublishTime = 0
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.activeCurveCaptureAction = action
+            self.curveCaptureHasClosedPoint = false
+            self.curveCaptureHasFullOnPoint = false
+            self.curveCaptureHasLiveValue = false
+            self.curveCaptureCanFinish = false
+            self.curveCaptureError = ""
+        }
+    }
+
+    /// CoreMIDI-thread seam: records the latest raw value for an active
+    /// capture session, if this CC event matches the session's FROZEN
+    /// binding identity — captured once at `startCurveCalibration`, never
+    /// re-read from `currentMIDIDeviceMapping` for this comparison. This
+    /// is what makes the session immune to a mid-session relearn/replace
+    /// of the same action silently retargeting it at a different physical
+    /// control, and avoids touching the `@Published` mapping from the
+    /// CoreMIDI thread entirely. The platter's CC6 flood and every
+    /// unrelated fader/pad are ignored by construction (the frozen
+    /// binding can never itself be CC6). Never writes to disk, never
+    /// starts or affects MIDI Learn, never touches the learned binding.
+    /// Bounded-rate UI publish, same throttle discipline as calibration's
+    /// observed-value publish.
+    ///
+    /// Called from the real CoreMIDI packet-parsing loop for every
+    /// incoming CC message; also callable directly from tests as a seam.
+    func evaluateCurveCaptureForCC(channel: Int, controller: Int, value: Int) {
+        midiCaptureLock.lock()
+        let capturing = isCurveCapturing
+        let binding = curveCaptureBindingIdentity
+        midiCaptureLock.unlock()
+        guard capturing, let binding else { return }
+        guard binding.messageType == .controlChange,
+              binding.channel == channel,
+              binding.controlNumber == controller
+        else { return }
+
+        let now = CACurrentMediaTime()
+        midiCaptureLock.lock()
+        curveCaptureLastRawValue = value
+        let shouldPublish = !isCurveCapturePublishPending
+            && (now - lastCurveCapturePublishTime >= curveCapturePublishInterval)
+        let generation = curveCaptureGeneration
+        if shouldPublish {
+            lastCurveCapturePublishTime = now
+            isCurveCapturePublishPending = true
+        }
+        midiCaptureLock.unlock()
+
+        guard shouldPublish else { return }
+
+        publishOnMainAsync(field: "curveCaptureObserved") { [weak self] in
+            guard let self else { return }
+            self.midiCaptureLock.lock()
+            let currentGeneration = self.curveCaptureGeneration
+            self.isCurveCapturePublishPending = false
+            self.midiCaptureLock.unlock()
+            // A stale publication — enqueued before a Cancel, Finish, or a
+            // new session started — must never resurrect this UI state.
+            guard currentGeneration == generation else { return }
+            if !self.curveCaptureHasLiveValue { self.curveCaptureHasLiveValue = true }
+        }
+    }
+
+    /// Recomputes `curveCaptureCanFinish` from the current pending points
+    /// and the active session's action, resolved against the CURRENT
+    /// learned control's min/max/inversion. Main-thread only (reads/
+    /// writes only `@Published` state). True only when both points exist,
+    /// differ, and produce a finite, non-degenerate span — the identical
+    /// guard `FaderCurveResponse.gain` itself applies, computed here so
+    /// the UI can gate Finish before `finishCurveCalibration()` is ever
+    /// called, per Defect 1.
+    private func refreshCurveCaptureCanFinish() {
+        midiCaptureLock.lock()
+        let action = curveCaptureAction
+        let closed = curveCapturePendingClosedRawValue
+        let fullOn = curveCapturePendingFullOnRawValue
+        midiCaptureLock.unlock()
+        guard let action, let closed, let fullOn, closed != fullOn,
+              let control = currentMIDIDeviceMapping?.control(for: action)
+        else {
+            curveCaptureCanFinish = false
+            return
+        }
+        let zeroAt = control.normalizedValue(from: min(max(closed, 0), 127))
+        let oneAt = control.normalizedValue(from: min(max(fullOn, 0), 127))
+        curveCaptureCanFinish = zeroAt.isFinite && oneAt.isFinite && abs(oneAt - zeroAt) >= 1e-6
+    }
+
+    /// "Set closed" button: stashes whatever the latest matching raw value
+    /// is RIGHT NOW as the pending closed point. Pending state only — no
+    /// persistence.
+    func captureCurveClosedPoint() {
+        midiCaptureLock.lock()
+        guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
+            midiCaptureLock.unlock()
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Move the control to its closed position first."
+            }
+            return
+        }
+        curveCapturePendingClosedRawValue = raw
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.curveCaptureHasClosedPoint = true
+            self.curveCaptureError = ""
+            self.refreshCurveCaptureCanFinish()
+        }
+    }
+
+    /// "Set full-on" button — mirrors `captureCurveClosedPoint`.
+    func captureCurveFullOnPoint() {
+        midiCaptureLock.lock()
+        guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
+            midiCaptureLock.unlock()
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Move the control to its full-on position first."
+            }
+            return
+        }
+        curveCapturePendingFullOnRawValue = raw
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.curveCaptureHasFullOnPoint = true
+            self.curveCaptureError = ""
+            self.refreshCurveCaptureCanFinish()
+        }
+    }
+
+    /// Fully ends the active curve-capture session (Finish-succeeded or
+    /// Cancel path): clears realtime session state under the lock, bumps
+    /// the generation token, and resets every UI-facing mirror on main via
+    /// `publishOnMainAsync` — the same dispatch discipline every other
+    /// `@Published` mutation in this file uses, regardless of whether the
+    /// caller happens to already be on main. `errorMessage` is published
+    /// in the SAME main-thread block as the reset (nil leaves
+    /// `curveCaptureError` untouched — used by the Finish-success path,
+    /// which clears it itself afterward with fresh persisted state
+    /// already applied).
+    private func clearCurveCaptureSession(errorMessage: String? = nil) {
+        midiCaptureLock.lock()
+        isCurveCapturing = false
+        curveCaptureAction = nil
+        curveCaptureDeviceID = nil
+        curveCaptureBindingIdentity = nil
+        curveCaptureGeneration &+= 1
+        midiCaptureLock.unlock()
+        publishOnMainAsync(field: "curveCapture") { [weak self] in
+            guard let self else { return }
+            self.activeCurveCaptureAction = nil
+            self.curveCaptureHasClosedPoint = false
+            self.curveCaptureHasFullOnPoint = false
+            self.curveCaptureHasLiveValue = false
+            self.curveCaptureCanFinish = false
+            if let errorMessage {
+                self.curveCaptureError = errorMessage
+            }
+        }
+    }
+
+    /// Requires two distinct captured raw positions that resolve to a
+    /// finite, non-degenerate span through the CURRENT learned control's
+    /// calibration, AND that the session's frozen device/binding identity
+    /// still matches what's actually learned right now. Atomically
+    /// persists `.custom` + the capture, then resolves and pushes it to
+    /// the controller — this is the ONLY place a custom curve actually
+    /// becomes active; selecting Custom or capturing individual points
+    /// never does.
+    ///
+    /// Validation happens BEFORE the session is touched (Defect 1): an
+    /// invalid Finish (missing/identical points, a degenerate resolved
+    /// span, or a stale device/binding) leaves `isCurveCapturing`,
+    /// `curveCaptureAction`, and every pending point exactly as they were
+    /// — the capture UI stays open with a visible, actionable error, and
+    /// the user can correct one point and Finish again without
+    /// restarting, or Cancel. The session is cleared ONLY once the queued
+    /// persistence mutation has actually applied the intended write; if a
+    /// race causes that write to be silently skipped, the session is left
+    /// active (never torn down early) so the completion's failure branch
+    /// still has a live session to report against.
+    func finishCurveCalibration() {
+        midiCaptureLock.lock()
+        let action = curveCaptureAction
+        let closed = curveCapturePendingClosedRawValue
+        let fullOn = curveCapturePendingFullOnRawValue
+        let capturedDeviceID = curveCaptureDeviceID
+        let capturedBinding = curveCaptureBindingIdentity
+        midiCaptureLock.unlock()
+
+        // No active session at all — nothing to validate or end.
+        guard let action else { return }
+
+        guard let closed, let fullOn else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Set both closed and full-on before finishing."
+            }
+            return
+        }
+        guard closed != fullOn else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Closed and full-on were the same position — move the control before capturing full-on, then try again."
+            }
+            return
+        }
+
+        // Identity check (Defect 2): the device and exact binding this
+        // session started on must still be what's actually learned now.
+        guard let capturedDeviceID, let capturedBinding,
+              selectedMIDIInputSourceID == capturedDeviceID,
+              let control = currentMIDIDeviceMapping?.control(for: action),
+              control.messageType == capturedBinding.messageType,
+              control.channel == capturedBinding.channel,
+              control.controlNumber == capturedBinding.controlNumber
+        else {
+            clearCurveCaptureSession(errorMessage: "The MIDI mapping changed during capture — start again.")
+            return
+        }
+
+        // Degeneracy check (Defect 1): distinct raw values can still
+        // normalize to the same, or a near-identical, endpoint under
+        // narrow calibration or extreme inversion — reject exactly like
+        // `FaderCurveResponse.gain`'s own span guard would.
+        let clampedClosed = min(max(closed, 0), 127)
+        let clampedFullOn = min(max(fullOn, 0), 127)
+        let zeroAt = control.normalizedValue(from: clampedClosed)
+        let oneAt = control.normalizedValue(from: clampedFullOn)
+        guard zeroAt.isFinite, oneAt.isFinite, abs(oneAt - zeroAt) >= 1e-6 else {
+            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+                self?.curveCaptureError = "Closed and full-on normalize to the same position under the current calibration — move the control further and capture full-on again."
+            }
+            return
+        }
+
+        let expectedConfig = MIDIFaderCurveConfig(
+            preset: .custom,
+            customCapture: FaderCurveCapture(closedRawValue: closed, fullOnRawValue: fullOn)
+        )
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // Re-verify the frozen identity against the in-queue mapping —
+            // never a main-thread snapshot that may predate an earlier
+            // enqueued write (see `finishCalibration`). A mismatch here
+            // means the binding changed between this call and the queued
+            // write actually running; skip the write rather than
+            // corrupting a different binding's curve.
+            guard let existing = mapping.control(for: action),
+                  existing.messageType == capturedBinding.messageType,
+                  existing.channel == capturedBinding.channel,
+                  existing.controlNumber == capturedBinding.controlNumber
+            else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: expectedConfig
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            guard mapping.control(for: action)?.curveConfig == expectedConfig else {
+                // The transform's identity re-check bailed: something
+                // changed underneath this Finish between validation and
+                // the queued write actually running. Nothing was
+                // persisted — leave the session exactly as it was (never
+                // torn down early, per Defect 1 point 5/6) so the error is
+                // visible and the user can retry or Cancel.
+                self.curveCaptureError = "The MIDI mapping changed while saving — try Finish again or Cancel."
+                return
+            }
+            self.clearCurveCaptureSession(errorMessage: "")
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Discards pending capture state. No persistence write — the
+    /// previously persisted curve (if any) and the controller's
+    /// currently-applied resolved curve are both left byte-identical to
+    /// before this session started.
+    func cancelCurveCalibration() {
+        clearCurveCaptureSession(errorMessage: "")
+    }
+
+    /// Evaluates whether this CC event matches the learned right-upfader or
+    /// crossfader mapping and, if so, forwards the calibrated/normalized
+    /// value (via the existing `MIDILearnedControl.normalizedValue(from:)` —
+    /// respecting min/max calibration and inversion exactly like every other
+    /// learned continuous control) to the playback controller as
+    /// scratch-sample audio gain. Matching is by EXACT (channel, controller),
+    /// same as `evaluateCalibrationForCC` above, so the platter's CC6 flood
+    /// can never match a fader binding.
+    ///
+    /// The left upfader intentionally has no audio effect (no supported beat
+    /// bus exists yet — see `MIDISemanticAction.leftUpfader`): it stays
+    /// mapped, persisted, and visible in diagnostics, but is never checked
+    /// here, so a learned left-upfader mapping simply never reaches the
+    /// playback controller.
+    ///
+    /// Called from the real CoreMIDI packet-parsing loop for every incoming
+    /// CC message; also callable directly from tests as a seam.
+    func evaluateUserMixerGainForCC(channel: Int, controller: Int, value: Int) {
+        guard let mapping = currentMIDIDeviceMapping else { return }
+        if let rightUpfader = mapping.control(for: .rightUpfader),
+           rightUpfader.messageType == .controlChange,
+           rightUpfader.channel == channel,
+           rightUpfader.controlNumber == controller {
+            scratchPlaybackController.setRightUpfaderGain(rightUpfader.normalizedValue(from: value))
+        }
+        if let crossfader = mapping.control(for: .crossfader),
+           crossfader.messageType == .controlChange,
+           crossfader.channel == channel,
+           crossfader.controlNumber == controller {
+            scratchPlaybackController.setCrossfaderPosition(crossfader.normalizedValue(from: value))
+        }
+    }
+
+    /// Evaluates whether an active calibration session should accumulate this
+    /// CC event's raw value. Only accumulates events on the EXACT (channel,
+    /// controller) already learned for the action being calibrated — this is
+    /// what makes calibration ignore unrelated controls and the platter's CC6
+    /// flood, since neither can ever match a fader's already-learned binding
+    /// (CC6 itself can never become a learned binding in the first place, per
+    /// `evaluateMIDILearnForCC`'s platter-flood filter).
+    ///
+    /// Called from the real CoreMIDI packet-parsing loop for every incoming CC
+    /// message; also callable directly from tests as a seam.
+    func evaluateCalibrationForCC(channel: Int, controller: Int, value: Int) {
+        midiCaptureLock.lock()
+        let calibrating = isCalibrating
+        let action = calibratingAction
+        midiCaptureLock.unlock()
+        guard calibrating, let action else { return }
+        guard let learnedControl = currentMIDIDeviceMapping?.control(for: action) else { return }
+        guard learnedControl.messageType == .controlChange,
+              learnedControl.channel == channel,
+              learnedControl.controlNumber == controller
+        else { return }
+
+        // Raw accumulation is unconditional and lossless: every matching
+        // event updates the accumulator under the lock, regardless of
+        // whether this particular event also triggers a UI publish below.
+        let now = CACurrentMediaTime()
+        midiCaptureLock.lock()
+        if calibrationSawAnyEvent {
+            calibrationMinAccumulator = min(calibrationMinAccumulator, value)
+            calibrationMaxAccumulator = max(calibrationMaxAccumulator, value)
+        } else {
+            calibrationMinAccumulator = value
+            calibrationMaxAccumulator = value
+            calibrationSawAnyEvent = true
+        }
+        // Throttle the UI-facing publish to a bounded rate: at most one
+        // publish in flight (`isCalibrationObservedPublishPending` gates
+        // re-entry) and no faster than `calibrationPublishInterval` — never
+        // one `DispatchQueue.main.async` per matching event. The queued
+        // block re-reads the accumulator under the lock at execution time,
+        // so it always reflects the newest values even if more events
+        // arrived while it waited, and separately re-checks the generation
+        // token to detect a cancel/finish/new-session that happened since
+        // this publish was enqueued.
+        let shouldPublish = !isCalibrationObservedPublishPending
+            && (now - lastCalibrationObservedPublishTime >= calibrationPublishInterval)
+        let generation = calibrationGeneration
+        if shouldPublish {
+            lastCalibrationObservedPublishTime = now
+            isCalibrationObservedPublishPending = true
+        }
+        midiCaptureLock.unlock()
+
+        guard shouldPublish else { return }
+
+        publishOnMainAsync(field: "calibrationObserved") { [weak self] in
+            guard let self else { return }
+            self.midiCaptureLock.lock()
+            let currentGeneration = self.calibrationGeneration
+            let observedMin = self.calibrationMinAccumulator
+            let observedMax = self.calibrationMaxAccumulator
+            self.isCalibrationObservedPublishPending = false
+            self.midiCaptureLock.unlock()
+            self.testOnly_calibrationObservedPublishCount += 1
+
+            // A stale publication — enqueued before a Cancel, Finish, or a
+            // new calibration session started — must never restore or
+            // overwrite the current calibration UI state.
+            guard currentGeneration == generation else { return }
+            self.calibrationObservedMin = observedMin
+            self.calibrationObservedMax = observedMax
+        }
+    }
+
+    /// Finish the active calibration session: validates the observed range
+    /// and, if acceptable, persists it as the control's new min/max (keeping
+    /// its current inversion — inversion is set independently via
+    /// `setInversion(_:for:)`). Rejects — without persisting — an unusably
+    /// narrow range or a session that observed no movement at all. Runs the
+    /// persistence on `midiMappingPersistenceQueue`, never on main.
+    func finishCalibration() {
+        midiCaptureLock.lock()
+        let action = calibratingAction
+        let observedMin = calibrationMinAccumulator
+        let observedMax = calibrationMaxAccumulator
+        let sawEvent = calibrationSawAnyEvent
+        isCalibrating = false
+        calibratingAction = nil
+        calibrationGeneration &+= 1
+        midiCaptureLock.unlock()
+
+        guard let action else { return }
+
+        publishOnMainAsync(field: "calibration") { [weak self] in
+            guard let self else { return }
+            self.activeCalibrationAction = nil
+            self.calibrationObservedMin = nil
+            self.calibrationObservedMax = nil
+        }
+
+        guard sawEvent else {
+            publishOnMainAsync(field: "calibrationError") { [weak self] in
+                self?.calibrationError = "No movement observed for \(action.displayName) — move the control through its full travel, then finish calibration."
+            }
+            return
+        }
+
+        let observedRange = observedMax - observedMin
+        guard observedRange >= Self.minimumCalibrationRange else {
+            publishOnMainAsync(field: "calibrationError") { [weak self] in
+                self?.calibrationError = "Calibration for \(action.displayName) covered too narrow a range (\(observedRange) of 127) — move the control through its full travel and finish again."
+            }
+            return
+        }
+
+        // Cheap pre-check on the main-thread cache for a fast, visible error —
+        // the authoritative check happens again inside the queued transform
+        // below, against whatever the mapping actually is by the time this
+        // mutation runs (never a stale snapshot captured before enqueuing).
+        guard currentMIDIDeviceMapping?.control(for: action) != nil else {
+            publishOnMainAsync(field: "calibrationError") { [weak self] in
+                self?.calibrationError = "\(action.displayName) is no longer learned; learn it again before calibrating."
+            }
+            return
+        }
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // Derive the calibrated control from whatever is ACTUALLY in the
+            // mapping at the moment this runs (which reflects every earlier
+            // enqueued write, in order) — never from a value captured on the
+            // caller's thread before this mutation was even enqueued.
+            guard let existing = mapping.control(for: action) else { return }
+            let calibrated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: observedMin,
+                maxValue: observedMax,
+                inverted: existing.inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: existing.curveConfig   // calibration doesn't touch the curve, only what raw values mean
+            )
+            mapping.upsert(calibrated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            self.calibrationError = ""
+            // The control's raw-value-to-normalized mapping just changed.
+            // A custom curve's endpoints are derived from raw values
+            // through THIS mapping, so they must be re-resolved now, not
+            // just reset to unity — pushResolvedCurve does both atomically.
+            // For the default/fixed presets this resolves to the exact
+            // same constants as before, so non-custom mappings see no
+            // behavior change here.
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Sets (and persists) the inversion flag for an already-learned continuous
+    /// action, independent of calibration — an explicit, standalone toggle.
+    /// Runs the persistence on `midiMappingPersistenceQueue`, never on main.
+    func setInversion(_ inverted: Bool, for action: MIDISemanticAction) {
+        guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
+        // Cheap pre-check on the main-thread cache, mirroring the pattern
+        // already used above: only an ACTUAL flip changes what the
+        // control's raw values mean. A same-value call (e.g. a UI toggle
+        // round-tripping) must not audibly reset gain for nothing.
+        let didChange = existingBeforeChange.inverted != inverted
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // See `finishCalibration` — derive from the in-queue mapping, not a
+            // main-thread snapshot that may predate an earlier in-flight write.
+            guard let existing = mapping.control(for: action), existing.inverted != inverted else { return }
+            let updated = MIDILearnedControl(
+                action: existing.action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: inverted,
+                assignedSampleID: existing.assignedSampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: existing.curveConfig   // inversion doesn't touch the curve, only what raw values mean
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            guard didChange else { return }
+            // Inversion flips how raw values map to gain — a custom
+            // curve's endpoints depend on that mapping, so re-resolve and
+            // push (also resets to unity), same reasoning as
+            // `finishCalibration`.
+            if let control = mapping.control(for: action) {
+                self.pushResolvedCurve(for: control)
+            }
+        })
+    }
+
+    /// Clear a learned mapping for a specific action, removing it from the
+    /// device profile and persisting the change.
+    func clearMapping(for action: MIDISemanticAction) {
+        // A pending curve-capture session for this action refers to a
+        // binding that's about to be removed — it can never be finished
+        // meaningfully. Cancel it; nothing was persisted from it, so
+        // there's nothing to roll back beyond the session state itself.
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
+        let deviceID = selectedMIDIInputSourceID
+        enqueueRemoveAction(deviceID: deviceID, action: action) { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            // Clear legacy state too if crossfader
+            if action == .crossfader {
+                self.midiCaptureLock.lock()
+                self.persistedCrossfaderMapping = nil
+                self.midiCaptureLock.unlock()
+                UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+                self.crossfaderCCMapping = nil
+                // The cleared control's last value must not keep muting
+                // audio — only this control resets; the other's current
+                // contribution is preserved.
+                self.scratchPlaybackController.resetCrossfaderGainToUnity()
+            } else if action == .rightUpfader {
+                self.scratchPlaybackController.resetRightUpfaderGainToUnity()
+            }
+            if self.midiLearnState != .idle { self.midiLearnState = .idle }
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+        }
+    }
+
+    /// Clear ALL learned mappings for the current device.
+    func clearDeviceMappings() {
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture { cancelCurveCalibration() }
+
+        let deviceID = selectedMIDIInputSourceID
+        enqueueDeleteDevice(deviceID: deviceID) { [weak self] in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = nil
+            // Also clear legacy
+            self.midiCaptureLock.lock()
+            self.persistedCrossfaderMapping = nil
+            self.midiCaptureLock.unlock()
+            UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+            self.crossfaderCCMapping = nil
+            // Neither control's mapping is trustworthy anymore.
+            self.scratchPlaybackController.resetUserMixerGainToUnity()
+            if self.midiLearnState != .idle { self.midiLearnState = .idle }
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+        }
+    }
+
+    /// Load the learned device mapping for the currently selected MIDI source.
+    /// Called whenever the selected MIDI source changes.
+    func loadDeviceMappingForCurrentSource() {
+        // A source change or mapping reload invalidates any in-progress
+        // curve-capture session unconditionally (Defect 2) — its frozen
+        // device ID can no longer be trusted to mean "the currently
+        // selected device", regardless of which action it was capturing.
+        // Same unconditional-regardless-of-action precedent as
+        // `clearDeviceMappings`'s existing cancellation below.
+        midiCaptureLock.lock()
+        let shouldCancelCurveCapture = isCurveCapturing
+        midiCaptureLock.unlock()
+        if shouldCancelCurveCapture {
+            clearCurveCaptureSession(errorMessage: "The MIDI source changed during capture — start again.")
+        }
+
+        // A MIDI source change is a new session for the learned-mixer gain
+        // contributions, regardless of outcome below: empty source ID, a
+        // successful load (even one with mappings for both controls), or a
+        // load failure. Reset unconditionally, before any of those exit
+        // paths, so a stale value from the previous device (e.g. a
+        // crossfader last seen at 0) can never leak into the new session.
+        // Both controls stay at unity until a fresh matching CC event
+        // arrives under the (possibly new) mapping. Queued on `audioQueue`,
+        // so it is ordered after any gain-setting calls already enqueued
+        // from the previous device's last events and before any from the
+        // new one.
+        scratchPlaybackController.resetUserMixerGainToUnity()
+
+        let deviceID = selectedMIDIInputSourceID
+        guard !deviceID.isEmpty else {
+            currentMIDIDeviceMapping = nil
+            midiMappingError = ""
+            return
+        }
+        do {
+            currentMIDIDeviceMapping = try midiMappingStore.loadOrThrow(deviceIdentifier: deviceID)
+            midiMappingError = ""
+        } catch {
+            // Fail visibly and safely: no mapping is applied for this device rather
+            // than risking a partially-decoded or wrong-schema mapping driving hardware.
+            currentMIDIDeviceMapping = nil
+            midiMappingError = "Could not load saved MIDI mapping for \(selectedMIDIInputSourceName): \(error.localizedDescription)"
+        }
+        // Also restore legacy crossfader for backward compat
+        if let mapping = currentMIDIDeviceMapping?.control(for: .crossfader) {
+            let legacy = CrossfaderCCMapping(channel: mapping.channel, controller: mapping.controlNumber)
+            midiCaptureLock.lock()
+            persistedCrossfaderMapping = legacy
+            midiCaptureLock.unlock()
+            crossfaderCCMapping = legacy
+        }
+
+        // The new device may have an entirely different curve configured
+        // than the previous one — push each control's resolved curve now,
+        // rather than leaving the controller holding the PREVIOUS device's
+        // stale resolved response until its next CC event happens to
+        // arrive. Controls this device hasn't learned stay at the unity
+        // reset already performed above (curve is moot while unmapped).
+        if let crossfaderControl = currentMIDIDeviceMapping?.control(for: .crossfader) {
+            pushResolvedCurve(for: crossfaderControl)
+        }
+        if let rightUpfaderControl = currentMIDIDeviceMapping?.control(for: .rightUpfader) {
+            pushResolvedCurve(for: rightUpfaderControl)
+        }
+    }
+
+    // MARK: - Hot-Cue Sample Assignment
+
+    /// Assign a scratch sample ID to a learned hot-cue mapping for the current device.
+    func assignSampleToHotCue(_ sampleID: String, hotCueIndex: Int) {
+        guard let action = MIDISemanticAction.allCases.first(where: { $0.hotCueIndex == hotCueIndex }),
+              !selectedMIDIInputSourceID.isEmpty,
+              currentMIDIDeviceMapping?.control(for: action) != nil
+        else { return }
+        guard ScratchSamplePlaybackController.knownSampleIDs.contains(sampleID) else {
+            midiMappingError = "Sample \"\(sampleID)\" is not available and was not assigned."
+            return
+        }
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            // Derive from the in-queue mapping — see `finishCalibration`.
+            guard let existing = mapping.control(for: action) else { return }
+            let updated = MIDILearnedControl(
+                action: action,
+                messageType: existing.messageType,
+                channel: existing.channel,
+                controlNumber: existing.controlNumber,
+                deck: existing.deck,
+                minValue: existing.minValue,
+                maxValue: existing.maxValue,
+                inverted: existing.inverted,
+                assignedSampleID: sampleID,
+                learnedAt: existing.learnedAt,
+                isVerified: existing.isVerified,
+                curveConfig: existing.curveConfig   // always nil for a hot-cue action; threaded for consistency
+            )
+            mapping.upsert(updated)
+        }, completion: { [weak self] mapping in
+            guard let self else { return }
+            self.currentMIDIDeviceMapping = mapping
+            self.midiMappingError = ""
+        })
+    }
+
+    // MARK: - Hot-Cue Sample Resolution & Loading (Phase 4)
+
+    /// Resolve a MIDI CC or Note On event against the current device's learned
+    /// hot-cue mappings. If a mapping matches and has an assigned sample, dispatch
+    /// the load through the serialized scratch-sample loading path.
+    ///
+    /// - Returns: `true` if the event matched a learned hot cue and a sample load
+    ///   was requested (queued, not yet complete). `false` if no match or no sample.
+    ///
+    /// Threading: safe to call from the CoreMIDI callback — no file I/O, no blocking
+    /// dispatch, no SwiftUI access. Only enqueues a load onto the controller's private
+    /// audio queue.
+    private func resolveAndLoadHotCueSample(
+        messageType: LearnedMIDIMessageType,
+        channel: Int,
+        controlNumber: Int,
+        value: Int
+    ) -> Bool {
+        // Only handle press events (not release).
+        guard value > 0 else { return false }
+        guard let mapping = currentMIDIDeviceMapping else { return false }
+
+        // Find the first hot-cue mapping that matches this MIDI event.
+        let matching = mapping.controls.first { control in
+            guard control.action.hotCueIndex != nil else { return false }
+            guard control.messageType == messageType else { return false }
+            guard control.channel == channel else { return false }
+            guard control.controlNumber == controlNumber else { return false }
+            return true
+        }
+        guard let match = matching, let sampleID = match.assignedSampleID, !sampleID.isEmpty else {
+            return false
+        }
+
+        print("[HotCueAutoLoad] matched · action=\(match.action.displayName) sample=\(sampleID) channel=\(channel) control=\(controlNumber)")
+        // Enqueue the load onto the controller's private audio queue — no file I/O
+        // or blocking on the MIDI callback.
+        let requested = scratchPlaybackController.load(sampleID: sampleID)
+        if !requested {
+            print("[HotCueAutoLoad] load request rejected · sampleID=\(sampleID)")
+            // Fail visibly: a hot cue pointing at a removed/missing sample should be
+            // obvious in the UI, not a silent no-op on the pad press.
+            publishOnMainAsync(field: "midiMappingError") { [weak self] in
+                let message = "\(match.action.displayName) is mapped to missing sample \"\(sampleID)\"."
+                if self?.midiMappingError != message { self?.midiMappingError = message }
+            }
+        }
+        return requested
     }
 
     private func setupMIDIClient() {
@@ -6375,7 +8242,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiListeningState") { [weak self] in
             guard let self else { return }
-            self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Selected"
+            let next = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Selected"
+            if self.midiListeningState != next { self.midiListeningState = next }
         }
     }
 
@@ -6389,6 +8257,153 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return capturedMidiCCEvents
     }
 
+    /// Deterministic MIDI 1.0 channel-voice byte-stream parser used by
+    /// `receiveMIDIPacketList`. Extracted from the inline packet loop so
+    /// bounds safety and message framing can be unit tested independently
+    /// of a live CoreMIDI callback.
+    ///
+    /// Stateless by design, matching CoreMIDI's own contract for
+    /// `MIDIPacket.data` (see `MIDIServices.h`): "Running status is not
+    /// allowed" and "the MIDI messages in the packet must always be
+    /// complete, except for system-exclusive." Consequently `parse` never
+    /// carries state between calls, between packets, or across a SysEx that
+    /// doesn't close within the current packet — each call starts fresh and
+    /// only ever reads bytes from the single packet it was given.
+    enum MIDIChannelMessageParser {
+        /// One fully-decoded channel-voice message. `channel`/message type
+        /// are derived from `status` (`status & 0x0F` / `status & 0xF0`).
+        /// `data2` is `nil` only for the two-byte types (Program Change,
+        /// Channel Pressure); for every other type it is always present —
+        /// `parse` never emits a message it could not fully decode.
+        /// `data1`/`data2`, when present, are always `< 0x80`: this parser
+        /// never hands out an impossible (>127) controller or value byte.
+        struct Message {
+            let status: UInt8
+            let data1: UInt8
+            let data2: UInt8?
+        }
+
+        private enum DataByteResult {
+            case byte(UInt8)
+            /// A byte `>= 0x80` was found where a data byte was expected —
+            /// either a new status byte arrived early, or (since running
+            /// status is never assumed) a bare data byte was mistaken for
+            /// one on a prior malformed read. The byte is NOT consumed, so
+            /// the caller's next loop iteration reprocesses it fresh.
+            case malformed
+            /// Ran out of bytes in this packet before the message
+            /// completed. Per CoreMIDI's contract this packet is malformed
+            /// (only SysEx may be incomplete) — the message is dropped,
+            /// never carried into the next packet.
+            case truncated
+        }
+
+        /// Parses every complete channel-voice message in `bytes` — a
+        /// single `MIDIPacket`'s payload — calling `onMessage` once per
+        /// message in stream order. Never reads past `bytes.count` and
+        /// never emits a message with an out-of-range data byte. A data
+        /// byte encountered with no immediately-preceding status byte is
+        /// treated as malformed and dropped (running status is not
+        /// supported, matching the CoreMIDI packet contract).
+        static func parse(_ bytes: UnsafeRawBufferPointer, onMessage: (Message) -> Void) {
+            var i = 0
+            let count = bytes.count
+            var sysExActive = false
+            while i < count {
+                let byte = bytes[i]
+
+                // Real-time bytes (Clock, Start, Continue, Stop, Active
+                // Sensing, Reset) have highest priority and may legally
+                // appear anywhere in the stream, including mid-message;
+                // they never affect SysEx state.
+                if byte >= 0xF8 {
+                    i += 1
+                    continue
+                }
+                if sysExActive {
+                    if byte == 0xF7 { sysExActive = false }
+                    i += 1
+                    continue
+                }
+                if byte == 0xF0 {
+                    // SysEx start. Rane's platter/pad/fader path never
+                    // emits SysEx; skip its body safely. If it doesn't
+                    // close with 0xF7 before this packet ends, `sysExActive`
+                    // is simply discarded — never carried into the next
+                    // packet — since ScratchLab does not consume SysEx.
+                    sysExActive = true
+                    i += 1
+                    continue
+                }
+                if byte >= 0xF1 {
+                    // System Common (0xF1–0xF7, minus 0xF0 handled above).
+                    // Rane never sends these on this path; skip the status
+                    // byte only rather than guess a length and risk
+                    // misalignment.
+                    i += 1
+                    continue
+                }
+                if byte >= 0x80 {
+                    // Fresh channel-voice status byte.
+                    i += 1
+                    if let message = readData(bytes, &i, count, status: byte) {
+                        onMessage(message)
+                    }
+                    continue
+                }
+                // A data byte with no immediately-preceding status byte:
+                // CoreMIDI packets never use running status, so this is
+                // malformed input (or a resync landing point) — drop the
+                // single byte and try the next one.
+                i += 1
+            }
+        }
+
+        /// Reads the data byte(s) for `status`, starting at `i` (which
+        /// already points at the first data-byte candidate) and advancing
+        /// `i` past whatever it consumes. Real-time bytes encountered in a
+        /// data position are skipped in place. Returns `nil` — consuming
+        /// nothing further — if the message is malformed or runs out of
+        /// bytes before this packet ends; the message is dropped rather
+        /// than emitted with a bad or incomplete byte.
+        private static func readData(
+            _ bytes: UnsafeRawBufferPointer,
+            _ i: inout Int,
+            _ count: Int,
+            status: UInt8
+        ) -> Message? {
+            let type = status & 0xF0
+            let needsTwoDataBytes = !(type == 0xC0 || type == 0xD0)
+
+            guard case .byte(let data1) = nextDataByte(bytes, &i, count) else { return nil }
+            guard needsTwoDataBytes else {
+                return Message(status: status, data1: data1, data2: nil)
+            }
+            guard case .byte(let data2) = nextDataByte(bytes, &i, count) else { return nil }
+            return Message(status: status, data1: data1, data2: data2)
+        }
+
+        private static func nextDataByte(
+            _ bytes: UnsafeRawBufferPointer,
+            _ i: inout Int,
+            _ count: Int
+        ) -> DataByteResult {
+            while i < count {
+                let b = bytes[i]
+                if b >= 0xF8 {
+                    i += 1  // real-time, interleaved: consume and keep looking
+                    continue
+                }
+                if b >= 0x80 {
+                    return .malformed  // do not consume — let it restart parsing
+                }
+                i += 1
+                return .byte(b)
+            }
+            return .truncated
+        }
+    }
+
     private func receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
         ScratchLabPerformanceSignpost.event(
             "MIDIReceived",
@@ -6400,134 +8415,230 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let deviceName = midiConnectedSourceName
         midiCaptureLock.unlock()
 
-        var packetPtr = withUnsafePointer(to: packetListPtr.pointee.packet) {
-            UnsafeMutablePointer(mutating: $0)
-        }
+        // CONFIRMED root cause: the original code obtained the first packet
+        // pointer via `withUnsafePointer(to: packetListPtr.pointee.packet)`.
+        // That passes the packet *by value* into a generic parameter — Swift
+        // copies it into a temporary, and the pointer `withUnsafePointer`
+        // hands back is only valid for that call's duration. The original
+        // code kept using it afterwards (in the loop below), which is a
+        // dangling-pointer read of whatever now occupies that stack slot.
+        // The invalid decoded values reported immediately before the crash
+        // (e.g. "CC ch11 cc134 val144") are consistent with exactly this:
+        // stale/reused stack bytes being read as if they were live MIDI
+        // data. The crash itself then trapped in `rawBytes[i]` inside
+        // `withUnsafeBytes(of: packetPtr.pointee.data)` — also reachable
+        // from that same dangling pointer, since whatever garbage occupied
+        // `.length` at that point could easily exceed the 256-byte capacity
+        // `withUnsafeBytes(of:)` can ever expose for the fixed-size `data`
+        // tuple declared in CoreMIDI's header.
+        //
+        // No captured diagnostic recorded the actual `MIDIPacket.length` at
+        // crash time, so it is NOT confirmed that Rane hardware itself ever
+        // delivers a real packet longer than 256 bytes — CoreMIDI's header
+        // does allow it ("[length] may be larger than 256 bytes if the
+        // packet is dynamically allocated"), so reading exactly `length`
+        // bytes from live storage below is correct defensive coverage of
+        // that documented possibility, not a claim that this is what Rane
+        // produced.
+        //
+        // The fix: never take the address of a `.pointee` value copy.
+        // Compute `packet`'s real byte offset within `MIDIPacketList` and
+        // point directly into CoreMIDI's own backing storage — mirroring
+        // the C reference pattern in CoreMIDI's own header
+        // (`&packetList->packet[0]`) and exactly how `data` below is read.
+        let packetFieldOffset = MemoryLayout<MIDIPacketList>.offset(of: \MIDIPacketList.packet)!
+        var packetPtr = UnsafeMutableRawPointer(mutating: UnsafeRawPointer(packetListPtr).advanced(by: packetFieldOffset))
+            .assumingMemoryBound(to: MIDIPacket.self)
         for _ in 0..<Int(packetListPtr.pointee.numPackets) {
             let length = Int(packetPtr.pointee.length)
-            if length >= 3 {
-                withUnsafeBytes(of: packetPtr.pointee.data) { rawBytes in
-                    var i = 0
-                    while i + 2 < length {
-                        let statusByte = Int(rawBytes[i])
-                        let rawChannel = Int(statusByte & 0x0F)
-                        let rawData1 = Int(rawBytes[i + 1])
-                        let rawData2 = Int(rawBytes[i + 2])
+            // Same fix applied to `data`: read exactly `length` bytes from
+            // the packet's live storage via its real field offset, rather
+            // than `withUnsafeBytes(of: packetPtr.pointee.data)`, which can
+            // only ever see the fixed 256-byte tuple `data` is declared
+            // with — regardless of the packet's actual `length`.
+            let dataOffset = MemoryLayout<MIDIPacket>.offset(of: \MIDIPacket.data)!
+            let rawBytes = UnsafeRawBufferPointer(
+                start: UnsafeRawPointer(packetPtr).advanced(by: dataOffset),
+                count: length
+            )
+            MIDIChannelMessageParser.parse(rawBytes) { [self] message in
+                dispatchMIDIChannelVoiceMessage(
+                    message,
+                    deviceName: deviceName,
+                    startTime: startTime,
+                    now: now
+                )
+            }
+            packetPtr = MIDIPacketNext(packetPtr)
+        }
+    }
 
-                        if statusByte & 0xF0 == 0xB0 {
-                            let channel = rawChannel
-                            let controller = rawData1
-                            let value = rawData2
+    #if DEBUG
+    /// Test-only seam: `receiveMIDIPacketList` is private and is the only
+    /// entry point that reads a real `MIDIPacketList`/`MIDIPacket`
+    /// allocation the way CoreMIDI actually delivers one — a synthetic
+    /// `[UInt8]` array cannot exercise the live-pointer fix above, so this
+    /// thin passthrough is unavoidable for regression coverage of the fixed
+    /// crash. DEBUG-only: never compiled into a Release build.
+    func testOnly_receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {
+        receiveMIDIPacketList(packetListPtr)
+    }
 
-                            midiCaptureLock.lock()
-                            let learning = isMIDILearning
-                            var currentMapping = persistedCrossfaderMapping
-                            midiCaptureLock.unlock()
+    /// Test-only seam: `scratchPlaybackController` is private. Fader-gain
+    /// tests need to verify `evaluateUserMixerGainForCC` actually reached
+    /// it — there is no other observable effect to assert on from outside
+    /// this file. DEBUG-only: never compiled into a Release build.
+    var testOnly_scratchPlaybackController: ScratchSamplePlaybackController { scratchPlaybackController }
+    #endif
 
-                            if learning {
-                                let newMapping = CrossfaderCCMapping(channel: channel, controller: controller)
-                                currentMapping = newMapping
-                                applyLearnedCrossfaderMapping(newMapping)
-                            }
+    /// Dispatches one fully-decoded channel-voice message to the existing
+    /// CC / Note-On pipelines. Behaviourally identical to the dispatch
+    /// logic that used to be inlined in `receiveMIDIPacketList`'s byte
+    /// loop — only how the bytes were extracted and framed has changed.
+    /// `message.data1`/`data2` are guaranteed `< 0x80` by
+    /// `MIDIChannelMessageParser`.
+    private func dispatchMIDIChannelVoiceMessage(
+        _ message: MIDIChannelMessageParser.Message,
+        deviceName: String,
+        startTime: CFTimeInterval,
+        now: CFTimeInterval
+    ) {
+        let statusByte = message.status
+        let rawChannel = Int(statusByte & 0x0F)
+        let rawData1 = Int(message.data1)
 
-                            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
-                            if mappedControl == "crossfader" {
-                                ScratchLabPerformanceSignpost.event("FaderMap", count: value)
-                            }
-                            // CC6 platter fast path: feed tracker → playback controller.
-                            // Verified Rane ONE MKII: left platter = ch=0 CC6,
-                            // right platter = ch=1 CC6. Pads are ch=4/ch=5 (NOT platter).
-                            // Rate-limited inside the controller (~60 Hz); CC6 events
-                            // fire at ~800 Hz so the controller drops excess updates.
-                            if controller == 6, channel == 0 || channel == 1 {
-                                platterTracker.ingest(channel: channel, value: value)
-                                let steps = platterTracker.accumulatedSteps(for: channel)
-                                let direction = platterTracker.recentDirection(for: channel)
-                                let now = CACurrentMediaTime()
-                                if now - lastScratchPlaybackBridgeLogTime >= scratchPlaybackBridgeLogInterval {
-                                    lastScratchPlaybackBridgeLogTime = now
-                                    print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
-                                }
-                                // Suppress the raw MIDI CC6 path while DVS/timecode
-                                // motion is driving playback, so the two sources
-                                // never call positionDidChange at the same time.
-                                if !dvsPlaybackDriveActive {
-                                    scratchPlaybackController.positionDidChange(
-                                        steps: steps,
-                                        direction: direction
-                                    )
-                                }
-                            }
-                            // CC8 crossfader: diagnostics/MIDI-learn only.
-                            // Not wired to scratch sample playback until the crossfader
-                            // feature is designed and approved. No audio-path side effects.
-                            recordReceivedMIDICCEvent(
-                                sourceName: deviceName,
-                                channel: channel,
-                                controller: controller,
-                                value: value,
-                                mappedControl: mappedControl,
-                                timestamp: now,
-                                recordingStartTime: startTime
-                            )
-#if DEBUG
-                            // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
-                            // CC6 (platter) floods at ~800Hz and must never trigger UI updates.
-                            // Dispatched to main to avoid @Published contention on the MIDI thread.
-                            if controller != 6,
-                               currentMapping?.controller != controller {
-                                let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
-                                publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
-                                    self?.lastRawPadDiagnostic = diag
-                                }
-                                print("[RanePad] \(diag)")
-                            }
-#endif
-                            i += 3
-                        } else if statusByte >= 0x80 {
-                            switch statusByte & 0xF0 {
-                            case 0x80, 0x90, 0xA0, 0xE0:
-                                // Only route Note On events from known Rane pad channels to the pad preview path.
-                                // Start/Stop (note=0 ch=0/ch=1), PFL (note=27 ch=0/ch=1), SYNC (note=2
-                                // ch=1), and all PitchBend/PolyAT events must not enter the pad router.
-                                if statusByte & 0xF0 == 0x90,
-                                   (rawChannel == 4 || rawChannel == 5 || rawChannel == 6) {
-                                    receiveNoteOnPadEvent(
-                                        channel: rawChannel,
-                                        noteNumber: rawData1,
-                                        velocity: rawData2
-                                    )
-                                }
-#if DEBUG
-                                // Raw diagnostic — only for pad channels to avoid flooding the
-                                // diagnostic label with transport/PFL/PitchBend events.
-                                if rawChannel == 4 || rawChannel == 5 || rawChannel == 6 {
-                                    let kind: String
-                                    switch statusByte & 0xF0 {
-                                    case 0x90: kind = "Note On"
-                                    case 0x80: kind = "Note Off"
-                                    case 0xA0: kind = "PolyAT"
-                                    case 0xE0: kind = "PitchBend"
-                                    default:   kind = "MIDI"
-                                    }
-                                    let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
-                                    publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
-                                        self?.lastRawPadDiagnostic = diag
-                                    }
-                                    print("[RanePad] \(diag)")
-                                }
-#endif
-                                i += 3
-                            case 0xC0, 0xD0: i += 2
-                            default: i += 1
-                            }
-                        } else {
-                            i += 1
-                        }
+        if statusByte & 0xF0 == 0xB0 {
+            guard let data2 = message.data2 else { return }
+            let channel = rawChannel
+            let controller = rawData1
+            let value = Int(data2)
+
+            midiCaptureLock.lock()
+            var currentMapping = persistedCrossfaderMapping
+            midiCaptureLock.unlock()
+
+            let learnResult = evaluateMIDILearnForCC(channel: channel, controller: controller, value: value)
+            if let overrideMapping = learnResult.crossfaderMapping {
+                currentMapping = overrideMapping
+            }
+            evaluateCalibrationForCC(channel: channel, controller: controller, value: value)
+            evaluateCurveCaptureForCC(channel: channel, controller: controller, value: value)
+            evaluateUserMixerGainForCC(channel: channel, controller: controller, value: value)
+
+            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
+            if mappedControl == "crossfader" {
+                ScratchLabPerformanceSignpost.event("FaderMap", count: value)
+            }
+            // CC6 platter fast path: feed tracker → playback controller.
+            // Verified Rane ONE MKII: left platter = ch=0 CC6,
+            // right platter = ch=1 CC6. Pads are ch=4/ch=5 (NOT platter).
+            // Both decks are tracked here for diagnostics, but only the
+            // right platter (channel 1 / Deck 2) may ever drive the single
+            // loaded scratch sample — product decision 2026-08-09. The left
+            // platter (channel 0) stays tracked/diagnostic-only and never
+            // reaches the playback controller.
+            if controller == 6, channel == 0 || channel == 1 {
+                platterTracker.ingest(channel: channel, value: value)
+                let steps = platterTracker.accumulatedSteps(for: channel)
+                let direction = platterTracker.recentDirection(for: channel)
+                let bridgeNow = CACurrentMediaTime()
+                if bridgeNow - lastScratchPlaybackBridgeLogTime >= scratchPlaybackBridgeLogInterval {
+                    lastScratchPlaybackBridgeLogTime = bridgeNow
+                    print("[ScratchSamplePlaybackBridge] platter forwarding · steps=\(steps) direction=\(String(describing: direction))")
+                }
+                // Suppress the raw MIDI CC6 path while DVS/timecode
+                // motion is driving playback, so the two sources never
+                // publish to the playback controller at the same time.
+                if channel == ScratchPlatterTracker.rightChannel, !dvsPlaybackDriveActive {
+                    if scratchPlaybackController.midiUsesContinuousRenderer {
+                        // The controller's own coalescing timer
+                        // independently samples the tracker at a bounded
+                        // cadence (see `configureMIDIPlatterProvider`) — no
+                        // per-event forwarding, keeping this CoreMIDI
+                        // receive callback bounded and non-blocking.
+                    } else {
+                        // Rate-limited inside the controller (~60 Hz); CC6
+                        // events fire at ~800 Hz so the controller drops
+                        // excess updates. Legacy grain rollback path only.
+                        scratchPlaybackController.positionDidChange(
+                            steps: steps,
+                            direction: direction
+                        )
                     }
                 }
             }
-            packetPtr = MIDIPacketNext(packetPtr)
+            // CC8 crossfader: diagnostics/MIDI-learn only.
+            // Not wired to scratch sample playback until the crossfader
+            // feature is designed and approved. No audio-path side effects.
+            recordReceivedMIDICCEvent(
+                sourceName: deviceName,
+                channel: channel,
+                controller: controller,
+                value: value,
+                mappedControl: mappedControl,
+                timestamp: now,
+                recordingStartTime: startTime,
+                consumedByLearn: learnResult.consumedByLearn
+            )
+#if DEBUG
+            // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
+            // CC6 (platter) floods at ~800Hz and must never trigger UI updates.
+            // Dispatched to main to avoid @Published contention on the MIDI thread.
+            if controller != 6,
+               currentMapping?.controller != controller {
+                let diag = "CC ch\(channel + 1) cc\(controller) val\(value)"
+                publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
+                    self?.lastRawPadDiagnostic = diag
+                }
+                print("[RanePad] \(diag)")
+            }
+#endif
+        } else if statusByte >= 0x80 {
+            switch statusByte & 0xF0 {
+            case 0x80, 0x90, 0xA0, 0xE0:
+                guard let data2 = message.data2 else { return }
+                let rawData2 = Int(data2)
+                // Only route Note On events from known Rane pad channels to the pad preview path.
+                // Start/Stop (note=0 ch=0/ch=1), PFL (note=27 ch=0/ch=1), SYNC (note=2
+                // ch=1), and all PitchBend/PolyAT events must not enter the pad router.
+                // Exception: while a hot-cue learn is active, route Note On from ANY
+                // channel — a hot cue on a device other than the validated Rane pad
+                // channels (e.g. a Pioneer S9) must still be learnable.
+                if statusByte & 0xF0 == 0x90,
+                   (rawChannel == 4 || rawChannel == 5 || rawChannel == 6
+                    || isHotCueLearnSessionActive()) {
+                    receiveNoteOnPadEvent(
+                        channel: rawChannel,
+                        noteNumber: rawData1,
+                        velocity: rawData2
+                    )
+                }
+#if DEBUG
+                // Raw diagnostic — only for pad channels to avoid flooding the
+                // diagnostic label with transport/PFL/PitchBend events.
+                if rawChannel == 4 || rawChannel == 5 || rawChannel == 6 {
+                    let kind: String
+                    switch statusByte & 0xF0 {
+                    case 0x90: kind = "Note On"
+                    case 0x80: kind = "Note Off"
+                    case 0xA0: kind = "PolyAT"
+                    case 0xE0: kind = "PitchBend"
+                    default:   kind = "MIDI"
+                    }
+                    let diag = "\(kind) ch\(rawChannel + 1) d1=\(rawData1) d2=\(rawData2)"
+                    publishOnMainAsync(field: "lastRawPadDiagnostic") { [weak self] in
+                        self?.lastRawPadDiagnostic = diag
+                    }
+                    print("[RanePad] \(diag)")
+                }
+#endif
+            default:
+                // 0xC0/0xD0 (Program Change / Channel Pressure) and any
+                // other status byte: no downstream action on this path
+                // today — matches original behaviour, which only ever
+                // consumed these bytes without dispatching them anywhere.
+                break
+            }
         }
     }
 
@@ -6564,12 +8675,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         if selectedMIDIInputSourceID.isEmpty {
             publishOnMainAsync(field: "midiListeningState") { [weak self] in
-                self?.midiListeningState = "Not Connected"
+                guard let self, self.midiListeningState != "Not Connected" else { return }
+                self.midiListeningState = "Not Connected"
             }
         }
         reconnectSelectedMIDIInput()
     }
 
+    /// Monitors/records an already-classified CC event. This function must
+    /// NEVER learn, persist, cancel, or change any mapping — the sole,
+    /// action-aware learn consumer is `evaluateMIDILearnForCC`, called
+    /// earlier in the packet-parsing loop; its result determines
+    /// `mappedControl` and `consumedByLearn` before this function ever runs.
     func recordReceivedMIDICCEvent(
         sourceName: String,
         channel: Int,
@@ -6577,21 +8694,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         value: Int,
         mappedControl: String? = nil,
         timestamp: Double = CACurrentMediaTime(),
-        recordingStartTime: CFTimeInterval? = nil
+        recordingStartTime: CFTimeInterval? = nil,
+        consumedByLearn: Bool = false
     ) {
         midiCaptureLock.lock()
-        let learning = isMIDILearning
-        let currentMapping = persistedCrossfaderMapping
+        let effectiveMapping = persistedCrossfaderMapping
         midiCaptureLock.unlock()
-
-        let effectiveMapping: CrossfaderCCMapping?
-        if learning {
-            let learnedMapping = CrossfaderCCMapping(channel: channel, controller: controller)
-            effectiveMapping = learnedMapping
-            applyLearnedCrossfaderMapping(learnedMapping)
-        } else {
-            effectiveMapping = currentMapping
-        }
 
         let effectiveMappedControl = mappedControl
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
@@ -6607,7 +8715,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             summary = "Received CC\(controller) Ch\(channel + 1) Value\(value)"
             ccMessage = "CC\(controller) Ch\(channel + 1) Value\(value)"
         }
-        let isMidiLearn = midiLearnState == .listening
 
         // Gated pad-to-sample preview — diagnostic only; no scoring, no routing.
         if let sampleID = ScratchBankPadEventRouter.sampleID(
@@ -6615,6 +8722,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             isEnabled: isScratchBankMIDIPreviewEnabled
         ) {
             scratchBankPadPreviewCallback?(sampleID)
+        }
+
+        // Production hot-cue auto-load: resolve CC pad events through the learned device
+        // mapping. Not gated behind isScratchBankMIDIPreviewEnabled — that toggle is a
+        // DEBUG-only diagnostic preview switch, unrelated to the production hot-cue
+        // mapping/load feature, which must work in Release too.
+        // Skipped when this exact event was just consumed by MIDI Learn — a control
+        // being (re-)learned must never also fire a stale/colliding hot-cue load on
+        // the same physical press.
+        if !consumedByLearn {
+            _ = resolveAndLoadHotCueSample(messageType: .controlChange, channel: channel, controlNumber: controller, value: value)
         }
 
         // Scratch bank pad monitor label — diagnostic only; no scoring, no routing.
@@ -6630,7 +8748,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
 
-        // Throttle @Published UI-monitor updates to ~4 Hz.
+        // Throttle @Published UI-monitor updates to a bounded ~4 Hz —
+        // unconditionally; Learn mode must never disable this. At most one
+        // coalesced publish is ever pending on main: if one is already
+        // queued, this event's data is simply folded into the next batch
+        // (`isMidiMonitorPublishPending` gates re-entry) instead of queuing
+        // another `DispatchQueue.main.async`. The queued block re-reads the
+        // batched state at execution time, so it always publishes the
+        // newest values even if more events arrived while it waited.
         // Full-fidelity MIDI capture (capturedMidiCCEvents + debug counters)
         // is never throttled — only the SwiftUI-facing string/counter
         // properties are rate-limited to avoid flooding the main actor.
@@ -6644,35 +8769,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // MIDI events still flow to capturedMidiCCEvents at full fidelity.
         let suspendedForReview = isLiveInputSuspendedForReview && !isRoutineRecording
         let shouldPublish = !suspendedForReview
-            && ((now - lastMidiMonitorPublishTime >= midiMonitorPublishInterval) || isMidiLearn)
+            && !isMidiMonitorPublishPending
+            && (now - lastMidiMonitorPublishTime >= midiMonitorPublishInterval)
         if shouldPublish {
             lastMidiMonitorPublishTime = now
-            let count = batchedMidiEventCount
-            batchedMidiEventCount = 0
-            let latestCC = batchedMidiCCMessage
-            let latestSummary = batchedMidiSummary
-            midiCaptureLock.unlock()
+            isMidiMonitorPublishPending = true
+        }
+        midiCaptureLock.unlock()
+
+        if shouldPublish {
             publishOnMainAsync(field: "midiMonitor") { [weak self] in
                 guard let self else { return }
+                self.midiCaptureLock.lock()
+                let count = self.batchedMidiEventCount
+                self.batchedMidiEventCount = 0
+                let latestCC = self.batchedMidiCCMessage
+                let latestSummary = self.batchedMidiSummary
+                self.isMidiMonitorPublishPending = false
+                self.midiCaptureLock.unlock()
+
                 self.midiEventsReceivedCount += count
                 self.lastMIDICCMessage = latestCC
                 self.lastMIDIEventSummary = latestSummary
-                self.midiListeningState = "Listening"
-                // Re-check state fresh here rather than using the `isMidiLearn`
-                // snapshot captured before dispatch: `applyLearnedCrossfaderMapping`
-                // (called earlier in this same event when `learning` was true) queues
+                // Avoid identical-value @Published writes — each one triggers
+                // objectWillChange.send(), which SwiftUI flags as "Modifying
+                // state during view update" when it lands inside an active
+                // update transaction.  This path fires at up to 4 Hz during
+                // active controller input; "Listening" → "Listening" is the
+                // overwhelming majority case.
+                if self.midiListeningState != "Listening" {
+                    self.midiListeningState = "Listening"
+                }
+                // Re-check state fresh here rather than using a snapshot
+                // captured before dispatch: `applyLearnedCrossfaderMapping`
+                // (called earlier in this same event when listening) queues
                 // its own main-actor publish that sets `midiLearnState = .learned(...)`
-                // and the correct "Learned Xfader: ..." feedback first. Using the
+                // and the correct "Learned Xfader: ..." feedback first. Using a
                 // stale snapshot here would unconditionally overwrite that with the
                 // generic "Received CC..." summary on the very event that just
                 // committed the mapping; the fresh re-check correctly no-ops once
                 // the learn has already landed.
-                if self.midiLearnState == .listening {
+                if self.midiLearnState == .listening, self.midiLearnFeedback != latestSummary {
                     self.midiLearnFeedback = latestSummary
                 }
+                self.testOnly_midiMonitorPublishCount += 1
             }
-        } else {
-            midiCaptureLock.unlock()
         }
 
         let startTime = recordingStartTime ?? midiRecordingStartTime
@@ -6784,6 +8925,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Also usable as a test seam — callers inject channel/noteNumber/velocity directly.
     func receiveNoteOnPadEvent(channel: Int, noteNumber: Int, velocity: Int) {
         guard velocity > 0 else { return }
+
+        // MIDI Learn: atomically claims and ends a hot-cue session if one is
+        // active and matches; returns false (and falls through) otherwise.
+        if learnHotCueFromNote(channel: channel, noteNumber: noteNumber) {
+            return
+        }
+
         print("[RanePad] TEMP diagnostic note received · channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
         let routedSampleID = ScratchBankPadEventRouter.sampleID(
             channel: channel, noteNumber: noteNumber, velocity: velocity,
@@ -6792,12 +8940,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let sampleID = routedSampleID {
             scratchBankPadPreviewCallback?(sampleID)
         }
+
+        // Production hot-cue auto-load: resolve Note On events through the learned device
+        // mapping. Not gated behind isScratchBankMIDIPreviewEnabled — see CC path above.
+        _ = resolveAndLoadHotCueSample(messageType: .note, channel: channel, controlNumber: noteNumber, value: velocity)
+
         // TEMP HARDWARE DIAGNOSTIC: direct-load ahhh for captured Rane hot cue notes
         // while keeping the existing ch4/ch5 fallback active during hardware proofing.
+        // This fires only when the production hot-cue path above did NOT resolve a sample.
         let isTemporaryAhhhFallback =
             ((channel == 4 || channel == 5) && (noteNumber == 20 || noteNumber == 24)) ||
             (channel == 6 && noteNumber == 20)
-        if isTemporaryAhhhFallback, routedSampleID == nil {
+        let productionMatched = currentMIDIDeviceMapping?.controls.contains(where: { control in
+            control.action.hotCueIndex != nil && control.messageType == .note && control.channel == channel && control.controlNumber == noteNumber
+        }) ?? false
+        if isTemporaryAhhhFallback, routedSampleID == nil, !productionMatched {
             print("[RanePad] TEMP diagnostic direct load · sampleID=ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
             scratchPlaybackController.load(sampleID: "ahhh")
         }
@@ -6831,7 +8988,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
               let endpoint = midiSourceEndpoints[selectedSource] else {
             publishOnMainAsync(field: "midiListeningState") { [weak self] in
                 guard let self else { return }
-                self.midiListeningState = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
+                let next = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
+                if self.midiListeningState != next { self.midiListeningState = next }
             }
             return
         }
@@ -6840,8 +8998,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiConnectedSourceName = selectedSource.name
         midiCaptureLock.unlock()
         MIDIPortConnectSource(midiInputPort, endpoint, nil)
+        // Load any saved device mapping for this source.
+        loadDeviceMappingForCurrentSource()
         publishOnMainAsync(field: "midiListeningState") { [weak self] in
-            self?.midiListeningState = "Listening"
+            guard let self, self.midiListeningState != "Listening" else { return }
+            self.midiListeningState = "Listening"
         }
     }
 
@@ -6853,13 +9014,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         lastMidiMonitorPublishTime = 0
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiMonitorReset") { [weak self] in
-            self?.midiEventsReceivedCount = 0
-            self?.lastMIDIEventSummary = "No MIDI received yet"
-            self?.lastMIDICCMessage = "CC -- Ch -- Value --"
-            self?.midiLearnFeedback = ""
-            self?.lastScratchBankPadLabel = ""
+            guard let self else { return }
+            self.midiEventsReceivedCount = 0
+            self.lastMIDIEventSummary = "No MIDI received yet"
+            self.lastMIDICCMessage = "CC -- Ch -- Value --"
+            if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+            self.lastScratchBankPadLabel = ""
 #if DEBUG
-            self?.lastRawPadDiagnostic = ""
+            self.lastRawPadDiagnostic = ""
 #endif
         }
     }

@@ -493,6 +493,10 @@ final class DVSOfflineGrainRendererTests: XCTestCase {
         )
         let clock = SchedulingClock()
         let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        // Offline grain reconstruction is a diagnostic of the legacy
+        // scheduled-grain DVS path — pin it (production DVS now uses the
+        // continuous renderer; see dvsUsesContinuousRenderer).
+        controller.dvsUsesContinuousRenderer = false
         guard controller.ensureLoadedForDVSDrive(sampleID: "dvs_ahhh") else {
             throw XCTSkip("The app test host does not contain VirtualPlatter/ahhh.wav")
         }

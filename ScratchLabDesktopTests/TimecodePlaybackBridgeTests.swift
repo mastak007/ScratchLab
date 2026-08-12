@@ -211,6 +211,70 @@ final class TimecodePlaybackBridgeTests: XCTestCase {
         withExtendedLifetime(observation) {}
     }
 
+    /// Listening-fix (SwiftUI publish coalescing): a sustained stream of
+    /// evaluations, each genuinely changing the observable output, must
+    /// not each fire a separate `objectWillChange` — this is what a
+    /// ~60 Hz DVS control tick does to `objectWillChange` observers, and
+    /// dispatching every single one to the main queue does not reliably
+    /// land *between* SwiftUI render passes at that rate (see
+    /// `publishOutputChange`'s doc comment). The trailing state must
+    /// still flush once the coalescing window elapses, so the very last
+    /// change in a gesture is never silently dropped.
+    func testBridgeRepeatedEvaluationsCoalesceUnderSustainedChange() {
+        // A fixed simulated clock — the worst case for coalescing, since
+        // every evaluation reports zero elapsed time regardless of how
+        // long the test's own synthetic decode work actually takes to run.
+        let now: TimeInterval = 0
+        let bridge = TimecodePlaybackBridge(
+            playbackDriveEnabled: true,
+            notificationClock: { now }
+        )
+        var publicationCount = 0
+        let observation = bridge.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        for i in 0..<40 {
+            let pipeline = makePipeline(mode: .controlPrototype)
+            pipeline.liveTapEnabled = true
+            feedPhaseProgression(
+                into: pipeline,
+                bufferCount: 8,
+                phaseStep: -0.2 - Float(i) * 0.01,
+                amplitude: 0.5
+            )
+            _ = pipeline.flushDecode()
+            _ = bridge.evaluate(pipeline: pipeline)
+        }
+
+        // All 40 evaluations reported the same simulated instant — well
+        // inside the coalescing window. Only the first publishes
+        // immediately (there is no prior notification to throttle against
+        // yet); the rest are folded into one pending tail.
+        XCTAssertEqual(
+            publicationCount,
+            1,
+            "evaluations inside the coalescing window must not each publish a separate objectWillChange"
+        )
+
+        // The scheduled tail-flush is a real `DispatchQueue.main.asyncAfter`
+        // (it must fire even if the simulated clock never advances again —
+        // e.g. the platter simply stops), so it needs the real run loop to
+        // spin, not the fake clock.
+        let flushed = expectation(description: "coalesced tail flush delivers")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            flushed.fulfill()
+        }
+        wait(for: [flushed], timeout: 1.0)
+        XCTAssertEqual(
+            publicationCount,
+            2,
+            "the trailing coalesced state must flush exactly once after the window elapses, so the final change is not lost"
+        )
+
+        withExtendedLifetime(observation) {}
+    }
+
     func testBridgeDiagnosticsRemainSafeDuringConcurrentEvaluationAndReads() {
         let pipeline = makePipeline(mode: .controlPrototype)
         let bridge = makeBridge(enabled: false)

@@ -1625,3 +1625,11 @@ Companion to the planning amendment landed in `AI_CONTEXT.md`, `docs/current_arc
 | Free-form audio synthesis from motion | **Move to experimental** | R&D bucket only. |
 | Any plan that would require schema/format changes to support new techniques | **Block** | Techniques ride on target patterns, not new event types. Schema discipline preserved. |
 | Practice-mode complexity beyond the four-mode crossfader picker | **Defer** | Don't add a fifth mode until the four ship and we have user data. |
+
+## Product direction — macOS-only active production target (2026-08-12)
+
+- [x] Retire ScratchLab iOS and ScratchLabWatch as active production Xcode targets
+  - Files: `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme` (removed), `TASKS.md`, `DEV_LOG.md`
+  - Done when: the `ScratchLab` (iOS) and `ScratchLabWatch` (watchOS) `PBXNativeTarget`s, their build phases/build-files/configuration lists/product references/target dependency, and the combined `ScratchLab.xcscheme` are removed from the active project graph; `ScratchLabDesktop`/`ScratchLabDesktopTests`/`ScratchLabDatasetBuilder` and all shared source are unaffected; every iOS/watchOS-exclusive Swift file remains on disk (unregistered from any target, still browsable/restorable) for potential future lightweight Companion Camera / sensor companion work; macOS Capture/Practice/Review continue to require no iPhone or Apple Watch; and `scripts/build.sh mac` plus the authoritative macOS test suite pass from a fresh checkout.
+
+**ScratchLab's active production product is now macOS-only.** The former iOS/watchOS implementations remain preserved in source/history for potential future lightweight Companion Camera / sensor companion work.

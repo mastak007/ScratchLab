@@ -1309,6 +1309,71 @@ final class TimecodeLiveTapTests: XCTestCase {
         withExtendedLifetime(observation) {}
     }
 
+    /// Listening-fix (SwiftUI publish coalescing): a sustained ~60 Hz
+    /// stream of decode ticks, each genuinely changing the published
+    /// output, must not each fire a separate `objectWillChange` — see
+    /// `TimecodeControlPipeline.sendChangeNotification`'s doc comment for
+    /// why dispatching every one to the main queue does not, on its own,
+    /// reliably land between SwiftUI render passes at that rate. The
+    /// trailing state must still flush once the coalescing window
+    /// elapses, so the last tick's change is never silently dropped.
+    func testSustainedDecodeFlushesCoalesceUnderRapidTicks() {
+        // A fixed simulated notification clock — `flushDecode(now:)`'s own
+        // `now:` parameter only affects staleness bookkeeping inside the
+        // decode itself, not the publish-coalescing clock, so pinning the
+        // latter is the deterministic worst case regardless of how long
+        // the test's own synthetic decode work actually takes to run.
+        let notificationNow: TimeInterval = 0
+        let pipeline = TimecodeControlPipeline(
+            sampleRate: sampleRate,
+            channelCount: 2,
+            notificationClock: { notificationNow }
+        )
+        pipeline.mode = .controlPrototype
+        var publicationCount = 0
+        let observation = pipeline.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        for i in 0..<40 {
+            let buffer = continuousQuadratureBuffer(
+                startFrame: i * framesPerBuffer,
+                frameCount: framesPerBuffer
+            )
+            let tickTime = Date(timeIntervalSinceReferenceDate: 50_000 + Double(i) / 60.0)
+            pipeline.enqueueLiveStereoBuffer(
+                left: buffer.left,
+                right: buffer.right,
+                sampleRate: sampleRate,
+                frameCount: buffer.left.count,
+                receivedAt: tickTime
+            )
+            pipeline.flushDecode(now: tickTime)
+        }
+
+        // All 40 flushes reported the same simulated notification instant
+        // — well inside the coalescing window. Only the first publishes
+        // immediately; the rest fold into one pending tail.
+        XCTAssertEqual(
+            publicationCount,
+            1,
+            "decode flushes inside the coalescing window must not each fire a separate SwiftUI invalidation"
+        )
+
+        let flushed = expectation(description: "coalesced tail flush delivers")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            flushed.fulfill()
+        }
+        wait(for: [flushed], timeout: 1.0)
+        XCTAssertEqual(
+            publicationCount,
+            2,
+            "the coalesced tail must flush exactly once, delivering the final decoded state"
+        )
+
+        withExtendedLifetime(observation) {}
+    }
+
     // MARK: - Test: output-state race safety
     //
     // `TimecodeControlPipeline`'s ten decoded-output properties

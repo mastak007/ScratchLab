@@ -641,8 +641,33 @@ struct MacAnalyzerView: View {
     @State private var isShowingStagingInspector = false
     /// Timecode control pipeline (Batch 3 — control pipeline integration).
     /// Used by the Timecode Control card in the Advanced workspace sidebar.
-    @StateObject private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
-    @StateObject private var timecodeBridge = TimecodePlaybackBridge()
+    //
+    // Listening-fix (SwiftUI publish-during-render, uncommitted): `@State`,
+    // not `@StateObject` — `@State` on a reference type still gives this
+    // view SwiftUI-owned, create-once identity/lifetime (the object is not
+    // recreated across re-renders), but — unlike `@StateObject` — does NOT
+    // subscribe this view to the object's `objectWillChange`. Both objects
+    // are realtime, lock-protected state updated at the ~60 Hz DVS
+    // control-worker rate (`handleTimecodeFlushTick` below calls
+    // `flushDecode()`/`evaluate()` every tick); observing them directly at
+    // this level re-ran this view's entire (10,000+ line) body on every
+    // tick, and dispatching an already-coalesced notification to the main
+    // queue does not reliably land *between* SwiftUI render passes at that
+    // rate (confirmed on hardware: warnings persisted, just less often,
+    // after coalescing alone — see `dvsUIRefreshTick` below). Every read of
+    // `timecodePipeline`/`timecodeBridge` below is a plain, already
+    // thread-safe property access and works identically regardless of
+    // property-wrapper choice; only automatic re-render-on-notify is
+    // removed. `TimecodeControlCard`/`DVSControlVinylPanel`, which this
+    // view passes both objects into, make the same change independently.
+    @State private var timecodePipeline = TimecodeControlPipeline(sampleRate: 44100, channelCount: 2)
+    @State private var timecodeBridge = TimecodePlaybackBridge()
+    /// Bumped by a bounded, main-actor-only timer (`dvsUIRefreshTimer`) —
+    /// never by the realtime DVS tick — to gate how often this view's body
+    /// re-evaluates the `timecodePipeline`/`timecodeBridge` diagnostic text
+    /// below, now that those objects no longer trigger re-render directly.
+    @State private var dvsUIRefreshTick = 0
+    private let dvsUIRefreshTimer = Timer.publish(every: 1.0 / 15.0, on: .main, in: .common).autoconnect()
     @State private var debugCaptureLabel = DebugTimecodeCapture.labels[0]
     @State private var debugCaptureStatus = "Ready to capture raw pair 3/4."
     @State private var debugCaptureSummary: DebugTimecodeCapture.Summary?
@@ -1003,6 +1028,7 @@ struct MacAnalyzerView: View {
         .sheet(isPresented: $isShowingStagingInspector) {
             StagingInspectorView(contexts: stagingInspectorContexts)
         }
+        .onReceive(dvsUIRefreshTimer) { _ in dvsUIRefreshTick += 1 }
 #endif
     }
 
@@ -1038,6 +1064,9 @@ struct MacAnalyzerView: View {
         let flushStart = CACurrentMediaTime()
         timecodePipeline.flushDecode()
         guard timecodePipeline.mode == .controlPrototype else { return }
+        captureEngine.setDVSPlaybackDriveActive(timecodeBridge.playbackDriveEnabled)
+        let playbackDrive = timecodeBridge.evaluate(pipeline: timecodePipeline)
+
         let now = Date()
 #if DEBUG
         logSlowTimecodeFlushIfNeeded(
@@ -1046,13 +1075,18 @@ struct MacAnalyzerView: View {
             elapsed: elapsed
         )
 #endif
+        captureEngine.forwardTimecodeDrive(
+            playbackDrive,
+            decision: timecodeBridge.lastDecision,
+            elapsed: max(0, elapsed)
+        )
 #if DEBUG
-        // Independent of any playback drive: this only ever accumulates
-        // into notation when `captureEngine.notationRoutingEnabled` is
-        // explicitly set (no UI sets it yet — see TASKS.md's DVS notation
-        // slice 2) and a routine take is actively recording. Evaluating it
-        // here never reads `timecodeBridge`/`playbackDrive`, and never
-        // affects them.
+        // Independent of the playback drive evaluated/forwarded just
+        // above: this only ever accumulates into notation when
+        // `captureEngine.notationRoutingEnabled` is explicitly set (no UI
+        // sets it yet — see TASKS.md's DVS notation slice 2) and a
+        // routine take is actively recording. Evaluating it here never
+        // reads `timecodeBridge`/`playbackDrive`, and never affects them.
         captureEngine.forwardTimecodeNotationWindow(
             pipeline: timecodePipeline,
             minConfidence: timecodePipeline.minConfidence
@@ -2530,6 +2564,10 @@ struct MacAnalyzerView: View {
                 return "Learned Xfader: \(mapping.displayName)"
             }
             return "Learned Xfader: \(mapping.displayName) · Received \(captureEngine.lastMIDICCMessage)"
+        case .listeningFor(let action):
+            // Another control (upfader/hot cue) is being learned via the
+            // Mixer & Hot-Cue Mapping section below.
+            return "Learning \(action.displayName)…"
         }
     }
 
@@ -2558,9 +2596,382 @@ struct MacAnalyzerView: View {
                     Button("Clear") { captureEngine.clearCrossfaderMapping() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                case .listeningFor:
+                    Button("Cancel") { captureEngine.cancelMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                 }
                 Spacer()
             }
+        }
+    }
+
+    // MARK: - Mixer & Hot-Cue Mapping (MIDI Learn checkpoint)
+    //
+    // Minimal Advanced/Debug UI for the generic per-device MIDI Learn model:
+    // left/right upfader learn+clear, hot cue 1-8 learn+clear with scratch
+    // sample assignment, active-device mapping summary, live learn feedback,
+    // and persistence/load error surfacing. Audio routing is out of scope.
+
+    private static let hotCueActions: [MIDISemanticAction] = [
+        .hotCue1, .hotCue2, .hotCue3, .hotCue4, .hotCue5, .hotCue6, .hotCue7, .hotCue8
+    ]
+
+    /// Parses the raw 0-127 value out of `lastMIDICCMessage`, formatted as
+    /// `"CC<n> Ch<c> Value<v>"` (or the `"CC -- Ch -- Value --"` placeholder).
+    private func parsedLastCCRawValue() -> Int? {
+        let message = captureEngine.lastMIDICCMessage
+        guard let range = message.range(of: "Value") else { return nil }
+        return Int(message[range.upperBound...])
+    }
+
+    private var midiLearnLiveValueText: String? {
+        guard let action = captureEngine.activeMIDILearnAction else { return nil }
+        guard let raw = parsedLastCCRawValue() else {
+            return "Learning \(action.displayName)… move the control now"
+        }
+        let normalized = Double(max(0, min(127, raw))) / 127.0
+        return "Learning \(action.displayName) · raw \(raw) · normalized \(String(format: "%.2f", normalized))"
+    }
+
+    private func midiMappingStatusLabel(for action: MIDISemanticAction) -> String {
+        if let control = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
+            return control.displayName
+        }
+        return "not mapped"
+    }
+
+    @ViewBuilder
+    private func midiLearnActionRow(_ action: MIDISemanticAction, title: String) -> some View {
+        let isLearningThis = captureEngine.activeMIDILearnAction == action
+        let isMapped = captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if isLearningThis {
+                Button("Cancel") { captureEngine.cancelMIDILearn() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else {
+                Button("Learn") { captureEngine.startMIDILearn(for: action) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.activeMIDILearnAction != nil)
+                if isMapped {
+                    Button("Clear") { captureEngine.clearMapping(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    /// Sorted, available bundled scratch-sample IDs for hot-cue assignment.
+    private var availableScratchSampleIDs: [String] {
+        ScratchSamplePlaybackController.knownSampleIDs.sorted()
+    }
+
+    @ViewBuilder
+    private func hotCueMappingRow(_ index: Int) -> some View {
+        let action = Self.hotCueActions[index - 1]
+        let isLearningThis = captureEngine.activeMIDILearnAction == action
+        let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hot Cue \(index)")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if isLearningThis {
+                    Button("Cancel") { captureEngine.cancelMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Learn") { captureEngine.startMIDILearn(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.activeMIDILearnAction != nil)
+                    if learnedControl != nil {
+                        Button("Clear") { captureEngine.clearMapping(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+
+            if let learnedControl {
+                Picker("Sample", selection: Binding(
+                    get: { learnedControl.assignedSampleID ?? "" },
+                    set: { newValue in
+                        guard !newValue.isEmpty else { return }
+                        captureEngine.assignSampleToHotCue(newValue, hotCueIndex: index)
+                    }
+                )) {
+                    Text("None").tag("")
+                    ForEach(availableScratchSampleIDs, id: \.self) { sampleID in
+                        Text(sampleID).tag(sampleID)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(maxWidth: 200, alignment: .leading)
+            }
+        }
+    }
+
+    private var midiMappingDeviceSummary: String {
+        guard let mapping = captureEngine.currentMIDIDeviceMapping else {
+            return "No saved mapping for this device yet."
+        }
+        return "\(mapping.deviceName) · \(mapping.controls.count) control\(mapping.controls.count == 1 ? "" : "s") mapped"
+    }
+
+    /// Status text for a continuous action's calibration row — live observed
+    /// range while calibrating, or the persisted range/inversion otherwise.
+    private func calibrationStatusText(for action: MIDISemanticAction, control: MIDILearnedControl, isCalibrating: Bool) -> String {
+        if isCalibrating {
+            if let observedMin = captureEngine.calibrationObservedMin, let observedMax = captureEngine.calibrationObservedMax {
+                return "\(action.displayName) calibration: observed \(observedMin)–\(observedMax) · move through full range"
+            }
+            return "\(action.displayName) calibration: move the control through its full range"
+        }
+        let invertLabel = control.inverted ? " · inverted" : ""
+        return "\(action.displayName) range \(control.minValue)–\(control.maxValue)\(invertLabel)"
+    }
+
+    /// Calibrate/Finish/Cancel + inversion toggle for one already-learned
+    /// continuous action (crossfader, left/right upfader). Nothing renders
+    /// until the action has a learned binding — calibration observes the
+    /// binding's raw range, it doesn't learn the binding itself.
+    @ViewBuilder
+    private func calibrationRow(for action: MIDISemanticAction) -> some View {
+        if let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
+            let isCalibratingThis = captureEngine.activeCalibrationAction == action
+            HStack(spacing: 8) {
+                Text(calibrationStatusText(for: action, control: learnedControl, isCalibrating: isCalibratingThis))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if isCalibratingThis {
+                    Button("Finish") { captureEngine.finishCalibration() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    Button("Cancel") { captureEngine.cancelCalibration() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Calibrate") { captureEngine.startCalibration(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.activeMIDILearnAction != nil || captureEngine.activeCalibrationAction != nil)
+                    Toggle("Invert", isOn: Binding(
+                        get: { learnedControl.inverted },
+                        set: { captureEngine.setInversion($0, for: action) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11, weight: .medium))
+                    .fixedSize()
+                }
+            }
+        }
+    }
+
+    /// Resolved (persisted or migration-default) preset for a fader-curve
+    /// action, or nil if the action has no learned binding yet.
+    private func resolvedCurvePreset(for action: MIDISemanticAction) -> FaderCurvePreset? {
+        captureEngine.currentMIDIDeviceMapping?.control(for: action)?.resolvedCurveConfig.preset
+    }
+
+    /// Picker selection for a fader-curve row. While a custom-capture
+    /// session is active for THIS action, shows Custom regardless of the
+    /// still-persisted preset — selecting Custom is transactional
+    /// (`startCurveCalibration`/`finishCurveCalibration`), so the
+    /// persisted value deliberately hasn't changed yet.
+    private func curvePickerSelection(for action: MIDISemanticAction) -> FaderCurvePreset {
+        if captureEngine.activeCurveCaptureAction == action { return .custom }
+        return resolvedCurvePreset(for: action) ?? .linear
+    }
+
+    /// One action's curve row: a preset picker, plus (only while
+    /// progressively disclosed) either the Custom capture controls or a
+    /// Reset-to-default affordance for an already-custom curve. No
+    /// engineering terms (normalized values, transfer functions) ever
+    /// appear here — presets are named, captured points are shown only as
+    /// captured/not-captured state.
+    @ViewBuilder
+    private func faderCurveRow(for action: MIDISemanticAction, title: String) -> some View {
+        if captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil {
+            let isCapturingThis = captureEngine.activeCurveCaptureAction == action
+            let sessionBusy = captureEngine.activeMIDILearnAction != nil
+                || captureEngine.activeCalibrationAction != nil
+                || (captureEngine.activeCurveCaptureAction != nil && !isCapturingThis)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { curvePickerSelection(for: action) },
+                        set: { newPreset in
+                            if newPreset == .custom {
+                                captureEngine.startCurveCalibration(for: action)
+                            } else {
+                                captureEngine.setCurvePreset(newPreset, for: action)
+                            }
+                        }
+                    )) {
+                        ForEach(FaderCurvePreset.availablePresets(for: action), id: \.self) { preset in
+                            Text(preset.displayName).tag(preset)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(maxWidth: 140)
+                    .disabled(sessionBusy)
+                }
+
+                if isCapturingThis {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Move the control to where it should go quiet, then tap Set closed. Move it to where it should reach full volume, then tap Set full-on.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button(captureEngine.curveCaptureHasClosedPoint ? "Closed ✓" : "Set closed") {
+                                captureEngine.captureCurveClosedPoint()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!captureEngine.curveCaptureHasLiveValue)
+
+                            Button(captureEngine.curveCaptureHasFullOnPoint ? "Full-on ✓" : "Set full-on") {
+                                captureEngine.captureCurveFullOnPoint()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!captureEngine.curveCaptureHasLiveValue)
+
+                            Spacer()
+
+                            Button("Finish") { captureEngine.finishCurveCalibration() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .disabled(!captureEngine.curveCaptureCanFinish)
+
+                            Button("Cancel") { captureEngine.cancelCurveCalibration() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        if !captureEngine.curveCaptureError.isEmpty {
+                            Label(captureEngine.curveCaptureError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color(nsColor: .systemOrange))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else if resolvedCurvePreset(for: action) == .custom {
+                    HStack(spacing: 8) {
+                        Text("Custom cut calibrated.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Recalibrate") { captureEngine.startCurveCalibration(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sessionBusy)
+                        Button("Reset to default") { captureEngine.resetCurve(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sessionBusy)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compact "Fader curves" section — Crossfader and Right Upfader only.
+    /// Left upfader's curve is intentionally never shown here: the model
+    /// and persistence support it for a future beat bus, but exposing a
+    /// control with no audible effect would mislead a learner. Its
+    /// existing MIDI mapping stays visible in the rows above; only its
+    /// curve editor is hidden.
+    @ViewBuilder
+    private var faderCurveSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Fader Curves")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            faderCurveRow(for: .crossfader, title: "Crossfader")
+            faderCurveRow(for: .rightUpfader, title: "Right Upfader")
+        }
+    }
+
+    @ViewBuilder
+    private var mixerAndHotCueMappingSection: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(midiMappingDeviceSummary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                if !captureEngine.midiMappingError.isEmpty {
+                    Label(captureEngine.midiMappingError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !captureEngine.calibrationError.isEmpty {
+                    Label(captureEngine.calibrationError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider()
+
+                calibrationRow(for: .crossfader)
+                midiLearnActionRow(.leftUpfader, title: "Left Upfader")
+                calibrationRow(for: .leftUpfader)
+                midiLearnActionRow(.rightUpfader, title: "Right Upfader")
+                calibrationRow(for: .rightUpfader)
+
+                Divider()
+
+                faderCurveSection
+
+                Divider()
+
+                Text("Hot Cues")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(1...8, id: \.self) { index in
+                        hotCueMappingRow(index)
+                    }
+                }
+            }
+            .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+        } label: {
+            Label("Mixer & Hot-Cue Mapping", systemImage: "pianokeys")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -5044,12 +5455,15 @@ struct MacAnalyzerView: View {
                 Text(captureEngine.lastMIDICCMessage)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
-                Text(captureEngine.midiCrossfaderMappingStatus)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
 
+            // Crossfader status (learned/listening/idle) is covered by
+            // `midiLearnRow` below via `midiLearnStatusText` — its `.idle`
+            // case already falls back to this same `midiCrossfaderMappingStatus`
+            // text, so a separate static line here was a pure duplicate.
             midiLearnRow
+
+            mixerAndHotCueMappingSection
 
 #if DEBUG
             Divider()
@@ -5066,12 +5480,20 @@ struct MacAnalyzerView: View {
             }
             .toggleStyle(.switch)
 
-            // TEMP HARDWARE DIAGNOSTIC: direct app-side proof path for sample playback.
-            Button("Play ahhh test") {
-                captureEngine.playScratchSampleDiagnostic(sampleID: "ahhh")
+            // TEMP HARDWARE DIAGNOSTIC: loads the validated one-revolution
+            // platter asset (dvs_ahhh) with no auto-preview — move the
+            // right platter afterward to hear it.
+            Button("Load platter ahhh test") {
+                captureEngine.loadPlatterTestSample()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+
+            if !captureEngine.platterTestLoadStatus.isEmpty {
+                Text(captureEngine.platterTestLoadStatus)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(captureEngine.platterTestLoadStatus.hasPrefix("loaded:") ? .green : .red)
+            }
 
             if !captureEngine.lastScratchBankPadLabel.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
