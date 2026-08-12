@@ -376,7 +376,9 @@ struct NotationVisualizerView: View {
                     // explode on tall windows and the timeline always has
                     // room to breathe.
                     ScrollView(.vertical) {
-                        CapturedNotationDisplayView(snapshot: snapshot)
+                        ScratchPhraseChartView(
+                            source: .captured(snapshot.recordMovementEvents)
+                        )
                             .frame(maxWidth: .infinity)
                             .frame(minHeight: 360)
                             .padding(.horizontal, 18)
