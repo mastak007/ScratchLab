@@ -1033,6 +1033,9 @@ struct MacAnalyzerView: View {
         let flushStart = CACurrentMediaTime()
         timecodePipeline.flushDecode()
         guard timecodePipeline.mode == .controlPrototype else { return }
+        captureEngine.setDVSPlaybackDriveActive(timecodeBridge.playbackDriveEnabled)
+        let playbackDrive = timecodeBridge.evaluate(pipeline: timecodePipeline)
+
         let now = Date()
 #if DEBUG
         logSlowTimecodeFlushIfNeeded(
@@ -1041,13 +1044,17 @@ struct MacAnalyzerView: View {
             elapsed: elapsed
         )
 #endif
+        captureEngine.forwardTimecodeDrive(
+            playbackDrive,
+            elapsed: max(0, elapsed)
+        )
 #if DEBUG
-        // Independent of any playback drive: this only ever accumulates
-        // into notation when `captureEngine.notationRoutingEnabled` is
-        // explicitly set (no UI sets it yet — see TASKS.md's DVS notation
-        // slice 2) and a routine take is actively recording. Evaluating it
-        // here never reads `timecodeBridge`/`playbackDrive`, and never
-        // affects them.
+        // Independent of the playback drive evaluated/forwarded just
+        // above: this only ever accumulates into notation when
+        // `captureEngine.notationRoutingEnabled` is explicitly set (no UI
+        // sets it yet — see TASKS.md's DVS notation slice 2) and a
+        // routine take is actively recording. Evaluating it here never
+        // reads `timecodeBridge`/`playbackDrive`, and never affects them.
         captureEngine.forwardTimecodeNotationWindow(
             pipeline: timecodePipeline,
             minConfidence: timecodePipeline.minConfidence
@@ -1085,15 +1092,19 @@ struct MacAnalyzerView: View {
     private var practiceWorkspace: some View {
         HSplitView {
             practiceSidebar
-                .frame(minWidth: 300, idealWidth: 340, maxWidth: 400)
+                .frame(
+                    minWidth: ScratchLabDesign.Sidebar.practiceMin,
+                    idealWidth: ScratchLabDesign.Sidebar.practiceIdeal,
+                    maxWidth: ScratchLabDesign.Sidebar.practiceMax
+                )
 
-            VStack(spacing: 18) {
+            VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
                 practiceStageHeader
                 practiceCameraStage
                 practiceNotationStrip
             }
-            .padding(18)
-            .background(Color.black)
+            .padding(ScratchLabDesign.Stage.outerPadding)
+            .background(ScratchLabDesign.Surface.canvas)
         }
     }
 
@@ -1194,9 +1205,13 @@ struct MacAnalyzerView: View {
     private var captureWorkspace: some View {
         HSplitView {
             captureSidebar
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+                .frame(
+                    minWidth: ScratchLabDesign.Sidebar.captureMin,
+                    idealWidth: ScratchLabDesign.Sidebar.captureIdeal,
+                    maxWidth: ScratchLabDesign.Sidebar.captureMax
+                )
 
-            VStack(spacing: 18) {
+            VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
                 captureStageHeader
 
                 if !hasRoutineSessions {
@@ -1204,7 +1219,7 @@ struct MacAnalyzerView: View {
                 } else if stageLayout == .desktopDeck {
                     localCameraStage
                 } else {
-                    HStack(spacing: 18) {
+                    HStack(spacing: ScratchLabDesign.Stage.headerToContent) {
                         localCameraStage
                             .frame(maxWidth: .infinity)
                         companionStage
@@ -1212,15 +1227,19 @@ struct MacAnalyzerView: View {
                     }
                 }
             }
-            .padding(18)
-            .background(Color.black)
+            .padding(ScratchLabDesign.Stage.outerPadding)
+            .background(ScratchLabDesign.Surface.canvas)
         }
     }
 
     private var reviewWorkspace: some View {
         HSplitView {
             reviewSidebar
-                .frame(minWidth: 340, idealWidth: 380, maxWidth: 460)
+                .frame(
+                    minWidth: ScratchLabDesign.Sidebar.reviewMin,
+                    idealWidth: ScratchLabDesign.Sidebar.reviewIdeal,
+                    maxWidth: ScratchLabDesign.Sidebar.reviewMax
+                )
 
             reviewStage
         }
@@ -1229,7 +1248,11 @@ struct MacAnalyzerView: View {
     private var advancedWorkspace: some View {
         HSplitView {
             advancedSidebar
-                .frame(minWidth: 340, idealWidth: 380, maxWidth: 460)
+                .frame(
+                    minWidth: ScratchLabDesign.Sidebar.advancedMin,
+                    idealWidth: ScratchLabDesign.Sidebar.advancedIdeal,
+                    maxWidth: ScratchLabDesign.Sidebar.advancedMax
+                )
 
             NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
         }
@@ -1237,16 +1260,32 @@ struct MacAnalyzerView: View {
 
     private var practiceSidebar: some View {
         // Practice is the coaching surface. The first scroll viewport shows
-        // the Practice header + Coach + Practice run cards. Try the demo,
-        // Progress tiles, and Diagnostics & workflow all collapse behind
-        // disclosures so the coaching screen doesn't feel like a dashboard.
+        // one Current lesson hero and the active run configuration. Beat
+        // Trainer, demo/export utilities, progress, and diagnostics remain
+        // available through progressive disclosure.
         ScrollView {
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 practiceHeaderCard
-                practiceCoachCard
                 practiceRunCard
                 practiceScoredAttemptCard
-                practiceBeatTrainerCard
+
+                DisclosureGroup {
+                    practiceBeatTrainerCard
+                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+                } label: {
+                    HStack(spacing: 8) {
+                        Label("Beat trainer", systemImage: "metronome")
+                            .font(ScratchLabDesign.Typo.disclosureLabel)
+                            .foregroundStyle(.secondary)
+
+                        Spacer(minLength: 8)
+
+                        Text(practiceBeatStore.isBeatEnabled ? "On" : "Off")
+                            .font(ScratchLabDesign.Typo.statusPill)
+                            .foregroundStyle(practiceBeatStore.isBeatEnabled ? ScratchLabDesign.Sem.success : .secondary)
+                    }
+                }
+                .padding(.horizontal, 4)
 
                 DisclosureGroup {
                     macDemoModeCard
@@ -1269,7 +1308,7 @@ struct MacAnalyzerView: View {
                 .padding(.horizontal, 4)
 
                 DisclosureGroup {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
                         practiceAudioCard
                         scratchCard
                         practiceFeedbackCard
@@ -1283,7 +1322,9 @@ struct MacAnalyzerView: View {
                 }
                 .padding(.horizontal, 4)
             }
-            .padding(24)
+            .padding(.horizontal, ScratchLabDesign.Spacing.sidebarHorizontal)
+            .padding(.top, ScratchLabDesign.Spacing.sidebarTop)
+            .padding(.bottom, ScratchLabDesign.Spacing.sidebarBottom)
         }
     }
 
@@ -1391,9 +1432,7 @@ struct MacAnalyzerView: View {
             .buttonStyle(.bordered)
             .disabled(isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard(.hero)
     }
 
     private func macDemoMetric(title: String, value: String) -> some View {
@@ -1413,22 +1452,26 @@ struct MacAnalyzerView: View {
     }
 
     private var captureSidebar: some View {
-        // Primary action chain stays visible (workflow, inputs, latest take).
-        // The session list + workflow summary collapse behind a single
-        // Sessions & workflow disclosure to remove the long debug-style scroll.
-        VStack(alignment: .leading, spacing: 18) {
+        // Capture reads top-to-bottom as the take workflow: the header names
+        // the next required action, Step 1 (session setup) and Step 2 (input
+        // readiness) scroll above a pinned Step 3/4 record–review hero so the
+        // primary action and blocked-readiness warnings never scroll away.
+        // Session list + workflow summary stay behind a single Sessions &
+        // workflow disclosure.
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    captureSessionWorkflowCard
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                    capturePageHeaderCard
+                    captureSessionSetupCard
                     captureInputStatusCard
                     captureLatestTakeCard
 
                     DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
                             captureSessionListCard
                             captureWorkflowSummaryCard
                         }
-                        .padding(.top, 12)
+                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
                     } label: {
                         Label("Sessions & workflow", systemImage: "list.bullet.rectangle")
                             .font(.system(size: 13, weight: .semibold))
@@ -1436,31 +1479,33 @@ struct MacAnalyzerView: View {
                     }
                     .padding(.horizontal, 4)
                 }
-                .padding(.bottom, 24)
+                .padding(.bottom, ScratchLabDesign.Spacing.sidebarBottom)
             }
+
+            captureRecordCard
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
+        .padding(.horizontal, ScratchLabDesign.Spacing.sidebarHorizontalCompact)
+        .padding(.top, ScratchLabDesign.Spacing.sidebarTop)
+        .padding(.bottom, ScratchLabDesign.Spacing.sidebarTop)
     }
 
     private var reviewSidebar: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                     reviewHeaderCard
                     reviewSessionListCard
                     reviewTakeCard
-                    reviewActionsCard
-                    reviewExportCard
-                    #if DEBUG
-                    platterTimelineDebugCard
-                    #endif
+                    if hasRecordedTake {
+                        reviewActionsCard
+                        reviewExportCard
+                    }
                 }
-                .padding(.bottom, 24)
+                .padding(.bottom, ScratchLabDesign.Spacing.sidebarBottom)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
+        .padding(.horizontal, ScratchLabDesign.Spacing.sidebarHorizontal)
+        .padding(.top, ScratchLabDesign.Spacing.sidebarTop)
     }
 
     #if DEBUG
@@ -2067,23 +2112,31 @@ struct MacAnalyzerView: View {
         // by the selected AdvancedSection so the panel is no longer one
         // endless technical scroll. All cards remain reachable — pick a
         // section to bring them into view.
-        VStack(alignment: .leading, spacing: 18) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    advancedHeaderCard
-                    advancedSectionPickerCard
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            GeometryReader { sidebarGeometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                        advancedHeaderCard
+                        advancedSectionPickerCard
 
-                    if let activeSession = routineSessionPresentation.activeSession {
-                        activeRoutineSessionCard(activeSession)
+                        if let activeSession = routineSessionPresentation.activeSession {
+                            activeRoutineSessionCard(activeSession)
+                        }
+
+                        advancedSelectedSectionContent
                     }
-
-                    advancedSelectedSectionContent
+                    // A vertical ScrollView proposes an unbounded width to
+                    // its content. `maxWidth: .infinity` therefore did not
+                    // give ViewThatFits a finite width, so the header still
+                    // chose its oversized horizontal layout. Use the actual
+                    // sidebar width to make every wrapping decision honest.
+                    .frame(width: sidebarGeometry.size.width, alignment: .leading)
+                    .padding(.bottom, ScratchLabDesign.Spacing.sidebarBottom)
                 }
-                .padding(.bottom, 24)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
+        .padding(.horizontal, ScratchLabDesign.Spacing.sidebarHorizontal)
+        .padding(.top, ScratchLabDesign.Spacing.sidebarTop)
     }
 
     private var advancedSectionPickerCard: some View {
@@ -2100,23 +2153,24 @@ struct MacAnalyzerView: View {
             .labelsHidden()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .scratchLabCard()
     }
 
     @ViewBuilder
     private var advancedSelectedSectionContent: some View {
         switch advancedSection {
         case .overview:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 advancedToolsCard
                 performanceDiagnosticsCard
+                #if DEBUG
+                platterTimelineDebugCard
+                #endif
                 routineSessionCard
                 workflowCard
             }
         case .audio:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 audioCard
                     .disabled(captureEngine.isRoutineRecording)
                 seratoScreenCard
@@ -2125,7 +2179,7 @@ struct MacAnalyzerView: View {
                 audioOnsetDiagnosticsCard
             }
         case .cameraDeck:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 cameraCard
                     .disabled(captureEngine.isRoutineRecording)
                 deckCalibrationCard
@@ -2135,24 +2189,24 @@ struct MacAnalyzerView: View {
                     .disabled(captureEngine.isRoutineRecording)
             }
         case .midiFader:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 midiMonitorCard
             }
         case .monitor:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 companionCard
                     .disabled(captureEngine.isRoutineRecording)
             }
 #if DEBUG
         case .captureDetails:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 if selectedRoutineSession != nil {
                     routineRecordingCard
                 }
                 cxlCaptureCard
             }
         case .timecodeInput:
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 // Keep capture controls ahead of live-resizing diagnostic
                 // panels so signal updates cannot move the button under the
                 // pointer while a user is trying to start a capture.
@@ -3183,6 +3237,76 @@ struct MacAnalyzerView: View {
         }
     }
 
+    private enum ReviewStagePresentation {
+        case empty
+        case recording(String)
+        case finalizing(String)
+        case issue(title: String, message: String)
+        case ready
+    }
+
+    private struct ReviewHeaderStatusStyle {
+        let systemImage: String
+        let color: Color
+    }
+
+    private var reviewStagePresentation: ReviewStagePresentation {
+        if captureEngine.isRoutineRecording {
+            return .recording("ScratchLab is recording your take. Stop the recording before reviewing it.")
+        }
+
+        guard let status = currentRoutineArtifactStatus else {
+            if hasRecordedTake {
+                return .finalizing("ScratchLab is verifying the saved audio and video. Review will update automatically.")
+            }
+            return .empty
+        }
+
+        let takeLabel = "Take \(String(format: "%03d", status.takeNumber))"
+        switch status.readiness {
+        case .ready:
+            return .ready
+        case .recording:
+            return .recording("\(takeLabel) is still recording. Stop the recording before reviewing it.")
+        case .finalizing:
+            return .finalizing("\(takeLabel) is finalizing its audio and video. Review will update automatically.")
+        case .missingAudio:
+            return .issue(
+                title: "Audio is missing",
+                message: "\(takeLabel) cannot be exported as a complete capture. Record another take; this take remains stored."
+            )
+        case .missingVideo:
+            return .issue(
+                title: "Video is missing",
+                message: "\(takeLabel) cannot be exported as a complete capture. Record another take; this take remains stored."
+            )
+        case .failed(let message):
+            return .issue(
+                title: "Take could not be completed",
+                message: "\(takeLabel) failed: \(message) Record another take; this take remains stored."
+            )
+        }
+    }
+
+    private var reviewHeaderStatusStyle: ReviewHeaderStatusStyle {
+        if reviewStatusMessage.hasPrefix("Could not") {
+            return ReviewHeaderStatusStyle(systemImage: "exclamationmark.triangle.fill", color: .red)
+        }
+
+        switch reviewStagePresentation {
+        case .empty:
+            return ReviewHeaderStatusStyle(systemImage: "circle.dashed", color: .secondary)
+        case .recording:
+            return ReviewHeaderStatusStyle(systemImage: "record.circle.fill", color: .red)
+        case .finalizing:
+            return ReviewHeaderStatusStyle(systemImage: "clock.arrow.circlepath", color: .orange)
+        case .issue:
+            return ReviewHeaderStatusStyle(systemImage: "exclamationmark.triangle.fill", color: .red)
+        case .ready:
+            return ReviewHeaderStatusStyle(systemImage: "checkmark.seal.fill", color: .secondary)
+        }
+    }
+
     private var reviewNotationAvailabilityMessage: String {
         if hasPartialReviewNotation {
             if hasRawMotionWithoutClassifiedStrokes {
@@ -4079,37 +4203,29 @@ struct MacAnalyzerView: View {
 
     private var advancedHeaderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Advanced")
-                        .font(.system(size: 28, weight: .semibold))
-
-                    Text("ScratchLab")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    advancedHeaderIdentity
+                    Spacer(minLength: 12)
+                    advancedHeaderActions
                 }
 
-                Spacer(minLength: 12)
-
-                HStack(spacing: 8) {
-                    Button("New session", action: createNewSessionAction)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(captureEngine.isRoutineRecording)
-
-                    Button("Open Performer Monitor") {
-                        openWindow(id: "performer-monitor")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 10) {
+                    advancedHeaderIdentity
+                    advancedHeaderActions
                 }
             }
 
             Text("Diagnostics, calibration, and notation tools.")
-                .font(.system(size: 14, weight: .medium))
+                .font(ScratchLabDesign.Typo.pageSubtitle)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 105), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
                 headerStatusPill(
                     title: "Audio",
                     value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not connected" : "Ready",
@@ -4131,8 +4247,10 @@ struct MacAnalyzerView: View {
             }
 
             Label(captureEngine.statusMessage, systemImage: captureEngine.statusIcon)
-                .font(.system(size: 12, weight: .semibold))
+                .font(ScratchLabDesign.Typo.pageStatus)
                 .foregroundStyle(captureEngine.statusColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if !captureEngine.isCameraActive {
                 Button {
@@ -4148,8 +4266,10 @@ struct MacAnalyzerView: View {
             }
 
             Label(performerBroadcaster.connectionStatus, systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right")
-                .font(.system(size: 12, weight: .semibold))
+                .font(ScratchLabDesign.Typo.pageStatus)
                 .foregroundColor(performerBroadcaster.connectedPeerNames.isEmpty ? Color.secondary : Color.green)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             DisclosureGroup("Connect manually") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -4166,12 +4286,50 @@ struct MacAnalyzerView: View {
             .font(.system(size: 12, weight: .semibold))
 
             Text("Open Performer Monitor and send that window to an external display, or run ScratchLab on a second device and tap Performer Monitor there.")
-                .font(.system(size: 12, weight: .medium))
+                .font(ScratchLabDesign.Typo.bodySecondary)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .scratchLabCard(.pageHeader)
+    }
+
+    private var advancedHeaderIdentity: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Advanced")
+                .font(ScratchLabDesign.Typo.pageTitle)
+
+            Text("ScratchLab")
+                .font(ScratchLabDesign.Typo.pageEyebrow)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var advancedHeaderActions: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                advancedNewSessionButton
+                advancedPerformerMonitorButton
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                advancedNewSessionButton
+                advancedPerformerMonitorButton
+            }
+        }
+    }
+
+    private var advancedNewSessionButton: some View {
+        Button("New session", action: createNewSessionAction)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(captureEngine.isRoutineRecording)
+    }
+
+    private var advancedPerformerMonitorButton: some View {
+        Button("Open Performer Monitor") {
+            openWindow(id: "performer-monitor")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private var advancedToolsCard: some View {
@@ -4201,9 +4359,7 @@ struct MacAnalyzerView: View {
                 #endif
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var performanceDiagnosticsCard: some View {
@@ -4333,9 +4489,7 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var friendlyPlaybackState: String {
@@ -4435,9 +4589,7 @@ struct MacAnalyzerView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private func activeRoutineSessionCard(
@@ -4461,9 +4613,7 @@ struct MacAnalyzerView: View {
             .buttonStyle(.plain)
             .disabled(captureEngine.isRoutineRecording)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private func routineSessionButton(
@@ -4484,28 +4634,93 @@ struct MacAnalyzerView: View {
         .disabled(captureEngine.isRoutineRecording)
     }
 
-    private var captureSessionWorkflowCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+    /// Single "what happens next" line for the Capture page header.
+    /// Derived entirely from existing session/engine state — no new state.
+    private struct CaptureNextAction {
+        let message: String
+        let systemImage: String
+        let color: Color
+    }
+
+    private var captureNextAction: CaptureNextAction {
+        if captureEngine.isRoutineRecording {
+            return CaptureNextAction(
+                message: "Recording — press Stop to finish the take.",
+                systemImage: "record.circle.fill",
+                color: Color(nsColor: .systemRed)
+            )
+        }
+        if selectedRoutineSession == nil {
+            return CaptureNextAction(
+                message: "Next: create a session to unlock recording.",
+                systemImage: "plus.circle",
+                color: .secondary
+            )
+        }
+        if let routineMetadataStatusMessage {
+            return CaptureNextAction(
+                message: routineMetadataStatusMessage,
+                systemImage: "exclamationmark.circle.fill",
+                color: ScratchLabDesign.Sem.warning
+            )
+        }
+        if routineStartDisabled {
+            return CaptureNextAction(
+                message: "Next: select an available audio input before recording.",
+                systemImage: "exclamationmark.circle.fill",
+                color: ScratchLabDesign.Sem.warning
+            )
+        }
+        if hasRecordedTake {
+            return CaptureNextAction(
+                message: "Take captured — review, save, or record another below.",
+                systemImage: "checkmark.seal.fill",
+                color: ScratchLabDesign.Sem.success
+            )
+        }
+        return CaptureNextAction(
+            message: "Ready — press Record to capture a take.",
+            systemImage: "checkmark.circle.fill",
+            color: ScratchLabDesign.Sem.success
+        )
+    }
+
+    private var capturePageHeaderCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Capture")
-                        .font(.system(size: 28, weight: .semibold))
+                        .font(ScratchLabDesign.Typo.pageTitle)
 
                     Text("Record clean takes for review and export.")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 12)
 
-                Button("New Session", action: createNewSessionAction)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(captureEngine.isRoutineRecording)
+                if selectedRoutineSession != nil {
+                    Button("New Session", action: createNewSessionAction)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.isRoutineRecording)
+                }
             }
 
+            Label(captureNextAction.message, systemImage: captureNextAction.systemImage)
+                .font(ScratchLabDesign.Typo.pageStatus)
+                .foregroundStyle(captureNextAction.color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .scratchLabCard(.pageHeader)
+    }
+
+    private var captureSessionSetupCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
+            ScratchLabStepHeader(number: 1, title: "Set up the session")
+
             if selectedRoutineSession == nil {
-                Text("Press Record to start a new Untitled Session.")
+                Text("Create a session to start recording. Leave the name blank for an Untitled Session.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -4514,37 +4729,6 @@ struct MacAnalyzerView: View {
                     .scratchLabPrimaryButton()
                     .disabled(captureEngine.isRoutineRecording)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Audio source")
-                        .font(.system(size: 13, weight: .semibold))
-
-                    Picker("Source", selection: selectedAudioDeviceBinding) {
-                        if captureEngine.availableAudioDevices.isEmpty {
-                            Text("No audio inputs found").tag("")
-                        } else {
-                            ForEach(captureEngine.availableAudioDevices, id: \.uniqueID) { device in
-                                Text(device.localizedName).tag(device.uniqueID)
-                            }
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
-
-                    // Engine's selectedAudioDeviceStatusLine is intentionally
-                    // omitted here — the Inputs grid below already surfaces
-                    // device + signal state without the chained-redundant
-                    // "Audio Ready — Virtual audio device — No signal" copy.
-
-                    if captureEngine.shouldOfferUseSeratoAudio {
-                        Button("Use Serato Audio") {
-                            captureEngine.usePreferredSeratoAudio()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
-                    }
-                }
-
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Session name")
                         .font(.system(size: 13, weight: .semibold))
@@ -4577,6 +4761,23 @@ struct MacAnalyzerView: View {
                     )
                     .disabled(captureEngine.isRoutineRecording)
                 }
+            }
+        }
+        .scratchLabCard()
+    }
+
+    /// Pinned record/review hero at the bottom of the Capture sidebar.
+    /// Steps 3 and 4 of the capture sequence share this surface: the step
+    /// header flips to "Review the result" once a take exists so the next
+    /// required action is always the hero's primary button.
+    @ViewBuilder
+    private var captureRecordCard: some View {
+        if selectedRoutineSession != nil {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
+                ScratchLabStepHeader(
+                    number: hasRecordedTake ? 4 : 3,
+                    title: hasRecordedTake ? "Review the result" : "Record the take"
+                )
 
                 Label(Self.friendlyStatusMessage(captureEngine.routineRecordingStatus), systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -4643,16 +4844,18 @@ struct MacAnalyzerView: View {
                     }
                 }
             }
+            .scratchLabCard(.lessonHero)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var captureInputStatusCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Inputs")
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                ScratchLabStepHeader(number: 2, title: "Confirm readiness")
+
+                Text("Inputs")
+                    .font(.headline)
+            }
 
             LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
 #if DEBUG
@@ -4716,6 +4919,18 @@ struct MacAnalyzerView: View {
                 )
             }
 
+            // One-click readiness repair: when the engine can see a Serato
+            // input that isn't selected, offer it right under the Audio tile
+            // instead of burying it in the routing disclosure below.
+            if selectedRoutineSession != nil, captureEngine.shouldOfferUseSeratoAudio {
+                Button("Use Serato Audio") {
+                    captureEngine.usePreferredSeratoAudio()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
+            }
+
             // Slice X.1.1: discoverable calibration entry point. The deck
             // calibration overlay lives over the live camera preview on the
             // Practice tab (Advanced -> Camera Deck only has the controls,
@@ -4756,13 +4971,38 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // MIDI source picker + Learn crossfader / Clear mapping live
-            // behind a single "Input details" disclosure so the Inputs grid
-            // stays the headline and the picker doesn't dominate the card
-            // when no controller is connected. Bindings unchanged — the
+            // Audio routing + MIDI source picker + Learn crossfader / Clear
+            // mapping live behind a single "Input details" disclosure so the
+            // Inputs grid stays the headline and the pickers don't dominate
+            // the card when nothing needs changing. Bindings unchanged — the
             // disclosure only re-parents the existing sub-views.
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 12) {
+                    if selectedRoutineSession != nil {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Audio source")
+                                .font(.system(size: 13, weight: .semibold))
+
+                            Picker("Source", selection: selectedAudioDeviceBinding) {
+                                if captureEngine.availableAudioDevices.isEmpty {
+                                    Text("No audio inputs found").tag("")
+                                } else {
+                                    ForEach(captureEngine.availableAudioDevices, id: \.uniqueID) { device in
+                                        Text(device.localizedName).tag(device.uniqueID)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
+
+                            // Engine's selectedAudioDeviceStatusLine is
+                            // intentionally omitted here — the Inputs grid
+                            // above already surfaces device + signal state
+                            // without the chained-redundant "Audio Ready —
+                            // Virtual audio device — No signal" copy.
+                        }
+                    }
+
                     midiSourcePickerRow
                     midiLearnRow
                 }
@@ -4773,9 +5013,7 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var midiMonitorCard: some View {
@@ -4904,9 +5142,7 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var captureSessionListCard: some View {
@@ -4928,9 +5164,7 @@ struct MacAnalyzerView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var captureWorkflowSummaryCard: some View {
@@ -4943,27 +5177,23 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var reviewHeaderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Review")
-                .font(.system(size: 28, weight: .semibold))
+                .font(ScratchLabDesign.Typo.pageTitle)
 
             Text("Confirm the detected scratch type, or correct it before export. Audio and video stay untouched.")
-                .font(.system(size: 14, weight: .medium))
+                .font(ScratchLabDesign.Typo.pageSubtitle)
                 .foregroundStyle(.secondary)
 
-            Label(reviewStatusMessage, systemImage: "checkmark.seal.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+            Label(reviewStatusMessage, systemImage: reviewHeaderStatusStyle.systemImage)
+                .font(ScratchLabDesign.Typo.pageStatus)
+                .foregroundStyle(reviewHeaderStatusStyle.color)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard(.pageHeader)
     }
 
     private var reviewSessionListCard: some View {
@@ -5009,9 +5239,7 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var reviewTakeCard: some View {
@@ -5117,12 +5345,19 @@ struct MacAnalyzerView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    Button {
+                        workspaceTab = .capture
+                    } label: {
+                        Label("Open Capture", systemImage: "record.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .padding(.top, 6)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var reviewActionsCard: some View {
@@ -5263,9 +5498,7 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
         .onAppear { loadReviewMetadataForCurrentTake() }
         .onChange(of: captureEngine.lastRoutineRecordingURL) { _, _ in
             loadReviewMetadataForCurrentTake()
@@ -5309,9 +5542,7 @@ struct MacAnalyzerView: View {
                     .truncationMode(.middle)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var reviewStage: some View {
@@ -5321,17 +5552,142 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.white)
 
-                reviewTargetNotationStageCard
-                reviewCapturedNotationStageCard
-                reviewTargetVsPerformedStageCard
-                reviewOverlayDiffStageCard
-                reviewAudioOnsetPreviewStageCard
-                reviewSummaryFooterCard
+                switch reviewStagePresentation {
+                case .empty:
+                    reviewStageStatusCard(
+                        title: "Record a take to begin",
+                        message: "Your target pattern is ready below. Open Capture when you're ready to record your attempt.",
+                        systemImage: "waveform.badge.plus",
+                        accent: .white,
+                        actionTitle: "Open Capture",
+                        actionSystemImage: "record.circle"
+                    ) {
+                        workspaceTab = .capture
+                    }
+                    reviewTargetNotationStageCard
+
+                case .recording(let message):
+                    reviewStageStatusCard(
+                        title: "Recording in progress",
+                        message: message,
+                        systemImage: "record.circle.fill",
+                        accent: .red,
+                        showsProgress: true,
+                        actionTitle: "Open Capture",
+                        actionSystemImage: "arrow.left"
+                    ) {
+                        workspaceTab = .capture
+                    }
+                    reviewTargetNotationStageCard
+
+                case .finalizing(let message):
+                    reviewStageStatusCard(
+                        title: "Preparing your take",
+                        message: message,
+                        systemImage: "clock.arrow.circlepath",
+                        accent: .orange,
+                        showsProgress: true
+                    )
+                    reviewTargetNotationStageCard
+
+                case .issue(let title, let message):
+                    reviewStageStatusCard(
+                        title: title,
+                        message: message,
+                        systemImage: "exclamationmark.triangle.fill",
+                        accent: .red,
+                        actionTitle: "Record another take",
+                        actionSystemImage: "arrow.counterclockwise"
+                    ) {
+                        if hasRecordedTake {
+                            prepareRetake()
+                        } else {
+                            workspaceTab = .capture
+                        }
+                    }
+                    reviewCompletedTakeStageCards
+
+                case .ready:
+                    reviewCompletedTakeStageCards
+                }
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Color.black)
+    }
+
+    @ViewBuilder
+    private var reviewCompletedTakeStageCards: some View {
+        reviewTargetNotationStageCard
+        reviewCapturedNotationStageCard
+        reviewTargetVsPerformedStageCard
+        reviewOverlayDiffStageCard
+        reviewAudioOnsetPreviewStageCard
+        reviewSummaryFooterCard
+    }
+
+    private func reviewStageStatusCard(
+        title: String,
+        message: String,
+        systemImage: String,
+        accent: Color,
+        showsProgress: Bool = false,
+        actionTitle: String? = nil,
+        actionSystemImage: String? = nil,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(accent.opacity(0.14))
+                if showsProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(accent)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(accent)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+
+                Text(message)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.66))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let actionTitle, let action {
+                    Button(action: action) {
+                        if let actionSystemImage {
+                            Label(actionTitle, systemImage: actionSystemImage)
+                        } else {
+                            Text(actionTitle)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .tint(accent)
+                    .padding(.top, 4)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(accent.opacity(0.22), lineWidth: 1)
+        }
     }
 
     /// Slice P — Review-only audio-onset preview card. Diagnostic surface
@@ -5424,9 +5780,7 @@ struct MacAnalyzerView: View {
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .scratchLabCard(.stage)
             }
         }
     }
@@ -5536,14 +5890,20 @@ struct MacAnalyzerView: View {
                 }
             }
             #if DEBUG
-            debugNotationDiagnosticChip(debugTargetNotationChipText)
+            DisclosureGroup {
+                debugNotationDiagnosticChip(debugTargetNotationChipText)
+                    .padding(.top, 8)
+            } label: {
+                Label("Target diagnostics", systemImage: "wrench.and.screwdriver")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
             #endif
             Text("Reference pattern. Stays visible even when no captured notation is available.")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
         }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard(.stage)
     }
 
     // MARK: - Review: target vs performed comparison
@@ -5854,13 +6214,6 @@ struct MacAnalyzerView: View {
                 Text("Captured evidence")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
-                #if DEBUG
-                Text("DEBUG SENTINEL")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 6)
-                    .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-                #endif
                 Spacer(minLength: 0)
                 if hasCapturedMotionNotation {
                     Button {
@@ -5970,32 +6323,48 @@ struct MacAnalyzerView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             #if DEBUG
-            debugNotationDiagnosticChip(debugCapturedNotationChipText)
-            Text("DEBUG: Captured evidence card renders")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.orange)
-            HStack(spacing: 8) {
-                Button("Replay from platter") {
-                    captureEngine.replayDiagnosticsFromPlatterTimeline()
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Captured evidence debug sentinel")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.orange)
+
+                    debugNotationDiagnosticChip(debugCapturedNotationChipText)
+
+                    Text("Captured evidence card rendered")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.orange)
+
+                    HStack(spacing: 8) {
+                        Button("Replay from platter") {
+                            captureEngine.replayDiagnosticsFromPlatterTimeline()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        let label = captureEngine.frozenReviewDiagnostics?.replaySourceLabel ?? ""
+                        if label == "replay:platterSynthetic" {
+                            Text("replayed")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.green)
+                        } else if label.isEmpty || label == "live" {
+                            Text("tap to replay")
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    movementFunnelInlineView
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                let label = captureEngine.frozenReviewDiagnostics?.replaySourceLabel ?? ""
-                if label == "replay:platterSynthetic" {
-                    Text("replayed")
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.green)
-                } else if label.isEmpty || label == "live" {
-                    Text("tap to replay")
-                        .font(.system(size: 9, weight: .regular, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
+                .padding(.top, 8)
+            } label: {
+                Label("Developer diagnostics", systemImage: "wrench.and.screwdriver")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
-            movementFunnelInlineView
             #endif
         }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard(.stage)
     }
 
     /// Slice 4.2 — read-only overlay diff viewer card. Renders the
@@ -6041,8 +6410,7 @@ struct MacAnalyzerView: View {
                 )
             }
         }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard(.stage)
     }
 
     private func reviewOverlayDiffEmptyState(
@@ -6130,8 +6498,7 @@ struct MacAnalyzerView: View {
             reviewFooterMetric(title: "Source", value: capturedSource.label, systemImage: capturedSource.systemImage, color: capturedSource.color)
             reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? .green : .secondary)
         }
-        .padding(14)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .scratchLabCard(.stage)
     }
 
     private func reviewFooterMetric(title: String, value: String, systemImage: String, color: Color) -> some View {
@@ -6189,31 +6556,41 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceHeaderCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Practice")
-                        .font(.system(size: 28, weight: .semibold))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("CURRENT LESSON")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
 
-                    Text("ScratchLab")
-                        .font(.system(size: 12, weight: .medium))
+                    Text("Baby Scratch")
+                        .font(ScratchLabDesign.Typo.pageTitle)
+
+                    Text("One smooth push forward, one smooth pull back, with the fader open.")
+                        .font(ScratchLabDesign.Typo.body)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 12)
 
+                VStack(alignment: .trailing, spacing: 8) {
+                    Label("Beginner", systemImage: "graduationcap.fill")
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(.secondary)
+
                     Button("Open Capture") {
                         workspaceTab = .capture
+                    }
+                    .scratchLabTertiaryButton()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
 
-            Text("Try the Baby Scratch demo, listen to the coach, and start a practice run.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 88), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
                 if liveInputEnabled {
                     headerStatusPill(
                         title: "Audio",
@@ -6244,42 +6621,60 @@ struct MacAnalyzerView: View {
             }
 
             Label(captureEngine.scratchStatusTitle, systemImage: captureEngine.scratchStatusIcon)
-                .font(.system(size: 12, weight: .semibold))
+                .font(ScratchLabDesign.Typo.pageStatus)
                 .foregroundStyle(captureEngine.scratchStatusColor)
 
-            Text("Record takes from the Capture tab.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+            Divider()
+                .overlay(ScratchLabDesign.Sem.accent.opacity(0.22))
+
+            practiceCoachCard
+
+            Divider()
+                .overlay(Color.primary.opacity(0.08))
+
+            HStack(spacing: 10) {
+                Button {
+                    if isPracticeSessionActive {
+                        finishPracticeSession(saveResult: true)
+                    } else {
+                        startPracticeSession()
+                    }
+                } label: {
+                    Label(
+                        isPracticeSessionActive ? "Finish & save" : "Start practice",
+                        systemImage: isPracticeSessionActive ? "checkmark.circle.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .scratchLabSuccessButton(fillsWidth: true)
+
+                if isPracticeSessionActive {
+                    Button("Cancel") {
+                        cancelTestLabPracticeSession()
+                    }
+                    .scratchLabSecondaryButton()
+                }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .scratchLabCard(.lessonHero)
     }
 
     // MARK: - Practice cards (decomposed from the legacy monolithic
-    // `practiceControlCard`). Three sibling cards + a Progress tile row,
-    // all powered by the existing demo-mode controller, practiceBeatStore,
-    // captureEngine, and progressManager — no new state, no new model
-    // fields, no new engine calls.
+    // `practiceControlCard`). The coach content now lives inside the Current
+    // lesson hero; the run card and progressively disclosed supporting tools
+    // remain powered by the existing controllers and stores — no new state,
+    // model fields, or engine calls.
 
     private var practiceCoachCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Coach")
-                        .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Listen first")
+                    .font(ScratchLabDesign.Typo.sectionLabel)
 
-                    Text("Hear the Baby Scratch reference. One clean push forward, one clean pull back, fader open.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 12)
-
-                Label("Beginner", systemImage: "graduationcap.fill")
-                    .font(.system(size: 11, weight: .bold))
+                Text("Hear the reference, then copy the same forward-and-back motion.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(spacing: 10) {
@@ -6359,9 +6754,6 @@ struct MacAnalyzerView: View {
             // sidebar version is removed to avoid clutter while the main strip is
             // being tested.
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private var practiceRunCard: some View {
@@ -6439,26 +6831,6 @@ struct MacAnalyzerView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 10) {
-                Button(isPracticeSessionActive ? "Finish & save" : "Start practice") {
-                    if isPracticeSessionActive {
-                        finishPracticeSession(saveResult: true)
-                    } else {
-                        startPracticeSession()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-
-                if isPracticeSessionActive {
-                    Button("Cancel") {
-                        cancelTestLabPracticeSession()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                }
-            }
-
             if let practiceLastSavedAt {
                 Label(
                     "Saved \(Int(practiceLastSavedAccuracy.rounded()))% over \(formatPracticeTime(practiceLastSavedDuration)) at \(practiceLastSavedAt.formatted(date: .omitted, time: .shortened)).",
@@ -6480,9 +6852,7 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     // MARK: - Scored attempt (WATCH → COPY → RESULT)
@@ -6853,9 +7223,7 @@ struct MacAnalyzerView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var practiceProgressTilesRow: some View {
@@ -7755,9 +8123,7 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(captureEngine.canUseDirectSeratoCapture ? Color(nsColor: .systemGreen) : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var cameraCard: some View {
@@ -7861,9 +8227,7 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private func coachDemoButton(
@@ -8291,9 +8655,7 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var workflowCard: some View {
@@ -8348,9 +8710,7 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     #if DEBUG
@@ -8784,9 +9144,7 @@ private struct ReviewLiveDiagnosticsOnsetCard: View {
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .scratchLabCard(.stage)
         }
     }
 }
@@ -10545,6 +10903,7 @@ private final class SeratoWindowMover: ObservableObject {
 /// `.scratchLabTertiaryButton()` view modifiers below.
 private enum ScratchLabButtonRole {
     case primary
+    case success
     case secondary
     case tertiary
     case destructive
@@ -10563,6 +10922,18 @@ private struct ScratchLabButtonStyle: ViewModifier {
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+        case .success:
+            content
+                .font(ScratchLabDesign.Typo.buttonPrimary)
+                .foregroundStyle(Color.black)
+                .frame(minHeight: ScratchLabDesign.Button.primaryHeight)
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
+                .background(
+                    ScratchLabDesign.Sem.success,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .contentShape(Rectangle())
+                .buttonStyle(.plain)
         case .secondary:
             content
                 .font(.system(size: 13, weight: .semibold))
@@ -10592,6 +10963,10 @@ extension View {
     /// One-per-section dominant action.
     func scratchLabPrimaryButton(fillsWidth: Bool = false) -> some View {
         modifier(ScratchLabButtonStyle(role: .primary, fillsWidth: fillsWidth))
+    }
+    /// Filled success action for a ready-to-start workflow.
+    func scratchLabSuccessButton(fillsWidth: Bool = false) -> some View {
+        modifier(ScratchLabButtonStyle(role: .success, fillsWidth: fillsWidth))
     }
     /// Bordered medium-weight action.
     func scratchLabSecondaryButton(fillsWidth: Bool = false) -> some View {

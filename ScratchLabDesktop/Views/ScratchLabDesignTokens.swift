@@ -30,6 +30,7 @@ enum ScratchLabDesign {
 
     enum Card {
         static let padding: CGFloat = 20
+        static let stagePadding: CGFloat = 16
         static let compactPadding: CGFloat = 14
         static let cornerRadius: CGFloat = 18
         static let compactCornerRadius: CGFloat = 14
@@ -67,6 +68,9 @@ enum ScratchLabDesign {
 
     enum Typo {
         static let pageTitle    = Font.system(size: 28, weight: .semibold)
+        static let pageSubtitle = Font.system(size: 14, weight: .medium)
+        static let pageEyebrow  = Font.system(size: 12, weight: .medium)
+        static let pageStatus   = Font.system(size: 12, weight: .semibold)
         static let cardHeading  = Font.system(size: 17, weight: .semibold)
         static let sectionLabel = Font.system(size: 13, weight: .semibold)
         static let body         = Font.system(size: 13, weight: .medium)
@@ -269,5 +273,161 @@ extension Chip where Label == Text {
         self.init(isSelected: isSelected, isNumeric: isNumeric, action: action) {
             Text(title)
         }
+    }
+}
+
+// MARK: - Card surfaces
+
+enum ScratchLabCardStyle {
+    case standard
+    case pageHeader
+    case lessonHero
+    case hero
+    case stage
+}
+
+private struct ScratchLabCardModifier: ViewModifier {
+    let style: ScratchLabCardStyle
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch style {
+        case .standard:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(ScratchLabDesign.Card.padding)
+                .background(
+                    ScratchLabDesign.Surface.card,
+                    in: RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.cornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                }
+
+        case .pageHeader:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(ScratchLabDesign.Card.padding)
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.heroCornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.heroCornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+
+        case .lessonHero:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(ScratchLabDesign.Card.padding)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            ScratchLabDesign.Sem.accent.opacity(0.22),
+                            ScratchLabDesign.Surface.card.opacity(0.96)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    in: RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.heroCornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.heroCornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(ScratchLabDesign.Sem.accent.opacity(0.30), lineWidth: 1)
+                }
+
+        case .hero:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(ScratchLabDesign.Card.padding)
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.cornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+
+        case .stage:
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(ScratchLabDesign.Card.stagePadding)
+                .background(
+                    ScratchLabDesign.Surface.stageOverlay,
+                    in: RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.cornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Card.cornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(ScratchLabDesign.Surface.divider, lineWidth: 1)
+                }
+        }
+    }
+}
+
+extension View {
+    func scratchLabCard(_ style: ScratchLabCardStyle = .standard) -> some View {
+        modifier(ScratchLabCardModifier(style: style))
+    }
+}
+
+// MARK: - StepHeader
+//
+// Numbered workflow-step caption ("① SET UP THE SESSION") used by the Capture
+// sidebar's configure → readiness → record → review sequence. Number badge
+// uses the accent role; the title reuses the metric-label eyebrow type role.
+
+struct ScratchLabStepHeader: View {
+    let number: Int
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(number)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(ScratchLabDesign.Sem.accent)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(ScratchLabDesign.Sem.accent.opacity(0.16)))
+                .overlay(Circle().stroke(ScratchLabDesign.Sem.accent.opacity(0.35), lineWidth: 1))
+
+            Text(title.uppercased())
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(.secondary)
+                .kerning(0.6)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step \(number): \(title)")
     }
 }
