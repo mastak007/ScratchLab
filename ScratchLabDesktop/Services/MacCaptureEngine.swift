@@ -6920,12 +6920,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Applies a just-learned crossfader binding. Called at most once per
-    /// learn session — the caller (`evaluateMIDILearnForCC`) has already
-    /// atomically claimed and ended the session before calling this, so no
-    /// session-state mutation happens here. Persistence (JSON encode +
-    /// UserDefaults write) runs on `midiMappingPersistenceQueue`, never on
-    /// the CoreMIDI callback or main.
+    /// Legacy-compatibility adapter, NOT the authoritative UI-state
+    /// publisher: writes the standalone pre-generalized-learn crossfader
+    /// store (`persistedCrossfaderMapping` + the single-key
+    /// `crossfaderMIDIMapping` UserDefaults entry) that launch-restore
+    /// (`init`, `startDeviceDiscoveryAfterViewMount`) and
+    /// `recordReceivedMIDICCEvent`'s mapped-control detection still read.
+    /// Called at most once per learn session — the caller
+    /// (`evaluateMIDILearnForCC`) has already atomically claimed and ended
+    /// the session before calling this, so no session-state mutation
+    /// happens here.
+    ///
+    /// Does NOT touch `crossfaderCCMapping`, `midiLearnState`, or
+    /// `midiLearnFeedback` — `applyLearnedMapping`'s completion (run via
+    /// `mutateDeviceMapping` on the same serial persistence queue) is the
+    /// single authoritative publisher of those for every learned action,
+    /// crossfader included. Publishing them here too raced that
+    /// completion: `mutateDeviceMapping` round-trips through
+    /// `midiMappingPersistenceQueue` before reaching main, so this
+    /// function's now-removed direct `publishOnMainAsync` used to land on
+    /// main *first* despite being called *second*, only for the delayed
+    /// generic completion to overwrite it back to `.idle` moments later.
     private func applyLearnedCrossfaderMapping(_ mapping: CrossfaderCCMapping) {
         midiCaptureLock.lock()
         persistedCrossfaderMapping = mapping
@@ -6934,15 +6949,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             if let data = try? JSONEncoder().encode(mapping) {
                 UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
             }
-        }
-        publishOnMainAsync(field: "midiLearn") { [weak self] in
-            guard let self else { return }
-            self.activeMIDILearnAction = nil
-            self.crossfaderCCMapping = mapping
-            let nextState = MIDILearnState.learned(mapping)
-            let nextFeedback = "Learned Xfader: \(mapping.displayName)"
-            if self.midiLearnState != nextState { self.midiLearnState = nextState }
-            if self.midiLearnFeedback != nextFeedback { self.midiLearnFeedback = nextFeedback }
         }
     }
 
@@ -7095,10 +7101,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             self.midiMappingError = ""
-            self.midiLearnState = .idle
             self.activeMIDILearnAction = nil
-            let fb = "Learned \(action.displayName): \(control.displayName)"
-            if self.midiLearnFeedback != fb { self.midiLearnFeedback = fb }
+            // Single authoritative state transition for every learned
+            // action. Crossfader keeps its original `.learned(mapping)`
+            // state and "Learned Xfader: ..." wording — the pre-existing
+            // crossfader-only UI, `midiCrossfaderMappingStatus`, and the
+            // `473c3a3` regression test all key off that exact shape —
+            // rather than the generic `.idle` this closure uses for every
+            // other action. `applyLearnedCrossfaderMapping` (called just
+            // before this by `evaluateMIDILearnForCC`, synchronously for
+            // its legacy-persistence side effects) no longer publishes UI
+            // state itself, so there is exactly one publish here.
+            if action == .crossfader {
+                let crossfaderMapping = CrossfaderCCMapping(channel: control.channel, controller: control.controlNumber)
+                self.crossfaderCCMapping = crossfaderMapping
+                let nextState = MIDILearnState.learned(crossfaderMapping)
+                let nextFeedback = "Learned Xfader: \(crossfaderMapping.displayName)"
+                if self.midiLearnState != nextState { self.midiLearnState = nextState }
+                if self.midiLearnFeedback != nextFeedback { self.midiLearnFeedback = nextFeedback }
+            } else {
+                self.midiLearnState = .idle
+                let fb = "Learned \(action.displayName): \(control.displayName)"
+                if self.midiLearnFeedback != fb { self.midiLearnFeedback = fb }
+            }
             // A fresh or replaced binding changes what CC (or none at all,
             // until now) drives this control — its old value (if any) is
             // not meaningful under the new binding, so resolve+push its

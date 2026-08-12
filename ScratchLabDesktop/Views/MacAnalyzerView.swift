@@ -5449,11 +5449,12 @@ struct MacAnalyzerView: View {
                 Text(captureEngine.lastMIDICCMessage)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
-                Text(captureEngine.midiCrossfaderMappingStatus)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
 
+            // Crossfader status (learned/listening/idle) is covered by
+            // `midiLearnRow` below via `midiLearnStatusText` — its `.idle`
+            // case already falls back to this same `midiCrossfaderMappingStatus`
+            // text, so a separate static line here was a pure duplicate.
             midiLearnRow
 
             mixerAndHotCueMappingSection
