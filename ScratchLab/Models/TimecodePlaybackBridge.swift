@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 // MARK: - TimecodePlaybackBridgeState
 
@@ -358,6 +359,11 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
 
     // MARK: - Init
 
+    /// `notificationClock` backs `evaluate(pipeline:)`'s flush-notification
+    /// coalescing (see its doc comment) — injectable so tests can pin
+    /// elapsed time deterministically instead of depending on how long a
+    /// test's own synthetic decode work happens to take on the machine
+    /// running it. Defaults to the real monotonic clock for production use.
     public init(
         playbackDriveEnabled: Bool = false,
         isReplayActive: Bool = false,
@@ -365,11 +371,13 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         validationOverride: Bool = false,
         maxPlaybackRate: Double = 5.0,
         minConfidence: Double = 0.3,
-        staleThreshold: TimeInterval = 2.0
+        staleThreshold: TimeInterval = 2.0,
+        notificationClock: @escaping () -> TimeInterval = { CACurrentMediaTime() }
     ) {
         self.maxPlaybackRate = maxPlaybackRate
         self.minConfidence = minConfidence
         self.staleThreshold = staleThreshold
+        self.notificationClock = notificationClock
         // Explicitly seed every lock-protected shadow from the initializer
         // argument directly, rather than relying on didSet firing during
         // init. `evaluate` reads only these shadows, so a bridge constructed
@@ -408,7 +416,7 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         outputLock.lock()
         defer { outputLock.unlock() }
         let previousOutput = observableOutputSnapshot
-        defer { publishOutputChange(ifDifferentFrom: previousOutput) }
+        defer { publishOutputChange(ifDifferentFrom: previousOutput, coalesced: true) }
 
         // Gate 1: Bridge must be enabled
         // Reads the lock-protected shadow, not the raw @Published storage,
@@ -569,13 +577,94 @@ public final class TimecodePlaybackBridge: ObservableObject, @unchecked Sendable
         )
     }
 
+    /// Real monotonic clock by default; injectable so tests can pin
+    /// elapsed time deterministically (see `init`).
+    private let notificationClock: () -> TimeInterval
+
+    /// Dedicated to the coalescing state below only — independent of
+    /// `outputLock`, and never held while calling anything else on this
+    /// type, so it cannot interact with `outputLock`'s existing (and, for
+    /// `evaluate()`, deliberately still-held-during-publish — see its
+    /// `defer` ordering) locking.
+    private let evaluateChangeNotificationLock = NSLock()
+    private var lastEvaluateChangeNotificationUptime: TimeInterval = -.infinity
+    private var evaluateChangeNotificationFlushScheduled = false
+
+    /// Same coalescing rationale as
+    /// `TimecodeControlPipeline.sendCoalescedFlushChangeNotification` (see
+    /// its doc comment, including the hardware-confirmed caveat that
+    /// coalescing alone did not eliminate the SwiftUI render warning — it
+    /// only reduced its frequency): `evaluate(pipeline:)` runs once per
+    /// ~60 Hz DVS control tick, `currentDrive` (carrying the full platter
+    /// timeline) changes on nearly every tick during motion. The actual
+    /// fix is that no SwiftUI view observes this bridge directly anymore —
+    /// `MacAnalyzerView` and `TimecodeControlCard` both read it as plain
+    /// state and re-render on their own bounded, main-actor-only timers.
+    /// `TimecodeControlCard`'s bindings (`playbackDriveEnabled`,
+    /// `currentDrive`, `lastDecision`, …) read this bridge's plain,
+    /// `outputLock`-protected properties directly, not through this
+    /// notification, so DVS playback correctness and latency are
+    /// unaffected either way — `MacAnalyzerView.handleTimecodeFlushTick`
+    /// still forwards every tick's drive to
+    /// `captureEngine.forwardTimecodeDrive` regardless of whether this
+    /// notification fires. Only `evaluate()` uses the coalesced path
+    /// (`coalesced: true`); `reset()` is a discrete, rare, session-
+    /// boundary operation and always notifies immediately.
+    private static let evaluateChangeNotificationMinInterval: TimeInterval = 1.0 / 20.0
+
     /// Bridge gates update state, drive, decision, and counters as one
     /// coherent result. Invalidate observers once after that result is
-    /// complete instead of once for every field assignment.
+    /// complete instead of once for every field assignment — and, when
+    /// `coalesced` (only `evaluate()` passes `true`), no more than
+    /// `evaluateChangeNotificationMinInterval` apart even when every tick
+    /// changes something.
     private func publishOutputChange(
-        ifDifferentFrom previous: ObservableOutputSnapshot
+        ifDifferentFrom previous: ObservableOutputSnapshot,
+        coalesced: Bool = false
     ) {
         guard previous != observableOutputSnapshot else { return }
+
+        guard coalesced else {
+            deliverChangeNotification()
+            return
+        }
+
+        let now = notificationClock()
+        evaluateChangeNotificationLock.lock()
+        let elapsed = now - lastEvaluateChangeNotificationUptime
+        if elapsed >= Self.evaluateChangeNotificationMinInterval {
+            lastEvaluateChangeNotificationUptime = now
+            evaluateChangeNotificationLock.unlock()
+            deliverChangeNotification()
+            return
+        }
+        guard !evaluateChangeNotificationFlushScheduled else {
+            evaluateChangeNotificationLock.unlock()
+            return
+        }
+        evaluateChangeNotificationFlushScheduled = true
+        let delay = Self.evaluateChangeNotificationMinInterval - elapsed
+        evaluateChangeNotificationLock.unlock()
+
+        // One-shot: flushes whatever the latest state is when it fires,
+        // so the tail end of a gesture is never left stuck on a
+        // throttled-away intermediate value. Not a repeating timer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.evaluateChangeNotificationLock.lock()
+            self.lastEvaluateChangeNotificationUptime = self.notificationClock()
+            self.evaluateChangeNotificationFlushScheduled = false
+            self.evaluateChangeNotificationLock.unlock()
+            print("[SwiftUIStateGuard] publish · source=TimecodePlaybackBridge.publishOutputChange.tailFlush thread=main time=\(String(format: "%.6f", CACurrentMediaTime()))")
+            self.objectWillChange.send()
+        }
+    }
+
+    // Hardware-verification instrumentation: a unique identity per publish
+    // call site, immediately before `objectWillChange.send()` — see
+    // `TimecodeControlPipeline.sendChangeNotification`'s matching comment.
+    private func deliverChangeNotification() {
+        print("[SwiftUIStateGuard] publish · source=TimecodePlaybackBridge.deliverChangeNotification thread=\(Thread.isMainThread ? "main" : "background") time=\(String(format: "%.6f", CACurrentMediaTime()))")
         if Thread.isMainThread {
             objectWillChange.send()
         } else {

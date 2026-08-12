@@ -201,11 +201,19 @@
 		SBPA0001TST /* ScratchBankPadAudioPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */; };
 		SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0001FREF /* ScratchSamplePlaybackController.swift */; };
 		SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */; };
+		TBCF0001TST /* TimecodeBridgeContinuityFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBCF0002FREF /* TimecodeBridgeContinuityFixTests.swift */; };
+		DCVR0001MAC /* DVSContinuousVinylRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCVR0001FREF /* DVSContinuousVinylRenderer.swift */; };
+		DCVT0001TST /* DVSContinuousVinylRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCVT0002FREF /* DVSContinuousVinylRendererTests.swift */; };
 		DOGR0001TST /* DVSOfflineGrainRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */; };
 		TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNRT0002FREF /* TimecodeNotationRoutingTests.swift */; };
 		SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
 		SPTR0001MAC /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
 		SPTR0001TST /* ScratchPlatterTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0002FREF /* ScratchPlatterTrackerTests.swift */; };
+		MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */; };
+		MPCD0001MAC /* MIDIPlatterContinuousDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */; };
+		MPCD0001TST /* MIDIPlatterContinuousDriveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0002FREF /* MIDIPlatterContinuousDriveTests.swift */; };
+		SPMT0001TST /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPMT0001FREF /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift */; };
+		PTSL0001TST /* PlatterTestSampleLoadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTSL0001FREF /* PlatterTestSampleLoadTests.swift */; };
 		SBMPG0001TST /* ScratchBankMIDIPreviewGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */; };
 		SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */; };
 		SDTR0001TST /* ScratchLabDesktopTestResourceResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */; };
@@ -279,8 +287,20 @@
 		MIDREG0IOS0005 /* MIDIVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0005 /* MIDIVerification.swift */; };
 		MIDREG0MAC0005 /* MIDIVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0005 /* MIDIVerification.swift */; };
 		MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0006 /* ParsedMIDIMessage.swift */; };
+		MIDREG0IOS0007 /* MIDILearnedMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0007 /* MIDILearnedMapping.swift */; };
 		MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0006 /* ParsedMIDIMessage.swift */; };
+		MIDREG0MAC0007 /* MIDILearnedMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0007 /* MIDILearnedMapping.swift */; };
+		MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0FREF0001 /* MIDIFaderCurve.swift */; };
+		MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0FREF0001 /* MIDIFaderCurve.swift */; };
+		MIDCRV0TBF0001 /* MIDIFaderCurveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */; };
 		MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */; };
+		MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */; };
+		MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */; };
+		MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */; };
+		DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */; };
+		SPCUMG0TBF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */; };
+		MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */; };
+		MIDLRN0TBF0003 /* MIDILearnHangFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */; };
 		MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */; };
 		RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */; };
 		CSM2011000CSM002CSM00001 /* CoachingEventSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */; };
@@ -666,10 +686,17 @@
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SSPC0001FREF /* ScratchSamplePlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackController.swift; sourceTree = "<group>"; };
 		SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerTests.swift; sourceTree = "<group>"; };
+		TBCF0002FREF /* TimecodeBridgeContinuityFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeBridgeContinuityFixTests.swift; sourceTree = "<group>"; };
+		DCVR0001FREF /* DVSContinuousVinylRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSContinuousVinylRenderer.swift; sourceTree = "<group>"; };
+		DCVT0002FREF /* DVSContinuousVinylRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSContinuousVinylRendererTests.swift; sourceTree = "<group>"; };
 		DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSOfflineGrainRendererTests.swift; sourceTree = "<group>"; };
 		TNRT0002FREF /* TimecodeNotationRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeNotationRoutingTests.swift; sourceTree = "<group>"; };
 		SPTR0001FREF /* ScratchPlatterTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTracker.swift; sourceTree = "<group>"; };
 		SPTR0002FREF /* ScratchPlatterTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTrackerTests.swift; sourceTree = "<group>"; };
+		MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPlatterContinuousDrive.swift; sourceTree = "<group>"; };
+		MPCD0002FREF /* MIDIPlatterContinuousDriveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPlatterContinuousDriveTests.swift; sourceTree = "<group>"; };
+		SPMT0001FREF /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerMIDIPlatterTests.swift; sourceTree = "<group>"; };
+		PTSL0001FREF /* PlatterTestSampleLoadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatterTestSampleLoadTests.swift; sourceTree = "<group>"; };
 		SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankMIDIPreviewGateTests.swift; sourceTree = "<group>"; };
 		SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMonitorTests.swift; sourceTree = "<group>"; };
 		SDTR0001FREF /* ScratchLabDesktopTestResourceResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesktopTestResourceResolver.swift; sourceTree = "<group>"; };
@@ -712,7 +739,17 @@
 		MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistry.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0005 /* MIDIVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerification.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0006 /* ParsedMIDIMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParsedMIDIMessage.swift; sourceTree = "<group>"; };
+		MIDREG0FREF0007 /* MIDILearnedMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMapping.swift; sourceTree = "<group>"; };
+		MIDCRV0FREF0001 /* MIDIFaderCurve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurve.swift; sourceTree = "<group>"; };
+		MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurveTests.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistryTests.swift; sourceTree = "<group>"; };
+		MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMappingTests.swift; sourceTree = "<group>"; };
+		MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnEngineTests.swift; sourceTree = "<group>"; };
+		MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPacketBoundsCrashFixTests.swift; sourceTree = "<group>"; };
+		DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSContinuousVinylRendererUserMixerGainTests.swift; sourceTree = "<group>"; };
+		SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerUserMixerGainTests.swift; sourceTree = "<group>"; };
+		MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIUserMixerGainTests.swift; sourceTree = "<group>"; };
+		MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnHangFixTests.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerificationModelTests.swift; sourceTree = "<group>"; };
 		RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2ProfileTests.swift; sourceTree = "<group>"; };
 		CSM2010000CSM002CSM00001 /* CoachingEventSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventSummaryTests.swift; sourceTree = "<group>"; };
@@ -1028,6 +1065,14 @@
 				CEV2010000CEV002CEV00001 /* CoachingEventVocabularyTests.swift */,
 				CES2010000CES002CES00001 /* CoachingEventTests.swift */,
 				MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */,
+				MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */,
+				MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */,
+				MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */,
+				DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */,
+				SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */,
+				MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */,
+				MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */,
+				MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */,
 				MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */,
 				CTLPRF0TREF0001 /* ControllerProfileCatalogTests.swift */,
 				CTLPRF0TREF0002 /* DDJFlx10ProfileTests.swift */,
@@ -1042,7 +1087,12 @@
 				SBMPG0001FREF /* ScratchBankMIDIPreviewGateTests.swift */,
 				SBPMN0001FREF /* ScratchBankPadMonitorTests.swift */,
 				SPTR0002FREF /* ScratchPlatterTrackerTests.swift */,
+				MPCD0002FREF /* MIDIPlatterContinuousDriveTests.swift */,
+				SPMT0001FREF /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift */,
+				PTSL0001FREF /* PlatterTestSampleLoadTests.swift */,
 				SSPC0002FREF /* ScratchSamplePlaybackControllerTests.swift */,
+				TBCF0002FREF /* TimecodeBridgeContinuityFixTests.swift */,
+				DCVT0002FREF /* DVSContinuousVinylRendererTests.swift */,
 				DOGR0002FREF /* DVSOfflineGrainRendererTests.swift */,
 				TNRT0002FREF /* TimecodeNotationRoutingTests.swift */,
 				DCE2010000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift */,
@@ -1352,6 +1402,7 @@
 				RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */,
 				SBPER0001FREF /* ScratchBankPadEventRouter.swift */,
 				SPTR0001FREF /* ScratchPlatterTracker.swift */,
+				MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */,
 			);
 			path = ScratchSoundBank;
 			sourceTree = "<group>";
@@ -1464,6 +1515,7 @@
 				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
 				SSPC0001FREF /* ScratchSamplePlaybackController.swift */,
+				DCVR0001FREF /* DVSContinuousVinylRenderer.swift */,
 				B2000006 /* MacScratchDetector.swift */,
 				B2000007 /* CompanionCameraReceiver.swift */,
 				B2000008 /* DJRigLayoutDetector.swift */,
@@ -1534,6 +1586,8 @@
 				MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */,
 				MIDREG0FREF0005 /* MIDIVerification.swift */,
 				MIDREG0FREF0006 /* ParsedMIDIMessage.swift */,
+				MIDREG0FREF0007 /* MIDILearnedMapping.swift */,
+				MIDCRV0FREF0001 /* MIDIFaderCurve.swift */,
 			);
 			path = Registry;
 			sourceTree = "<group>";
@@ -1818,6 +1872,7 @@
 				TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */,
 				SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */,
 				SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */,
+				DCVR0001MAC /* DVSContinuousVinylRenderer.swift in Sources */,
 				D256080E1E27BC2E84D90135 /* MacScratchDetector.swift in Sources */,
 				309F7737DD8317EA37CCFC73 /* CompanionCameraReceiver.swift in Sources */,
 				10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */,
@@ -1849,6 +1904,7 @@
 				RMKPLS0001MAC /* RaneOneMK2PadCandidateLabeler.swift in Sources */,
 				SBPER0001MAC /* ScratchBankPadEventRouter.swift in Sources */,
 				SPTR0001MAC /* ScratchPlatterTracker.swift in Sources */,
+				MPCD0001MAC /* MIDIPlatterContinuousDrive.swift in Sources */,
 				SMR0001000SMR001SMR00001 /* ScratchMotionRenderer.swift in Sources */,				NVM0001000NVM001NVM00001 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00001 /* PlatterPositionTimeline.swift in Sources */,
 				NGP1001000NGP001NGP00001 /* NotationPrimitive.swift in Sources */,
@@ -1895,6 +1951,8 @@
 				MIDREG0MAC0004 /* MIDIHardwareRegistry.swift in Sources */,
 				MIDREG0MAC0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */,
+				MIDREG0MAC0007 /* MIDILearnedMapping.swift in Sources */,
+				MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */,
 				CTLPRF0MAC0001 /* ControllerProfile.swift in Sources */,
 				CTLPRF0MAC0002 /* ControllerProfileCatalog.swift in Sources */,
 				CTLPRF0MAC0003 /* DDJFlx10Profile.swift in Sources */,
@@ -2017,6 +2075,8 @@
 				MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */,
 				MIDREG0IOS0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */,
+				MIDREG0IOS0007 /* MIDILearnedMapping.swift in Sources */,
+				MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */,
 				CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */,
 				CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */,
 				CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */,
@@ -2041,6 +2101,7 @@
 				RMKPLS0001IOS /* RaneOneMK2PadCandidateLabeler.swift in Sources */,
 				SBPER0001IOS /* ScratchBankPadEventRouter.swift in Sources */,
 				SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */,
+				MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */,
 				SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
@@ -2237,6 +2298,14 @@
 				CEV2011000CEV002CEV00001 /* CoachingEventVocabularyTests.swift in Sources */,
 				CES2011000CES002CES00001 /* CoachingEventTests.swift in Sources */,
 				MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */,
+				MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */,
+				MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */,
+				MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */,
+				DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */,
+				SPCUMG0TBF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift in Sources */,
+				MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */,
+				MIDLRN0TBF0003 /* MIDILearnHangFixTests.swift in Sources */,
+				MIDCRV0TBF0001 /* MIDIFaderCurveTests.swift in Sources */,
 				MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */,
 				CTLPRF0TBF0001 /* ControllerProfileCatalogTests.swift in Sources */,
 				CTLPRF0TBF0002 /* DDJFlx10ProfileTests.swift in Sources */,
@@ -2251,7 +2320,12 @@
 				SBMPG0001TST /* ScratchBankMIDIPreviewGateTests.swift in Sources */,
 				SBPMN0001TST /* ScratchBankPadMonitorTests.swift in Sources */,
 				SPTR0001TST /* ScratchPlatterTrackerTests.swift in Sources */,
+				MPCD0001TST /* MIDIPlatterContinuousDriveTests.swift in Sources */,
+				SPMT0001TST /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift in Sources */,
+				PTSL0001TST /* PlatterTestSampleLoadTests.swift in Sources */,
 				SSPC0001TST /* ScratchSamplePlaybackControllerTests.swift in Sources */,
+				TBCF0001TST /* TimecodeBridgeContinuityFixTests.swift in Sources */,
+				DCVT0001TST /* DVSContinuousVinylRendererTests.swift in Sources */,
 				DOGR0001TST /* DVSOfflineGrainRendererTests.swift in Sources */,
 				TNRT0001TST /* TimecodeNotationRoutingTests.swift in Sources */,
 				DCE2011000DCE002DCE00001 /* DriftCoachingEvaluatorTests.swift in Sources */,
