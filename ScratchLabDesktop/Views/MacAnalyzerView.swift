@@ -1033,9 +1033,6 @@ struct MacAnalyzerView: View {
         let flushStart = CACurrentMediaTime()
         timecodePipeline.flushDecode()
         guard timecodePipeline.mode == .controlPrototype else { return }
-        captureEngine.setDVSPlaybackDriveActive(timecodeBridge.playbackDriveEnabled)
-        let playbackDrive = timecodeBridge.evaluate(pipeline: timecodePipeline)
-
         let now = Date()
 #if DEBUG
         logSlowTimecodeFlushIfNeeded(
@@ -1044,17 +1041,13 @@ struct MacAnalyzerView: View {
             elapsed: elapsed
         )
 #endif
-        captureEngine.forwardTimecodeDrive(
-            playbackDrive,
-            elapsed: max(0, elapsed)
-        )
 #if DEBUG
-        // Independent of the playback drive evaluated/forwarded just
-        // above: this only ever accumulates into notation when
-        // `captureEngine.notationRoutingEnabled` is explicitly set (no UI
-        // sets it yet — see TASKS.md's DVS notation slice 2) and a
-        // routine take is actively recording. Evaluating it here never
-        // reads `timecodeBridge`/`playbackDrive`, and never affects them.
+        // Independent of any playback drive: this only ever accumulates
+        // into notation when `captureEngine.notationRoutingEnabled` is
+        // explicitly set (no UI sets it yet — see TASKS.md's DVS notation
+        // slice 2) and a routine take is actively recording. Evaluating it
+        // here never reads `timecodeBridge`/`playbackDrive`, and never
+        // affects them.
         captureEngine.forwardTimecodeNotationWindow(
             pipeline: timecodePipeline,
             minConfidence: timecodePipeline.minConfidence
