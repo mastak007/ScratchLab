@@ -12,7 +12,7 @@ import SwiftUI
 // between strokes.
 //
 // The view keeps the macOS-specific affordances around the shared
-// renderer's output: a fixed playhead at 30% from the left, a CROSSFADER
+// renderer's output: a fixed playhead at 30% from the left, a FADER
 // sub-lane that visualises fader state per stroke, and a beat-numbered
 // grid. Loop tiling is done with `MotionPath.shifted(by:)`, so the
 // curve is naturally seam-safe (both ends of the deflect-and-return path
@@ -36,8 +36,8 @@ struct ScratchNotationCanvasView: View {
     var hasWrapped: Bool = false
 
     // Layout fractions (record lane : fader lane)
-    private let recordLaneFraction: CGFloat = 0.72
-    private let faderLaneFraction:  CGFloat = 0.18
+    private let recordLaneFraction: CGFloat = 0.70
+    private let faderLaneFraction:  CGFloat = 0.20
 
     // Timing window: how many seconds are visible at once.
     private let visibleSeconds: Double = 2.4
@@ -50,9 +50,6 @@ struct ScratchNotationCanvasView: View {
     private let gridMajor   = Color(white: 0.22)
     private let gridMinor   = Color(white: 0.155)
     private let playheadCol = Color.white
-    private let faderOpenCol   = Color(red: 0.20, green: 0.88, blue: 0.55).opacity(0.7)
-    private let faderClosedCol = Color(red: 1.00, green: 0.25, blue: 0.25).opacity(0.85)
-    private let cutCol         = Color(white: 0.90)
 
     var body: some View {
         Canvas { ctx, size in
@@ -75,7 +72,7 @@ struct ScratchNotationCanvasView: View {
 
             // Lane labels (left side, inside the canvas)
             drawLaneLabel(ctx: ctx, text: "RECORD", y: recordH * 0.08, size: size)
-            drawLaneLabel(ctx: ctx, text: "CROSSFADER",  y: faderY + faderH * 0.18, size: size)
+            drawLaneLabel(ctx: ctx, text: "FADER",  y: faderY + faderH * 0.18, size: size)
 
             let faderRect  = CGRect(x: 0, y: faderY, width: size.width, height: faderH)
 
@@ -128,18 +125,15 @@ struct ScratchNotationCanvasView: View {
                         shifted, in: ctx, viewport: viewport, style: .target)
                 }
 
-                // Crossfader sub-lane (macOS affordance, kept). Non-empty
-                // canonical `faderEvents` is authoritative; otherwise this
-                // falls back to one span per stroke's own `faderState` —
-                // visually identical to the pre-canonical per-stroke draw.
+                // Fader sub-lane — binary OPEN/CLOSED rails (V2).
+                // Non-empty canonical `faderEvents` is authoritative; otherwise
+                // falls back to one span per stroke's own `faderState`.
                 let faderSpans = notation.faderAuthoritySpans(documentEnd: content.duration)
                 for loopOffset in tileOffsets {
-                    for span in faderSpans {
-                        drawFaderMarker(ctx: ctx, span: span,
-                                        loopOffset: loopOffset, now: now,
-                                        phX: phX, pps: pps,
-                                        laneRect: faderRect, canvasWidth: size.width)
-                    }
+                    drawFaderRails(ctx: ctx, spans: faderSpans,
+                                   loopOffset: loopOffset, now: now,
+                                   phX: phX, pps: pps,
+                                   laneRect: faderRect, canvasWidth: size.width)
                 }
             }
 
@@ -210,11 +204,18 @@ struct ScratchNotationCanvasView: View {
         )
     }
 
-    // MARK: - Fader lane marker
+    // MARK: - Fader lane (binary rails)
 
-    private func drawFaderMarker(
+    /// Draws the fader lane as two binary rails — OPEN (top) and
+    /// CLOSED (bottom) — with the active rail highlighted and vertical
+    /// transition marks at state-change edges.  This replaces the older
+    /// continuous-span treatment with a two-rail V2 presentation.
+    ///
+    /// Baby Scratch (OPEN throughout) renders as a single solid OPEN rail
+    /// with no transitions.
+    private func drawFaderRails(
         ctx: GraphicsContext,
-        span: LaneFaderSpan,
+        spans: [LaneFaderSpan],
         loopOffset: Double,
         now: Double,
         phX: CGFloat,
@@ -222,42 +223,114 @@ struct ScratchNotationCanvasView: View {
         laneRect: CGRect,
         canvasWidth: CGFloat
     ) {
-        let x1 = phX + CGFloat(span.startTime + loopOffset - now) * pps
-        let x2 = phX + CGFloat(span.endTime   + loopOffset - now) * pps
-        guard x2 >= -60, x1 <= canvasWidth + 60 else { return }
+        let topY    = laneRect.minY + laneRect.height * 0.15
+        let bottomY = laneRect.minY + laneRect.height * 0.88
+        let guideAlpha: Double = 0.18
+        let activeAlpha: Double = 0.80
+        let pastAlpha: Double = 0.22
+        let transitionAlpha: Double = 0.55
 
-        let midY   = laneRect.midY
-        let halfH  = laneRect.height * 0.38
-        let isPast = x2 < phX
-
-        switch span.state {
-        case .open:
-            var bar = Path()
-            bar.move(to: CGPoint(x: x1, y: midY - halfH))
-            bar.addLine(to: CGPoint(x: x1, y: midY + halfH))
-            bar.addLine(to: CGPoint(x: x2, y: midY + halfH))
-            bar.addLine(to: CGPoint(x: x2, y: midY - halfH))
-            bar.closeSubpath()
-            ctx.fill(bar, with: .color(faderOpenCol.opacity(isPast ? 0.25 : 0.55)))
-        case .closed:
-            var line = Path()
-            line.move(to: CGPoint(x: x1, y: midY))
-            line.addLine(to: CGPoint(x: x2, y: midY))
-            ctx.stroke(line, with: .color(faderClosedCol.opacity(isPast ? 0.25 : 0.70)), lineWidth: 2)
-            // Cut markers at endpoints
-            for cx in [x1, x2] {
-                var cut = Path()
-                cut.move(to: CGPoint(x: cx, y: midY - halfH))
-                cut.addLine(to: CGPoint(x: cx, y: midY + halfH))
-                ctx.stroke(cut, with: .color(cutCol.opacity(isPast ? 0.20 : 0.80)), lineWidth: 1.5)
+        // Guide rails — faint horizontal lines for OPEN (top) and CLOSED (bottom)
+        for (y, label) in [(topY, "OPEN"), (bottomY, "CLOSED")] {
+            var guide = Path()
+            guide.move(to: CGPoint(x: max(0, laneRect.minX), y: y))
+            guide.addLine(to: CGPoint(x: min(canvasWidth, laneRect.maxX), y: y))
+            ctx.stroke(guide, with: .color(Color(white: 0.28).opacity(guideAlpha)),
+                       lineWidth: 0.5)
+            // Rail label — OPEN just below the open rail, CLOSED just above
+            // the closed rail (compact placement, no overlap).
+            if label == "OPEN" {
+                ctx.draw(
+                    Text(label)
+                        .font(.system(size: 5.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.32)),
+                    at: CGPoint(x: 4, y: y + 1),
+                    anchor: .topLeading
+                )
+            } else {
+                ctx.draw(
+                    Text(label)
+                        .font(.system(size: 5.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.32)),
+                    at: CGPoint(x: 4, y: y - 1),
+                    anchor: .bottomLeading
+                )
             }
         }
+
+        guard !spans.isEmpty else { return }
+
+        // Sort merged spans and draw active-rail segments + transitions
+        let merged = mergeAdjacentSpans(spans)
+        for span in merged {
+            let x1 = phX + CGFloat(span.startTime + loopOffset - now) * pps
+            let x2 = phX + CGFloat(span.endTime   + loopOffset - now) * pps
+            guard x2 >= -60, x1 <= canvasWidth + 60 else { continue }
+
+            let isPast = x2 < phX
+            let alpha = isPast ? pastAlpha : activeAlpha
+            let activeY = span.state == .open ? topY : bottomY
+            let activeColor: Color = span.state == .open
+                ? Color(red: 0.20, green: 0.88, blue: 0.55)
+                : Color(red: 1.00, green: 0.25, blue: 0.25)
+
+            // Active rail segment
+            var rail = Path()
+            let clampedX1 = max(laneRect.minX, x1)
+            let clampedX2 = min(canvasWidth, x2)
+            rail.move(to: CGPoint(x: clampedX1, y: activeY))
+            rail.addLine(to: CGPoint(x: clampedX2, y: activeY))
+            ctx.stroke(rail, with: .color(activeColor.opacity(alpha)), lineWidth: 2.5)
+
+            // Transition mark at span start (except very first span)
+            if span.startTime > 0.001 {
+                let prevState: ScratchNotationFaderState = span.state == .open ? .closed : .open
+                let prevY = prevState == .open ? topY : bottomY
+                var trans = Path()
+                trans.move(to: CGPoint(x: x1, y: prevY))
+                trans.addLine(to: CGPoint(x: x1, y: activeY))
+                ctx.stroke(trans, with: .color(Color(white: 0.75).opacity(transitionAlpha)),
+                           lineWidth: 1.2)
+                // Small diamond at the transition point
+                let d: CGFloat = 2.5
+                var diamond = Path()
+                diamond.move(to: CGPoint(x: x1, y: activeY - d))
+                diamond.addLine(to: CGPoint(x: x1 + d, y: activeY))
+                diamond.addLine(to: CGPoint(x: x1, y: activeY + d))
+                diamond.addLine(to: CGPoint(x: x1 - d, y: activeY))
+                diamond.closeSubpath()
+                ctx.fill(diamond, with: .color(Color(white: 0.82).opacity(transitionAlpha)))
+            }
+        }
+    }
+
+    /// Merges consecutive spans that share the same state, producing a
+    /// minimal set of contiguous open/closed intervals.
+    private func mergeAdjacentSpans(_ spans: [LaneFaderSpan]) -> [LaneFaderSpan] {
+        guard spans.count > 1 else { return spans }
+        let sorted = spans.sorted { $0.startTime < $1.startTime }
+        var merged: [LaneFaderSpan] = [sorted[0]]
+        for span in sorted.dropFirst() {
+            let last = merged[merged.count - 1]
+            if span.state == last.state, abs(span.startTime - last.endTime) < 0.001 {
+                merged[merged.count - 1] = LaneFaderSpan(
+                    startTime: last.startTime,
+                    endTime: span.endTime,
+                    state: last.state
+                )
+            } else {
+                merged.append(span)
+            }
+        }
+        return merged
     }
 }
 
 // MARK: - Preview
 
 #if DEBUG
+// Preview macro disabled: PreviewsMacros.SwiftUIView plugin unavailable.
+#if false
 #Preview {
     let notation = ScratchNotation.babyScratch
     return ScratchNotationCanvasView(
@@ -268,4 +341,5 @@ struct ScratchNotationCanvasView: View {
     .frame(width: 700, height: 200)
     .background(Color.black)
 }
+#endif // #if false
 #endif

@@ -1162,7 +1162,8 @@ struct MacAnalyzerView: View {
                                 beatGridBPM: 79,
                                 beatGridFirstBeatTime: 0.336,
                                 beatsPerBar: 4,
-                                maximumAmplitude: 0.35
+                                maximumAmplitude: 0.35,
+                                faderAuthorityNotation: ScratchNotation.babyScratch
                             )
                             .frame(height: 80)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -6107,12 +6108,24 @@ struct MacAnalyzerView: View {
                     .padding(12)
                     .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             case .ready(let model):
-                ScratchPhraseChartView(
-                    source: .target(model.notation),
-                    bpm: model.bpm,
-                    comparisonOverlay: model.overlay
-                )
-                .frame(height: 170)
+                VStack(alignment: .leading, spacing: 6) {
+                    // Direct TARGET / MY PERFORMANCE labels — not
+                    // colour-dependent, accessible.
+                    HStack(spacing: 24) {
+                        Label("TARGET", systemImage: "target")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(white: 0.55))
+                        Label("MY PERFORMANCE", systemImage: "person.fill")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.30, green: 0.70, blue: 1.00))
+                    }
+                    ScratchPhraseChartView(
+                        source: .target(model.notation),
+                        bpm: model.bpm,
+                        comparisonOverlay: model.overlay
+                    )
+                    .frame(height: 170)
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 Text("Dots at stroke starts: green on time · amber early · orange late · red wrong direction · hollow missed · white extra. Slashes show what you played; cyan/rose is the target.")
@@ -6273,9 +6286,8 @@ struct MacAnalyzerView: View {
             }
             if let snapshot = currentRoutineNotationSnapshot,
                hasCapturedMotionNotation {
-                CapturedNotationDisplayView(
-                    snapshot: snapshot,
-                    mixedStateHint: hasRawMotionWithoutClassifiedStrokes
+                ScratchPhraseChartView(
+                    source: .captured(snapshot.recordMovementEvents)
                 )
                     .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 520)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -6320,47 +6332,6 @@ struct MacAnalyzerView: View {
                 .frame(minHeight: 360)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            #if DEBUG
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Captured evidence debug sentinel")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.orange)
-
-                    debugNotationDiagnosticChip(debugCapturedNotationChipText)
-
-                    Text("Captured evidence card rendered")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.orange)
-
-                    HStack(spacing: 8) {
-                        Button("Replay from platter") {
-                            captureEngine.replayDiagnosticsFromPlatterTimeline()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
-                        let label = captureEngine.frozenReviewDiagnostics?.replaySourceLabel ?? ""
-                        if label == "replay:platterSynthetic" {
-                            Text("replayed")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.green)
-                        } else if label.isEmpty || label == "live" {
-                            Text("tap to replay")
-                                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    movementFunnelInlineView
-                }
-                .padding(.top, 8)
-            } label: {
-                Label("Developer diagnostics", systemImage: "wrench.and.screwdriver")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            #endif
         }
         .scratchLabCard(.stage)
     }
@@ -6976,6 +6947,23 @@ struct MacAnalyzerView: View {
 
         case .copying(let session):
             VStack(alignment: .leading, spacing: 10) {
+                // TARGET notation during COPY — shows the learner what to copy
+                if let pattern = practiceCanonicalPattern,
+                   let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0,
+                   let target = pattern.materialized(bpm: Double(bpmValue)) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("TARGET — copy this")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(white: 0.50))
+                        ScratchPhraseChartView(
+                            source: .target(target),
+                            bpm: Double(bpmValue),
+                            showPlayhead: false
+                        )
+                        .frame(height: 90)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
                 Text("Copying one cycle — closes automatically in about \(String(format: "%.1f", session.closesAfterSeconds))s.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -6991,7 +6979,32 @@ struct MacAnalyzerView: View {
     }
 
     private func practiceScoredAttemptResultView(_ result: PracticeAttemptResult) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let targetNotation: ScratchNotation? = {
+            guard let pattern = practiceCanonicalPattern,
+                  result.bpm > 0 else { return nil }
+            return pattern.materialized(bpm: result.bpm)
+        }()
+
+        return VStack(alignment: .leading, spacing: 10) {
+            // TARGET notation chart — shows what the learner was aiming for.
+            // MY PERFORMANCE lives in the Review "Target vs performed" card
+            // where the comparison overlay is already rendered.
+            if let targetNotation {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("TARGET")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.45))
+                    ScratchPhraseChartView(
+                        source: .target(targetNotation),
+                        bpm: result.bpm,
+                        showPlayhead: false
+                    )
+                    .frame(height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                Divider().overlay(Color.white.opacity(0.06))
+            }
+
             HStack(spacing: 8) {
                 if let grade = result.grade {
                     Text(reviewGradeLabel(grade))

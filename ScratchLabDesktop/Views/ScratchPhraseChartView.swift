@@ -9,7 +9,8 @@ import SwiftUI
 // visual language as the iOS lane: cyan forward push and hot pink backward
 // pull, deflect-and-return tent ramps with apex nodes on each rail, and a
 // dashed rest line between strokes. macOS-specific affordances (beat-number
-// labels, the CROSSFADER sub-lane, and the optional playhead) live around
+// labels, PLATTER/FADER lane labels, turnaround diamonds, OPEN/CLOSED binary
+// fader rails with transition markers, and the optional playhead) live around
 // the shared renderer's record-lane output. The CAPTURED / EMPTY cases are
 // unchanged.
 
@@ -35,7 +36,7 @@ struct ScratchPhraseChartView: View {
     /// chart: performed strokes in the captured chart's own visual language
     /// (green forward `/`, orange backward `\` slashes), per-mark verdict
     /// dots on the baseline, and performed fader-edge ticks in the
-    /// crossfader sub-lane. `nil` (every pre-existing call site) renders the
+    /// fader sub-lane. `nil` (every pre-existing call site) renders the
     /// chart byte-identically to before. Ignored by `.captured`/`.empty`.
     var comparisonOverlay: ScratchComparisonOverlay? = nil
 
@@ -48,13 +49,11 @@ struct ScratchPhraseChartView: View {
     private let forwardCol = Color(red: 0.20, green: 0.88, blue: 0.55)
     private let backCol    = Color(red: 1.00, green: 0.55, blue: 0.10)
     private let dotCol     = Color(white: 0.82)
-    private let faderOpenCol   = Color(red: 0.20, green: 0.88, blue: 0.55).opacity(0.55)
-    private let faderClosedCol = Color(red: 1.00, green: 0.25, blue: 0.25).opacity(0.65)
     private let laneDividerCol = Color(white: 0.28)
 
-    // Fraction of the chart vertically reserved for the crossfader sub-lane.
+    // Fraction of the chart vertically reserved for the fader sub-lane.
     // The strokes region gets the remaining (1 - faderLaneFraction).
-    private let faderLaneFraction: CGFloat = 0.22
+    private let faderLaneFraction: CGFloat = 0.26
 
     var body: some View {
         switch source {
@@ -112,11 +111,25 @@ struct ScratchPhraseChartView: View {
         ScratchMotionRenderer.draw(motionPath, in: ctx, viewport: viewport,
                                     style: .target)
 
+        // Turnaround markers — small diamonds at forward→backward boundaries
+        drawTurnaroundMarkers(ctx: ctx, notation: notation,
+                              windowStart: windowStart, pps: pps,
+                              strokeRegionHeight: strokeRegionHeight)
+
+        // PLATTER lane label — top-left anchor at the head of the stroke region
+        ctx.draw(
+            Text("PLATTER")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(white: 0.42)),
+            at: CGPoint(x: 4, y: 3),
+            anchor: .topLeading
+        )
+
         drawLaneDivider(ctx: ctx, size: size, y: strokeRegionHeight)
-        drawTargetCrossfaderLane(ctx: ctx, size: size, notation: notation,
-                                  documentEnd: full,
-                                  windowStart: windowStart, windowEnd: windowEnd,
-                                  pps: pps, strokeRegionTop: strokeRegionHeight)
+        drawTargetFaderLane(ctx: ctx, size: size, notation: notation,
+                             documentEnd: full,
+                             windowStart: windowStart, windowEnd: windowEnd,
+                             pps: pps, strokeRegionTop: strokeRegionHeight)
 
         if let overlay = comparisonOverlay {
             drawComparisonOverlay(ctx: ctx, size: size, overlay: overlay,
@@ -222,7 +235,7 @@ struct ScratchPhraseChartView: View {
     /// baseline. Missing target slots draw a hollow verdict circle at the
     /// unplayed slot instead of a slash — nothing was performed there.
     /// Performed fader edges draw as verdict-coloured ticks in the
-    /// crossfader sub-lane; missing target edges draw hollow.
+    /// fader sub-lane; missing target edges draw hollow.
     private func drawComparisonOverlay(ctx: GraphicsContext, size: CGSize,
                                        overlay: ScratchComparisonOverlay,
                                        windowStart: Double, windowEnd: Double,
@@ -273,7 +286,7 @@ struct ScratchPhraseChartView: View {
             ctx.fill(Path(ellipseIn: dot), with: .color(color))
         }
 
-        // Performed fader edges — ticks in the crossfader sub-lane.
+        // Performed fader edges — ticks in the fader sub-lane.
         let laneTop = strokeRegionHeight + 2
         let laneBottom = size.height - 2
         for mark in overlay.faderMarks {
@@ -354,62 +367,157 @@ struct ScratchPhraseChartView: View {
         ctx.stroke(line, with: .color(laneDividerCol), lineWidth: 0.5)
     }
 
-    private func drawTargetCrossfaderLane(ctx: GraphicsContext, size: CGSize,
-                                           notation: ScratchNotation,
-                                           documentEnd: Double,
-                                           windowStart: Double,
-                                           windowEnd: Double,
-                                           pps: CGFloat,
-                                           strokeRegionTop: CGFloat) {
+    private func drawTargetFaderLane(ctx: GraphicsContext, size: CGSize,
+                                      notation: ScratchNotation,
+                                      documentEnd: Double,
+                                      windowStart: Double,
+                                      windowEnd: Double,
+                                      pps: CGFloat,
+                                      strokeRegionTop: CGFloat) {
         let laneHeight = size.height - strokeRegionTop
-        let inset: CGFloat = 3
-        let barTop = strokeRegionTop + inset
-        let barHeight = max(0, laneHeight - inset * 2)
+        let topY    = strokeRegionTop + laneHeight * 0.15
+        let bottomY = strokeRegionTop + laneHeight * 0.88
+        let guideAlpha: Double = 0.16
+        let activeAlpha: Double = 0.78
+        let transitionAlpha: Double = 0.50
 
-        // Merge adjacent same-state intervals so the crossfader lane reads
-        // as continuous bars instead of per-span blocks. A small merge gap
-        // (150 ms) ensures that close-together spans with identical state
-        // (e.g. every Baby Scratch stroke's own `faderState`, in the legacy
-        // fallback) form one smooth bar rather than separate rounded rects.
-        // Non-empty canonical `faderEvents` is authoritative here too — see
-        // `ScratchNotation.faderAuthoritySpans(documentEnd:)`.
-        let mergeGap: Double = 0.150
-        typealias FaderInterval = (start: Double, end: Double, isOpen: Bool)
-        var merged: [FaderInterval] = []
+        // FADER label anchored above the divider — sits in the bottom margin
+        // of the platter region so it never competes with OPEN/CLOSED below.
+        ctx.draw(
+            Text("FADER")
+                .font(.system(size: 6.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(white: 0.40)),
+            at: CGPoint(x: 4, y: strokeRegionTop),
+            anchor: .bottomLeading
+        )
+
+        // Guide rails — faint lines for OPEN (top) and CLOSED (bottom).
+        // Labels are drawn AFTER the active-rail loop so they sit on top.
+        for y in [topY, bottomY] {
+            var guide = Path()
+            guide.move(to: CGPoint(x: 0, y: y))
+            guide.addLine(to: CGPoint(x: size.width, y: y))
+            ctx.stroke(guide, with: .color(Color(white: 0.28).opacity(guideAlpha)),
+                       lineWidth: 0.5)
+        }
+
         let faderSpans = notation.faderAuthoritySpans(documentEnd: documentEnd)
-            .sorted(by: { $0.startTime < $1.startTime })
-        for span in faderSpans {
+        guard !faderSpans.isEmpty else {
+            // Lane stays visible per V2 spec even with no fader spans —
+            // the guide rails and labels above already render.
+            return
+        }
+
+        let merged = mergeAdjacentFaderSpans(faderSpans)
+        var previousState: ScratchNotationFaderState? = nil
+
+        for span in merged {
             guard span.endTime > windowStart, span.startTime < windowEnd,
                   span.endTime > span.startTime else { continue }
-            let clampedStart = max(span.startTime, windowStart)
-            let clampedEnd = min(span.endTime, windowEnd)
-            let isOpen = span.state == .open
+            let x1 = CGFloat(max(span.startTime, windowStart) - windowStart) * pps
+            let x2 = CGFloat(min(span.endTime, windowEnd) - windowStart) * pps
+            guard x2 > x1 else { continue }
 
-            if let last = merged.last, last.isOpen == isOpen,
-               clampedStart - last.end <= mergeGap {
-                merged[merged.count - 1].end = max(last.end, clampedEnd)
+            let activeY = span.state == .open ? topY : bottomY
+            let activeColor: Color = span.state == .open
+                ? Color(red: 0.20, green: 0.88, blue: 0.55)
+                : Color(red: 1.00, green: 0.25, blue: 0.25)
+
+            var rail = Path()
+            rail.move(to: CGPoint(x: x1, y: activeY))
+            rail.addLine(to: CGPoint(x: x2, y: activeY))
+            ctx.stroke(rail, with: .color(activeColor.opacity(activeAlpha)), lineWidth: 2.5)
+
+            // Vertical transition when state changes
+            if let prev = previousState, prev != span.state {
+                let prevY = prev == .open ? topY : bottomY
+                var trans = Path()
+                trans.move(to: CGPoint(x: x1, y: prevY))
+                trans.addLine(to: CGPoint(x: x1, y: activeY))
+                ctx.stroke(trans, with: .color(Color(white: 0.75).opacity(transitionAlpha)),
+                           lineWidth: 1.2)
+                let d: CGFloat = 2.5
+                var diamond = Path()
+                diamond.move(to: CGPoint(x: x1, y: activeY - d))
+                diamond.addLine(to: CGPoint(x: x1 + d, y: activeY))
+                diamond.addLine(to: CGPoint(x: x1, y: activeY + d))
+                diamond.addLine(to: CGPoint(x: x1 - d, y: activeY))
+                diamond.closeSubpath()
+                ctx.fill(diamond, with: .color(Color(white: 0.82).opacity(transitionAlpha)))
+            }
+            previousState = span.state
+        }
+
+        // Rail labels drawn AFTER active rails so they sit on top.
+        // OPEN sits just below the open rail; CLOSED sits just above
+        // the closed rail. At 80pt Practice Live height these do not
+        // overlap with each other or with FADER above.
+        ctx.draw(
+            Text("OPEN")
+                .font(.system(size: 5.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(white: 0.32)),
+            at: CGPoint(x: 4, y: topY + 1),
+            anchor: .topLeading
+        )
+        ctx.draw(
+            Text("CLOSED")
+                .font(.system(size: 5.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(white: 0.32)),
+            at: CGPoint(x: 4, y: bottomY - 1),
+            anchor: .bottomLeading
+        )
+    }
+
+    /// Small diamonds at forward→backward direction-change boundaries.
+    /// Turnaround semantics are unambiguous: a diamond at the exact end time
+    /// of stroke `i` where stroke `i+1` has the opposite direction.
+    private func drawTurnaroundMarkers(ctx: GraphicsContext,
+                                        notation: ScratchNotation,
+                                        windowStart: Double,
+                                        pps: CGFloat,
+                                        strokeRegionHeight: CGFloat) {
+        let baseline = strokeRegionHeight * CGFloat(CapturedNotationStrokeGeometry.baselineFraction)
+        let maxBand  = strokeRegionHeight * CGFloat(CapturedNotationStrokeGeometry.maxBandFraction)
+        let peakY = baseline - maxBand * 0.55  // centre-band peak for turnaround diamonds
+        let strokes = notation.strokes
+        guard strokes.count >= 2 else { return }
+
+        for i in 0..<(strokes.count - 1) {
+            let a = strokes[i]
+            let b = strokes[i + 1]
+            guard a.direction == .forward, b.direction == .backward else { continue }
+            let turnaroundTime = a.endTime
+            let x = CGFloat(turnaroundTime - windowStart) * pps
+            guard x >= -20 else { continue }
+
+            let d: CGFloat = 2.5
+            var diamond = Path()
+            diamond.move(to: CGPoint(x: x, y: peakY - d))
+            diamond.addLine(to: CGPoint(x: x + d, y: peakY))
+            diamond.addLine(to: CGPoint(x: x, y: peakY + d))
+            diamond.addLine(to: CGPoint(x: x - d, y: peakY))
+            diamond.closeSubpath()
+            ctx.fill(diamond, with: .color(Color(white: 0.72).opacity(0.45)))
+        }
+    }
+
+    private func mergeAdjacentFaderSpans(_ spans: [LaneFaderSpan]) -> [LaneFaderSpan] {
+        guard spans.count > 1 else { return spans }
+        let sorted = spans.sorted { $0.startTime < $1.startTime }
+        var merged: [LaneFaderSpan] = [sorted[0]]
+        for span in sorted.dropFirst() {
+            let last = merged[merged.count - 1]
+            if span.state == last.state, abs(span.startTime - last.endTime) < 0.001 {
+                merged[merged.count - 1] = LaneFaderSpan(
+                    startTime: last.startTime,
+                    endTime: span.endTime,
+                    state: last.state
+                )
             } else {
-                merged.append((clampedStart, clampedEnd, isOpen))
+                merged.append(span)
             }
         }
-
-        for interval in merged {
-            let x1 = CGFloat(interval.start - windowStart) * pps
-            let x2 = CGFloat(interval.end - windowStart) * pps
-            guard x2 > x1, barHeight > 0 else { continue }
-            let rect = CGRect(x: x1, y: barTop, width: x2 - x1, height: barHeight)
-            let fill = interval.isOpen ? faderOpenCol : faderClosedCol
-            ctx.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(fill))
-        }
-
-        // Lane label: keep copy short and user-facing.
-        ctx.draw(
-            Text("CROSSFADER")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color(white: 0.55)),
-            at: CGPoint(x: 4, y: strokeRegionTop + laneHeight / 2),
-            anchor: .leading
-        )
+        return merged
     }
 
     private func drawCapturedAxisLabels(ctx: GraphicsContext, size: CGSize,
@@ -504,6 +612,8 @@ enum CapturedNotationStrokeGeometry {
 // MARK: - Preview
 
 #if DEBUG
+// Preview macros disabled: PreviewsMacros.SwiftUIView plugin unavailable.
+#if false
 #Preview("Target — Baby Scratch") {
     ScratchPhraseChartView(
         source: .target(ScratchNotation.babyScratch ?? ScratchNotation(
@@ -520,4 +630,5 @@ enum CapturedNotationStrokeGeometry {
     ScratchPhraseChartView(source: .empty("Choose a scratch type to load target notation."))
         .frame(width: 640, height: 100)
 }
+#endif // #if false
 #endif
