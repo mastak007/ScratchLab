@@ -864,3 +864,186 @@ struct ScratchPerformanceScore: Equatable, Sendable {
         )
     }
 }
+
+// MARK: - Semantic error model (V2 Practice & Review)
+
+/// A formal, presentation-ready error mapped from `ScratchPerformanceComparisonResult`.
+/// Each error isolates exactly one mismatch — timing, platter, or fader — at a
+/// specific musical-time position. The coaching layer and review inspector
+/// consume these directly; no view should duplicate the mapping logic.
+struct SemanticError: Equatable, Sendable {
+    enum Family: String, Equatable, Sendable, CaseIterable {
+        case timing
+        case platter
+        case fader
+    }
+
+    enum Kind: Equatable, Sendable {
+        // TIMING
+        case early
+        case late
+        // PLATTER
+        case wrongDirection
+        case movementTooShort
+        case movementTooLong
+        case missedMovement
+        // FADER
+        case missedCut
+        case extraCut
+        case earlyCut
+        case lateCut
+    }
+
+    let family: Family
+    let kind: Kind
+    /// Beat-relative position, or `nil` when not determinable.
+    let beatPosition: Double?
+    /// Magnitude in milliseconds where meaningful (timing offsets), `nil` otherwise.
+    let magnitudeMilliseconds: Double?
+    /// Human-readable expected behaviour.
+    let expected: String
+    /// Human-readable performed behaviour.
+    let performed: String
+}
+
+extension SemanticError {
+
+    /// Derives a flat, priority-ordered list of semantic errors from a
+    /// completed comparison result. Coaching precedence: timing errors first,
+    /// then platter direction/completeness, then fader — matching the
+    /// fundamental-first hierarchy the coaching messages already use.
+    ///
+    /// Each matched stroke with a timing or direction problem produces one
+    /// error; each missing target stroke produces one missed-movement error;
+    /// extra performed strokes are listed as movement-too-long errors.
+    /// Fader edge mismatches produce cut-level errors.
+    static func derive(
+        from result: ScratchPerformanceComparisonResult,
+        target: TargetScratchPhrase,
+        performed: PerformedScratchTimeline,
+        clock: PerformanceBeatClock
+    ) -> [SemanticError] {
+        var errors: [SemanticError] = []
+
+        // --- Timing / platter direction ---
+        for match in result.matchedStrokes {
+            guard target.strokes.indices.contains(match.targetIndex),
+                  performed.strokes.indices.contains(match.performedIndex) else { continue }
+            let tStroke = target.strokes[match.targetIndex]
+            let beat = tStroke.startBeat
+
+            switch match.timing {
+            case .early:
+                errors.append(SemanticError(
+                    family: .timing, kind: .early,
+                    beatPosition: beat,
+                    magnitudeMilliseconds: match.offsetMilliseconds,
+                    expected: "On beat \(String(format: "%.1f", beat)).",
+                    performed: "Turnaround \(String(format: "%.0f ms early", abs(match.offsetMilliseconds)))."))
+            case .late:
+                errors.append(SemanticError(
+                    family: .timing, kind: .late,
+                    beatPosition: beat,
+                    magnitudeMilliseconds: match.offsetMilliseconds,
+                    expected: "On beat \(String(format: "%.1f", beat)).",
+                    performed: "Turnaround \(String(format: "%.0f ms late", match.offsetMilliseconds))."))
+            case .correct:
+                break
+            }
+
+            if match.directionCorrect == false {
+                errors.append(SemanticError(
+                    family: .platter, kind: .wrongDirection,
+                    beatPosition: beat,
+                    magnitudeMilliseconds: nil,
+                    expected: "\(tStroke.direction) stroke.",
+                    performed: "Opposite direction played."))
+            }
+        }
+
+        // --- Missing target strokes (missed movement) ---
+        for index in result.missingTargetStrokeIndices
+        where target.strokes.indices.contains(index) {
+            let stroke = target.strokes[index]
+            errors.append(SemanticError(
+                family: .platter, kind: .missedMovement,
+                beatPosition: stroke.startBeat,
+                magnitudeMilliseconds: nil,
+                expected: "\(stroke.direction) stroke at beat \(String(format: "%.1f", stroke.startBeat)).",
+                performed: "No movement detected."))
+        }
+
+        // --- Extra performed strokes (movement too long / extra) ---
+        for index in result.extraPerformedStrokeIndices
+        where performed.strokes.indices.contains(index) {
+            let stroke = performed.strokes[index]
+            errors.append(SemanticError(
+                family: .platter, kind: .movementTooLong,
+                beatPosition: stroke.startBeat,
+                magnitudeMilliseconds: nil,
+                expected: "No extra movement beyond the pattern.",
+                performed: "Extra stroke detected at beat \(String(format: "%.1f", stroke.startBeat))."))
+        }
+
+        // --- Fader edge errors ---
+        switch result.faderChannel {
+        case .compared(let matchedEdges, let missingTargetEdgeIndices, let extraPerformedEdgeIndices):
+            for match in matchedEdges
+            where target.faderEdges.indices.contains(match.targetIndex) {
+                let targetBeat = target.faderEdges[match.targetIndex].beat
+                switch match.timing {
+                case .early:
+                    errors.append(SemanticError(
+                        family: .fader, kind: .earlyCut,
+                        beatPosition: targetBeat,
+                        magnitudeMilliseconds: match.offsetMilliseconds,
+                        expected: "Cut on beat \(String(format: "%.1f", targetBeat)).",
+                        performed: "Cut \(String(format: "%.0f ms early", abs(match.offsetMilliseconds)))."))
+                case .late:
+                    errors.append(SemanticError(
+                        family: .fader, kind: .lateCut,
+                        beatPosition: targetBeat,
+                        magnitudeMilliseconds: match.offsetMilliseconds,
+                        expected: "Cut on beat \(String(format: "%.1f", targetBeat)).",
+                        performed: "Cut \(String(format: "%.0f ms late", match.offsetMilliseconds))."))
+                case .correct:
+                    break
+                }
+            }
+            for _ in missingTargetEdgeIndices {
+                errors.append(SemanticError(
+                    family: .fader, kind: .missedCut,
+                    beatPosition: nil, magnitudeMilliseconds: nil,
+                    expected: "Fader cut expected.",
+                    performed: "No cut detected."))
+            }
+            for _ in extraPerformedEdgeIndices {
+                errors.append(SemanticError(
+                    family: .fader, kind: .extraCut,
+                    beatPosition: nil, magnitudeMilliseconds: nil,
+                    expected: "No fader cut expected here.",
+                    performed: "Extra cut detected."))
+            }
+        case .noCanonicalFaderChannel, .noPerformedFaderCapture:
+            break // no fader errors when channel isn't compared
+        }
+
+        // Stable sort: timing first, then platter, then fader; within each
+        // family, earlier beat positions first.
+        errors.sort { a, b in
+            if a.family != b.family {
+                return familyPriority(a.family) < familyPriority(b.family)
+            }
+            return (a.beatPosition ?? .infinity) < (b.beatPosition ?? .infinity)
+        }
+        return errors
+    }
+
+    private static func familyPriority(_ f: Family) -> Int {
+        switch f {
+        case .timing: return 0
+        case .platter: return 1
+        case .fader: return 2
+        }
+    }
+}
