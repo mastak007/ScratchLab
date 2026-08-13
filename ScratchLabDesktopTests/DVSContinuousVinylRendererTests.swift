@@ -66,6 +66,17 @@ final class DVSContinuousVinylRendererTests: XCTestCase {
             ))
         }
 
+        func publishSnapping(velocity: Double, authoritativePhase: Double) {
+            epoch += 1
+            core.ingest(snapshot: DVSVinylControlSnapshot(
+                epoch: epoch,
+                velocity: velocity,
+                authoritativePhase: authoritativePhase,
+                active: true,
+                snapPhase: true
+            ))
+        }
+
         func publishIdle() {
             epoch += 1
             core.ingest(snapshot: DVSVinylControlSnapshot(
@@ -452,6 +463,27 @@ final class DVSContinuousVinylRendererTests: XCTestCase {
         )
         XCTAssertLessThan(abs(finalError), 5,
             "Bounded correction must converge the render phase onto the authoritative anchor (residual \(finalError))")
+    }
+
+    func testIntentionalCueBoundarySnapsExactlyToAuthoritativePhase() {
+        let harness = CoreHarness()
+        let loop = Self.revolutionFrames
+        harness.install(content: sineContent(frames: 46_000), loopFrames: loop)
+
+        harness.publish(velocity: Self.rate, authoritativePhase: 0)
+        harness.render(8_000)
+        XCTAssertGreaterThan(harness.core.phase, 1_000)
+
+        let cueOnset = 11_880.0
+        harness.publishSnapping(velocity: Self.rate, authoritativePhase: cueOnset)
+
+        XCTAssertEqual(
+            harness.core.phase,
+            cueOnset,
+            accuracy: 1e-9,
+            "A physical cue-loop boundary must put the render head exactly at the 12-o'clock cue onset"
+        )
+        XCTAssertEqual(harness.core.pendingPhaseCorrection, 0, accuracy: 1e-9)
     }
 
     // MARK: - Sample swap resets phase to the new sample's origin

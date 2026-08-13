@@ -92,6 +92,34 @@ struct DVSVinylSampleTable {
     let loopFrames: Double
     let contentFadeFrames: Double
     let sourceSampleRate: Double
+    /// Render-side phase to start at on install (cue-start-alignment fix,
+    /// 2026-08-14), in `[0, loopFrames)` — e.g. a hot-cue sample's detected
+    /// audible onset, so the very first bit of platter motion is already
+    /// audible instead of the renderer starting at frame 0 and only slowly
+    /// (bounded-rate, velocity-proportional) correcting toward the
+    /// authoritative phase over time. `0` (the previous, only behavior)
+    /// when the caller has no such offset.
+    let initialPhase: Double
+
+    init(
+        identity: UInt64,
+        channel0: UnsafePointer<Float>,
+        channel1: UnsafePointer<Float>?,
+        contentFrames: Int,
+        loopFrames: Double,
+        contentFadeFrames: Double,
+        sourceSampleRate: Double,
+        initialPhase: Double = 0
+    ) {
+        self.identity = identity
+        self.channel0 = channel0
+        self.channel1 = channel1
+        self.contentFrames = contentFrames
+        self.loopFrames = loopFrames
+        self.contentFadeFrames = contentFadeFrames
+        self.sourceSampleRate = sourceSampleRate
+        self.initialPhase = initialPhase
+    }
 }
 
 // MARK: - Control snapshot
@@ -103,6 +131,10 @@ struct DVSVinylControlSnapshot {
     var velocity: Double
     var authoritativePhase: Double
     var active: Bool
+    /// True only when the physical platter crosses an intentional cue-loop
+    /// boundary. Unlike ordinary drift correction, this must reposition the
+    /// render head exactly so the cue onset lands at 12 o'clock.
+    var snapPhase: Bool = false
 }
 
 // MARK: - Pure render core (single-owner state + deterministic math)
@@ -210,8 +242,14 @@ struct DVSContinuousVinylRenderCore {
 
     /// Applies a published sample table. Resets integration state on an
     /// identity change — this is a load, not a velocity-zero event.
-    mutating func ingest(table: DVSVinylSampleTable) {
-        guard table.identity != sampleIdentity else { return }
+    /// Returns `true` when a new table was actually applied (identity
+    /// changed), `false` for a no-op re-check of the already-installed
+    /// table — the caller (`performRender`) uses this to report real
+    /// ingest events for diagnostics without the core itself doing any
+    /// cross-thread work.
+    @discardableResult
+    mutating func ingest(table: DVSVinylSampleTable) -> Bool {
+        guard table.identity != sampleIdentity else { return false }
         sampleIdentity = table.identity
         sampleChannel0 = table.channel0
         sampleChannel1 = table.channel1
@@ -219,18 +257,19 @@ struct DVSContinuousVinylRenderCore {
         sampleLoopFrames = table.loopFrames.isFinite ? table.loopFrames : 0
         sampleContentFadeFrames = max(1, table.contentFadeFrames)
         sampleSourceRate = table.sourceSampleRate > 0 ? table.sourceSampleRate : 44_100
-        phase = 0
+        phase = table.initialPhase.isFinite ? table.initialPhase : 0
         velocity = 0
         gain = 0
         pendingPhaseCorrection = 0
         controlVelocity = 0
         controlActive = false
         framesSinceControlUpdate = Int.max / 2
+        return true
     }
 
-    /// Applies a control snapshot. On an epoch change the freshness clock
-    /// restarts and the bounded correction toward the authoritative anchor
-    /// is recomputed — never applied as a jump.
+    /// Applies a control snapshot. Ordinary updates use bounded correction;
+    /// an intentional cue-loop boundary may explicitly snap to its
+    /// authoritative phase.
     mutating func ingest(snapshot: DVSVinylControlSnapshot) {
         guard snapshot.epoch != lastSeenControlEpoch else { return }
         lastSeenControlEpoch = snapshot.epoch
@@ -243,10 +282,17 @@ struct DVSContinuousVinylRenderCore {
         if snapshot.authoritativePhase.isFinite {
             controlAuthoritativePhase = snapshot.authoritativePhase
             if sampleLoopFrames > 0 {
-                pendingPhaseCorrection = Self.wrappedSignedDelta(
-                    controlAuthoritativePhase - phase,
-                    loop: sampleLoopFrames
-                )
+                if snapshot.snapPhase {
+                    var wrapped = controlAuthoritativePhase.truncatingRemainder(dividingBy: sampleLoopFrames)
+                    if wrapped < 0 { wrapped += sampleLoopFrames }
+                    phase = wrapped
+                    pendingPhaseCorrection = 0
+                } else {
+                    pendingPhaseCorrection = Self.wrappedSignedDelta(
+                        controlAuthoritativePhase - phase,
+                        loop: sampleLoopFrames
+                    )
+                }
             }
         }
     }
@@ -456,6 +502,7 @@ private final class DVSVinylRenderMailbox {
     let velocityBits = Atomic<UInt64>(Double.zero.bitPattern)
     let phaseBits = Atomic<UInt64>(Double.zero.bitPattern)
     let activeWord = Atomic<UInt64>(0)
+    let snapPhaseWord = Atomic<UInt64>(0)
     let sampleTablePointer = Atomic<UnsafeMutableRawPointer?>(nil)
     /// Learned-mixer user gain (crossfader × right upfader), already
     /// combined and clamped by the control side. Independent of
@@ -464,6 +511,20 @@ private final class DVSVinylRenderMailbox {
     /// own to coordinate with velocity/phase/active. Starts at unity so
     /// audio is never muted before any mixer control is learned or moved.
     let userMixerGainBits = Atomic<UInt64>(Double(1.0).bitPattern)
+
+    // Render → control diagnostics (2026-08-14 intermittent hot-cue
+    // retrigger investigation). Written by the render thread itself with
+    // relaxed-ordering atomic stores only — no lock, no allocation, no
+    // logging on the render path, preserving the real-time-safety
+    // contract in the file header. Read by the control side (`audioQueue`)
+    // to log ingest/phase events from a safe thread. `#if DEBUG` only —
+    // never touched by the production render math itself.
+    #if DEBUG
+    let renderIngestCount = Atomic<UInt64>(0)
+    let lastIngestedTableIdentity = Atomic<UInt64>(0)
+    let lastIngestedInitialPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
+    let renderPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
+    #endif
 
     /// Render-owned core; after init, touched only by the render path
     /// (`DVSContinuousVinylRenderer.performRender`).
@@ -582,7 +643,19 @@ final class DVSContinuousVinylRenderer {
         // (and therefore this mailbox) lives.
         if let raw = mailbox.sampleTablePointer.load(ordering: .acquiring) {
             let table = raw.assumingMemoryBound(to: DVSVinylSampleTable.self)
-            mailbox.core.pointee.ingest(table: table.pointee)
+            let didIngestNewTable = mailbox.core.pointee.ingest(table: table.pointee)
+            #if DEBUG
+            // Intermittent hot-cue retrigger investigation (2026-08-14):
+            // real-time-safe diagnostics only — relaxed atomic stores, no
+            // print/allocation/lock on the render path itself (see the
+            // mailbox field doc comments). The control side polls these
+            // and logs from a safe thread.
+            if didIngestNewTable {
+                mailbox.renderIngestCount.wrappingAdd(1, ordering: .relaxed)
+                mailbox.lastIngestedTableIdentity.store(table.pointee.identity, ordering: .relaxed)
+                mailbox.lastIngestedInitialPhaseBits.store(table.pointee.initialPhase.bitPattern, ordering: .relaxed)
+            }
+            #endif
         }
         // Control snapshot: acquiring epoch load first, then relaxed field
         // loads — each field is individually atomic (no tearing) and the
@@ -593,7 +666,8 @@ final class DVSContinuousVinylRenderer {
             epoch: epoch,
             velocity: Double(bitPattern: mailbox.velocityBits.load(ordering: .relaxed)),
             authoritativePhase: Double(bitPattern: mailbox.phaseBits.load(ordering: .relaxed)),
-            active: mailbox.activeWord.load(ordering: .relaxed) != 0
+            active: mailbox.activeWord.load(ordering: .relaxed) != 0,
+            snapPhase: mailbox.snapPhaseWord.load(ordering: .relaxed) != 0
         )
         mailbox.core.pointee.ingest(snapshot: snapshot)
         // Learned-mixer user gain: one relaxed atomic load, independent of
@@ -601,7 +675,11 @@ final class DVSContinuousVinylRenderer {
         mailbox.core.pointee.ingestUserMixerGain(
             Double(bitPattern: mailbox.userMixerGainBits.load(ordering: .relaxed))
         )
-        return mailbox.core.pointee.render(left: left, right: right, frameCount: frameCount)
+        let silent = mailbox.core.pointee.render(left: left, right: right, frameCount: frameCount)
+        #if DEBUG
+        mailbox.renderPhaseBits.store(mailbox.core.pointee.phase.bitPattern, ordering: .relaxed)
+        #endif
+        return silent
     }
 
     // MARK: - Control-side API (controller audio queue only)
@@ -614,7 +692,8 @@ final class DVSContinuousVinylRenderer {
     func installSample(
         from buffer: AVAudioPCMBuffer,
         loopFrames: Double,
-        contentFadeFrames: Int
+        contentFadeFrames: Int,
+        initialPhase: Double = 0
     ) -> Bool {
         let contentFrames = Int(buffer.frameLength)
         guard contentFrames > 1,
@@ -649,7 +728,8 @@ final class DVSContinuousVinylRenderer {
             contentFrames: contentFrames,
             loopFrames: loopFrames,
             contentFadeFrames: Double(max(1, contentFadeFrames)),
-            sourceSampleRate: buffer.format.sampleRate
+            sourceSampleRate: buffer.format.sampleRate,
+            initialPhase: initialPhase.isFinite ? min(max(initialPhase, 0), loopFrames) : 0
         ))
         mailbox.retainedTableAllocations.append(table)
         // Releasing store publishes the fully initialized table.
@@ -667,7 +747,12 @@ final class DVSContinuousVinylRenderer {
     /// authoritative loop phase from the control tick. Values are
     /// sanitized here (and defensively again at ingest) so the render
     /// callback never sees non-finite input.
-    func publish(velocity: Double, authoritativePhase: Double, active: Bool) {
+    func publish(
+        velocity: Double,
+        authoritativePhase: Double,
+        active: Bool,
+        snapPhase: Bool = false
+    ) {
         let safeVelocity = DVSContinuousVinylRenderCore.sanitizedVelocity(
             velocity,
             sourceSampleRate: installedSourceSampleRate
@@ -677,6 +762,7 @@ final class DVSContinuousVinylRenderer {
             mailbox.phaseBits.store(authoritativePhase.bitPattern, ordering: .relaxed)
         }
         mailbox.activeWord.store(active ? 1 : 0, ordering: .relaxed)
+        mailbox.snapPhaseWord.store(snapPhase ? 1 : 0, ordering: .relaxed)
         mailbox.controlEpoch.wrappingAdd(1, ordering: .releasing)
 #if DEBUG
         publishCount += 1
@@ -692,6 +778,7 @@ final class DVSContinuousVinylRenderer {
     func publishIdle() {
         mailbox.velocityBits.store(Double.zero.bitPattern, ordering: .relaxed)
         mailbox.activeWord.store(0, ordering: .relaxed)
+        mailbox.snapPhaseWord.store(0, ordering: .relaxed)
         mailbox.controlEpoch.wrappingAdd(1, ordering: .releasing)
 #if DEBUG
         idlePublishCount += 1
@@ -744,5 +831,14 @@ final class DVSContinuousVinylRenderer {
     var testOnly_coreGain: Double { mailbox.core.pointee.gain }
     var testOnly_coreUserMixerGain: Double { mailbox.core.pointee.userMixerGain }
     var testOnly_coreTargetUserMixerGain: Double { mailbox.core.pointee.targetUserMixerGain }
+
+    // MARK: - Hardware diagnostics (2026-08-14 intermittent hot-cue
+    // retrigger investigation) — safe to read at any time, including
+    // during real playback: single relaxed atomic loads of state the
+    // render thread itself published, unlike `testOnly_core*` above.
+    var renderIngestCount: UInt64 { mailbox.renderIngestCount.load(ordering: .relaxed) }
+    var lastIngestedTableIdentity: UInt64 { mailbox.lastIngestedTableIdentity.load(ordering: .relaxed) }
+    var lastIngestedInitialPhase: Double { Double(bitPattern: mailbox.lastIngestedInitialPhaseBits.load(ordering: .relaxed)) }
+    var currentRenderPhase: Double { Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .relaxed)) }
 #endif
 }

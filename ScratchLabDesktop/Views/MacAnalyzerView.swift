@@ -2674,8 +2674,15 @@ struct MacAnalyzerView: View {
     }
 
     /// Sorted, available bundled scratch-sample IDs for hot-cue assignment.
+    /// Excludes the legacy raw `ahhh` sample (product decision, 2026-08-14):
+    /// `dvs_ahhh` is now the only user-facing "Ahh" scratch sample. `ahhh`
+    /// stays in `knownSampleIDs`/loadable — it remains a required fixture
+    /// for the legacy-grain-path regression test suite — it is only
+    /// excluded from this picker.
     private var availableScratchSampleIDs: [String] {
-        ScratchSamplePlaybackController.knownSampleIDs.sorted()
+        ScratchSamplePlaybackController.knownSampleIDs
+            .subtracting(["ahhh"])
+            .sorted()
     }
 
     @ViewBuilder

@@ -3516,12 +3516,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         movieOutput.movieFragmentInterval = .invalid
         startAudioSignalDecayTimer()
 
-        // Scratch bank pad → sample load for platter-driven scratch playback.
-        // Hot cue press loads the sample; platter CC6 movement drives audio.
-        scratchBankPadPreviewCallback = { [weak self] sampleID in
-            guard let self, self.isScratchBankMIDIPreviewEnabled else { return }
-            print("[RanePad] loading sample · sampleID=\(sampleID)")
-            self.scratchPlaybackController.load(sampleID: sampleID)
+        // Scratch bank pad → diagnostic preview event only (2026-08-13 dedup
+        // fix). This legacy hardcoded pad mapping (`ScratchBankPadEventRouter`)
+        // and the learned production hot-cue mapping
+        // (`resolveAndLoadHotCueSample`, called right after this callback
+        // fires in both the CC and Note On routes) cover the exact same
+        // ch4/ch5 CC/note 20–27 range on real Rane hardware, so once a
+        // hot-cue is learned, every pad press matched both routes and
+        // loaded the sample twice. `resolveAndLoadHotCueSample` is now the
+        // single authoritative loader; this closure only logs so the
+        // firing itself (used by pad-label diagnostics and tests) is
+        // unchanged.
+        scratchBankPadPreviewCallback = { sampleID in
+            print("[RanePad] preview event (no load) · sampleID=\(sampleID)")
         }
 
         // Right-deck (channel 1) MIDI continuous platter drive (2026-08-09):
@@ -8164,6 +8171,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Hot-Cue Sample Resolution & Loading (Phase 4)
 
+    /// True when `currentMIDIDeviceMapping` has a learned hot-cue action for
+    /// this exact `(messageType, channel, controlNumber)` — the same
+    /// membership check `resolveAndLoadHotCueSample` itself uses to find a
+    /// match, hoisted so callers can cheaply skip entering the resolver (and
+    /// its diagnostic trace) entirely for events that could never match.
+    ///
+    /// Diagnostic/routing-boundary fix, 2026-08-14: a hardware trace showed
+    /// `resolveAndLoadHotCueSample` — and its `[HotCueTrace]` log — firing
+    /// continuously for an unrelated, high-frequency CC stream (a fader/
+    /// knob, CC6 on channel 1), drowning out the actual hot-cue sequence.
+    /// Purely data-driven from the learned mapping/action registry — no
+    /// hardcoded CC numbers — so generic MIDI Learn for any control/action
+    /// pairing is unaffected; only genuinely unmapped-as-hot-cue traffic is
+    /// filtered before it ever reaches the resolver.
+    private func isHotCueCandidate(messageType: LearnedMIDIMessageType, channel: Int, controlNumber: Int) -> Bool {
+        currentMIDIDeviceMapping?.controls.contains(where: { control in
+            control.action.hotCueIndex != nil
+                && control.messageType == messageType
+                && control.channel == channel
+                && control.controlNumber == controlNumber
+        }) ?? false
+    }
+
     /// Resolve a MIDI CC or Note On event against the current device's learned
     /// hot-cue mappings. If a mapping matches and has an assigned sample, dispatch
     /// the load through the serialized scratch-sample loading path.
@@ -8180,6 +8210,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         controlNumber: Int,
         value: Int
     ) -> Bool {
+        #if DEBUG
+        // Intermittent hot-cue-retrigger investigation (2026-08-14): every
+        // call, unconditionally — including early-outs (release events, no
+        // learned mapping, no match) — so a duplicate call for the same
+        // physical press is visible even when it doesn't end up matching.
+        print("[HotCueTrace] resolveAndLoadHotCueSample called · messageType=\(messageType) " +
+              "channel=\(channel) controlNumber=\(controlNumber) value=\(value)")
+        #endif
         // Only handle press events (not release).
         guard value > 0 else { return false }
         guard let mapping = currentMIDIDeviceMapping else { return false }
@@ -8199,7 +8237,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         print("[HotCueAutoLoad] matched · action=\(match.action.displayName) sample=\(sampleID) channel=\(channel) control=\(controlNumber)")
         // Enqueue the load onto the controller's private audio queue — no file I/O
         // or blocking on the MIDI callback.
-        let requested = scratchPlaybackController.load(sampleID: sampleID)
+        // A hot-cue press must only arm platter-controlled playback. The
+        // controller's diagnostic preview plays the first 350 ms through a
+        // separate player node; enabling it here duplicates the vocal onset
+        // immediately before the continuous renderer starts at the cue point.
+        let requested = scratchPlaybackController.load(
+            sampleID: sampleID,
+            playDiagnosticPreview: false
+        )
         if !requested {
             print("[HotCueAutoLoad] load request rejected · sampleID=\(sampleID)")
             // Fail visibly: a hot cue pointing at a removed/missing sample should be
@@ -8730,8 +8775,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // mapping/load feature, which must work in Release too.
         // Skipped when this exact event was just consumed by MIDI Learn — a control
         // being (re-)learned must never also fire a stale/colliding hot-cue load on
-        // the same physical press.
-        if !consumedByLearn {
+        // the same physical press. Also skipped entirely for CC addresses with no
+        // learned hot-cue action at all (routing-boundary fix, 2026-08-14) — see
+        // `isHotCueCandidate`'s doc comment; a continuous CC stream (fader, platter)
+        // must never enter the hot-cue resolver just to immediately no-op.
+        if !consumedByLearn, isHotCueCandidate(messageType: .controlChange, channel: channel, controlNumber: controller) {
             _ = resolveAndLoadHotCueSample(messageType: .controlChange, channel: channel, controlNumber: controller, value: value)
         }
 
@@ -8943,20 +8991,26 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         // Production hot-cue auto-load: resolve Note On events through the learned device
         // mapping. Not gated behind isScratchBankMIDIPreviewEnabled — see CC path above.
-        _ = resolveAndLoadHotCueSample(messageType: .note, channel: channel, controlNumber: noteNumber, value: velocity)
+        // Skipped entirely for notes with no learned hot-cue action at all
+        // (routing-boundary fix, 2026-08-14) — see `isHotCueCandidate`'s doc
+        // comment; `productionMatched` below reuses the same check rather than
+        // scanning `currentMIDIDeviceMapping` twice.
+        let productionMatched = isHotCueCandidate(messageType: .note, channel: channel, controlNumber: noteNumber)
+        if productionMatched {
+            _ = resolveAndLoadHotCueSample(messageType: .note, channel: channel, controlNumber: noteNumber, value: velocity)
+        }
 
-        // TEMP HARDWARE DIAGNOSTIC: direct-load ahhh for captured Rane hot cue notes
-        // while keeping the existing ch4/ch5 fallback active during hardware proofing.
-        // This fires only when the production hot-cue path above did NOT resolve a sample.
+        // TEMP HARDWARE DIAGNOSTIC: direct-load dvs_ahhh for captured Rane hot cue
+        // notes while keeping the existing ch4/ch5 fallback active during hardware
+        // proofing. This fires only when the production hot-cue path above did NOT
+        // resolve a sample. Loads `dvs_ahhh`, not the legacy raw `ahhh` — product
+        // decision 2026-08-14: dvs_ahhh is the only user-facing "Ahh" sample.
         let isTemporaryAhhhFallback =
             ((channel == 4 || channel == 5) && (noteNumber == 20 || noteNumber == 24)) ||
             (channel == 6 && noteNumber == 20)
-        let productionMatched = currentMIDIDeviceMapping?.controls.contains(where: { control in
-            control.action.hotCueIndex != nil && control.messageType == .note && control.channel == channel && control.controlNumber == noteNumber
-        }) ?? false
         if isTemporaryAhhhFallback, routedSampleID == nil, !productionMatched {
-            print("[RanePad] TEMP diagnostic direct load · sampleID=ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
-            scratchPlaybackController.load(sampleID: "ahhh")
+            print("[RanePad] TEMP diagnostic direct load · sampleID=dvs_ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
+            scratchPlaybackController.load(sampleID: "dvs_ahhh")
         }
         if let label = Self.compactScratchBankNotePadLabel(
             channel: channel, noteNumber: noteNumber, velocity: velocity,
@@ -8970,11 +9024,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     // TEMP HARDWARE DIAGNOSTIC: one clean proof path from known-good Rane CC8
     // input into platter-owned sample playback, bypassing pad routing/gates.
+    // Loads `dvs_ahhh`, not the legacy raw `ahhh` — product decision 2026-08-14:
+    // dvs_ahhh is the only user-facing "Ahh" sample.
     private func handleTemporaryDirectAhhhTrigger(rawValue: Int) {
         if rawValue > 120, tempDirectAhhhTriggerArmed {
             tempDirectAhhhTriggerArmed = false
             print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger fired · source=cc8 raw=\(rawValue)")
-            scratchPlaybackController.load(sampleID: "ahhh")
+            scratchPlaybackController.load(sampleID: "dvs_ahhh")
         } else if rawValue < 20, !tempDirectAhhhTriggerArmed {
             tempDirectAhhhTriggerArmed = true
             print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger reset · source=cc8 raw=\(rawValue)")

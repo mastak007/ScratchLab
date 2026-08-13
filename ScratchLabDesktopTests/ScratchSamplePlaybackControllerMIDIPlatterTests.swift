@@ -78,10 +78,12 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity), 0)
     }
 
-    /// Direct-MIDI geometry fix (2026-08-10): precise numeric check that
-    /// the published render velocity is `stepVelocity * midiFramesPerStep`
-    /// using the 3600-based direct-MIDI scale, not the DVS 3932-based
-    /// scale — the earlier tests above only assert sign, not magnitude.
+    /// Direct-MIDI geometry fix (2026-08-10; reaffirmed 2026-08-13 after
+    /// reverting a same-day rate-rescaling experiment that a hardware test
+    /// proved caused a "chipmunk" pitch/speed shift): precise numeric check
+    /// that the published render velocity is `stepVelocity *
+    /// midiFramesPerStep` using the 3600-based direct-MIDI real-vinyl-RPM
+    /// scale, not a scale derived from the sample's own length —
     /// `midiFramesPerStep = (rate * vinylSecondsPerRevolution) / 3600`
     /// = `(44_100 * 1.8) / 3600` = `22.05` exactly for this synthetic
     /// buffer's rate, so both sides of this check are exact rationals.
@@ -102,7 +104,8 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
             try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity),
             expectedFrameVelocity,
             accuracy: 0.01,
-            "Published velocity must use the direct-MIDI 3600-based frame scale, not DVS's 3932-based scale"
+            "Published velocity must use the direct-MIDI 3600-based real-vinyl-RPM frame scale, " +
+            "not one derived from the sample's own length — sample duration must not affect pitch"
         )
     }
 
@@ -722,14 +725,22 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         controller.setDVSOwnership(active: false)
         controller.waitForAudioQueue()
 
-        let framesPerStepValue = controller.dvsLoopFrames / Self.stepsPerRevolution
+        // Onset-alignment fix (2026-08-13): MIDI's continuous phase is
+        // offset by `hotCueOnsetFrame` and wraps at `hotCueLoopFrames`, but
+        // the rate stays the real-vinyl `midiFramesPerStep`/3600 scale
+        // (unchanged — a same-day experiment that rescaled this to the
+        // sample's own length caused an audible pitch/speed shift on real
+        // hardware and was reverted). The synthetic loop buffer is loud
+        // from frame 0, so `hotCueOnsetFrame` is 0 here.
+        let onset = Double(controller.hotCueOnsetFrame)
+        let loopFrames = controller.hotCueLoopFrames
+        let stepRate = (Self.rate * 1.8) / Self.stepsPerRevolution // midiFramesPerStep
         func loopPhase(forSteps steps: Double) -> Double {
-            let loop = controller.dvsLoopFrames
-            var wrapped = (steps * framesPerStepValue).truncatingRemainder(dividingBy: loop)
-            if wrapped < 0 { wrapped += loop }
-            return wrapped
+            var wrapped = (steps * stepRate).truncatingRemainder(dividingBy: loopFrames)
+            if wrapped < 0 { wrapped += loopFrames }
+            return onset + wrapped
         }
-        let expectedAnchor = Double(dvsPhase) / framesPerStepValue
+        let expectedAnchor = (Double(dvsPhase) - onset) / stepRate
         XCTAssertEqual(controller.testOnly_midiContinuousAccumulatedSteps, expectedAnchor, accuracy: 0.01,
                         "Release must rebase MIDI's anchor to DVS's retained phase, not leave it at the stale pre-DVS value")
         XCTAssertNotEqual(controller.testOnly_midiContinuousAccumulatedSteps, 40,
@@ -810,18 +821,24 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         XCTAssertEqual(controller.testOnly_midiCoalescingTimerStartCount, 2)
     }
 
-    // MARK: - Platter test asset load-path defect (2026-08-09 hardware finding)
+    // MARK: - Platter test asset load-path defect (2026-08-09 hardware finding,
+    // resolved 2026-08-13 by arbitrary-length platter playback)
     //
-    // Root cause: the Debug hardware-test button loaded `ahhh.wav`
+    // Original root cause: the Debug hardware-test button loaded `ahhh.wav`
     // (~4.4667 s, the hot-cue pad asset), which is longer than one physical
     // platter revolution (`dvsLoopFrames`, ~1.8 s) — `midiCoalescingTick`'s
     // loop-fit guard silently returned every tick, so moving the right
-    // platter produced no audio. The validated `dvs_ahhh` asset
-    // (`VirtualPlatter/ahhh.wav`, ~1.0474 s) fits the one-revolution
-    // renderer geometry.
+    // platter produced no audio. The direct-MIDI continuous path is no
+    // longer capped at one revolution (see `continuousLoopFrames`'s doc
+    // comment): both the validated `dvs_ahhh` asset and samples longer than
+    // one revolution now drive the continuous renderer correctly.
 
     func testBundledDVSAhhhFitsWithinOneRevolutionGeometryForDirectMIDI() throws {
-        let controller = ScratchSamplePlaybackController()
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
         XCTAssertTrue(controller.load(sampleID: "dvs_ahhh"), "dvs_ahhh must be a known sample ID")
         controller.waitForAudioQueue()
         XCTAssertEqual(controller.loadedSampleID, "dvs_ahhh")
@@ -829,44 +846,530 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         XCTAssertLessThanOrEqual(
             Double(controller.totalFrames),
             controller.dvsLoopFrames,
-            "The validated platter-test asset must fit within one physical revolution — " +
-            "the direct-MIDI continuous path silently rejects anything longer"
+            "The validated platter-test asset fits within one physical revolution, so " +
+            "continuousLoopFrames must equal dvsLoopFrames unchanged for it"
+        )
+        XCTAssertEqual(
+            controller.continuousLoopFrames,
+            controller.dvsLoopFrames,
+            "A sample that already fits one revolution must keep the existing one-revolution loop bound"
         )
 
-        // No rejection diagnostic for a compatible sample.
-        controller.testOnly_setRightDeckAccumulatedStepsProvider { 0 }
+        // Drives the continuous renderer normally — no rejection.
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = 40
         controller.testOnly_midiCoalescingTick()
-        XCTAssertNil(controller.lastMIDIContinuousRejectionReason)
+        XCTAssertTrue(controller.testOnly_midiOwnsPlatterRender)
     }
 
-    func testSampleExceedingOneRevolutionCannotSilentlyEnterDirectMIDIMode() throws {
-        let controller = ScratchSamplePlaybackController()
+    func testSampleExceedingOneRevolutionNowEntersDirectMIDIModeAtItsOwnLength() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
         // ~2.27 s at 44.1 kHz — clearly longer than the ~1.8 s/~79_380-frame
         // one-revolution loop (see `dvsLoopFrames`'s doc comment), the same
         // mismatch class as the ~4.4667 s hot-cue pad asset that produced
-        // the silent-failure hardware finding.
+        // the original silent-failure hardware finding. Arbitrary-length
+        // platter playback (2026-08-13) now supports it.
         let longBuffer = try makeSyntheticLoopBuffer(frames: 100_000)
-        controller.testOnly_installSyntheticSample(longBuffer, sampleID: "too-long-for-one-revolution")
+        controller.testOnly_installSyntheticSample(longBuffer, sampleID: "longer-than-one-revolution")
         XCTAssertGreaterThan(
             Double(controller.totalFrames),
             controller.dvsLoopFrames,
             "test setup sanity: the synthetic sample must exceed one revolution"
         )
+        XCTAssertEqual(
+            controller.continuousLoopFrames,
+            Double(controller.totalFrames),
+            "A sample longer than one revolution must loop at its own length, not the fixed revolution bound"
+        )
 
-        controller.testOnly_setRightDeckAccumulatedStepsProvider { 40 }
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+        clock.now = 0.0; steps.value = 40
         controller.testOnly_midiCoalescingTick() // priming attempt
+        clock.now = 1.0 / 60.0; steps.value = 80
         controller.testOnly_midiCoalescingTick() // real-motion attempt
 
-        XCTAssertEqual(
+        XCTAssertGreaterThan(
             controller.dvsContinuousRenderer.publishCount,
             0,
-            "A sample exceeding one revolution must never silently publish to the continuous renderer"
+            "A sample exceeding one revolution must now publish to the continuous renderer, not be silently rejected"
         )
-        XCTAssertFalse(controller.testOnly_midiOwnsPlatterRender)
-        let reason = try XCTUnwrap(
-            controller.lastMIDIContinuousRejectionReason,
-            "Rejection must produce a clear, readable diagnostic reason, not a silent no-op"
+        XCTAssertTrue(controller.testOnly_midiOwnsPlatterRender)
+
+        // Natural-pitch requirement (reaffirmed 2026-08-13 after reverting a
+        // same-day experiment that stretched a sample's content to fit
+        // exactly one revolution — a hardware test proved that shifts
+        // pitch/speed with sample length): the RATE (`midiFramesPerStep`)
+        // is never rescaled by sample length. One-revolution cue window
+        // (2026-08-15 hardware finding): a sample with at least one
+        // revolution's worth of frames after its onset — this 100_000-frame
+        // buffer, loud from frame 0 so `hotCueOnsetFrame` is 0, easily
+        // qualifies — loops at exactly one physical revolution
+        // (`hotCueLoopFrames == midiFramesPerStep * 3600`), so one full
+        // revolution of real platter motion returns exactly to cue start,
+        // at the unchanged real-vinyl rate. Priming captured its baseline
+        // at raw step 40 (above), so the accumulator (deltas since priming)
+        // reaches exactly 3600 at raw step 40 + 3600 = 3640, not 3600.
+        clock.now = 2.0 / 60.0; steps.value = 40 + Int(Self.stepsPerRevolution)
+        controller.testOnly_midiCoalescingTick()
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            controller.hotCueOnsetFrame,
+            "One physical revolution (3600 steps) at the unchanged real-vinyl-RPM rate must return exactly " +
+            "to cue start for a long hot-cue sample — the actual hardware fix (2026-08-15)"
         )
-        XCTAssertTrue(reason.contains("revolution"), "Diagnostic reason must be legible: \(reason)")
+    }
+
+    // MARK: - Hot-cue onset alignment, natural real-vinyl-RPM rate (2026-08-13 hardware findings)
+
+    /// Builds a stereo buffer with `silenceFrames` of true silence followed
+    /// by a continuous tone for the remainder — models the leading silence
+    /// found in the bundled `ah_yeah`/`check_it_out`/`ahhh` pad WAVs.
+    private func makeSilenceThenToneBuffer(silenceFrames: Int, toneFrames: Int) throws -> AVAudioPCMBuffer {
+        let totalFrames = silenceFrames + toneFrames
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: Self.rate, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(totalFrames)))
+        buffer.frameLength = AVAudioFrameCount(totalFrames)
+        for i in 0..<totalFrames {
+            let value: Float
+            if i < silenceFrames {
+                value = 0
+            } else {
+                value = 0.8 * Float(sin(Double(i - silenceFrames) * 2 * .pi / 100))
+            }
+            buffer.floatChannelData![0][i] = value
+            buffer.floatChannelData![1][i] = value
+        }
+        return buffer
+    }
+
+    func testDetectHotCueOnsetFrameSkipsLeadingSilence() throws {
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 12_000, toneFrames: 4_000)
+        let onset = ScratchSamplePlaybackController.detectHotCueOnsetFrame(in: buffer)
+        // Detected at the start of the windowed-RMS block containing the
+        // true silence/tone boundary — within one detection window (5 ms
+        // default) of frame 12_000, not exact-to-the-sample and not still
+        // deep inside the leading silence.
+        let windowFrames = Int(0.005 * Self.rate)
+        XCTAssertLessThanOrEqual(abs(onset - 12_000), windowFrames)
+    }
+
+    func testDetectHotCueOnsetFrameIsZeroForContentLoudFromTheStart() throws {
+        let buffer = try makeSyntheticLoopBuffer(frames: 4_000)
+        XCTAssertEqual(ScratchSamplePlaybackController.detectHotCueOnsetFrame(in: buffer), 0)
+    }
+
+    func testDetectHotCueOnsetFrameIsZeroForPureSilence() throws {
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 4_000, toneFrames: 0)
+        XCTAssertEqual(ScratchSamplePlaybackController.detectHotCueOnsetFrame(in: buffer), 0,
+                        "No block ever crosses the threshold, so the safe fallback is frame 0")
+    }
+
+    /// End-to-end: a sample with leading silence must sound immediately at
+    /// cue position 0 (12 o'clock) — no silent travel before the audible
+    /// content — matching the hardware finding that triggering at 12
+    /// o'clock produced audible sound only around 2 o'clock.
+    func testLoadedSampleWithLeadingSilenceStartsAtOnsetNotFileFrameZero() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 12_000, toneFrames: 4_000)
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "leading-silence")
+
+        XCTAssertGreaterThan(controller.hotCueOnsetFrame, 0, "test setup sanity: leading silence must be detected")
+
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = 1 // the smallest possible motion off cue position 0
+        controller.testOnly_midiCoalescingTick()
+
+        XCTAssertGreaterThanOrEqual(
+            controller.currentSampleFrame,
+            controller.hotCueOnsetFrame,
+            "The very first tick off cue position 0 must already be at or past the audible onset, " +
+            "not still inside the leading silence"
+        )
+    }
+
+    /// Cue-start-alignment fix (2026-08-14): direct proof against the
+    /// render core itself, not just the controller's own bookkeeping. Before
+    /// this fix `DVSContinuousVinylRenderCore.ingest(table:)` always reset
+    /// its render-side `phase` to file frame 0 on install, regardless of
+    /// any onset — the authoritative-phase correction toward
+    /// `hotCueOnsetFrame` published by the first real MIDI tick is bounded
+    /// (≤ 2% of current velocity per frame, frozen entirely at zero
+    /// velocity — see `DVSContinuousVinylRenderCore.maxPhaseCorrectionRatio`),
+    /// so a hot-cue press played silence until the platter had physically
+    /// travelled far enough to close that gap. `installSample` must now be
+    /// called with `initialPhase: hotCueOnsetFrame`, so the render core's
+    /// own `phase` is already at the onset — with zero platter motion.
+    func testRenderCorePhaseStartsAtOnsetImmediatelyOnInstallBeforeAnyPlatterMotion() throws {
+        let controller = ScratchSamplePlaybackController()
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 12_000, toneFrames: 4_000)
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "leading-silence")
+        XCTAssertGreaterThan(controller.hotCueOnsetFrame, 0, "test setup sanity: leading silence must be detected")
+
+        // Force the renderer to ingest the just-installed table (production
+        // does this inside the real render callback; a zero-length render
+        // exercises the exact same ingest path deterministically, with no
+        // audio engine and before any platter movement/publish).
+        var left: Float = 0
+        var right: Float = 0
+        controller.dvsContinuousRenderer.testOnly_render(left: &left, right: &right, frameCount: 0)
+
+        XCTAssertEqual(
+            controller.dvsContinuousRenderer.testOnly_corePhase,
+            Double(controller.hotCueOnsetFrame),
+            "The render core's own phase must start exactly at the onset on install, before any platter " +
+            "motion — not file frame 0, which would only slowly (and inaudibly, at low/zero velocity) " +
+            "correct toward the onset afterward"
+        )
+    }
+
+    /// Onset offset must shift only the INITIAL position and the loop's
+    /// wrap point, never the playback rate (reaffirmed 2026-08-13 after
+    /// reverting a same-day experiment that rescaled the rate to force
+    /// exactly one cycle per revolution — a hardware test proved that
+    /// causes an audible pitch/speed shift). Phase must start exactly at
+    /// the onset (cue position 0) and advance at the real-vinyl-RPM
+    /// `midiFramesPerStep` pace from there — cue start and playback rate
+    /// are independent, per product decision.
+    func testHotCuePhaseStartsAtOnsetAndAdvancesAtRealVinylRateWithLeadingSilence() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 12_000, toneFrames: 4_000)
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "leading-silence")
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+        XCTAssertGreaterThan(controller.hotCueOnsetFrame, 0, "test setup sanity: leading silence must be detected")
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+
+        // A modest, arbitrary step delta (not tied to 3600) — the rate is
+        // real-vinyl-calibrated, not sample-length-derived, so there is no
+        // special significance to 3600 steps for this assertion.
+        clock.now = 1.0 / 60.0; steps.value = 500
+        controller.testOnly_midiCoalescingTick()
+        let midiFramesPerStep = (Self.rate * 1.8) / Self.stepsPerRevolution
+        let expectedFrame = Double(controller.hotCueOnsetFrame) + 500 * midiFramesPerStep
+        XCTAssertEqual(
+            Double(controller.currentSampleFrame),
+            expectedFrame,
+            accuracy: 1,
+            "Phase must start at the onset and advance at the real-vinyl-RPM rate, independent of the " +
+            "sample's own length"
+        )
+    }
+
+    /// Reverse motion must traverse the same active cue range backward,
+    /// continuously (no phase jump), symmetric with forward traversal.
+    func testHotCueReverseMotionTraversesActiveRangeBackwardContinuously() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 12_000, toneFrames: 4_000)
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "leading-silence")
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+
+        // Forward well into the interior of the loop (accumulator=1000
+        // steps, i.e. 1000 * midiFramesPerStep ≈ 22_050 frames — comfortably
+        // inside `hotCueLoopFrames`, clear of the cue-origin/loop-end seam),
+        // then reverse by a smaller amount — "phase decreases on reversal"
+        // is unambiguous here (crossing the seam itself wraps to the other
+        // end of the loop by design and is intentionally not what this test
+        // exercises).
+        clock.now = 1.0 / 60.0; steps.value = 1_000
+        controller.testOnly_midiCoalescingTick()
+        let phaseBeforeReversal = controller.currentSampleFrame
+
+        clock.now = 2.0 / 60.0; steps.value = 800
+        controller.testOnly_midiCoalescingTick()
+        let phaseAfterReversal = controller.currentSampleFrame
+
+        XCTAssertLessThan(
+            phaseAfterReversal, phaseBeforeReversal,
+            "Reversing platter direction must move the phase backward"
+        )
+        let jump = abs(phaseAfterReversal - phaseBeforeReversal)
+        let midiFramesPerStep = (Self.rate * 1.8) / Self.stepsPerRevolution
+        let maxPlausibleStep = Int(200 * midiFramesPerStep) + 1
+        XCTAssertLessThanOrEqual(
+            jump, maxPlausibleStep,
+            "Reversal must be continuous — no larger phase jump than the actual step delta implies"
+        )
+    }
+
+    // MARK: - Intermittent hot-cue-retrigger investigation (2026-08-14)
+
+    /// Controlled reproduction of hypothesis (a) "duplicate load/reinstall":
+    /// if a second `applyLoadedBufferState` for the SAME sample runs while
+    /// the first is already actively playing mid-scratch (phase away from
+    /// the onset), the render core's phase snaps back to `hotCueOnsetFrame`
+    /// — exactly the "brief extra fragment of the initial ah in the middle
+    /// of the sample" hardware symptom. This does not identify the actual
+    /// real-hardware trigger source (a genuine duplicate MIDI Note On, a
+    /// duplicate `resolveAndLoadHotCueSample` call, etc. — the new
+    /// `[HotCueTrace]`/`[HotCueOnset]` logs are what identify that on real
+    /// hardware), but it proves the mechanism: ANY unexpected second
+    /// install while a hot cue is active reproduces the reported symptom,
+    /// and the new diagnostics (`renderIngestCount`, `PREEMPTING` log)
+    /// correctly observe it.
+    func testDuplicateReinstallWhileActiveReproducesOnsetRetriggerSymptom() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeSilenceThenToneBuffer(silenceFrames: 12_000, toneFrames: 4_000)
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "leading-silence")
+        let onset = controller.hotCueOnsetFrame
+        XCTAssertGreaterThan(onset, 0, "test setup sanity: leading silence must be detected")
+
+        // Scratch forward, well away from the onset — simulates "mid-playback".
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = 1_000
+        controller.testOnly_midiCoalescingTick()
+        XCTAssertNotEqual(
+            controller.currentSampleFrame, onset,
+            "test setup sanity: playback must have moved away from the onset before the duplicate reinstall"
+        )
+
+        // The bug mechanism: an unexpected second install for the SAME
+        // sample while it is already active (mirrors a duplicate MIDI
+        // trigger, a duplicate resolveAndLoadHotCueSample call, or any
+        // other unintended second `load()`).
+        let ingestCountBeforeDuplicate = controller.dvsContinuousRenderer.renderIngestCount
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "leading-silence")
+
+        XCTAssertEqual(
+            controller.currentSampleFrame, onset,
+            "A duplicate reinstall for the already-active sample must reproduce the retrigger symptom: " +
+            "phase snaps back to the onset (replaying the initial \"ah\") instead of continuing from " +
+            "wherever real platter motion had already reached"
+        )
+
+        // Force the renderer to ingest the second table (production does
+        // this on the real render callback) and confirm the diagnostic
+        // counter observed exactly one additional real ingest — proving
+        // `renderIngestCount` correctly distinguishes "installed twice"
+        // from "installed once."
+        var left: Float = 0
+        var right: Float = 0
+        controller.dvsContinuousRenderer.testOnly_render(left: &left, right: &right, frameCount: 0)
+        XCTAssertEqual(
+            controller.dvsContinuousRenderer.renderIngestCount, ingestCountBeforeDuplicate + 1,
+            "renderIngestCount must observe exactly one additional real ingest for the duplicate install"
+        )
+    }
+
+    // MARK: - One-physical-revolution cue window (2026-08-15 hardware finding)
+    //
+    // Hardware trace proved the earlier onset fix was correct (no duplicate
+    // load) but incomplete: for a long hot-cue sample (`ah_yeah`), the loop
+    // bound was the ENTIRE post-onset WAV (~191k frames), so a legitimate
+    // loop wrap only occurred after several physical revolutions instead of
+    // one — matching the "does not loop once per revolution" hardware
+    // observation. The fix caps the loop bound to exactly one revolution's
+    // worth of frames at the UNCHANGED real-vinyl-RPM rate
+    // (`midiFramesPerStep`) for samples with enough post-onset frames to
+    // support it; `midiFramesPerStep` itself is never rescaled, unlike the
+    // rejected 2026-08-13 `activeFrames / 3600` experiment.
+
+    /// A long buffer (short silence, long tone) with enough frames after
+    /// the detected onset to trigger the one-revolution cue window
+    /// (`availableFramesAfterOnset >= hotCueRevolutionFrames`, i.e. >=
+    /// ~79_380 frames at this file's 44.1 kHz rate) — models `ah_yeah`/
+    /// `check_it_out`.
+    private func makeLongHotCueBuffer() throws -> AVAudioPCMBuffer {
+        try makeSilenceThenToneBuffer(silenceFrames: 1_000, toneFrames: 150_000)
+    }
+
+    func testLongHotCueSamplePhaseAtStepZeroIsOnset() throws {
+        let controller = ScratchSamplePlaybackController()
+        let buffer = try makeLongHotCueBuffer()
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "long-hot-cue")
+        let onset = controller.hotCueOnsetFrame
+        let hotCueRevolutionFrames = (Self.rate * 1.8)
+        XCTAssertGreaterThanOrEqual(
+            controller.hotCueLoopFrames, hotCueRevolutionFrames - 1,
+            "test setup sanity: this buffer must have enough post-onset frames to trigger the one-revolution window"
+        )
+        XCTAssertLessThanOrEqual(
+            controller.hotCueLoopFrames, hotCueRevolutionFrames + 1,
+            "A long sample's loop must be capped at exactly one revolution's worth of frames, not the whole post-onset WAV"
+        )
+        // Phase at accumulated steps = 0 is the controller's own initial
+        // position immediately after load — see `applyLoadedBufferState`.
+        XCTAssertEqual(controller.currentSampleFrame, onset, "phase(0) must equal the onset")
+    }
+
+    func testLongHotCueSamplePhaseAtEighteenHundredStepsIsHalfRevolution() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeLongHotCueBuffer()
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "long-hot-cue")
+        let onset = controller.hotCueOnsetFrame
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = 1_800
+        controller.testOnly_midiCoalescingTick()
+
+        let midiFramesPerStep = (Self.rate * 1.8) / Self.stepsPerRevolution
+        let expected = Double(onset) + 1_800 * midiFramesPerStep
+        XCTAssertEqual(
+            Double(controller.currentSampleFrame), expected, accuracy: 1,
+            "phase(1800) must sit exactly halfway through the one-revolution cue window"
+        )
+        // Sanity: this must be exactly the midpoint of the cue window, not
+        // some other fraction of the whole post-onset WAV.
+        XCTAssertEqual(
+            Double(controller.currentSampleFrame) - Double(onset), controller.hotCueLoopFrames / 2, accuracy: 1
+        )
+    }
+
+    func testLongHotCueSamplePhaseAtThirtyFiveNinetyNineIsNearEndOfWindow() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeLongHotCueBuffer()
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "long-hot-cue")
+        let onset = controller.hotCueOnsetFrame
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = 3_599
+        controller.testOnly_midiCoalescingTick()
+
+        let midiFramesPerStep = (Self.rate * 1.8) / Self.stepsPerRevolution
+        let expected = Double(onset) + 3_599 * midiFramesPerStep
+        XCTAssertEqual(Double(controller.currentSampleFrame), expected, accuracy: 1)
+        XCTAssertLessThan(
+            Double(controller.currentSampleFrame) - Double(onset), controller.hotCueLoopFrames,
+            "phase(3599) must be near, but strictly before, the end of the cue window"
+        )
+        XCTAssertGreaterThan(
+            Double(controller.currentSampleFrame) - Double(onset), controller.hotCueLoopFrames - midiFramesPerStep - 1
+        )
+    }
+
+    func testLongHotCueSamplePhaseAtThirtySixHundredStepsReturnsExactlyToOnset() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeLongHotCueBuffer()
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "long-hot-cue")
+        let onset = controller.hotCueOnsetFrame
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = Int(Self.stepsPerRevolution)
+        controller.testOnly_midiCoalescingTick()
+
+        XCTAssertEqual(
+            controller.currentSampleFrame, onset,
+            "+3600 steps (one physical platter revolution) must return exactly to the onset — the actual " +
+            "hardware fix: a long sample must complete one logical cycle per revolution, not several"
+        )
+    }
+
+    func testLongHotCueSamplePhaseAtNegativeOneStepTraversesBackwardIntoEndOfWindow() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeLongHotCueBuffer()
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "long-hot-cue")
+        let onset = controller.hotCueOnsetFrame
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = -1
+        controller.testOnly_midiCoalescingTick()
+
+        let midiFramesPerStep = (Self.rate * 1.8) / Self.stepsPerRevolution
+        // Reversing one step past the onset must wrap to the END of the
+        // same cue window (loop-wrap, not a jump elsewhere) — the exact
+        // mirror of `phase(3599)`, one step before the wrap back to onset.
+        let expected = Double(onset) + controller.hotCueLoopFrames - midiFramesPerStep
+        XCTAssertEqual(Double(controller.currentSampleFrame), expected, accuracy: 1)
+    }
+
+    /// Velocity computation must be byte-for-byte unaffected by which loop
+    /// bound (`hotCueLoopFrames`) is active — this fix changes only the
+    /// modulus of the phase wrap, never the rate a given real step delta
+    /// is converted to frames/second.
+    func testLongHotCueSampleVelocityCalculationUnaffectedByOneRevolutionWindow() throws {
+        final class Clock { var now: TimeInterval = 0 }
+        final class Steps { var value: Int = 0 }
+        let clock = Clock()
+        let steps = Steps()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        let buffer = try makeLongHotCueBuffer()
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "long-hot-cue")
+        controller.testOnly_setRightDeckAccumulatedStepsProvider { steps.value }
+
+        clock.now = 0.0; steps.value = 0
+        controller.testOnly_midiCoalescingTick() // priming
+        clock.now = 1.0 / 60.0; steps.value = 40
+        controller.testOnly_midiCoalescingTick()
+
+        let stepVelocity = 40.0 / (1.0 / 60.0)
+        let midiFramesPerStep = (Self.rate * 1.8) / Self.stepsPerRevolution
+        let expectedFrameVelocity = stepVelocity * midiFramesPerStep
+
+        XCTAssertEqual(
+            try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity),
+            expectedFrameVelocity,
+            accuracy: 0.01,
+            "Published velocity must use the unchanged real-vinyl-RPM scale regardless of the active loop bound"
+        )
+    }
+
+    /// A short hot-cue sample (the validated `dvs_ahhh`-equivalent case:
+    /// not enough post-onset frames for a full revolution) must keep
+    /// exactly its prior, already-correct behavior — the one-revolution
+    /// cue window must not engage.
+    func testShortHotCueSampleDoesNotEngageOneRevolutionWindow() throws {
+        let controller = ScratchSamplePlaybackController()
+        // Loud from frame 0 (no onset), short — mirrors dvs_ahhh's shape:
+        // well under one revolution's worth of frames.
+        let buffer = try makeSyntheticLoopBuffer(frames: 8_000)
+        controller.testOnly_installSyntheticSample(buffer, sampleID: "short-hot-cue")
+        XCTAssertEqual(controller.hotCueOnsetFrame, 0)
+        XCTAssertEqual(
+            controller.hotCueLoopFrames, controller.continuousLoopFrames,
+            "A short sample's loop bound must remain the full available span, exactly as before this fix"
+        )
     }
 }

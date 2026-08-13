@@ -18,6 +18,7 @@
 
 import AVFoundation
 import Foundation
+import Synchronization
 
 /// Drives sample playback from a `ScratchPlatterTracker` position.
 /// - Hot cue press: loads the corresponding bundled WAV (async, off CoreMIDI thread).
@@ -106,13 +107,6 @@ final class ScratchSamplePlaybackController {
     /// very next quiet tick, instead of relying on the renderer's own
     /// 0.25 s stale-control fallback.
     private var midiContinuousWasActive = false
-
-    /// Non-nil while the currently loaded sample does not fit within one
-    /// physical platter revolution (`dvsLoopFrames`) — the direct-MIDI
-    /// continuous path cannot drive it and `midiCoalescingTick` returns
-    /// early every tick. Cleared as soon as a compatible sample loads.
-    /// Readable for diagnostics/tests; not a UI-facing field itself.
-    private(set) var lastMIDIContinuousRejectionReason: String?
 
     private var midiCoalescingTimer: DispatchSourceTimer?
 
@@ -216,15 +210,24 @@ final class ScratchSamplePlaybackController {
             dvsContinuousRenderer.publishIdle()
             // Rebase MIDI's own phase anchor to the position DVS left the
             // audible sample at, using the exact inverse of the mapping
-            // MIDI itself publishes through (`midiLoopPhaseFrame`):
-            // frame = (steps * midiFramesPerStep) mod loop, so
-            // steps = frame / midiFramesPerStep reproduces that frame
-            // exactly. Uses MIDI's own geometry (`midiFramesPerStep`), not
-            // DVS's (`framesPerStep`) — cue-lock drift fix, 2026-08-10 —
-            // because `midiCoalescingTick` immediately converts this same
-            // anchor back to a frame position via `midiLoopPhaseFrame`;
-            // rebasing with the wrong scale would produce a visible phase
-            // jump on every DVS→MIDI handoff.
+            // MIDI itself publishes through (`hotCueLoopPhaseFrame`):
+            // frame = hotCueOnsetFrame + (steps * midiFramesPerStep) mod
+            // hotCueLoopFrames, so steps = (frame - hotCueOnsetFrame) /
+            // midiFramesPerStep reproduces that frame exactly whenever
+            // `frame` already sits inside `[hotCueOnsetFrame,
+            // continuousLoopFrames)` — true for a hot-cue sample DVS was
+            // never driving, since `currentSampleFrame` is then still
+            // wherever MIDI itself last left it. If DVS actually drove this
+            // same sample (its own domain doesn't share `hotCueOnsetFrame`),
+            // the result is only an approximate handoff position rather
+            // than an exact inverse — an existing, accepted limitation of
+            // this rebase (see below), not a new one introduced here. Uses
+            // MIDI's own geometry (`midiFramesPerStep`), not DVS's
+            // (`framesPerStep`) — cue-lock drift fix, 2026-08-10 — because
+            // `midiCoalescingTick` immediately converts this same anchor
+            // back to a frame position via `hotCueLoopPhaseFrame`; rebasing
+            // with the wrong scale would produce a visible phase jump on
+            // every DVS→MIDI handoff.
             // `currentSampleFrame` is DVS's own control-side authoritative
             // phase (maintained on `audioQueue` by
             // `positionDidChangeOnQueue`/`renderContinuousDVSTick`, never
@@ -238,7 +241,7 @@ final class ScratchSamplePlaybackController {
             // the renderer's audible phase (never reset by an idle
             // publish) is untouched.
             if midiFramesPerStep > 0 {
-                midiContinuousAccumulatedSteps = Double(currentSampleFrame) / midiFramesPerStep
+                midiContinuousAccumulatedSteps = (Double(currentSampleFrame) - Double(hotCueOnsetFrame)) / midiFramesPerStep
             }
             // MIDI resumes from a clean delta/time baseline — no stale
             // pre-handoff delta/time pair carried across the handoff, so
@@ -265,27 +268,12 @@ final class ScratchSamplePlaybackController {
               let forward = forwardBuffer
         else { return }
 
-        // A sample longer than one physical platter revolution cannot enter
-        // the direct-MIDI continuous path — the same one-revolution-loop
-        // constraint DVS itself requires (see `dvsLoopFrames`'s doc
-        // comment). Surfaced as a clear, readable diagnostic (rather than a
-        // silent no-op) so a mismatched sample choice — e.g. a ~4.5 s
-        // hot-cue pad clip instead of the validated ~1.05 s platter asset —
-        // is never mistaken for a platter/MIDI hardware problem. Supporting
-        // longer samples on this path is explicitly out of scope; that
-        // belongs to the later hot-cue/sample-mapping design.
-        guard dvsLoopFrames > 0, Double(forward.frameLength) <= dvsLoopFrames else {
-            if lastMIDIContinuousRejectionReason == nil {
-                let reason = "sample \(forward.frameLength) frames exceeds one platter " +
-                    "revolution (\(Int(dvsLoopFrames)) frames) — direct-MIDI continuous drive rejected"
-                lastMIDIContinuousRejectionReason = reason
-                print("[ScratchSamplePlaybackController] \(reason)")
-            }
-            return
-        }
-        if lastMIDIContinuousRejectionReason != nil {
-            lastMIDIContinuousRejectionReason = nil
-        }
+        // Arbitrary-length hot-cue playback (2026-08-13): the direct-MIDI
+        // continuous path drives any loaded sample at real-vinyl-RPM
+        // pitch/speed (`midiFramesPerStep`, unchanged), wrapping at
+        // `hotCueLoopFrames` — see that property's doc comment. Guard only
+        // against a not-yet-installed/zero-length sample.
+        guard hotCueLoopFrames > 0, forward.frameLength > 0 else { return }
 
         let now = schedulingClock()
         let steps = provider()
@@ -293,6 +281,13 @@ final class ScratchSamplePlaybackController {
             return // Priming: baseline captured, nothing to publish yet.
         }
 
+        #if DEBUG
+        // Intermittent hot-cue-retrigger investigation (2026-08-14):
+        // captured before this tick's delta is folded in, so the anomaly
+        // check below can tell real motion from a spurious reset.
+        let previousPhaseForTrace = Double(currentSampleFrame)
+        let accumulatedStepsBeforeThisTick = midiContinuousAccumulatedSteps
+        #endif
         // The full signed delta always folds into the phase anchor, even on
         // a tick whose velocity was sanitized to 0 — real motion is never
         // lost, matching the DVS anchor's own "never lose real steps"
@@ -317,11 +312,51 @@ final class ScratchSamplePlaybackController {
 
         platterRenderOwner = .midi
         midiContinuousWasActive = true
-        let phase = midiLoopPhaseFrame(forAccumulatedSteps: midiContinuousAccumulatedSteps)
+        // Onset-aligned, real-vinyl-RPM phase (`hotCueLoopPhaseFrame`):
+        // `midiFramesPerStep` (unchanged real-time-calibrated rate) applied
+        // against `hotCueLoopFrames` (the arbitrary-length wrap bound with
+        // any detected leading silence trimmed off the front) — see
+        // `hotCueLoopFrames`'s doc comment.
+        let phase = hotCueLoopPhaseFrame(forAccumulatedSteps: midiContinuousAccumulatedSteps)
+        let rawBefore = accumulatedStepsBeforeThisTick * midiFramesPerStep
+        let rawAfter = midiContinuousAccumulatedSteps * midiFramesPerStep
+        let loopWrapped = hotCueLoopFrames > 0
+            && (rawBefore / hotCueLoopFrames).rounded(.down) != (rawAfter / hotCueLoopFrames).rounded(.down)
+        #if DEBUG
+        if !hasLoggedFirstMIDIPhaseSinceLoad {
+            hasLoggedFirstMIDIPhaseSinceLoad = true
+            print("[HotCueOnset] gen=\(currentLoadGeneration) sampleID=\(loadedSampleID ?? "?") firstMIDIPhaseFrame=\(Int(phase)) " +
+                  "onsetFrame=\(hotCueOnsetFrame)")
+        }
+        // Intermittent hot-cue-retrigger investigation (2026-08-14): flag
+        // and log the moment a phase transition can't be explained by this
+        // tick's own real step delta — either a legitimate loop wrap (the
+        // platter travelled a full `hotCueLoopFrames` lap: expected,
+        // correct behavior) or a spurious jump (a duplicate install/load
+        // resetting `initialPhase`, or an unexpected snap back toward
+        // `hotCueOnsetFrame` — the actual bug signature).
+        if hotCueLoopFrames > 0 {
+            let expectedAdvance = abs(result.deltaSteps * midiFramesPerStep)
+            let rawJump = abs(phase - previousPhaseForTrace)
+            let wrapAwareJump = min(rawJump, hotCueLoopFrames - rawJump)
+            let isUnexpectedJump = !loopWrapped && wrapAwareJump > expectedAdvance + 50
+            let snappedNearOnset = !loopWrapped
+                && abs(phase - Double(hotCueOnsetFrame)) < 50
+                && abs(previousPhaseForTrace - Double(hotCueOnsetFrame)) >= 50
+            if loopWrapped || isUnexpectedJump || snappedNearOnset {
+                print("[HotCueTrace] gen=\(currentLoadGeneration) PHASE ANOMALY · sampleID=\(loadedSampleID ?? "?") " +
+                      "previousPhase=\(Int(previousPhaseForTrace)) authoritativePhase=\(Int(phase)) " +
+                      "correctedRendererPhase=\(Int(dvsContinuousRenderer.currentRenderPhase)) " +
+                      "loopWrapped=\(loopWrapped) unexpectedJump=\(isUnexpectedJump) snappedNearOnset=\(snappedNearOnset) " +
+                      "deltaSteps=\(result.deltaSteps) renderIngestCount=\(dvsContinuousRenderer.renderIngestCount)")
+            }
+        }
+        #endif
         dvsContinuousRenderer.publish(
             velocity: result.velocity * midiFramesPerStep,
             authoritativePhase: phase,
-            active: true
+            active: true,
+            snapPhase: loopWrapped
         )
         if isEngineRunningForPlayback(), !playerNode.isPlaying {
             playerNode.play()
@@ -418,8 +453,64 @@ final class ScratchSamplePlaybackController {
     private var framesPerStep: Double = 1
     /// Direct-MIDI-only counterpart to `framesPerStep`, derived from
     /// `raneOneMKIIDirectMIDIStepsPerRevolution` instead of
-    /// `stepsPerRevolution`. See that constant's doc comment.
+    /// `stepsPerRevolution`. Real-vinyl-RPM scale — used by both the legacy
+    /// direct-MIDI rollback grain path (`midiUsesContinuousRenderer ==
+    /// false`) AND the hot-cue continuous tick (`midiCoalescingTick`).
+    /// A 2026-08-13 experiment tried rescaling the continuous tick's rate to
+    /// stretch each sample's content over exactly one revolution
+    /// (`activeFrames / 3600`); a hardware test confirmed this changes
+    /// pitch/speed with sample length ("chipmunk" effect) and was reverted
+    /// the same day — platter angular velocity must map to playback
+    /// velocity independently of sample duration, so both continuous MIDI
+    /// paths share this one real-time-calibrated rate again.
     private var midiFramesPerStep: Double = 1
+
+    /// First frame of `forwardBuffer` the hot-cue continuous tick
+    /// (`midiCoalescingTick`) treats as "cue position 0" (2026-08-13 onset-
+    /// alignment fix). Detected once per load via
+    /// `Self.detectHotCueOnsetFrame` — the first sustained, audible
+    /// content, so a pad with leading silence in the source WAV (several
+    /// bundled `ScratchSamples` assets have 270–450 ms of silence before
+    /// the vocal) still starts sounding the instant the platter leaves 12
+    /// o'clock, instead of only after the platter has traveled through
+    /// that silence. `0` for a sample with no detected leading silence
+    /// (the validated `dvs_ahhh` DVS asset, and the fallback when nothing
+    /// crosses the detection threshold). This shifts only the INITIAL
+    /// position and the loop's wrap point — never the playback rate, which
+    /// stays `midiFramesPerStep` (real-vinyl-RPM scale) regardless of
+    /// where `hotCueOnsetFrame` lands; see `hotCueLoopFrames`.
+    private(set) var hotCueOnsetFrame: Int = 0
+
+    /// Hot-cue continuous tick's wrap bound (2026-08-15 one-revolution-
+    /// cue-window fix): `min(availableFramesAfterOnset, hotCueRevolutionFrames)`,
+    /// where `availableFramesAfterOnset = continuousLoopFrames -
+    /// hotCueOnsetFrame` and `hotCueRevolutionFrames = midiFramesPerStep *
+    /// raneOneMKIIDirectMIDIStepsPerRevolution` — one physical platter
+    /// revolution's worth of frames at the UNCHANGED real-vinyl-RPM rate
+    /// (`midiFramesPerStep` itself is never rescaled; a same-day-earlier
+    /// experiment that instead derived a per-sample frame rate from
+    /// `activeFrames / 3600` caused an audible pitch/speed shift on real
+    /// hardware and was reverted — this is deliberately the opposite: only
+    /// the loop BOUND changes, never the rate).
+    ///
+    /// For a long hot-cue sample with at least one revolution's worth of
+    /// frames after the onset (`ah_yeah`, `check_it_out`) this caps the
+    /// loop to exactly one revolution, so `midiCoalescingTick` — driven at
+    /// the real-vinyl-RPM rate — returns to the onset every 3600 physical
+    /// steps instead of taking several revolutions to traverse the whole
+    /// post-onset WAV. For a short sample where the full post-onset span
+    /// is already less than one revolution (the validated `dvs_ahhh` DVS
+    /// asset), this is unchanged from the plain `availableFramesAfterOnset`
+    /// bound the prior fix used — no behavior change for HC1/HC4.
+    ///
+    /// Deliberately NOT a rescaled "sample content stretched to fit one
+    /// revolution" length — this is exactly `continuousLoopFrames` (the
+    /// arbitrary-length bound `dvsContinuousRenderer` is installed with;
+    /// DVS's own phase mapping still wraps at the untouched
+    /// `continuousLoopFrames`, unaffected by this) minus the onset offset,
+    /// capped at one revolution's worth of frames. Always `>= 1` once a
+    /// sample is loaded.
+    private(set) var hotCueLoopFrames: Double = 1
 
     /// Last raw absolute step count passed to `positionDidChange(steps:
     /// Int, ...)` (MIDI CC6 path). Used only to compute this call's delta
@@ -451,6 +542,21 @@ final class ScratchSamplePlaybackController {
     /// at their own length (`totalFrames`) regardless of platter RPM (see
     /// the comment in `loadOnQueue` above `framesPerStep`).
     private(set) var dvsLoopFrames: Double = 0
+
+    /// Arbitrary-length platter playback (2026-08-13): the loop bound the
+    /// continuous renderer (`dvsContinuousRenderer`) is actually installed
+    /// with and the modulus the MIDI-continuous and DVS-continuous phase
+    /// mapping (`continuousLoopPhaseFrame`) wraps against — `max(dvsLoopFrames,
+    /// totalFrames)`. Equal to `dvsLoopFrames` for any sample that already
+    /// fits one physical revolution (the validated "ahh" asset), so the
+    /// existing one-ahh-per-revolution cadence and every pinned grain-path
+    /// regression test (which reads `dvsLoopFrames` directly and is
+    /// untouched by this addition) are unaffected. Equal to `totalFrames`
+    /// for anything longer, so a sample of any length can be driven
+    /// continuously by either control source — it simply takes more than
+    /// one physical revolution to traverse, exactly like a longer real
+    /// vinyl groove, instead of being silently rejected.
+    private(set) var continuousLoopFrames: Double = 0
 
     /// Listening-fix #4 (uncommitted): cumulative REAL platter steps
     /// decoded since load (signed, DVS-only). The DVS sample position is
@@ -489,6 +595,19 @@ final class ScratchSamplePlaybackController {
         var travelledDistance: Double = 0
         var tickCount: Int = 0
     }
+
+    /// Cue-start-alignment fix (2026-08-14) diagnostic: true once the first
+    /// real (non-priming) `midiCoalescingTick` publish since the current
+    /// sample was loaded has been logged. Reset on every load so each
+    /// hot-cue press gets exactly one `[HotCueOnset] firstMIDIPhaseFrame=`
+    /// log line, not one per tick.
+    private var hasLoggedFirstMIDIPhaseSinceLoad = false
+
+    /// Intermittent hot-cue-retrigger investigation (2026-08-14): the
+    /// generation ID of the currently-loaded sample (see
+    /// `allocateLoadGeneration`), so `midiCoalescingTick`'s per-tick phase
+    /// diagnostics can tag which load they belong to.
+    private var currentLoadGeneration: UInt64 = 0
     #endif
 
     private(set) var lastScheduledSourceFrame: Int?
@@ -1386,14 +1505,18 @@ final class ScratchSamplePlaybackController {
     /// is absent from the bundle. Actual file I/O, buffer preparation, and
     /// engine startup run on the audio queue; the caller returns immediately.
     ///
-    /// - Parameter playDiagnosticPreview: When true (the default, and the
-    ///   behavior every existing caller — hot-cue pads, crossfader trigger —
-    ///   keeps unchanged), a short audible snippet plays once to prove the
-    ///   engine/sample chain is audible. Pass `false` for a load that must
-    ///   produce no audio by itself (e.g. the right-deck platter test button:
-    ///   platter movement, not the load itself, should be what's heard).
+    /// - Parameter playDiagnosticPreview: When true (the default), a short
+    ///   audible snippet plays once to prove the engine/sample chain is audible.
+    ///   Pass `false` for a load that must produce no audio by itself (for
+    ///   example, production hot-cue and right-deck platter loads, where
+    ///   platter movement should be the only audible source).
     @discardableResult
     func load(sampleID: String, playDiagnosticPreview: Bool = true) -> Bool {
+        let generation = allocateLoadGeneration()
+        #if DEBUG
+        print("[HotCueTrace] gen=\(generation) load(sampleID:) requested · sampleID=\(sampleID) " +
+              "thread=\(Thread.isMainThread ? "main" : "bg")")
+        #endif
         print("[ScratchSamplePlaybackController] load requested · sampleID=\(sampleID)")
         guard let url = wavURL(for: sampleID) else {
             print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
@@ -1403,7 +1526,7 @@ final class ScratchSamplePlaybackController {
             return false
         }
         audioQueue.async { [weak self] in
-            self?.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: playDiagnosticPreview)
+            self?.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: playDiagnosticPreview, generation: generation)
         }
         return true
     }
@@ -1430,14 +1553,47 @@ final class ScratchSamplePlaybackController {
             }
             return false
         }
+        let generation = allocateLoadGeneration()
+        #if DEBUG
+        print("[HotCueTrace] gen=\(generation) ensureLoadedForDVSDrive requested · sampleID=\(sampleID) " +
+              "thread=\(Thread.isMainThread ? "main" : "bg")")
+        #endif
         audioQueue.async { [weak self] in
-            guard let self, self.loadedSampleID != sampleID else { return }
-            self.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: true)
+            guard let self, self.loadedSampleID != sampleID else {
+                #if DEBUG
+                print("[HotCueTrace] gen=\(generation) ensureLoadedForDVSDrive no-op · already loaded")
+                #endif
+                return
+            }
+            self.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: true, generation: generation)
         }
         return true
     }
 
-    private func loadOnQueue(sampleID: String, url: URL, playDiagnosticPreview: Bool) {
+    /// Intermittent hot-cue-retrigger investigation (2026-08-14): every
+    /// `load(sampleID:)`/`ensureLoadedForDVSDrive` request is assigned a
+    /// monotonically increasing generation ID, synchronously at the call
+    /// site (any thread) — threaded through `loadOnQueue` →
+    /// `applyLoadedBufferState` → the renderer install, so the whole async
+    /// load chain for one request can be correlated in the `[HotCueTrace]`
+    /// logs, and a second, unexpected request arriving while the same
+    /// sample is still active shows up as two distinct generations in
+    /// quick succession rather than being invisible.
+    private let loadGenerationCounter = Atomic<UInt64>(0)
+
+    private func allocateLoadGeneration() -> UInt64 {
+        loadGenerationCounter.wrappingAdd(1, ordering: .relaxed)
+        return loadGenerationCounter.load(ordering: .relaxed)
+    }
+
+    private func loadOnQueue(sampleID: String, url: URL, playDiagnosticPreview: Bool, generation: UInt64) {
+        #if DEBUG
+        let isReloadOfActiveSample = loadedSampleID == sampleID
+        print("[HotCueTrace] gen=\(generation) loadOnQueue begin · sampleID=\(sampleID) " +
+              "currentlyLoadedSampleID=\(loadedSampleID ?? "nil") " +
+              "isReloadOfAlreadyActiveSample=\(isReloadOfActiveSample) " +
+              "priorRenderIngestCount=\(dvsContinuousRenderer.renderIngestCount)")
+        #endif
         print("[ScratchSamplePlaybackController] sample load queued: \(sampleID)")
         lastLoadError = nil
         let file: AVAudioFile
@@ -1462,7 +1618,7 @@ final class ScratchSamplePlaybackController {
             return
         }
 
-        applyLoadedBufferState(buffer, sampleID: sampleID)
+        applyLoadedBufferState(buffer, sampleID: sampleID, generation: generation)
 
         ensureEngineRunning()
 
@@ -1514,14 +1670,26 @@ final class ScratchSamplePlaybackController {
     /// semantics) so the DEBUG synthetic-sample seam below shares the exact
     /// production reset path instead of duplicating it. Must run on
     /// `audioQueue`.
-    private func applyLoadedBufferState(_ buffer: AVAudioPCMBuffer, sampleID: String) {
+    private func applyLoadedBufferState(_ buffer: AVAudioPCMBuffer, sampleID: String, generation: UInt64) {
+        #if DEBUG
+        // Intermittent hot-cue-retrigger investigation (2026-08-14): captured
+        // before any state below is reset for the new load, so it reflects
+        // whether the PREVIOUS sample was actively, audibly playing at the
+        // instant this (possibly duplicate/unexpected) load pre-empted it.
+        let wasActiveBeforeThisLoad = midiContinuousWasActive || (platterRenderOwner != .none)
+        if loadedSampleID != nil, loadedSampleID != sampleID || wasActiveBeforeThisLoad {
+            print("[HotCueTrace] gen=\(generation) applyLoadedBufferState PREEMPTING prior state · " +
+                  "priorSampleID=\(loadedSampleID ?? "nil") newSampleID=\(sampleID) " +
+                  "priorPlatterRenderOwner=\(platterRenderOwner) priorMidiContinuousWasActive=\(midiContinuousWasActive) " +
+                  "priorCurrentSampleFrame=\(currentSampleFrame)")
+        }
+        #endif
         forwardBuffer = buffer
         totalFrames = Int(buffer.frameLength)
         loadedSampleID = sampleID
         lastScheduledSteps = 0
         lastScheduledDirection = nil
         lastScheduleTime = 0
-        currentSampleFrame = 0
         lastPlatterSteps = nil
         lastRawMIDISteps = nil
         midiAccumulatedSteps = 0
@@ -1549,6 +1717,43 @@ final class ScratchSamplePlaybackController {
         // Exactly one revolution's frame count at this sample's rate — see
         // the `dvsLoopFrames` doc comment.
         dvsLoopFrames = framesPerStep * Double(stepsPerRevolution)
+        // Arbitrary-length platter playback — see `continuousLoopFrames`'s
+        // doc comment. Recomputed on every load since it depends on this
+        // sample's own `totalFrames`.
+        continuousLoopFrames = max(dvsLoopFrames, Double(totalFrames))
+        // Hot-cue onset alignment fix (2026-08-13): see
+        // `hotCueOnsetFrame`/`hotCueLoopFrames`'s doc comments. Rate is NOT
+        // rescaled here — `midiCoalescingTick` keeps using `midiFramesPerStep`
+        // above, unchanged, for the hot-cue continuous tick too.
+        hotCueOnsetFrame = Self.detectHotCueOnsetFrame(in: buffer)
+        // One-revolution cue-window fix (2026-08-15 hardware finding): see
+        // `hotCueLoopFrames`'s doc comment. Only the loop BOUND is capped to
+        // one revolution's worth of frames at the unchanged real-vinyl-RPM
+        // rate — `midiFramesPerStep` itself is untouched. Scoped to samples
+        // with at least one revolution's worth of frames after the onset;
+        // a short sample (the validated `dvs_ahhh`) keeps its existing,
+        // already-correct behavior unchanged.
+        let availableFramesAfterOnset = max(1, continuousLoopFrames - Double(hotCueOnsetFrame))
+        let hotCueRevolutionFrames = midiFramesPerStep * Double(Self.raneOneMKIIDirectMIDIStepsPerRevolution)
+        hotCueLoopFrames = availableFramesAfterOnset >= hotCueRevolutionFrames
+            ? hotCueRevolutionFrames
+            : availableFramesAfterOnset
+        // Cue-start-alignment fix (2026-08-14): the controller's own
+        // position bookkeeping starts at the onset too, not file frame 0 —
+        // see the matching `initialPhase:` passed to `installSample` below,
+        // which is the actual fix (the renderer previously always reset
+        // its own render-side phase to 0 on install, regardless of this
+        // field, and only slowly/boundedly corrected toward the
+        // authoritative phase afterward — inaudibly slow at low velocity,
+        // frozen entirely at zero velocity, so a hot-cue press played
+        // silence until the platter had moved far enough to catch up).
+        currentSampleFrame = hotCueOnsetFrame
+        #if DEBUG
+        currentLoadGeneration = generation
+        print("[HotCueOnset] gen=\(generation) sampleID=\(sampleID) totalFrames=\(totalFrames) onsetFrame=\(hotCueOnsetFrame) " +
+              "initialRendererFrame=\(hotCueOnsetFrame) hotCueLoopFrames=\(Int(hotCueLoopFrames)) " +
+              "oneRevolutionCueWindow=\(hotCueLoopFrames < availableFramesAfterOnset ? "true" : "false")")
+        #endif
         dvsAccumulatedSteps = 0
         // Right-deck MIDI continuous drive: independent phase anchor and
         // drive history reset alongside DVS's, on every load (a freshly
@@ -1563,12 +1768,10 @@ final class ScratchSamplePlaybackController {
         midiContinuousDrive.reset()
         midiContinuousWasActive = false
         platterRenderOwner = dvsOwnershipActive ? .dvs : .none
-        // Stale from a previous sample; the next coalescing tick
-        // recomputes it fresh against the sample just loaded.
-        lastMIDIContinuousRejectionReason = nil
         #if DEBUG
         dvsLapCandidate = nil
         previousGrainScalars = nil
+        hasLoggedFirstMIDIPhaseSinceLoad = false
         #endif
         lastScheduledSourceFrame = nil
         lastScheduledSegmentFrames = nil
@@ -1580,20 +1783,93 @@ final class ScratchSamplePlaybackController {
         lastReversalCompensated = false
         resetDVSGrainTiming()
         varispeedNode.rate = 1.0
-        // Continuous DVS renderer: install the immutable PCM copy whenever
-        // the clip fits inside the one-revolution loop (always true for the
-        // production DVS asset). Longer samples never engage the renderer —
-        // `renderContinuousDVSTick` requires the same fit — so they only
-        // need the renderer silenced.
-        if Double(totalFrames) <= dvsLoopFrames {
-            dvsContinuousRenderer.installSample(
-                from: buffer,
-                loopFrames: dvsLoopFrames,
-                contentFadeFrames: dvsLoopContentFadeFrames
-            )
-        } else {
-            dvsContinuousRenderer.publishIdle()
+        // Continuous DVS renderer: always install the immutable PCM copy,
+        // at `continuousLoopFrames` (arbitrary-length platter playback,
+        // 2026-08-13) — the sample's own length for anything longer than
+        // one physical revolution, or the one-revolution bound unchanged
+        // for anything that already fits it. `installSample` always
+        // succeeds here since `contentFrames <= continuousLoopFrames` by
+        // construction (`continuousLoopFrames` is `max(dvsLoopFrames,
+        // totalFrames)`). `initialPhase: hotCueOnsetFrame` (cue-start-
+        // alignment fix, 2026-08-14) is the actual fix for hot-cue leading
+        // silence — see `hotCueOnsetFrame`'s doc comment and the debug log
+        // just above. `0` for a sample with no detected leading silence
+        // (the validated `dvs_ahhh` DVS asset), so DVS's own scratch feel
+        // is completely unaffected.
+        #if DEBUG
+        // Intermittent hot-cue-retrigger investigation (2026-08-14): the
+        // key "did this install interrupt already-active playback" signal
+        // — `platterRenderOwner`/`midiContinuousWasActive` reflect whether
+        // MIDI or DVS was actively driving audible playback in the instant
+        // just before this reset (all the state above has already been
+        // zeroed for the NEW load by this point, so this must be read
+        // before that reset — captured earlier as `wasActiveBeforeThisLoad`).
+        print("[HotCueTrace] gen=\(generation) installSample about to run · sampleID=\(sampleID) " +
+              "initialPhase=\(hotCueOnsetFrame) wasActiveBeforeThisLoad=\(wasActiveBeforeThisLoad) " +
+              "renderIngestCountBefore=\(dvsContinuousRenderer.renderIngestCount)")
+        #endif
+        dvsContinuousRenderer.installSample(
+            from: buffer,
+            loopFrames: continuousLoopFrames,
+            contentFadeFrames: dvsLoopContentFadeFrames,
+            initialPhase: Double(hotCueOnsetFrame)
+        )
+        #if DEBUG
+        print("[HotCueTrace] gen=\(generation) installSample returned · sampleID=\(sampleID) " +
+              "installedSampleCount=\(dvsContinuousRenderer.installedSampleCount)")
+        #endif
+    }
+
+    /// Detects the first frame of sustained, audible content in `buffer`
+    /// (hot-cue onset-alignment fix, 2026-08-13): a hardware finding showed
+    /// several bundled pad WAVs (`ah_yeah`, `check_it_out`, `ahhh`) open
+    /// with 270–450 ms of near-silence before the vocal, which put the
+    /// audible sound around "2 o'clock" instead of "12 o'clock" when the
+    /// platter's cue position 0 mapped to raw file frame 0.
+    ///
+    /// Windowed-RMS envelope, not an instantaneous-sample threshold: voiced
+    /// audio crosses zero every few samples even at full loudness, so a
+    /// "does this one sample exceed the threshold" test misses onsets
+    /// inside genuinely loud content. `windowSeconds` blocks are scanned in
+    /// playback order; the first block whose RMS reaches `thresholdRatio`
+    /// (relative to full scale) wins. Returns `0` — safe fallback to file
+    /// frame 0 — for an empty buffer or a buffer with no block ever
+    /// reaching the threshold (e.g. the validated `dvs_ahhh` DVS asset,
+    /// which is loud from frame 0 and so is detected at block 0 anyway).
+    static func detectHotCueOnsetFrame(
+        in buffer: AVAudioPCMBuffer,
+        thresholdRatio: Float = 0.01,
+        windowSeconds: Double = 0.005
+    ) -> Int {
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0,
+              let channels = buffer.floatChannelData,
+              buffer.format.commonFormat == .pcmFormatFloat32,
+              !buffer.format.isInterleaved else { return 0 }
+        let channelCount = Int(buffer.format.channelCount)
+        let windowFrames = max(1, Int(windowSeconds * buffer.format.sampleRate))
+
+        var start = 0
+        while start < frameCount {
+            let end = min(start + windowFrames, frameCount)
+            var sumSquares: Double = 0
+            var sampleCount = 0
+            for c in 0..<channelCount {
+                let channel = channels[c]
+                for i in start..<end {
+                    let value = Double(channel[i])
+                    sumSquares += value * value
+                    sampleCount += 1
+                }
+            }
+            guard sampleCount > 0 else { return start }
+            let rms = Float((sumSquares / Double(sampleCount)).squareRoot())
+            if rms >= thresholdRatio {
+                return start
+            }
+            start = end
         }
+        return 0
     }
 
 #if DEBUG
@@ -1604,8 +1880,9 @@ final class ScratchSamplePlaybackController {
     /// the DVS tick routing deterministically without bundled fixtures
     /// (the documented command-line fixture-resolution gap).
     func testOnly_installSyntheticSample(_ buffer: AVAudioPCMBuffer, sampleID: String) {
+        let generation = allocateLoadGeneration()
         audioQueue.sync {
-            self.applyLoadedBufferState(buffer, sampleID: sampleID)
+            self.applyLoadedBufferState(buffer, sampleID: sampleID, generation: generation)
         }
     }
 #endif
@@ -2450,12 +2727,14 @@ final class ScratchSamplePlaybackController {
     }
 
     /// Continuous-renderer handling for one DVS control tick. Returns true
-    /// when the tick was fully handled (the caller returns); false when the
-    /// tick must fall through to the legacy grain machinery (sample longer
-    /// than one revolution — never the production DVS asset).
+    /// when the tick was fully handled (the caller returns); false only for
+    /// a not-yet-installed/zero-length sample, in which case the tick falls
+    /// through to the legacy grain machinery. Arbitrary-length platter
+    /// playback (2026-08-13): no longer capped at one physical revolution —
+    /// see `continuousLoopFrames`'s doc comment.
     ///
     /// Behavioral parity is deliberate: the authoritative phase anchor
-    /// (`dvsAccumulatedSteps` → `dvsLoopPhaseFrame`), the near-stop settle
+    /// (`dvsAccumulatedSteps` → `continuousLoopPhaseFrame`), the near-stop settle
     /// hysteresis, the motion→noDirection stop-ramp lifecycle flags, and
     /// every scalar diagnostic (`forwardScheduleCount`, `lastScheduledRate`,
     /// consumed-window bookkeeping, lap detection) behave exactly as the
@@ -2474,7 +2753,7 @@ final class ScratchSamplePlaybackController {
     ) -> Bool {
         guard let forward = forwardBuffer else { return false }
         let sourceTotalFrames = Int(forward.frameLength)
-        guard dvsLoopFrames > 0, Double(sourceTotalFrames) <= dvsLoopFrames else {
+        guard continuousLoopFrames > 0, sourceTotalFrames > 0 else {
             return false
         }
 
@@ -2508,9 +2787,9 @@ final class ScratchSamplePlaybackController {
         #if DEBUG
         let physicalStepsBefore = dvsAccumulatedSteps
         #endif
-        let startPhase = dvsLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps)
+        let startPhase = continuousLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps, stepRate: framesPerStep)
         dvsAccumulatedSteps += deltaSteps
-        let endPhase = dvsLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps)
+        let endPhase = continuousLoopPhaseFrame(forAccumulatedSteps: dvsAccumulatedSteps, stepRate: framesPerStep)
         currentSampleFrame = Int(endPhase)
 
         // Near-stop settling hysteresis: unchanged, hardware-validated
@@ -2733,6 +3012,9 @@ final class ScratchSamplePlaybackController {
             self.lastRawMIDISteps = nil
             self.midiAccumulatedSteps = 0
             self.dvsLoopFrames = 0
+            self.continuousLoopFrames = 0
+            self.hotCueOnsetFrame = 0
+            self.hotCueLoopFrames = 1
             self.dvsAccumulatedSteps = 0
             self.wasDVSMotionActive = false
             self.dvsDefinitivelyStopped = false
@@ -2743,10 +3025,11 @@ final class ScratchSamplePlaybackController {
             // Preserve DVS ownership across unload if it is authoritatively
             // active — see the matching comment in `applyLoadedBufferState`.
             self.platterRenderOwner = self.dvsOwnershipActive ? .dvs : .none
-            self.lastMIDIContinuousRejectionReason = nil
             #if DEBUG
             self.dvsLapCandidate = nil
             self.previousGrainScalars = nil
+            self.hasLoggedFirstMIDIPhaseSinceLoad = false
+            self.currentLoadGeneration = 0
             #endif
             self.lastScheduledSourceFrame = nil
             self.lastScheduledSegmentFrames = nil
@@ -3037,18 +3320,40 @@ final class ScratchSamplePlaybackController {
         return wrapped < 0 ? wrapped + totalFrames : wrapped
     }
 
-    /// Direct-MIDI-only counterpart to `dvsLoopPhaseFrame` (cue-lock drift
-    /// fix, 2026-08-10): identical formula, using `midiFramesPerStep`
-    /// (Rane ONE MKII direct-MIDI CC6 geometry) instead of `framesPerStep`
-    /// (DVS/timecode geometry). Shares `dvsLoopFrames` with the DVS path
-    /// deliberately — that value is the real one-revolution audio-frame
-    /// duration at this sample's rate, not a steps-per-revolution-derived
-    /// quantity, so both paths correctly wrap against the same loop.
-    private func midiLoopPhaseFrame(forAccumulatedSteps steps: Double) -> Double {
-        guard dvsLoopFrames > 0 else { return 0 }
-        var wrapped = (steps * midiFramesPerStep).truncatingRemainder(dividingBy: dvsLoopFrames)
-        if wrapped < 0 { wrapped += dvsLoopFrames }
+    /// DVS-continuous loop-phase mapping (arbitrary-length platter
+    /// playback, 2026-08-13), used by `renderContinuousDVSTick` with
+    /// `stepRate: framesPerStep` — real-vinyl-RPM scale. Wraps against
+    /// `continuousLoopFrames` — the same bound `dvsContinuousRenderer` is
+    /// installed with — rather than the fixed one-revolution `dvsLoopFrames`
+    /// the legacy grain path still uses, so a DVS sample of any length maps
+    /// correctly. No onset offset — that is hot-cue-only, see
+    /// `hotCueLoopPhaseFrame`.
+    private func continuousLoopPhaseFrame(forAccumulatedSteps steps: Double, stepRate: Double) -> Double {
+        guard continuousLoopFrames > 0 else { return 0 }
+        var wrapped = (steps * stepRate).truncatingRemainder(dividingBy: continuousLoopFrames)
+        if wrapped < 0 { wrapped += continuousLoopFrames }
         return wrapped
+    }
+
+    /// Direct-MIDI hot-cue continuous loop-phase mapping (onset-alignment
+    /// fix, 2026-08-13), used only by `midiCoalescingTick`. Real-vinyl-RPM
+    /// scale (`midiFramesPerStep`, identical to the legacy rollback path —
+    /// a 2026-08-13 experiment that rescaled this to stretch each sample's
+    /// content over exactly one revolution caused an audible pitch/speed
+    /// shift on real hardware and was reverted the same day, see
+    /// `midiFramesPerStep`'s doc comment), wrapped at `hotCueLoopFrames`
+    /// and offset by `hotCueOnsetFrame` so cue position 0 is the sample's
+    /// audible onset rather than raw file frame 0. The renderer itself is
+    /// still installed with the sample's full, untrimmed buffer at
+    /// `continuousLoopFrames` (`applyLoadedBufferState`); the returned
+    /// absolute frame is always inside `[hotCueOnsetFrame,
+    /// continuousLoopFrames)`, so the renderer's own internal wrap at
+    /// `continuousLoopFrames` never triggers from this path's publications.
+    private func hotCueLoopPhaseFrame(forAccumulatedSteps steps: Double) -> Double {
+        guard hotCueLoopFrames > 0 else { return Double(hotCueOnsetFrame) }
+        var wrapped = (steps * midiFramesPerStep).truncatingRemainder(dividingBy: hotCueLoopFrames)
+        if wrapped < 0 { wrapped += hotCueLoopFrames }
+        return Double(hotCueOnsetFrame) + wrapped
     }
 
     // MARK: - DVS rotational loop (listening-fix #4, uncommitted)
