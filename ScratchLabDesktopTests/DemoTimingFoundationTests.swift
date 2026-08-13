@@ -765,19 +765,16 @@ struct MotionPathTests {
             for: laneContent(duration: 4,
                              [(.forward, .medium, 1, 2), (.backward, .medium, 2, 3)]))
         let strokes = strokeSegments(path)
-        // Each stroke becomes two sub-segments (out + return), so two input
-        // strokes produce four stroke sub-segments.
-        try #require(strokes.count == 4)
-        // The forward stroke deflects above the centre at its peak.
-        let forwardPeak = strokes
-            .filter { if case .stroke(.forward) = $0.kind { return true }; return false }
-            .flatMap { [$0.startPosition, $0.endPosition] }.max() ?? 0
-        #expect(forwardPeak > 0.5)
-        // The backward stroke deflects below the centre at its trough.
-        let backwardTrough = strokes
-            .filter { if case .stroke(.backward) = $0.kind { return true }; return false }
-            .flatMap { [$0.startPosition, $0.endPosition] }.min() ?? 1
-        #expect(backwardTrough < 0.5)
+        // Each stroke is ONE directional segment (forward then backward), so
+        // two input strokes produce exactly two stroke segments.
+        try #require(strokes.count == 2)
+        // The forward stroke rises, then the backward stroke falls back.
+        let forward = strokes[0]
+        let backward = strokes[1]
+        #expect(forward.endPosition > forward.startPosition)
+        #expect(backward.endPosition < backward.startPosition)
+        // Continuous: the backward stroke begins where the forward ended.
+        #expect(abs(backward.startPosition - forward.endPosition) < 1e-9)
     }
 
     @Test("Gaps between strokes become flat hold segments")
@@ -822,12 +819,12 @@ struct MotionPathTests {
         }
     }
 
-    @Test("Each push and pull deflects from centre to its rail and back")
+    @Test("Push raises the platter position and pull lowers it, continuously")
     func strokesDeflectToRails() {
-        // An alternating push/pull pattern with mixed speeds. The platter
-        // rests at the centre between scratches, so every stroke shows as a
-        // distinct bump aligned to its own time window — no flat runs from
-        // consecutive same-direction strokes, no drift.
+        // An alternating push/pull pattern with mixed speeds. The platter is
+        // one continuous position trace: each forward stroke raises it, each
+        // backward stroke lowers it, and each stroke begins where the last
+        // one ended — no centre-rest bumps, no fabricated midpoint reversal.
         let path = ScratchStrokeGeometry.motionPath(
             for: laneContent(duration: 7,
                              [(.forward, .fast, 0.5, 1.0),
@@ -836,37 +833,27 @@ struct MotionPathTests {
                               (.backward, .fast, 2.3, 2.7),
                               (.forward, .slow, 2.7, 3.6)]))
 
-        // Forward strokes reach the high rail at their peak.
-        let forwardPeak = path.segments
-            .filter { if case .stroke(.forward) = $0.kind { return true }; return false }
-            .flatMap { [$0.startPosition, $0.endPosition] }.max() ?? 0
-        #expect(forwardPeak >= 0.98)
+        // Direction is geometric: every forward segment rises, every backward
+        // segment falls.
+        for segment in path.segments {
+            guard case .stroke(let direction) = segment.kind else { continue }
+            if direction == .forward {
+                #expect(segment.endPosition > segment.startPosition)
+            } else {
+                #expect(segment.endPosition < segment.startPosition)
+            }
+        }
 
-        // Backward strokes reach the low rail at their trough.
-        let backwardTrough = path.segments
-            .filter { if case .stroke(.backward) = $0.kind { return true }; return false }
-            .flatMap { [$0.startPosition, $0.endPosition] }.min() ?? 1
-        #expect(backwardTrough <= 0.02)
+        // The path is continuous — no jumps at stroke boundaries.
+        for index in 1..<path.segments.count {
+            #expect(abs(path.segments[index].startPosition
+                        - path.segments[index - 1].endPosition) < 1e-9)
+        }
 
         // The path spans the whole 0...1 band — a meaningful range.
         let positions = path.segments.flatMap { [$0.startPosition, $0.endPosition] }
         #expect((positions.min() ?? 1) <= 0.02)
         #expect((positions.max() ?? 0) >= 0.98)
-
-        // Every stroke segment either starts or ends at the centre — the
-        // platter rests at the centre, the stroke deflects and returns.
-        for segment in path.segments {
-            guard case .stroke = segment.kind else { continue }
-            let touchesCentre = abs(segment.startPosition - 0.5) < 1e-6
-                             || abs(segment.endPosition - 0.5) < 1e-6
-            #expect(touchesCentre)
-        }
-
-        // The lead-in hold rests at the centre — no edge-hugging.
-        if let leadIn = path.segments.first, leadIn.isHold {
-            #expect(abs(leadIn.startPosition - 0.5) < 1e-6)
-            #expect(abs(leadIn.endPosition - 0.5) < 1e-6)
-        }
     }
 
     @Test("A looping pattern closes the loop — tiles meet seamlessly at the wrap")
@@ -918,7 +905,7 @@ struct MotionPathTests {
         }
     }
 
-    @Test("Demo (non-looping) content opens at the centre rest position")
+    @Test("Demo (non-looping) content opens with a flat lead-in at rest")
     func demoStartsAtCentreRestState() throws {
         let manifestURL = reelTestsRepoRoot().appendingPathComponent(
             "ScratchLab/Resources/PracticeReelAudio/baby_reel.json")
@@ -926,12 +913,15 @@ struct MotionPathTests {
         let demoContent = LaneContent(reel: reel)
         #expect(!demoContent.loops)
         let path = ScratchStrokeGeometry.motionPath(for: demoContent)
-        // The Demo's first segment is the lead-in hold, resting at centre —
-        // the platter rests at the middle of the lane before the demo starts.
+        // The Demo's first segment is the lead-in hold — the platter rests
+        // flat before the demo starts, then the first stroke rises from it.
         if let leadIn = path.segments.first {
             #expect(leadIn.isHold)
-            #expect(abs(leadIn.startPosition - 0.5) < 1e-6)
-            #expect(abs(leadIn.endPosition - 0.5) < 1e-6)
+            #expect(abs(leadIn.startPosition - leadIn.endPosition) < 1e-6)
+        }
+        if let firstStroke = strokeSegments(path).first, let leadIn = path.segments.first {
+            // Continuous — the first stroke leaves from the rest position.
+            #expect(abs(firstStroke.startPosition - leadIn.endPosition) < 1e-6)
         }
     }
 
@@ -962,10 +952,9 @@ struct MotionPathTests {
     @Test("Stroke amplitude scales with speed — slow < medium < fast in each direction")
     func strokeAmplitudeScalesWithSpeed() throws {
         // Three forward strokes of equal duration but different speed
-        // buckets, and three backward strokes mirroring them. The fixture
-        // also carries a fast pair in each direction so normalization
-        // anchors the rails at ±1 — the slow and medium peaks then read
-        // as fractions of the rail rather than the rail itself.
+        // buckets, and three backward strokes mirroring them. The platter
+        // integrates cumulatively, so the per-stroke travel (|end − start|)
+        // is the amplitude step — slow < medium < fast in both directions.
         let path = ScratchStrokeGeometry.motionPath(
             for: laneContent(duration: 10,
                              [(.forward,  .slow,   0.5, 1.0),
@@ -975,44 +964,37 @@ struct MotionPathTests {
                               (.backward, .medium, 4.5, 5.0),
                               (.backward, .fast,   5.5, 6.0)]))
 
-        // Helper: the absolute deflection from the normalized centre (0.5)
-        // at this stroke's apex. The out-half ends at the rail end, so we
-        // can read it off any sub-segment of the matching speed+direction.
-        func peakOffset(_ direction: ScratchNotationDirection,
-                        _ speed: ScratchNotationSpeedClassification) throws -> CGFloat {
+        // Helper: the per-stroke travel (the vertical step) of the segment
+        // matching a given speed + direction.
+        func travel(_ direction: ScratchNotationDirection,
+                    _ speed: ScratchNotationSpeedClassification) throws -> CGFloat {
             let matches = path.segments.filter {
                 if case .stroke(let d) = $0.kind { return d == direction && $0.speed == speed }
                 return false
             }
-            let positions = matches.flatMap { [$0.startPosition, $0.endPosition] }
-            let maxOffset = try #require(positions.map { abs($0 - 0.5) }.max())
-            return maxOffset
+            let segment = try #require(matches.first)
+            return abs(segment.endPosition - segment.startPosition)
         }
 
-        let fwdSlow   = try peakOffset(.forward, .slow)
-        let fwdMedium = try peakOffset(.forward, .medium)
-        let fwdFast   = try peakOffset(.forward, .fast)
+        let fwdSlow   = try travel(.forward, .slow)
+        let fwdMedium = try travel(.forward, .medium)
+        let fwdFast   = try travel(.forward, .fast)
         #expect(fwdSlow < fwdMedium)
         #expect(fwdMedium < fwdFast)
-        // The fast stroke still reaches the rail (normalized to 0 or 1).
-        #expect(fwdFast >= 0.49)
 
-        let backSlow   = try peakOffset(.backward, .slow)
-        let backMedium = try peakOffset(.backward, .medium)
-        let backFast   = try peakOffset(.backward, .fast)
+        let backSlow   = try travel(.backward, .slow)
+        let backMedium = try travel(.backward, .medium)
+        let backFast   = try travel(.backward, .fast)
         #expect(backSlow < backMedium)
         #expect(backMedium < backFast)
-        #expect(backFast >= 0.49)
     }
 
     @Test("A slow stroke beside a fast one falls well short of the rail")
     func slowStrokeDoesNotReachRail() throws {
         // Pair a slow + fast forward stroke and a slow + fast backward
-        // stroke. After the asymmetric min/max normalization, the fast
-        // strokes peg the rails (0 and 1) and the slow strokes sit at
-        // roughly the 0.55 : 1.0 ratio inside the band — visibly short
-        // of the rail. A regression that re-pegged every stroke would
-        // push the slow peaks back to 0 / 1, which this test catches.
+        // stroke. After normalization the fast stroke's step is larger than
+        // the slow stroke's — the slow-to-fast travel ratio reflects the
+        // underlying amplitude ratio (0.55 : 1.0), visibly short of the rail.
         let path = ScratchStrokeGeometry.motionPath(
             for: laneContent(duration: 6,
                              [(.forward,  .slow, 0.5, 1.0),
@@ -1020,28 +1002,22 @@ struct MotionPathTests {
                               (.backward, .slow, 2.5, 3.0),
                               (.backward, .fast, 3.5, 4.0)]))
 
-        func peakOffset(_ direction: ScratchNotationDirection,
-                        _ speed: ScratchNotationSpeedClassification) throws -> CGFloat {
+        func travel(_ direction: ScratchNotationDirection,
+                    _ speed: ScratchNotationSpeedClassification) throws -> CGFloat {
             let matches = path.segments.filter {
                 if case .stroke(let d) = $0.kind { return d == direction && $0.speed == speed }
                 return false
             }
-            let positions = matches.flatMap { [$0.startPosition, $0.endPosition] }
-            return try #require(positions.map { abs($0 - 0.5) }.max())
+            let segment = try #require(matches.first)
+            return abs(segment.endPosition - segment.startPosition)
         }
 
-        let fwdSlow = try peakOffset(.forward, .slow)
-        let fwdFast = try peakOffset(.forward, .fast)
-        let backSlow = try peakOffset(.backward, .slow)
-        let backFast = try peakOffset(.backward, .fast)
+        let fwdSlow = try travel(.forward, .slow)
+        let fwdFast = try travel(.forward, .fast)
+        let backSlow = try travel(.backward, .slow)
+        let backFast = try travel(.backward, .fast)
 
-        // The fast stroke pegs the rail (offset from centre ≈ 0.5).
-        #expect(fwdFast >= 0.49)
-        #expect(backFast >= 0.49)
-        // The slow stroke sits visibly inside the band.
-        #expect(fwdSlow < 0.40)
-        #expect(backSlow < 0.40)
-        // The slow-to-fast peak ratio reflects the underlying amplitude
+        // The slow-to-fast travel ratio reflects the underlying amplitude
         // ratio (0.55 / 1.0), within a small numerical slack.
         #expect(fwdSlow / fwdFast >= 0.45)
         #expect(fwdSlow / fwdFast <= 0.65)

@@ -288,8 +288,8 @@ final class ScratchNotationTravelMotionPathTests: XCTestCase {
         XCTAssertEqual(strokeSegs[2].endPosition, 1.0, accuracy: 1e-9)    // travel 1.0 → rail
     }
 
-    // A9. The speed-bucket reference path (ScratchStrokeGeometry) is untouched by this change:
-    //     it still differentiates speed buckets (fast deflects more than slow in the same phrase).
+    // A9. The speed-bucket reference path (ScratchStrokeGeometry) still differentiates
+    //     speed buckets: fast moves further than slow in the same phrase.
     func testSpeedBucketReferencePathStillDifferentiates() {
         let content = LaneContent(
             strokes: [
@@ -299,11 +299,10 @@ final class ScratchNotationTravelMotionPathTests: XCTestCase {
             segments: [], beatsPerMinute: nil, duration: 2.0, loops: false)
         let path = ScratchStrokeGeometry.motionPath(for: content)
         let strokeSegs = path.segments.filter { if case .stroke = $0.kind { return true }; return false }
-        XCTAssertGreaterThanOrEqual(strokeSegs.count, 4)
-        let centre = path.segments.first { $0.isHold }?.startPosition ?? 0.5
-        let slowDev = abs(strokeSegs[0].endPosition - centre)
-        let fastDev = abs(strokeSegs[2].endPosition - centre)
-        XCTAssertLessThan(slowDev, fastDev, "speed-bucket reference must still rank fast above slow")
+        XCTAssertEqual(strokeSegs.count, 2)  // one continuous segment per stroke
+        let slowTravel = abs(strokeSegs[0].endPosition - strokeSegs[0].startPosition)
+        let fastTravel = abs(strokeSegs[1].endPosition - strokeSegs[1].startPosition)
+        XCTAssertLessThan(slowTravel, fastTravel, "speed-bucket reference must still rank fast above slow")
     }
 
     // A10. Real recording at the four UI slider values (signed mode): peak excursion strictly

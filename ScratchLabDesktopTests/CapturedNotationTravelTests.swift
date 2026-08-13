@@ -118,3 +118,48 @@ final class CapturedNotationTravelTests: XCTestCase {
                        "Reversed positions use abs — still yields the correct positive fraction")
     }
 }
+
+// MARK: - Common comparison domain (stacked TARGET / MY PERFORMANCE)
+
+final class ScratchPhraseChartComparisonDomainTests: XCTestCase {
+
+    func testCommonDomainIsTargetAuthoritative() {
+        // Target spans 3 s. The performed take's own span is irrelevant —
+        // the stacked comparison displays the TARGET's domain for both charts.
+        let domain = ScratchPhraseChartComparisonDomain.commonDomain(targetDuration: 3.0)
+        XCTAssertEqual(domain.lowerBound, 0.0)
+        XCTAssertEqual(domain.upperBound, 3.0, accuracy: 1e-9)
+    }
+
+    func testCommonDomainNeverCollapses() {
+        // A degenerate (empty) target still yields a usable, non-zero domain.
+        let domain = ScratchPhraseChartComparisonDomain.commonDomain(targetDuration: 0.0)
+        XCTAssertGreaterThan(domain.upperBound - domain.lowerBound, 0.0)
+    }
+
+    func testSameMusicalTimeMapsToSameNormalizedX() {
+        let domain = ScratchPhraseChartComparisonDomain.commonDomain(targetDuration: 3.0)
+        let width = 300.0
+        // Halfway through the target (1.5 s) maps to the horizontal centre —
+        // the exact same x a performed stroke at 1.5 s gets, because both
+        // charts consume this one domain.
+        let x = ScratchPhraseChartComparisonDomain.normalizedX(time: 1.5, domain: domain, width: width)
+        XCTAssertEqual(x, 150.0, accuracy: 1e-9)
+
+        // The mapping is linear and domain-relative: a performed event at the
+        // target's right edge (3.0 s) maps to the right edge regardless of the
+        // performed take's own maximum end time.
+        let rightEdge = ScratchPhraseChartComparisonDomain.normalizedX(time: 3.0, domain: domain, width: width)
+        XCTAssertEqual(rightEdge, width, accuracy: 1e-9)
+    }
+
+    func testDomainIsIndependentOfPerformedSpan() {
+        // A performed take ending at 1.2 s must NOT rescale the chart: the
+        // displayed domain still spans the target's 3.0 s, so a performed
+        // stroke at 1.2 s lands at 40% width, not 100%.
+        let domain = ScratchPhraseChartComparisonDomain.commonDomain(targetDuration: 3.0)
+        let width = 100.0
+        let x = ScratchPhraseChartComparisonDomain.normalizedX(time: 1.2, domain: domain, width: width)
+        XCTAssertEqual(x, 40.0, accuracy: 1e-9)
+    }
+}

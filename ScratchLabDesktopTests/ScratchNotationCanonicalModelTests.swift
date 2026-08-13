@@ -59,6 +59,34 @@ struct BabyScratchCycleTests {
         #expect(cycle.validationIssues().isEmpty)
     }
 
+    @Test("Baby Scratch fader is OPEN throughout — no closure is ever authored or rendered")
+    func faderOpenThroughout() throws {
+        let cycle = ScratchNotation.babyScratchCycle
+        // The cycle authors no canonical fader edge channel. Per the
+        // authority rule this is NOT an implicit open — but the per-stroke
+        // fallback it triggers is `.open` on every stroke, so the resolved
+        // fader timeline is OPEN end-to-end with zero closures.
+        #expect(cycle.faderEvents.isEmpty)
+
+        let notation = try #require(cycle.materialized(bpm: 79))
+        let duration = notation.timelineDuration
+        let spans = notation.faderAuthoritySpans(documentEnd: duration)
+
+        // Every authoritative fader span is OPEN, and their union covers the
+        // whole technique duration — no closed span, no gap a closed rail
+        // could hide in.
+        #expect(!spans.isEmpty)
+        #expect(spans.allSatisfy { $0.state == .open })
+        let openCoverage = spans.reduce(0.0) { $0 + ($1.endTime - $1.startTime) }
+        #expect(approximatelyEqual(openCoverage, duration))
+
+        // The authoritative state at any point inside the cycle resolves to
+        // OPEN (checked at two interior times, not just the endpoints).
+        let secondsPerBeat = 60.0 / 79.0
+        #expect(notation.faderState(at: 0.25 * secondsPerBeat, documentEnd: duration) == .open)
+        #expect(notation.faderState(at: 0.75 * secondsPerBeat, documentEnd: duration) == .open)
+    }
+
     @Test("Materialization at BPM 79 derives the exact projected seconds")
     func materializationAt79() throws {
         let cycle = ScratchNotation.babyScratchCycle

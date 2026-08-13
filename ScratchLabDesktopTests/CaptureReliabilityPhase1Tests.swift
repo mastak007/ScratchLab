@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Dispatch
+import Vision
 import XCTest
 @testable import ScratchLab
 
@@ -1832,6 +1833,59 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(packet.samples, [0.50, 0.0, 0.0, 0.0])
     }
 
+    func testMacCaptureEngineAudioPacketBoundsIterationToAuthoritativeFrameCount() {
+        XCTAssertEqual(
+            MacCaptureEngine.validatedAudioSampleCount(
+                frameCount: 4_800,
+                bufferChannelCount: 14,
+                bytesPerSample: MemoryLayout<Int32>.size,
+                availableByteCount: Int(UInt32.max)
+            ),
+            67_200
+        )
+    }
+
+    func testMacCaptureEngineAudioPacketRejectsInconsistentOrUnboundedMetadata() {
+        XCTAssertNil(
+            MacCaptureEngine.validatedAudioSampleCount(
+                frameCount: 4_800,
+                bufferChannelCount: 14,
+                bytesPerSample: MemoryLayout<Int32>.size,
+                availableByteCount: 1_024
+            )
+        )
+        XCTAssertNil(
+            MacCaptureEngine.validatedAudioSampleCount(
+                frameCount: 1_048_577,
+                bufferChannelCount: 1,
+                bytesPerSample: MemoryLayout<Float>.size,
+                availableByteCount: Int(UInt32.max)
+            )
+        )
+    }
+
+    func testMacCaptureEngineAudioPacketDownmixesRaneMultichannelInt32() throws {
+        let channelCount = 14
+        let frameCount = 4
+        let samples = (0..<(frameCount * channelCount)).map { Int32($0 * 100) }
+        let sampleBuffer = try makeInterleavedInt32SampleBuffer(
+            samples: samples,
+            channelCount: channelCount,
+            sampleRate: 48_000
+        )
+
+        let packet = try XCTUnwrap(MacCaptureEngine.audioPacket(from: sampleBuffer))
+
+        XCTAssertEqual(packet.sampleRate, 48_000)
+        XCTAssertEqual(packet.samples.count, frameCount)
+        for frameIndex in 0..<frameCount {
+            let frame = samples[(frameIndex * channelCount)..<((frameIndex + 1) * channelCount)]
+            let expected = frame.reduce(Float.zero) { $0 + Float($1) / Float(Int32.max) }
+                / Float(channelCount)
+            XCTAssertEqual(packet.samples[frameIndex], expected, accuracy: 0.000_000_1)
+        }
+    }
+
     func testRoutineAudioCaptureWriterCreatesWAVForRaneMultichannelPCM() throws {
         let frameCount = 32
         let channelCount = 14
@@ -2642,15 +2696,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "FormulaPlaygroundView must not be compiled into the iOS app target (Rule 2.5.1)"
         )
 
-        // Formula model files must still be present in the iOS target.
-        XCTAssertTrue(
-            source.contains("A1000018 /* ScratchFormulaAST.swift in Sources */"),
-            "ScratchFormulaAST.swift must remain in iOS target — used by ScratchRenderTimeline"
-        )
-        XCTAssertTrue(
-            source.contains("A1000021 /* ScratchFormulaRenderer.swift in Sources */"),
-            "ScratchFormulaRenderer.swift must remain in iOS target — provides ScratchRenderTimeline/ScratchRenderEvent"
-        )
+        // The iOS `ScratchLab` production target was retired (commit 736e6ab),
+        // so its per-file Sources entries no longer exist. Only the desktop test
+        // entries below remain meaningful.
 
         // Desktop test entries must still be present.
         XCTAssertTrue(source.contains("B5AA0004A1B2C3D4E5F60709 /* ScratchFormulaAST.swift in Sources */"))
@@ -4087,17 +4135,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(exportMetadata.takes.first?.exportMixMode, ExportMixMode.scratchOnly.rawValue)
     }
 
-    func testScratchLabIOSSchemeUsesForegroundLaunchWithoutLocationSimulation() throws {
-        let schemeURL = projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme")
-        let scheme = try String(contentsOf: schemeURL, encoding: .utf8)
-
-        XCTAssertTrue(scheme.contains("<LaunchAction"))
-        XCTAssertTrue(scheme.contains("launchStyle = \"0\""))
-        XCTAssertTrue(scheme.contains("BuildableName = \"ScratchLab.app\""))
-        XCTAssertFalse(scheme.contains("allowLocationSimulation = \"YES\""))
-        XCTAssertFalse(scheme.contains("<LocationScenarioReference"))
-        XCTAssertFalse(scheme.contains("waitForExecutable = \"YES\""))
-    }
+    // REMOVED: testScratchLabIOSSchemeUsesForegroundLaunchWithoutLocationSimulation.
+    // The iOS `ScratchLab` production target (and its `ScratchLab.xcscheme`) were
+    // retired by commit 736e6ab "Retire iOS and watchOS production targets", so
+    // there is no iOS scheme left to assert on.
 
     func testMainMenuSourceExposesDebugCoachPreviewEntryPoint() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
@@ -4295,8 +4336,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(project.contains("Coach.usdz in Resources"))
         XCTAssertTrue(project.contains("Coach.usdz */ = {isa = PBXFileReference;"))
         XCTAssertTrue(project.contains("path = Resources/Coach/Coach.usdz;"))
-        XCTAssertTrue(project.contains("CoachPreviewView.swift in Sources"))
-        XCTAssertTrue(project.contains("CoachPreviewView.swift */ = {isa = PBXFileReference;"))
+        // CoachPreviewView was retired alongside the iOS target (commit 736e6ab);
+        // only the bundled USDZ asset is still a required macOS resource.
     }
 
     func testHostedDesktopBundleContainsCoachUSDZAsset() throws {
@@ -4608,7 +4649,6 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let project = try String(contentsOf: projectURL, encoding: .utf8)
 
         XCTAssertTrue(project.contains("ScratchCoachViews.swift"))
-        XCTAssertTrue(project.contains("A1000030 /* ScratchCoachViews.swift in Sources */"))
         XCTAssertTrue(project.contains("B5AA0008A1B2C3D4E5F60709 /* ScratchCoachViews.swift in Sources */"))
     }
 
@@ -4619,11 +4659,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(project.contains("CoachInstructions"))
         XCTAssertTrue(project.contains("CoachInstructions in Resources"))
         XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */"))
-        XCTAssertTrue(project.contains("219D8D60A93840FC9A724C11 /* CoachInstructions in Resources */"))
         XCTAssertTrue(project.contains("CoachDemoAudio"))
         XCTAssertTrue(project.contains("CoachDemoAudio in Resources"))
         XCTAssertTrue(project.contains("09C738A56A342FC5A7BBBEA3 /* Resources */"))
-        XCTAssertTrue(project.contains("A6000003 /* Resources */"))
+        // The iOS `ScratchLab` target (and its per-target Resources entries
+        // `219D…`/`A6000003`) were retired by commit 736e6ab.
     }
 
     func testCoachInstructionResourcesContainNoProvenanceMetadataAndDecode() throws {
@@ -5416,7 +5456,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for (time, state, x) in observations {
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.92,
                 now: time
             )
@@ -5448,7 +5488,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for (time, state, x) in observations {
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.88,
                 now: time
             )
@@ -5488,7 +5528,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for (time, state, x) in observations {
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.84,
                 now: time
             )
@@ -5516,7 +5556,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for (time, state, x) in observations {
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.80,
                 now: time
             )
@@ -5567,7 +5607,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for (time, state, x) in observations {
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.84,
                 now: time
             )
@@ -5598,7 +5638,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for (time, state, x) in observations {
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.88,
                 now: time
             )
@@ -5639,7 +5679,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             let x = noisePositions[i % noisePositions.count]
             builder.recordObservation(
                 state: .steady,
-                position: CGPoint(x: x, y: 0.5),
+                position: x,
                 confidence: 0.90,
                 now: t
             )
@@ -5658,7 +5698,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             let state: MacCaptureEngine.HandMotionState = (i % 2 == 0) ? .searching : .steady
             builder.recordObservation(
                 state: state,
-                position: CGPoint(x: 0.5, y: 0.5),
+                position: 0.5,
                 confidence: 0.80,
                 now: t
             )
@@ -7017,7 +7057,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("static func normalizedRecordDirection("))
         XCTAssertTrue(source.contains("final class RoutineDetectedNotationBuilder"))
         XCTAssertTrue(source.contains("func recordObservation("))
-        XCTAssertTrue(source.contains("self.activeRoutineDetectedNotationBuilder?.recordObservation("))
+        XCTAssertTrue(source.contains("builder.recordObservation("))
         XCTAssertTrue(source.contains("return .backward"))
         XCTAssertTrue(source.contains("return .forward"))
         XCTAssertTrue(source.contains("Self.normalizedRecordDirection(forCameraSpaceDirection: direction)"))
@@ -7032,7 +7072,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("private func publishRoutineMovementDiagnostics("))
         XCTAssertTrue(source.contains("recordMovementEvents: candidateMovementEvents"))
         XCTAssertTrue(source.contains("debugSession?.recordRawDrop(.durationTooShort)"))
-        XCTAssertTrue(source.contains("debugSession?.recordNormalizedDrop(.deltaTooSmall)"))
+        XCTAssertTrue(source.contains("debugSession?.recordNormalizedDrop(.deltaTooSmall, confidenceBefore:"))
     }
 
     func testMacReviewScreenContainsCorrectionAndExportLabels() throws {
@@ -7266,7 +7306,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testPracticeSourceKeepsDemoPathAppReviewSafe() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        XCTAssertTrue(source.contains("Try the Baby Scratch demo, listen to the coach, and start a practice run."))
+        XCTAssertTrue(source.contains("Try the Baby Scratch demo, listen to the coach, and start a simple practice run."))
         XCTAssertTrue(source.contains("No hardware needed"))
         XCTAssertFalse(source.contains("dataset details"))
     }
@@ -12558,4 +12598,1765 @@ final class LiveInputSuspensionTests: XCTestCase {
         )
     }
 
+}
+
+// MARK: - Movement trace diagnostics + exact replay (Phase 1/2)
+
+
+// MARK: - Movement trace diagnostics + exact replay (Phase 1/2)
+
+final class MovementTraceDiagnosticsTests: XCTestCase {
+
+    /// Builds one observation. `builderState` non-nil means the builder was fed
+    /// (with that state); `dedupRejected` forces the builder inputs to nil.
+    private func observation(
+        index: Int,
+        kind: MovementTraceObservation.PointKind = .real,
+        x: Double,
+        time: Double,
+        builderState: String? = "movingLeft",
+        builderExecutionSequence: Int? = nil,
+        builderExecutionTime: Double? = nil,
+        builderAction: String? = nil,
+        builderSkippedReason: String? = nil,
+        dedupRejected: Bool = false
+    ) -> MovementTraceObservation {
+        let point = MovementTraceObservation.Point(x: x, y: 0.5)
+        let isReal = kind == .real
+        let fed = builderState != nil && !dedupRejected
+        return MovementTraceObservation(
+            index: index,
+            kind: kind,
+            presentationTime: time,
+            processingStartTime: time,
+            visionCompletionTime: isReal ? time : nil,
+            takeRelativeTime: time,
+            trackerPoint: isReal ? point : nil,
+            trackerTime: time,
+            enqueueTime: time,
+            enqueueSequence: index,
+            builderPoint: fed ? point : nil,
+            builderState: fed ? builderState : nil,
+            builderConfidence: fed ? 1.0 : nil,
+            builderExecutionTime: builderExecutionTime,
+            builderExecutionSequence: builderExecutionSequence,
+            builderAction: builderAction,
+            builderRejectionReason: nil,
+            finishedEventIndex: nil,
+            builderSkippedReason: builderSkippedReason,
+            rawDirection: isReal ? "movingForward" : nil,
+            idleReason: nil,
+            trackerConfidence: isReal ? 1.0 : nil,
+            semanticDirection: isReal ? "movingLeft" : nil,
+            jointConfidence: isReal ? 1.0 : nil,
+            rejectedPoint: nil,
+            dedupRejected: dedupRejected
+        )
+    }
+
+    // MARK: - Encoding / take association
+
+    func testMovementTraceExportRoundTripsAndPreservesOrder() throws {
+        let trace = MovementTraceExport(
+            schemaVersion: "scratchlab_movement_trace_v1",
+            takeID: "take-006",
+            takeNumber: 6,
+            recordingStartHostTime: 1000.0,
+            finalizationHostTime: 1000.5,
+            observations: [
+                observation(index: 0, x: 0.20, time: 0.00),
+                observation(index: 1, x: 0.30, time: 0.04),
+                observation(index: 2, kind: .miss, x: 0.30, time: 0.08, builderState: nil),
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(trace)
+        let decoded = try JSONDecoder().decode(MovementTraceExport.self, from: data)
+        XCTAssertEqual(decoded, trace, "trace must round-trip through Codable")
+        XCTAssertEqual(decoded.observations.map(\.index), [0, 1, 2], "chronological order must be preserved")
+        XCTAssertEqual(decoded.takeID, "take-006")
+        XCTAssertEqual(decoded.takeNumber, 6)
+    }
+
+    func testMovementDiagnosticsExportPreservesDropReasonsAndCounts() throws {
+        let snapshot = MacCaptureEngine.RoutineMovementDiagnosticsSnapshot(
+            framesReceived: 200, framesAnalyzed: 176, handObservationsReceived: 176,
+            observationsWithConfidence: 150, rawDirectionChanges: 25, semanticDirectionChanges: 18,
+            builderSamplesReceived: 150, rawMovementEventsCreated: 9, mergedSegments: 2,
+            normalizedMovementEvents: 7, fusedMovementEvents: 3, trustedDirectionalEvents: 4,
+            finalRecordMovementEvents: 4, activeMovementStarts: 20, activeMovementFinishAttempts: 20,
+            builderInputAccepted: 12, builderInputRejectedDirection: 60, builderRejectedSteady: 58,
+            builderRejectedSearching: 2, steadyInsufficientHistory: 1, steadyDisplacementTooSmall: 40,
+            steadyVelocityTooLow: 20, builderInputExtended: 8, publishHandTrackingCalls: 150,
+            publishHandTrackingDedupSkips: 5, impossibleJumpRejects: 1, platterObserveAttempted: 176,
+            platterObserveSkippedNotRecording: 0, handPoseIntervalMS: 40,
+            rawDropReasons: ["endTimeEqualsStart": 10, "deltaTooSmall": 6],
+            normalizedDropReasons: ["deltaTooSmall": 2],
+            trustDropReasons: ["lowAudioOverlap": 3],
+            replaySourceTrusted: 0,
+            recentSamples: ["raw[0.200,0.500] sm[0.200,0.500] c=0.50"],
+            recentDirections: ["raw=movingForward semantic=movingLeft"]
+        )
+        let export = MovementDiagnosticsExport(
+            schemaVersion: "scratchlab_movement_diagnostics_v1",
+            takeID: "take-006", takeNumber: 6, diagnostics: snapshot
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(export)
+        let decoded = try JSONDecoder().decode(MovementDiagnosticsExport.self, from: data)
+        XCTAssertEqual(decoded.diagnostics, snapshot, "diagnostics (incl. drop dicts + final counts) must survive encode/decode")
+        XCTAssertEqual(decoded.diagnostics.rawDropReasons["endTimeEqualsStart"], 10)
+        XCTAssertEqual(decoded.diagnostics.rawDropReasons["deltaTooSmall"], 6)
+        XCTAssertEqual(decoded.diagnostics.normalizedDropReasons["deltaTooSmall"], 2)
+        XCTAssertEqual(decoded.diagnostics.trustDropReasons["lowAudioOverlap"], 3)
+        XCTAssertEqual(decoded.diagnostics.finalRecordMovementEvents, 4)
+    }
+
+    // MARK: - Ideal replay
+
+    func testIdealReplayReproducesSingleForwardStroke() {
+        let observations = [
+            observation(index: 0, x: 0.20, time: 0.00),
+            observation(index: 1, x: 0.30, time: 0.04),
+            observation(index: 2, x: 0.40, time: 0.08),
+            observation(index: 3, x: 0.50, time: 0.12),
+            observation(index: 4, x: 0.60, time: 0.16),
+        ]
+        let result = MovementTraceReplay.idealReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        XCTAssertEqual(result.snapshot.handObservationsReceived, 5)
+        XCTAssertEqual(result.snapshot.rawMovementEventsCreated, 1)
+        XCTAssertEqual(result.snapshot.finalRecordMovementEvents, 1)
+        XCTAssertEqual(result.events.count, 1)
+        XCTAssertEqual(result.events.first?.direction, "backward", "camera +X maps to semantic backward")
+        if let event = result.events.first {
+            XCTAssertGreaterThan(event.endPosition, event.startPosition, "backward event has increasing X")
+        }
+    }
+
+    func testReplayIsDeterministic() {
+        let observations = [
+            observation(index: 0, x: 0.20, time: 0.00),
+            observation(index: 1, x: 0.30, time: 0.04),
+            observation(index: 2, kind: .miss, x: 0.30, time: 0.08, builderState: nil),
+        ]
+        let a = MovementTraceReplay.idealReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        let b = MovementTraceReplay.idealReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        XCTAssertEqual(a.snapshot, b.snapshot)
+        XCTAssertEqual(a.events, b.events)
+    }
+
+    // MARK: - Dedup fidelity
+
+    func testDedupRejectedObservationIsExcludedFromReplay() {
+        // A dedup-rejected observation must NOT be fed to the builder. If it
+        // were, its x=0.9 would become the furthest point and inflate the event.
+        let observations = [
+            observation(index: 0, x: 0.20, time: 0.00),
+            observation(index: 1, x: 0.40, time: 0.04),
+            observation(index: 2, x: 0.90, time: 0.08, builderState: nil, dedupRejected: true), // NOT fed
+            observation(index: 3, x: 0.50, time: 0.12),
+        ]
+        let result = MovementTraceReplay.idealReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        XCTAssertEqual(result.events.count, 1)
+        if let event = result.events.first {
+            // furthest = max(0.20, 0.40, 0.50) = 0.50, NOT 0.90.
+            XCTAssertEqual(event.endPosition, 0.50, accuracy: 1e-6, "dedup-rejected observation must be excluded")
+        }
+    }
+
+    // MARK: - Jump-rejection fidelity
+
+    func testOneRejectedJumpIsOneTrackerMiss() {
+        // A jump-rejected frame is represented by ONE trace entry that drives
+        // exactly one tracker miss — identical to a plain miss entry.
+        let jumpTrace = [observation(index: 0, kind: .jumpRejected, x: 0.90, time: 0.00, builderState: nil)]
+        let missTrace = [observation(index: 0, kind: .miss, x: 0.90, time: 0.00, builderState: nil)]
+        let jumpResult = MovementTraceReplay.idealReplay(observations: jumpTrace, audioEvents: [], handPoseInterval: 0.04)
+        let missResult = MovementTraceReplay.idealReplay(observations: missTrace, audioEvents: [], handPoseInterval: 0.04)
+        XCTAssertEqual(jumpResult.snapshot, missResult.snapshot, "jumpRejected and miss must produce identical (single-miss) replay")
+        XCTAssertEqual(jumpResult.events, missResult.events)
+    }
+
+    func testRecorderStoresOneObservationPerJumpFrame() {
+        let recorder = MovementTraceRecorder()
+        recorder.startRecording(at: 0)
+        // One processed camera frame rejected as an impossible jump — must be a
+        // single trace record, not a jumpRejected plus a miss.
+        recorder.recordObservation(
+            kind: .jumpRejected, presentationTime: 0.0, processingStartTime: 0.0,
+            visionCompletionTime: 0.0, takeRelativeTime: 0.0, trackerPoint: nil,
+            trackerTime: 0.0, jointConfidence: nil, builderPoint: nil, builderState: nil,
+            builderConfidence: nil, rawDirection: nil, idleReason: nil, trackerConfidence: nil,
+            semanticDirection: nil, rejectedPoint: MovementTraceObservation.Point(x: 0.9, y: 0.5),
+            dedupRejected: false
+        )
+        let export = recorder.export(takeID: "t", takeNumber: 1, finalizationHostTime: 0)
+        XCTAssertEqual(export.observations.count, 1, "one jump frame → one trace record")
+        XCTAssertEqual(export.observations.first?.kind, .jumpRejected)
+    }
+
+    // MARK: - Exact replay (actual builder execution)
+
+    func testExactReplayHonorsSkippedBuilderTask() {
+        // A real observation whose builder task was skipped (recording stopped)
+        // must not be fed by the exact replay, even though the ideal replay would.
+        let observations = [
+            observation(index: 0, x: 0.20, time: 0.00,
+                        builderExecutionSequence: 0, builderExecutionTime: 0.02, builderAction: "started"),
+            observation(index: 1, x: 0.40, time: 0.04,
+                        builderExecutionSequence: 1, builderExecutionTime: 0.04, builderAction: "extended"),
+            observation(index: 2, x: 0.60, time: 0.08,
+                        builderExecutionSequence: 2, builderExecutionTime: 0.06,
+                        builderSkippedReason: "recordingStopped"), // never executed
+        ]
+        let exact = MovementTraceReplay.exactReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        // Only obs 0 and 1 executed; obs 2 was skipped. Their furthest is 0.40.
+        XCTAssertEqual(exact.events.count, 1)
+        if let event = exact.events.first {
+            XCTAssertEqual(event.endPosition, 0.40, accuracy: 1e-6, "skipped builder task must be excluded")
+        }
+    }
+
+    func testExactReplayUsesActualExecutionOrder() {
+        // obs 1 actually executed first (sequence 0), obs 0 second (sequence 1).
+        // The exact replay must honour the execution order, yielding a different
+        // (dropped) movement than the ideal enqueue-order replay.
+        let observations = [
+            observation(index: 0, x: 0.20, time: 0.00,
+                        builderExecutionSequence: 1, builderExecutionTime: 0.06, builderAction: "extended"),
+            observation(index: 1, x: 0.40, time: 0.04,
+                        builderExecutionSequence: 0, builderExecutionTime: 0.02, builderAction: "started"),
+        ]
+        let ideal = MovementTraceReplay.idealReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        let exact = MovementTraceReplay.exactReplay(observations: observations, audioEvents: [], handPoseInterval: 0.04)
+        // Ideal (enqueue order): start x=0.20 (obs 0), furthest x=0.40 (obs 1) → 1 event.
+        XCTAssertEqual(ideal.events.count, 1)
+        // Exact (execution order): start x=0.40 (obs 1), obs 0 (x=0.20) does not
+        // extend the max → start == furthest → dropped → 0 events.
+        XCTAssertEqual(exact.events.count, 0, "reversed execution order must yield a different movement")
+    }
+
+    // MARK: - Per-take isolation + archive companion copy
+
+    private func recordOne(_ recorder: MovementTraceRecorder, x: Double, time: Double) {
+        recorder.recordObservation(
+            kind: .real, presentationTime: time, processingStartTime: time,
+            visionCompletionTime: time, takeRelativeTime: time,
+            trackerPoint: MovementTraceObservation.Point(x: x, y: 0.5), trackerTime: time,
+            jointConfidence: 1.0, builderPoint: MovementTraceObservation.Point(x: x, y: 0.5),
+            builderState: "movingLeft", builderConfidence: 1.0,
+            rawDirection: "movingForward", idleReason: nil, trackerConfidence: 1.0,
+            semanticDirection: "movingLeft", rejectedPoint: nil, dedupRejected: false
+        )
+    }
+
+    func testRecorderIsolatesTakes() {
+        let recorder = MovementTraceRecorder()
+        recorder.startRecording(at: 0)
+        recordOne(recorder, x: 0.20, time: 0.0)
+        let take1 = recorder.export(takeID: "take-001", takeNumber: 1, finalizationHostTime: 0)
+        XCTAssertEqual(take1.observations.count, 1)
+
+        // Start take 2 — must reset and not carry take 1's observation.
+        recorder.startRecording(at: 100)
+        recordOne(recorder, x: 0.50, time: 0.0)
+        recordOne(recorder, x: 0.60, time: 0.04)
+        let take2 = recorder.export(takeID: "take-002", takeNumber: 2, finalizationHostTime: 0)
+        XCTAssertEqual(take2.observations.count, 2)
+        XCTAssertEqual(take2.observations.map(\.index), [0, 1], "take 2 restarts observation indices")
+        XCTAssertEqual(take1.observations.count, 1, "take 1 export must be frozen, not mutated by take 2")
+        XCTAssertEqual(take1.observations.first?.index, 0)
+    }
+
+
+    // MARK: - Archive companion copy
+
+    func testCopyDebugCompanionAbsentIsSkipped() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sidecarURL = root.appendingPathComponent("source-1.json")
+        let debugDir = root.appendingPathComponent("debug", isDirectory: true)
+        XCTAssertNoThrow(try copyDebugCompanion(
+            suffix: "movement_trace", sidecarURL: sidecarURL, takeID: "t1", takeNumber: 1,
+            debugDir: debugDir, fileManager: .default))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: debugDir.path))
+    }
+
+    func testCopyDebugCompanionMalformedThrows() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sidecarURL = root.appendingPathComponent("source-1.json")
+        let companionURL = root.appendingPathComponent("source-1_movement_trace.json")
+        try Data("not json {{{".utf8).write(to: companionURL)
+        XCTAssertThrowsError(try copyDebugCompanion(
+            suffix: "movement_trace", sidecarURL: sidecarURL, takeID: "t1", takeNumber: 1,
+            debugDir: root.appendingPathComponent("debug"), fileManager: .default))
+    }
+
+    func testCopyDebugCompanionCopiesWithIdentity() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sidecarURL = root.appendingPathComponent("source-2.json")
+        let companionURL = root.appendingPathComponent("source-2_movement_trace.json")
+        try Data("{}".utf8).write(to: companionURL)
+        let debugDir = root.appendingPathComponent("debug")
+        try copyDebugCompanion(suffix: "movement_trace", sidecarURL: sidecarURL, takeID: "real-take-id", takeNumber: 7, debugDir: debugDir, fileManager: .default)
+        let outURL = debugDir.appendingPathComponent("take-7_movement_trace.json")
+        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: outURL)) as? [String: Any]
+        XCTAssertEqual(json?["takeID"] as? String, "real-take-id")
+        XCTAssertEqual(json?["takeNumber"] as? Int, 7)
+    }
+
+    func testTwoTakeCompanionCopyProducesDistinctFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let debugDir = root.appendingPathComponent("debug")
+        // Two takes, two sidecars, two companions — distinct output files.
+        for (n, takeID) in [1: "take-001", 2: "take-002"] {
+            let sidecarURL = root.appendingPathComponent("source-\(n).json")
+            let companionURL = root.appendingPathComponent("source-\(n)_movement_trace.json")
+            try Data("{}".utf8).write(to: companionURL)
+            try copyDebugCompanion(suffix: "movement_trace", sidecarURL: sidecarURL, takeID: takeID, takeNumber: n, debugDir: debugDir, fileManager: .default)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: debugDir.appendingPathComponent("take-1_movement_trace.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: debugDir.appendingPathComponent("take-2_movement_trace.json").path))
+    }
+
+    // MARK: - Finalization barrier + exact-replay agreement
+
+    func testFinalizationBarrierAgreement() throws {
+        // Deliberately delayed builder tasks: the barrier must wait for every
+        // enqueued task before draining + freezing, and the exact replay of the
+        // frozen trace must reproduce the saved notation.
+        let recorder = MovementTraceRecorder()
+        recorder.startRecording(at: 0)
+        let debugSession = MacCaptureEngine.RoutineMovementDebugSession(handPoseInterval: 0.04)
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0, debugSession: debugSession, traceRecorder: recorder)
+        let group = DispatchGroup()
+        // Serial queue mimics the live MainActor: the builder is not thread-safe
+        // and must be fed one observation at a time, in enqueue order.
+        let builderQueue = DispatchQueue(label: "test.builder")
+
+        let xs = [0.2, 0.4, 0.6]
+        for (i, x) in xs.enumerated() {
+            let t = Double(i) * 0.04
+            let id = recorder.recordObservation(
+                kind: .real, presentationTime: t, processingStartTime: t, visionCompletionTime: t,
+                takeRelativeTime: t, trackerPoint: .init(x: x, y: 0.5), trackerTime: t,
+                jointConfidence: 1.0, builderPoint: .init(x: x, y: 0.5), builderState: "movingLeft",
+                builderConfidence: 1.0, rawDirection: "movingForward", idleReason: nil,
+                trackerConfidence: 1.0, semanticDirection: "movingLeft", rejectedPoint: nil, dedupRejected: false)
+            group.enter()
+            // Deliberately delayed, serialized builder execution.
+            builderQueue.asyncAfter(deadline: .now() + .milliseconds(20 + i * 15)) {
+                builder.recordObservation(state: .movingLeft, position: x, confidence: 1.0, now: t, observationID: id)
+                group.leave()
+            }
+        }
+
+        // Barrier: block until every enqueued task has executed.
+        group.wait()
+        let finalizationHostTime = 0.12  // deterministic drain instant (mimics live finalization)
+        let rawEvents = builder.movementEvents(now: finalizationHostTime)
+
+        // Saved notation = the fused events (what finalizeRoutineRecording stores).
+        let notationSnapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: rawEvents,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            debugSession: debugSession)
+        let savedEvents = notationSnapshot.recordMovementEvents
+
+        let trace = recorder.export(takeID: "take-006", takeNumber: 6, finalizationHostTime: finalizationHostTime)
+
+        // Every enqueued task executed before freeze (none skipped).
+        XCTAssertEqual(trace.observations.count, 3)
+        XCTAssertTrue(trace.observations.allSatisfy { $0.builderExecutionSequence != nil }, "every enqueued task must execute before freeze")
+
+        // Exact replay of the frozen trace reproduces the saved (fused) notation
+        // and its final-movement count.
+        let exact = MovementTraceReplay.exactReplay(observations: trace.observations, audioEvents: [], handPoseInterval: 0.04, drainTime: finalizationHostTime)
+        XCTAssertEqual(exact.events, savedEvents, "saved notation and exact replay must agree")
+        XCTAssertEqual(exact.snapshot.finalRecordMovementEvents, savedEvents.count)
+        XCTAssertEqual(savedEvents.count, 1, "one sustained forward (semantic backward) stroke")
+    }
+
+    // MARK: - Admission gate
+
+    func testAdmissionGateRejectsEnqueueAfterCloseAndIsolatesGenerations() {
+        let gate = BuilderAdmissionGate()
+        let gen1 = gate.open()
+        let token1 = gate.admit()
+        XCTAssertNotNil(token1, "admit while open must succeed")
+        XCTAssertEqual(token1?.generation, gen1)
+        let group = gate.close()
+        XCTAssertNil(gate.admit(), "admit after close must be nil")
+        token1?.group.leave()
+        group.wait()  // returns immediately: the only admitted task already left
+        XCTAssertTrue(gate.isCurrent(gen1), "same take is current until the next open")
+
+        let gen2 = gate.open()
+        XCTAssertNotEqual(gen1, gen2, "each take must use a fresh generation")
+        XCTAssertFalse(gate.isCurrent(gen1), "old generation must not be current after the next open")
+        XCTAssertTrue(gate.isCurrent(gen2))
+    }
+
+    func testAdmissionGateFinalizationRejectsLateEnqueue() {
+        let gate = BuilderAdmissionGate()
+        gate.open()
+        let recorder = MovementTraceRecorder()
+        recorder.startRecording(at: 0)
+        let debugSession = MacCaptureEngine.RoutineMovementDebugSession(handPoseInterval: 0.04)
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0, debugSession: debugSession, traceRecorder: recorder)
+        let queue = DispatchQueue(label: "test.builder")
+
+        // Admit two delayed builder tasks (a forward stroke 0.2 -> 0.4).
+        for (i, x) in [0.2, 0.4].enumerated() {
+            let t = Double(i) * 0.04
+            let id = recorder.recordObservation(
+                kind: .real, presentationTime: t, processingStartTime: t, visionCompletionTime: t,
+                takeRelativeTime: t, trackerPoint: .init(x: x, y: 0.5), trackerTime: t,
+                jointConfidence: 1.0, builderPoint: .init(x: x, y: 0.5), builderState: "movingLeft",
+                builderConfidence: 1.0, rawDirection: "movingForward", idleReason: nil,
+                trackerConfidence: 1.0, semanticDirection: "movingLeft", rejectedPoint: nil, dedupRejected: false)
+            guard let token = gate.admit() else { return XCTFail("admit while open must succeed") }
+            queue.asyncAfter(deadline: .now() + .milliseconds(30)) {
+                if gate.isCurrent(token.generation) {
+                    builder.recordObservation(state: .movingLeft, position: x, confidence: 1.0, now: t, observationID: id)
+                }
+                token.group.leave()
+            }
+        }
+
+        // Atomically close admission, then attempt a late enqueue.
+        let group = gate.close()
+        XCTAssertNil(gate.admit(), "a late enqueue after close must be rejected")
+
+        // The late observation is recorded explicitly as postFinalization and is
+        // NOT fed to the builder.
+        let lateTime = 0.08
+        let lateID = recorder.recordObservation(
+            kind: .real, presentationTime: lateTime, processingStartTime: lateTime, visionCompletionTime: lateTime,
+            takeRelativeTime: lateTime, trackerPoint: .init(x: 0.9, y: 0.5), trackerTime: lateTime,
+            jointConfidence: 1.0, builderPoint: .init(x: 0.9, y: 0.5), builderState: "movingLeft",
+            builderConfidence: 1.0, rawDirection: "movingForward", idleReason: nil,
+            trackerConfidence: 1.0, semanticDirection: "movingLeft", rejectedPoint: nil, dedupRejected: false)
+        recorder.recordBuilderExecution(index: lateID, executionTime: lateTime, action: "skipped", rejectionReason: nil, finishedEventIndex: nil, skippedReason: "postFinalization")
+
+        // Finalization: wait for every previously admitted task, then drain.
+        group.wait()
+        let finalizationHostTime = 0.12
+        let rawEvents = builder.movementEvents(now: finalizationHostTime)
+        let notationSnapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: rawEvents, detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            debugSession: debugSession)
+        let savedEvents = notationSnapshot.recordMovementEvents
+        let trace = recorder.export(takeID: "take-006", takeNumber: 6, finalizationHostTime: finalizationHostTime)
+
+        // The late (x=0.9) observation must be excluded — saved furthest is 0.4.
+        XCTAssertEqual(savedEvents.count, 1)
+        if let event = savedEvents.first {
+            XCTAssertEqual(event.endPosition, 0.4, accuracy: 1e-6, "late enqueue must not mutate the builder")
+        }
+        XCTAssertTrue(trace.observations.contains { $0.builderSkippedReason == "postFinalization" }, "late enqueue must be recorded as postFinalization")
+
+        // Exact replay of the frozen trace reproduces the saved notation.
+        let exact = MovementTraceReplay.exactReplay(observations: trace.observations, audioEvents: [], handPoseInterval: 0.04, drainTime: finalizationHostTime)
+        XCTAssertEqual(exact.events, savedEvents, "saved notation and exact replay must agree")
+    }
+
+    // MARK: - Shared gate (Release parity) + synchronous skip
+
+    private func projectRootURL() -> URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// Whether `marker` sits inside a `#if DEBUG … #endif` block (line-based,
+    /// `#else` does not change the depth).
+    private func isInsideDebugBlock(_ source: String, containing marker: String) -> Bool {
+        guard let range = source.range(of: marker) else { return false }
+        let prefix = source[..<range.lowerBound]
+        var depth = 0
+        for line in prefix.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "#if DEBUG" { depth += 1 }
+            else if trimmed == "#endif" { depth = max(0, depth - 1) }
+        }
+        return depth > 0
+    }
+
+    func testBuilderAdmissionGateOpenAndAdmitAreSharedNotDebug() throws {
+        let source = try String(contentsOf: projectRootURL()
+            .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"), encoding: .utf8)
+        // open() and admit() must run in Release too, so they are NOT inside a
+        // `#if DEBUG` block. The diagnostic trace-file writer IS DEBUG-only.
+        XCTAssertFalse(isInsideDebugBlock(source, containing: "self.builderAdmissionGate.open()"),
+                       "open() must be shared (Release) code")
+        XCTAssertFalse(isInsideDebugBlock(source, containing: "let token = builderAdmissionGate.admit()"),
+                       "admit() must be shared (Release) code")
+        XCTAssertTrue(isInsideDebugBlock(source, containing: "private func writeMovementCompanionFilesForTake"),
+                      "the diagnostic trace-file writer must remain DEBUG-only")
+    }
+
+    func testRejectedAdmissionSkipIsInFrozenTrace() {
+        let gate = BuilderAdmissionGate()
+        gate.open()
+        let recorder = MovementTraceRecorder()
+        recorder.startRecording(at: 0)
+
+        // Close admission, then a late observation is rejected.
+        let group = gate.close()
+        XCTAssertNil(gate.admit(), "late enqueue after close must be rejected")
+        XCTAssertNotNil(group)
+
+        // The late observation is recorded SYNCHRONOUSLY on the capture path
+        // (no MainActor hop), then the trace is frozen immediately.
+        let lateTime = 0.1
+        let id = recorder.recordObservation(
+            kind: .real, presentationTime: lateTime, processingStartTime: lateTime, visionCompletionTime: lateTime,
+            takeRelativeTime: lateTime, trackerPoint: .init(x: 0.9, y: 0.5), trackerTime: lateTime,
+            jointConfidence: 1.0, builderPoint: .init(x: 0.9, y: 0.5), builderState: "movingLeft",
+            builderConfidence: 1.0, rawDirection: "movingForward", idleReason: nil,
+            trackerConfidence: 1.0, semanticDirection: "movingLeft", rejectedPoint: nil, dedupRejected: false)
+        recorder.recordBuilderExecution(index: id, executionTime: lateTime, action: "skipped",
+                                        rejectionReason: nil, finishedEventIndex: nil,
+                                        skippedReason: "postFinalization")
+
+        // The FROZEN trace itself (not a later mutable update) already carries
+        // the postFinalization skip.
+        let trace = recorder.export(takeID: "t", takeNumber: 1, finalizationHostTime: lateTime)
+        let lateObservation = trace.observations.first { $0.index == id }
+        XCTAssertEqual(lateObservation?.builderSkippedReason, "postFinalization",
+                       "the frozen trace must already contain the rejected-admission skip")
+    }
+
+    func testAsyncFinalizationReturnsWithoutBlockingAndCompletesOnce() {
+        let gate = BuilderAdmissionGate()
+        gate.open()
+        let recorder = MovementTraceRecorder()
+        recorder.startRecording(at: 0)
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0, debugSession: nil, traceRecorder: recorder)
+        let builderQueue = DispatchQueue(label: "test.builder")   // serial, mimics MainActor
+        let completionQueue = DispatchQueue(label: "test.completion")
+
+        // Admit two DELAYED builder tasks (a forward stroke 0.2 -> 0.4).
+        for (i, x) in [0.2, 0.4].enumerated() {
+            let t = Double(i) * 0.04
+            let id = recorder.recordObservation(
+                kind: .real, presentationTime: t, processingStartTime: t, visionCompletionTime: t,
+                takeRelativeTime: t, trackerPoint: .init(x: x, y: 0.5), trackerTime: t,
+                jointConfidence: 1.0, builderPoint: .init(x: x, y: 0.5), builderState: "movingLeft",
+                builderConfidence: 1.0, rawDirection: "movingForward", idleReason: nil,
+                trackerConfidence: 1.0, semanticDirection: "movingLeft", rejectedPoint: nil, dedupRejected: false)
+            guard let token = gate.admit() else { return XCTFail("admit while open must succeed") }
+            builderQueue.asyncAfter(deadline: .now() + .milliseconds(100)) {
+                if gate.isCurrent(token.generation) {
+                    builder.recordObservation(state: .movingLeft, position: x, confidence: 1.0, now: t, observationID: id)
+                }
+                token.group.leave()
+            }
+        }
+
+        // Close admission and schedule the async completion — must NOT block.
+        let group = gate.close()
+        let completionExpectation = expectation(description: "finalization completes exactly once")
+        let lock = NSLock()
+        var completionCount = 0
+        group.notify(queue: completionQueue) {
+            lock.lock(); completionCount += 1; lock.unlock()
+            completionExpectation.fulfill()
+        }
+
+        // The entry point returned immediately: the 100ms tasks have not run yet,
+        // so completion must still be zero (no synchronous wait happened).
+        lock.lock(); let countImmediately = completionCount; lock.unlock()
+        XCTAssertEqual(countImmediately, 0, "close()+notify() must return without blocking")
+
+        // Completion fires exactly once after the admitted tasks finish.
+        wait(for: [completionExpectation], timeout: 5)
+        lock.lock(); let countAfter = completionCount; lock.unlock()
+        XCTAssertEqual(countAfter, 1, "completion must happen exactly once")
+
+        // Saved notation, frozen trace and exact replay agree.
+        let finalizationHostTime = 0.12
+        let rawEvents = builder.movementEvents(now: finalizationHostTime)
+        let notationSnapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: rawEvents, detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            debugSession: nil)
+        let savedEvents = notationSnapshot.recordMovementEvents
+        let trace = recorder.export(takeID: "t", takeNumber: 1, finalizationHostTime: finalizationHostTime)
+        let exact = MovementTraceReplay.exactReplay(observations: trace.observations, audioEvents: [], handPoseInterval: 0.04, drainTime: finalizationHostTime)
+        XCTAssertEqual(exact.events, savedEvents, "saved notation and exact replay must agree")
+    }
+
+}
+
+// MARK: - Controller platter decoder (RANE ONE MKII CC6)
+
+final class ControllerPlatterDecoderTests: XCTestCase {
+
+    private func midiEvent(_ value: Int, _ time: Double) -> CaptureCore.RawMixerMIDIEvent {
+        .init(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
+              channel: 1, controller: 6, value: value,
+              normalizedValue: Double(value) / 127.0, mappedControl: nil)
+    }
+
+    private func decode(_ events: [(Int, Double)]) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        CaptureCore.derivePlatterMovementEvents(
+            from: events.map { midiEvent($0.0, $0.1) },
+            controller: 6, channel: 1)
+    }
+
+    private func run(_ value: Int, _ count: Int, from time: Double, step: Double = 0.01) -> [(Int, Double)] {
+        (0..<count).map { (value + $0, time + Double($0) * step) }
+    }
+
+    // MARK: - Modular wraparound (both directions)
+
+    func testModularWrapForwardDoesNotCreateFalseReversal() {
+        // 127 -> 0 wraps forward as +1, so this stays one continuous forward run.
+        let events = run(120, 8, from: 0.0) + run(0, 8, from: 0.08)
+        let decoded = decode(events)
+        XCTAssertEqual(decoded.count, 1, "127->0 wrap must not split the forward run")
+        XCTAssertEqual(decoded.first?.direction, "forward")
+    }
+
+    func testModularWrapBackwardDoesNotCreateFalseReversal() {
+        // 0 -> 127 wraps backward as -1, so this stays one continuous backward run.
+        let forward = run(0, 8, from: 0.0)  // forward first
+        let backward: [(Int, Double)] = (0..<8).map { (8 - $0, 0.08 + Double($0) * 0.01) }
+        _ = forward
+        // Build an explicit backward sequence that wraps 1 -> 0 -> 127 -> 126 ...
+        let backwardEvents: [(Int, Double)] = [
+            (1, 0.00), (0, 0.01), (127, 0.02), (126, 0.03), (125, 0.04),
+            (124, 0.05), (123, 0.06), (122, 0.07), (121, 0.08), (120, 0.09)
+        ]
+        let decoded = decode(backwardEvents)
+        XCTAssertEqual(decoded.count, 1, "0->127 wrap must not split the backward run")
+        XCTAssertEqual(decoded.first?.direction, "backward")
+    }
+
+    // MARK: - Sustained runs + reversals
+
+    func testSustainedForwardAndBackwardRunsProduceAlternatingEvents() {
+        let forward = run(0, 30, from: 0.0)
+        let backward: [(Int, Double)] = (0..<30).map { (30 - $0, 0.30 + Double($0) * 0.01) }
+        let decoded = decode(forward + backward)
+        XCTAssertEqual(decoded.count, 2, "one forward + one backward run")
+        XCTAssertEqual(decoded.map(\.direction), ["forward", "backward"])
+        // Reversal boundary: the backward event starts where forward ended.
+        XCTAssertEqual(decoded[0].endTime, decoded[1].startTime, accuracy: 1e-9)
+    }
+
+    func testNoZeroDurationMovements() {
+        let events = run(0, 30, from: 0.0) + (0..<30).map { (30 - $0, 0.30 + Double($0) * 0.01) }
+        let decoded = decode(events)
+        XCTAssertFalse(decoded.isEmpty)
+        for event in decoded {
+            XCTAssertGreaterThan(event.endTime, event.startTime, "no zero-duration movement")
+        }
+    }
+
+    // MARK: - Noise rejection
+
+    func testIsolatedNoiseRejected() {
+        // A single one-step pulse surrounded by gaps is rejected (too short).
+        let events: [(Int, Double)] = [
+            (10, 0.00), (11, 0.01),   // +1 only
+            (11, 0.50), (10, 0.51)    // -1 only
+        ]
+        let decoded = decode(events)
+        XCTAssertEqual(decoded.count, 0, "isolated one-step noise must be rejected")
+    }
+
+    // MARK: - Source provenance + priority
+
+    func testControllerProvenanceSurvivesFusion() {
+        // A controller-sourced movement must keep its provenance through the
+        // shared fusion (no camera penalty, no audio requirement) and be
+        // truthfully labelled "controller" in detectionSources.
+        let controllerEvent = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.4, startPosition: 0.1, endPosition: 0.6,
+            direction: "forward", movementKind: .normalPush, speed: 1.6,
+            confidence: 0.9, source: "controller")
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [controllerEvent],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1, "controller movement must survive fusion without audio")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "controller", "source must stay 'controller'")
+        XCTAssertTrue(snapshot.detectionSources.contains("controller"))
+        XCTAssertFalse(snapshot.detectionSources.contains("video"))
+        // Confidence is preserved, not penalized by the camera multiplier.
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.confidence ?? 0, 0.9, accuracy: 1e-6)
+    }
+
+    // MARK: - Reduced Take 002 fixture (alternating region 12.45–12.54s)
+
+    func testTake002FixtureProducesAlternatingStrokes() {
+        // Representative consecutive forward/backward/forward runs from the
+        // Take 002 stable alternating region (~10.64–11.60s), reduced to 10
+        // steps per run. The forward runs wrap 127->0 (modular +, no false
+        // reversal).
+        let forwardA = run(30, 10, from: 10.64)                       // 30..39
+        let backward: [(Int, Double)] = (0..<10).map { (39 - $0, 10.75 + Double($0) * 0.01) }  // 39..30
+        let forwardB = run(30, 10, from: 10.86)                       // 30..39 (wrap-free)
+        let fixture = forwardA + backward + forwardB
+        let decoded = decode(fixture)
+        XCTAssertEqual(decoded.count, 3, "one forward + one backward + one forward")
+        XCTAssertEqual(decoded.map(\.direction), ["forward", "backward", "forward"])
+        for event in decoded {
+            XCTAssertGreaterThan(event.endTime, event.startTime, "non-zero duration")
+            XCTAssertEqual(event.source, "controller", "controller provenance")
+        }
+        // Reversal boundaries: each run starts where the previous ended.
+        for i in 1..<decoded.count {
+            XCTAssertEqual(decoded[i].startTime, decoded[i - 1].endTime, accuracy: 1e-9)
+        }
+    }
+
+    func testChannelAndDeviceIsolation() {
+        // A second device / the other deck's CC6 stream must never corrupt the
+        // selected (ch 1, Rane ONE MKII) stream.
+        let ch1 = run(0, 12, from: 0.0)  // forward, selected channel
+        let ch0 = (0..<12).map { (50 - $0, 0.0 + Double($0) * 0.01) }  // backward, other deck
+        let otherDevice = run(100, 12, from: 0.0)  // forward, another device
+        let ch1Events = ch1.map { (v, t) in (v, t, 1, "Rane ONE MKII") }
+        let ch0Events = ch0.map { (v, t) in (v, t, 0, "Rane ONE MKII") }
+        let otherEvents = otherDevice.map { (v, t) in (v, t, 1, "Other Device") }
+
+        let all = (ch1Events + ch0Events + otherEvents).map { (v, t, ch, dev) in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: t, takeRelativeTime: t, deviceName: dev,
+                channel: ch, controller: 6, value: v,
+                normalizedValue: Double(v) / 127.0, mappedControl: nil)
+        }
+        let decoded = CaptureCore.derivePlatterMovementEvents(
+            from: all, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+        XCTAssertEqual(decoded.count, 1, "only the selected ch1/device stream must decode")
+        XCTAssertEqual(decoded.first?.direction, "forward")
+    }
+
+    // MARK: - Selected-device routing (deterministic source resolution)
+
+    private func deviceRun(_ value: Int, _ count: Int, from time: Double,
+                           device: String, channel: Int = 1,
+                           step: Double = 0.01) -> [CaptureCore.RawMixerMIDIEvent] {
+        var events: [CaptureCore.RawMixerMIDIEvent] = []
+        events.reserveCapacity(count)
+        for i in 0..<count {
+            let t = time + Double(i) * step
+            let v = value + i
+            events.append(CaptureCore.RawMixerMIDIEvent(
+                timestamp: t, takeRelativeTime: t, deviceName: device,
+                channel: channel, controller: 6, value: v,
+                normalizedValue: Double(v) / 127.0, mappedControl: nil))
+        }
+        return events
+    }
+
+    func testSelectedDeviceRoutingIgnoresWrongDeviceEmittedFirst() {
+        // A second device emits a clean channel-1 CC6 forward run BEFORE the
+        // selected device emits a backward run. Decoding must resolve to the
+        // app's selected source, not the first emitter, so the wrong device's
+        // stream is never mixed in.
+        let wrongFirst = deviceRun(100, 12, from: 0.00, device: "Other Device")  // forward
+        var selectedSecond: [CaptureCore.RawMixerMIDIEvent] = []
+        for i in 0..<12 {
+            let t = 0.20 + Double(i) * 0.01
+            let v = 50 - i
+            selectedSecond.append(CaptureCore.RawMixerMIDIEvent(
+                timestamp: t, takeRelativeTime: t, deviceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: v,
+                normalizedValue: Double(v) / 127.0, mappedControl: nil))
+        }  // backward
+
+        let deviceName = MacCaptureEngine.platterDeviceNameForDecode(
+            selectedMIDISourceName: "Rane ONE MKII",
+            capturedMidi: wrongFirst + selectedSecond)
+        XCTAssertEqual(deviceName, "Rane ONE MKII")
+
+        let decoded = CaptureCore.derivePlatterMovementEvents(
+            from: wrongFirst + selectedSecond, controller: 6, channel: 1,
+            deviceName: deviceName)
+        XCTAssertEqual(decoded.count, 1, "only the selected device's run must decode")
+        XCTAssertEqual(decoded.first?.direction, "backward",
+                       "the wrong device's forward run must not be decoded")
+    }
+
+    func testSelectedDeviceRoutingFailsClosedWhenSelectedSourceAbsent() {
+        XCTAssertNil(MacCaptureEngine.platterDeviceNameForDecode(
+            selectedMIDISourceName: "Not Connected", capturedMidi: []))
+        XCTAssertNil(MacCaptureEngine.platterDeviceNameForDecode(
+            selectedMIDISourceName: "", capturedMidi: []))
+        XCTAssertNil(MacCaptureEngine.platterDeviceNameForDecode(
+            selectedMIDISourceName: "   ", capturedMidi: []))
+    }
+
+    func testSelectedDeviceRoutingFailsClosedWhenSelectedSourceDidNotEmitCC6() {
+        // Selected source present but never emitted right-platter CC6 — must not
+        // decode a different device that did.
+        let otherOnly = deviceRun(1, 12, from: 0.0, device: "Other Device")
+        XCTAssertNil(MacCaptureEngine.platterDeviceNameForDecode(
+            selectedMIDISourceName: "Rane ONE MKII", capturedMidi: otherOnly))
+    }
+
+    // MARK: - Finalization routing (fail closed, not just the resolver)
+
+    func testFinalizationRoutingFailsClosedWhenSelectedSourceAbsent() {
+        // The selected source is absent, but ANOTHER device emitted a valid
+        // channel-1 CC6 forward run. The finalization routing helper must NOT
+        // decode that traffic (nil device would disable the device filter).
+        let otherDevice = deviceRun(0, 12, from: 0.0, device: "Other Device")
+        let events = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "Not Connected", capturedMidi: otherDevice)
+        XCTAssertTrue(events.isEmpty, "no controller movements without a selected device")
+    }
+
+    func testFinalizationRoutingFailsClosedWhenSelectedSourceNameEmpty() {
+        let otherDevice = deviceRun(0, 12, from: 0.0, device: "Other Device")
+        let events = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "", capturedMidi: otherDevice)
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    func testFinalizationRoutingDecodesOnlySelectedDevice() {
+        // Selected device present and emitting CC6 — the helper decodes it, and
+        // ignores another device's interleaved CC6.
+        let selected = deviceRun(0, 12, from: 0.0, device: "Rane ONE MKII")
+        let other = deviceRun(100, 12, from: 0.0, device: "Other Device")
+        let events = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "Rane ONE MKII", capturedMidi: other + selected)
+        XCTAssertEqual(events.count, 1, "only the selected device's run decodes")
+        XCTAssertEqual(events.first?.source, "controller")
+    }
+}
+
+// MARK: - Hand-pose cadence scheduler (30 fps → 15 fps quantization fix)
+
+final class HandPoseCadenceSchedulerTests: XCTestCase {
+
+    private func frames(fps: Double, seconds: Double) -> [CFTimeInterval] {
+        let spacing = 1.0 / fps
+        let count = Int((seconds * fps).rounded())
+        return (0..<count).map { Double($0) * spacing }
+    }
+
+    private func acceptedCount(scheduler: inout HandPoseCadenceScheduler,
+                               frames: [CFTimeInterval]) -> Int {
+        frames.reduce(0) { $0 + (scheduler.shouldProcess(frameAt: $1) ? 1 : 0) }
+    }
+
+    func testThirtyFPSIsNotQuantizedToFifteenFPS() {
+        // 40 ms interval → theoretical ceiling ≈ 25 Hz. The old reset-to-accepted
+        // gate would accept ≈15 of 30 fps; the accumulated deadline must accept
+        // near the 25 Hz ceiling, never half of it.
+        var scheduler = HandPoseCadenceScheduler(interval: 0.04)
+        let accepted = acceptedCount(scheduler: &scheduler, frames: frames(fps: 30, seconds: 1.0))
+        XCTAssertGreaterThan(accepted, 20, "30 fps must not be quantized to ~15 fps")
+        XCTAssertLessThan(accepted, 30, "cannot exceed the input frame rate")
+    }
+
+    func testFifteenFPSAllFramesAccepted() {
+        // Below the interval rate, every frame passes (no quantization).
+        var scheduler = HandPoseCadenceScheduler(interval: 0.04)
+        let accepted = acceptedCount(scheduler: &scheduler, frames: frames(fps: 15, seconds: 1.0))
+        XCTAssertEqual(accepted, 15)
+    }
+
+    func testTwentyFiveFPSNearIntervalRateIsNotHalved() {
+        // Input at exactly the interval rate (40 ms) → nearly every frame passes
+        // (floating-point boundary on the exact 40 ms spacing may drop a couple,
+        // but never the ~half that the old reset-to-accepted gate produced).
+        var scheduler = HandPoseCadenceScheduler(interval: 0.04)
+        let accepted = acceptedCount(scheduler: &scheduler, frames: frames(fps: 25, seconds: 1.0))
+        XCTAssertGreaterThan(accepted, 20, "must track the interval rate, not half of it")
+        XCTAssertLessThanOrEqual(accepted, 25)
+    }
+
+    func testSixtyFPSIsCappedAtIntervalRate() {
+        // 60 fps input, 40 ms interval → capped near 25 Hz.
+        var scheduler = HandPoseCadenceScheduler(interval: 0.04)
+        let accepted = acceptedCount(scheduler: &scheduler, frames: frames(fps: 60, seconds: 1.0))
+        XCTAssertGreaterThanOrEqual(accepted, 24)
+        XCTAssertLessThanOrEqual(accepted, 26)
+    }
+
+    func testCatchUpBurstDoesNotFireBackToBack() {
+        // A stall (1 s gap) then a 60 fps burst must NOT fire a run of
+        // back-to-back frames; the drift guard re-anchors after the stall.
+        var scheduler = HandPoseCadenceScheduler(interval: 0.04)
+        _ = scheduler.shouldProcess(frameAt: 0.0)  // prime
+        let burst = frames(fps: 60, seconds: 0.2).map { $0 + 1.0 }
+        var accepted: [CFTimeInterval] = []
+        for t in burst where scheduler.shouldProcess(frameAt: t) {
+            accepted.append(t)
+        }
+        // Over 0.2 s at a 40 ms cadence we expect ~5 accepted frames, not a
+        // catch-up burst of all 12. Assert no two accepted frames are back-to-back
+        // at the 60 fps input spacing.
+        XCTAssertGreaterThan(accepted.count, 1)
+        XCTAssertLessThan(accepted.count, burst.count, "must not fire a catch-up burst")
+        for i in 1..<accepted.count {
+            XCTAssertGreaterThan(accepted[i] - accepted[i - 1], 0.03,
+                                 "no back-to-back catch-up at 60 fps spacing")
+        }
+    }
+
+    func testResetStartsFreshPhase() {
+        var scheduler = HandPoseCadenceScheduler(interval: 0.04)
+        _ = scheduler.shouldProcess(frameAt: 100.0)   // advances deadline to 100.04
+        XCTAssertFalse(scheduler.shouldProcess(frameAt: 100.01))
+        scheduler.reset()
+        XCTAssertTrue(scheduler.shouldProcess(frameAt: 100.01),
+                      "after reset, the first frame is accepted regardless of prior phase")
+    }
+
+    func testIntervalChangeReanchorsWithoutBleed() {
+        var scheduler = HandPoseCadenceScheduler(interval: 0.12)  // idle
+        _ = scheduler.shouldProcess(frameAt: 0.0)
+        scheduler = HandPoseCadenceScheduler(interval: 0.04)      // recording
+        XCTAssertTrue(scheduler.shouldProcess(frameAt: 0.02),
+                      "a fresh interval must not inherit the previous interval's phase")
+    }
+}
+
+// MARK: - Temporally-stable hand anchor
+
+final class HandAnchorTrackerTests: XCTestCase {
+
+    private func joints(_ dict: [String: (x: Double, y: Double, c: Float)]) -> [String: HandAnchorSample] {
+        dict.mapValues { HandAnchorSample(location: CGPoint(x: $0.x, y: $0.y), confidence: $0.c) }
+    }
+
+    private func base(_ x: Double, _ y: Double, _ c: Float = 0.8) -> [String: HandAnchorSample] {
+        joints([
+            "wrist": (x, y, c),
+            "indexMCP": (x + 0.02, y, c),
+            "middleMCP": (x - 0.02, y, c)
+        ])
+    }
+
+    func testBaseAnchorWinsOverFingertips() {
+        // A wrist + MCP base is present alongside a high-confidence fingertip;
+        // the anchor must use the base, not the flickering tip.
+        var tracker = HandAnchorTracker()
+        let s = tracker.update(joints: joints([
+            "wrist": (0.40, 0.40, 0.7),
+            "indexMCP": (0.42, 0.40, 0.7),
+            "middleMCP": (0.38, 0.40, 0.7),
+            "indexTip": (0.55, 0.30, 0.95)  // higher confidence but a finger
+        ]), at: 0.0)!
+        XCTAssertEqual(s.mode, .base)
+        XCTAssertTrue(s.jointNames.contains("wrist"))
+        XCTAssertFalse(s.jointNames.contains("indexTip"))
+        // Weighted base point sits at the palm, not the fingertip.
+        XCTAssertEqual(s.point.x, 0.40, accuracy: 0.001)
+    }
+
+    func testTemporaryBaseLossHoldsAnchorWithoutJump() {
+        var tracker = HandAnchorTracker()
+        let a = tracker.update(joints: base(0.40, 0.40), at: 0.0)!
+        // A brief (within baseHoldDuration) loss with a tip present must HOLD the
+        // base, not jump to a fingertip.
+        let b = tracker.update(joints: joints(["indexTip": (0.60, 0.30, 0.9)]), at: 0.05)!
+        XCTAssertEqual(b.mode, .base, "brief loss must hold base, not fall to tip")
+        XCTAssertEqual(b.point, a.point, "held base point must not move")
+        XCTAssertFalse(b.switched)
+    }
+
+    func testAnchorExpiresAfterHoldDuration() {
+        // Item 4: update(joints: [:]) must NOT return the last anchor indefinitely.
+        var tracker = HandAnchorTracker()
+        _ = tracker.update(joints: base(0.40, 0.40), at: 0.0)
+        // Within the base hold → held (non-nil).
+        XCTAssertNotNil(tracker.update(joints: [:], at: 0.05))
+        // Well beyond the hold → nil (caller enters the miss path).
+        let expiry = HandAnchorTracker.baseHoldDuration + HandAnchorTracker.tipHoldDuration + 0.10
+        XCTAssertNil(tracker.update(joints: [:], at: expiry), "stale anchor must expire")
+    }
+
+    func testReacquisitionAfterBaseLoss() {
+        var tracker = HandAnchorTracker()
+        _ = tracker.update(joints: base(0.40, 0.40), at: 0.0)
+        // A tip present past the base hold → fall back to the tip.
+        var t = 0.0
+        for _ in 0..<6 {
+            t += 0.05
+            _ = tracker.update(joints: joints(["indexTip": (0.60, 0.30, 0.9)]), at: t)
+        }
+        XCTAssertEqual(
+            tracker.update(joints: joints(["indexTip": (0.61, 0.31, 0.9)]), at: t + 0.05)!.mode,
+            .tipFallback)
+        // Base returns → reacquire it.
+        let reacquired = tracker.update(joints: base(0.41, 0.41), at: t + 0.10)!
+        XCTAssertEqual(reacquired.mode, .base, "base must be reacquired when it returns")
+    }
+
+    func testFingertipSwitchingDoesNotMoveAnchor() {
+        // Fingertips switch identity frame-to-frame (indexTip -> middleTip);
+        // while the base is present the anchor point is unchanged (false-jump
+        // prevention).
+        var tracker = HandAnchorTracker()
+        let a = tracker.update(joints: joints([
+            "wrist": (0.40, 0.40, 0.7),
+            "indexMCP": (0.42, 0.40, 0.7),
+            "middleMCP": (0.38, 0.40, 0.7),
+            "indexTip": (0.55, 0.30, 0.9)
+        ]), at: 0.0)!
+        let b = tracker.update(joints: joints([
+            "wrist": (0.40, 0.40, 0.7),
+            "indexMCP": (0.42, 0.40, 0.7),
+            "middleMCP": (0.38, 0.40, 0.7),
+            "middleTip": (0.56, 0.31, 0.95)  // different tip wins now
+        ]), at: 0.04)!
+        XCTAssertEqual(a.point.x, b.point.x, accuracy: 1e-6)
+        XCTAssertEqual(a.point.y, b.point.y, accuracy: 1e-6)
+    }
+
+    func testBaseRequiresWrist() {
+        // No wrist -> base unavailable -> falls back to a tip.
+        var tracker = HandAnchorTracker()
+        let s = tracker.update(joints: joints(["indexMCP": (0.40, 0.40, 0.8), "indexTip": (0.55, 0.30, 0.9)]), at: 0.0)!
+        XCTAssertEqual(s.mode, .tipFallback)
+    }
+
+    func testNoJointsReturnsNilUntilFirstAnchor() {
+        var tracker = HandAnchorTracker()
+        XCTAssertNil(tracker.update(joints: [:], at: 0.0))
+        XCTAssertNil(tracker.update(joints: [:], at: 0.05))
+    }
+
+    func testAnchorExpiryIsFrameRateIndependent() {
+        // The same physical loss (base seen at t=0, then lost) must expire at
+        // ~the same wall-clock time at 15/25/30/60 fps (elapsed-time rule, not a
+        // frame count).
+        for fps in [15.0, 25.0, 30.0, 60.0] {
+            var tracker = HandAnchorTracker()
+            _ = tracker.update(joints: base(0.40, 0.40), at: 0.0)
+            let spacing = 1.0 / fps
+            var t = spacing
+            var expiredAt: Double? = nil
+            while t < 1.0 {
+                if tracker.update(joints: [:], at: t) == nil {
+                    expiredAt = t
+                    break
+                }
+                t += spacing
+            }
+            let expected = HandAnchorTracker.baseHoldDuration
+            XCTAssertNotNil(expiredAt, "anchor must expire at \(fps) fps")
+            XCTAssertLessThan(abs((expiredAt ?? 0) - expected), 0.10,
+                              "expiry must be ~\(expected)s at \(fps) fps, not frame-count dependent")
+        }
+    }
+}
+
+// MARK: - Physical platter rotation (angular direction)
+
+final class PlatterRotationTrackerTests: XCTestCase {
+    private let centre = CGPoint(x: 0.5, y: 0.5)
+
+    private func point(angle: Double, radius: Double = 0.2) -> CGPoint {
+        CGPoint(x: 0.5 + radius * cos(angle), y: 0.5 + radius * sin(angle))
+    }
+
+    func testCounterClockwiseMapsToForward() {
+        var tracker = PlatterRotationTracker()
+        for i in 0..<6 {
+            _ = tracker.observe(point: point(angle: Double(i) * 0.2), centre: centre, at: Double(i) * 0.04)
+        }
+        XCTAssertEqual(tracker.direction, .counterClockwise)
+        XCTAssertEqual(PlatterRotationMath.recordDirection(for: tracker.direction, isMirrored: false), .forward)
+    }
+
+    func testClockwiseMapsToBackward() {
+        var tracker = PlatterRotationTracker()
+        for i in 0..<6 {
+            _ = tracker.observe(point: point(angle: -Double(i) * 0.2), centre: centre, at: Double(i) * 0.04)
+        }
+        XCTAssertEqual(tracker.direction, .clockwise)
+        XCTAssertEqual(PlatterRotationMath.recordDirection(for: tracker.direction, isMirrored: false), .backward)
+    }
+
+    func testWraparoundDoesNotReverse() {
+        // Cross the ±π boundary: 3.0 → 3.1 → -3.1 → -3.0 rad is a continuous
+        // counter-clockwise motion (each step +0.1 rad), not a reversal.
+        XCTAssertEqual(PlatterRotationMath.shortestSignedDelta(from: 3.1, to: -3.1), 0.08318530717958648, accuracy: 1e-9)
+        var tracker = PlatterRotationTracker()
+        var angles: [Double] = [3.0, 3.1, -3.1, -3.0, -2.9, -2.8]
+        for (i, a) in angles.enumerated() {
+            _ = tracker.observe(point: point(angle: a), centre: centre, at: Double(i) * 0.04)
+        }
+        XCTAssertEqual(tracker.direction, .counterClockwise, "crossing ±π must not read as a reversal")
+    }
+
+    func testReversalChangesDirection() {
+        var tracker = PlatterRotationTracker()
+        // Counter-clockwise first...
+        for i in 0..<6 {
+            _ = tracker.observe(point: point(angle: Double(i) * 0.2), centre: centre, at: Double(i) * 0.04)
+        }
+        XCTAssertEqual(tracker.direction, .counterClockwise)
+        // ...then clockwise.
+        for i in 1...6 {
+            _ = tracker.observe(point: point(angle: 1.0 - Double(i) * 0.2), centre: centre, at: 0.24 + Double(i) * 0.04)
+        }
+        XCTAssertEqual(tracker.direction, .clockwise)
+    }
+
+    func testJitterStaysIdle() {
+        var tracker = PlatterRotationTracker()
+        // Oscillate ±0.01 rad around a fixed angle — below the displacement
+        // threshold, so this must never commit a direction.
+        var t = 0.0
+        for i in 0..<12 {
+            let a = (i % 2 == 0) ? 0.01 : -0.01
+            _ = tracker.observe(point: point(angle: a), centre: centre, at: t)
+            t += 0.04
+        }
+        XCTAssertEqual(tracker.direction, .idle, "micro-jitter must stay idle")
+    }
+
+    func testCentreRejection() {
+        var tracker = PlatterRotationTracker()
+        let result = tracker.observe(point: CGPoint(x: 0.5, y: 0.51), centre: centre, at: 0.0)
+        XCTAssertEqual(result.rejection, .tooCloseToCentre)
+    }
+
+    func testImplausibleJumpRejected() {
+        var tracker = PlatterRotationTracker()
+        _ = tracker.observe(point: point(angle: 0.0), centre: centre, at: 0.0)
+        let result = tracker.observe(point: point(angle: .pi), centre: centre, at: 0.001)
+        XCTAssertEqual(result.rejection, .implausibleJump)
+    }
+
+    func testMirroredOrientationInvertsSemantic() {
+        // A mirrored feed flips handedness; the contract compensates so the
+        // SEMANTIC record direction is unchanged for the same physical motion.
+        XCTAssertEqual(PlatterRotationMath.recordDirection(for: .counterClockwise, isMirrored: false), .forward)
+        XCTAssertEqual(PlatterRotationMath.recordDirection(for: .counterClockwise, isMirrored: true), .backward)
+        XCTAssertEqual(PlatterRotationMath.recordDirection(for: .clockwise, isMirrored: false), .backward)
+        XCTAssertEqual(PlatterRotationMath.recordDirection(for: .clockwise, isMirrored: true), .forward)
+        XCTAssertNil(PlatterRotationMath.recordDirection(for: .idle, isMirrored: false))
+        XCTAssertNil(PlatterRotationMath.recordDirection(for: .searching, isMirrored: false))
+    }
+
+    func testContinuousAnglePreservedForGeometry() {
+        var tracker = PlatterRotationTracker()
+        var expected = 0.0
+        for i in 0..<6 {
+            let result = tracker.observe(point: point(angle: Double(i) * 0.3), centre: centre, at: Double(i) * 0.04)
+            expected += (i == 0 ? 0 : 0.3)
+            XCTAssertEqual(result.continuousAngle, expected, accuracy: 1e-9)
+        }
+        // A full reversal subtracts from the continuous angle (never rewinds via wrap).
+        for i in 1...3 {
+            _ = tracker.observe(point: point(angle: 1.5 - Double(i) * 0.3), centre: centre, at: 0.24 + Double(i) * 0.04)
+        }
+        XCTAssertLessThan(tracker.continuousAngle, 1.5, "reversal must reduce the continuous angle")
+    }
+}
+
+// MARK: - Controller round-trip (MIDI → decode → fuse → save → load → export → decode)
+
+final class Take002ControllerRoundTripTests: XCTestCase {
+
+    private func midiEvent(_ value: Int, _ time: Double, device: String = "Rane ONE MKII",
+                           channel: Int = 1) -> CaptureCore.RawMixerMIDIEvent {
+        .init(timestamp: time, takeRelativeTime: time, deviceName: device,
+              channel: channel, controller: 6, value: value,
+              normalizedValue: Double(value) / 127.0, mappedControl: nil)
+    }
+
+    private func run(_ value: Int, _ count: Int, from time: Double, step: Double = 0.01) -> [CaptureCore.RawMixerMIDIEvent] {
+        (0..<count).map { midiEvent(value + $0, time + Double($0) * step) }
+    }
+
+    /// Mirrors `SessionExportCoordinator`'s export mapping so the round-trip
+    /// test exercises the same field-for-field contract the real export uses.
+    /// Uses the production export mapping (the SAME `SessionExportRecordMovementEvent(from:)`
+    /// initializer the exporter calls) — never a reimplemented copy.
+    private func exportEvents(_ events: [CaptureCore.DetectedNotationRecordMovementEvent]) -> [SessionExportRecordMovementEvent] {
+        events.map { SessionExportRecordMovementEvent(from: $0) }
+    }
+
+    func testControllerRoundTripPreservesSemantics() throws {
+        // controller MIDI: forward + backward + forward runs.
+        let forwardA = run(0, 12, from: 0.10)
+        let backward = (0..<12).map { midiEvent(11 - $0, 0.22 + Double($0) * 0.01) }
+        let forwardB = run(0, 12, from: 0.34)
+        let midi = forwardA + backward + forwardB
+
+        // decode → normalization/fusion.
+        let decoded = CaptureCore.derivePlatterMovementEvents(
+            from: midi, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+        XCTAssertEqual(decoded.count, 3)
+        XCTAssertEqual(decoded.map(\.direction), ["forward", "backward", "forward"])
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoded,
+            detectedLabel: "baby", labelSource: "detected", labelConfidence: 0.9)
+
+        // "saved notation" = DetectedNotationSnapshot Codable encode.
+        let saved = try JSONEncoder().encode(snapshot)
+        // "Review loading" = decode back.
+        let loaded = try JSONDecoder().decode(CaptureCore.DetectedNotationSnapshot.self, from: saved)
+
+        // Semantic equality across every field the task names.
+        XCTAssertEqual(loaded.recordMovementEvents, snapshot.recordMovementEvents)
+        XCTAssertEqual(loaded.recordMovementEvents.map(\.direction), ["forward", "backward", "forward"])
+        XCTAssertEqual(loaded.recordMovementEvents.map(\.movementKind),
+                       snapshot.recordMovementEvents.map(\.movementKind))
+        for event in loaded.recordMovementEvents {
+            XCTAssertEqual(event.source, "controller")
+            XCTAssertGreaterThan(event.confidence, 0.0)
+            XCTAssertGreaterThan(event.endTime, event.startTime)
+            XCTAssertGreaterThanOrEqual(event.startPosition, 0.0)
+            XCTAssertLessThanOrEqual(event.endPosition, 1.0)
+        }
+        XCTAssertEqual(loaded.notationSource, "detected")
+        XCTAssertTrue(loaded.detectionSources.contains("controller"))
+
+        // "session export" = map to export events + encode; "exported notation
+        // decode" = decode back. Assert the export mapping is field-faithful.
+        let exported = exportEvents(snapshot.recordMovementEvents)
+        let exportedData = try JSONEncoder().encode(exported)
+        let decodedExport = try JSONDecoder().decode([SessionExportRecordMovementEvent].self, from: exportedData)
+        XCTAssertEqual(decodedExport.count, 3)
+        for (i, event) in decodedExport.enumerated() {
+            let original = snapshot.recordMovementEvents[i]
+            XCTAssertEqual(event.direction, original.direction)
+            XCTAssertEqual(event.startTime, original.startTime)
+            XCTAssertEqual(event.endTime, original.endTime)
+            XCTAssertEqual(event.startPosition, original.startPosition)
+            XCTAssertEqual(event.endPosition, original.endPosition)
+            XCTAssertEqual(event.movementKind, original.movementKind.rawValue)
+            XCTAssertEqual(event.speed, original.speed)
+            XCTAssertEqual(event.confidence, original.confidence)
+            XCTAssertEqual(event.source, original.source)
+        }
+    }
+
+    func testCameraOnlyRoundTripPreservesSemantics() throws {
+        // Camera builder output (source "detected") → fusion → save → Review →
+        // export → decode. Uses the production export mapping, not a copy.
+        let camera = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.5, startPosition: 0.1, endPosition: 0.7,
+            direction: "backward", movementKind: .normalPull, speed: 1.5,
+            confidence: 1.0, source: "detected")
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [camera],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1, "camera-only fallback produces movement")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "video")
+
+        // save → Review load.
+        let saved = try JSONEncoder().encode(snapshot)
+        let loaded = try JSONDecoder().decode(CaptureCore.DetectedNotationSnapshot.self, from: saved)
+        XCTAssertEqual(loaded.recordMovementEvents, snapshot.recordMovementEvents)
+
+        // export (production mapping) → decode.
+        let exported = snapshot.recordMovementEvents.map { SessionExportRecordMovementEvent(from: $0) }
+        let decodedExport = try JSONDecoder().decode([SessionExportRecordMovementEvent].self, from: JSONEncoder().encode(exported))
+        XCTAssertEqual(decodedExport, exported)
+        XCTAssertEqual(decodedExport.first?.source, "video")
+    }
+
+    func testDecoderDiagnosticsOnReducedFixture() {
+        // Two clean runs (forward then backward) → rawRunCount == 2, both survive.
+        let forward = run(0, 12, from: 0.10)
+        let backward = (0..<12).map { midiEvent(11 - $0, 0.22 + Double($0) * 0.01) }
+        let diag = CaptureCore.platterMovementDecodeDiagnostics(
+            from: forward + backward, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+        XCTAssertEqual(diag.filteredEventCount, 24)
+        XCTAssertEqual(diag.rawRunCount, 2)
+        XCTAssertEqual(diag.noiseFilteredRunCount, 2)
+    }
+
+    func testTake002FullStreamStageCounts() throws {
+        // Gated: run with SCRATCHLAB_TAKE002_JSON=<path to take-002_detected_notation.json>
+        // to verify the exact pipeline reduction against the real 8,656-event
+        // CC6 stream (and its 47 audio events). Skipped when the archive is absent.
+        guard let path = ProcessInfo.processInfo.environment["SCRATCHLAB_TAKE002_JSON"] else {
+            throw XCTSkip("SCRATCHLAB_TAKE002_JSON not set")
+        }
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawMidi = root["mixerMidiEvents"] as? [[String: Any]] else {
+            XCTFail("archive missing mixerMidiEvents")
+            return
+        }
+        let midi: [CaptureCore.RawMixerMIDIEvent] = rawMidi.compactMap { event in
+            guard let value = event["value"] as? Int,
+                  let time = event["takeRelativeTime"] as? Double,
+                  let channel = event["channel"] as? Int,
+                  let controller = event["controller"] as? Int,
+                  let device = event["deviceName"] as? String,
+                  let normalized = event["normalizedValue"] as? Double else { return nil }
+            return CaptureCore.RawMixerMIDIEvent(
+                timestamp: time, takeRelativeTime: time, deviceName: device,
+                channel: channel, controller: controller, value: value,
+                normalizedValue: normalized, mappedControl: nil)
+        }
+
+        // Audio events → the fusion's candidate shape.
+        let audioEvents: [ScratchAudioNotationEventCandidate] = (root["audioEvents"] as? [[String: Any]] ?? []).compactMap { event in
+            guard let start = event["startTime"] as? Double,
+                  let end = event["endTime"] as? Double,
+                  let kind = event["eventKind"] as? String else { return nil }
+            let kindValue = ScratchAudioNotationEventKind(rawValue: kind) ?? .unknown
+            return ScratchAudioNotationEventCandidate(
+                startTime: start, endTime: end, duration: end - start,
+                peakLevel: Float((event["peakLevel"] as? Double) ?? 0),
+                rmsLevel: Float((event["rmsLevel"] as? Double) ?? 0),
+                confidence: (event["confidence"] as? Double) ?? 0,
+                eventKind: kindValue, source: "audio")
+        }
+        let burstCount = audioEvents.filter { $0.eventKind == .scratchBurst || $0.eventKind == .possibleDrag }.count
+
+        // Stage 1: decoder.
+        let diag = CaptureCore.platterMovementDecodeDiagnostics(
+            from: midi, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+        XCTAssertEqual(diag.filteredEventCount, 8656, "8,656 filtered CC6 events")
+        XCTAssertEqual(diag.rawRunCount, 50, "50 raw direction runs")
+        XCTAssertEqual(diag.noiseFilteredRunCount, 35, "35 noise-filtered runs")
+
+        let decoded = CaptureCore.derivePlatterMovementEvents(
+            from: midi, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+        XCTAssertEqual(decoded.count, 35)
+
+        // Stage 2: normalizer (merge + classify). 35 → 32: three runs are
+        // dropped by classify (min-duration / min-delta / min-speed), never
+        // merged (the decoder already collapsed same-sign runs).
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+        let debugSession = MacCaptureEngine.RoutineMovementDebugSession(handPoseInterval: 0.04)
+        let normalized = normalizer.normalize(
+            events: decoded, audioEvents: audioEvents, debugSession: debugSession)
+        let ds = debugSession.snapshot()
+        XCTAssertEqual(normalized.count, 30, "35 → 30: two merges + three classify drops")
+        XCTAssertEqual(ds.mergedSegments, 2, "two adjacent same-direction merges")
+        XCTAssertEqual(ds.normalizedDropReasons, ["deltaTooSmall": 2, "speedTooLow": 1])
+
+        // Stage 3: fusion → saved/Review/export notation (32, source "controller").
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: audioEvents, confidence: nil),
+            motionEvents: decoded,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 30, "30 trusted/saved/Review/export movements")
+        for event in snapshot.recordMovementEvents {
+            XCTAssertEqual(event.source, "controller", "controller provenance survives fusion")
+        }
+        XCTAssertEqual(snapshot.notationSource, "detected")
+        XCTAssertTrue(snapshot.detectionSources.contains("controller"))
+
+        // Correlation: 26 of 32 movements overlap at least one of the 20 audio
+        // bursts (a single burst can corroborate two adjacent movements).
+        let correlated = snapshot.recordMovementEvents.filter { movement in
+            audioEvents.contains { audio in
+                guard audio.eventKind == .scratchBurst || audio.eventKind == .possibleDrag else { return false }
+                let overlap = max(0, min(movement.endTime, audio.endTime) - max(movement.startTime, audio.startTime))
+                let audioMid = (audio.startTime + audio.endTime) / 2
+                let moveMid = (movement.startTime + movement.endTime) / 2
+                return overlap > 0 || abs(audioMid - moveMid) <= 0.09
+            }
+        }.count
+        XCTAssertEqual(burstCount, 20, "20 audio bursts (scratchBurst + possibleDrag)")
+        XCTAssertEqual(correlated, 26, "26 of 32 movements are audio-correlated")
+    }
+}
+
+// MARK: - Source priority + degraded modes
+
+final class SourcePriorityAndDegradedModeTests: XCTestCase {
+
+    private func controllerEvent(direction: String, start: Double, end: Double,
+                                 from: Double = 0.1, to: Double = 0.6) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        .init(startTime: start, endTime: end, startPosition: from, endPosition: to,
+              direction: direction, movementKind: direction == "forward" ? .normalPush : .normalPull,
+              speed: abs(to - from) / max(end - start, 0.001), confidence: 0.9, source: "controller")
+    }
+
+    func testControllerNotationWorksWithoutCamera() {
+        // No camera, no Vision, no hand — controller telemetry alone must
+        // produce detected controller notation.
+        let event = controllerEvent(direction: "forward", start: 0.1, end: 0.4)
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [event],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1)
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "controller")
+        XCTAssertEqual(snapshot.notationSource, "detected")
+        XCTAssertTrue(snapshot.detectionSources.contains("controller"))
+        XCTAssertFalse(snapshot.detectionSources.contains("video"))
+    }
+
+    func testCameraOnlyFallbackWorksWithoutControllerTelemetry() {
+        // Camera builder output (source "detected"), no controller telemetry —
+        // the fallback path must still produce movement events (downgraded to
+        // "video" provenance, never "controller"). Uses a maximum-confidence
+        // camera event because the camera path applies the unconfirmed-confidence
+        // multiplier on each fusion pass.
+        let camera = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.5, startPosition: 0.1, endPosition: 0.7,
+            direction: "backward", movementKind: .normalPull, speed: 1.5,
+            confidence: 1.0, source: "detected")
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [camera],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1, "camera-only fallback must produce movement")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "video")
+        XCTAssertFalse(snapshot.detectionSources.contains("controller"))
+    }
+
+    func testControllerEventsKeepProvenanceThroughAdjacentMerge() {
+        // Two adjacent same-direction controller events merge into ONE event
+        // whose provenance stays "controller" (never "fused"/"video") with
+        // unpenalized confidence — controller authority survives fusion.
+        let a = controllerEvent(direction: "forward", start: 0.10, end: 0.20, from: 0.1, to: 0.6)
+        let b = controllerEvent(direction: "forward", start: 0.20, end: 0.30, from: 0.6, to: 0.9)
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [a, b],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1, "adjacent same-direction controller runs merge into one")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "controller")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.confidence ?? 0, 0.9, accuracy: 1e-9)
+        XCTAssertTrue(snapshot.detectionSources.contains("controller"))
+        XCTAssertFalse(snapshot.detectionSources.contains("video"))
+    }
+
+    func testAbsenceOfBothProducesHonestUnavailableState() {
+        // No controller, no camera, no audio → honest "unavailable", no events.
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.notationSource, "unavailable")
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty)
+        XCTAssertTrue(snapshot.audioEvents.isEmpty)
+    }
+
+    func testMissingFaderCaptureIsUnknownNotInferredOpen() {
+        // No crossfader CC6/CC7 events → no fader events (unknown), never an
+        // inferred "open" fader event.
+        let noFader: [CaptureCore.RawMixerMIDIEvent] = [
+            .init(timestamp: 0, takeRelativeTime: 0, deviceName: "Rane ONE MKII",
+                  channel: 1, controller: 6, value: 1, normalizedValue: 0.01, mappedControl: nil)
+        ]
+        let faderEvents = CaptureCore.deriveDetectedNotationFaderEvents(from: noFader)
+        XCTAssertTrue(faderEvents.isEmpty, "missing fader capture must be unknown, not inferred open")
+    }
+
+    func testCameraPenaltyIsAppliedExactlyOnce() {
+        // An uncorroborated camera event (confidence 1.0) must be penalized ONCE
+        // (×0.62 → 0.62), not compounded by the initial normalize + unmatched
+        // branch + final normalize (which previously gave 1.0 × 0.62⁴ ≈ 0.148).
+        let camera = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.5, startPosition: 0.1, endPosition: 0.7,
+            direction: "backward", movementKind: .normalPull, speed: 1.5,
+            confidence: 1.0, source: "detected")
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [camera],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1)
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.confidence ?? 0, 0.62, accuracy: 1e-9,
+                       "camera penalty must be applied exactly once, not compounded")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "video")
+    }
+
+    func testRepeatedNormalizationDoesNotCompoundConfidence() {
+        // normalize() is idempotent: two passes must not change confidence.
+        let camera = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.5, startPosition: 0.1, endPosition: 0.7,
+            direction: "backward", movementKind: .normalPull, speed: 1.5,
+            confidence: 0.62, source: "video")
+        let normalizer = MacCaptureEngine.RoutineNotationEventNormalizer()
+        let once = normalizer.normalize(events: [camera], audioEvents: [])
+        let twice = normalizer.normalize(events: once, audioEvents: [])
+        XCTAssertEqual(once.count, 1)
+        XCTAssertEqual(twice.count, 1)
+        XCTAssertEqual(twice.first?.confidence ?? 0, 0.62, accuracy: 1e-9,
+                       "repeated normalization must not re-apply the penalty")
+    }
+
+    func testControllerConfidenceUnaffectedByPenaltyRefactor() {
+        let controller = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.4, startPosition: 0.1, endPosition: 0.6,
+            direction: "forward", movementKind: .normalPush, speed: 1.6,
+            confidence: 0.9, source: "controller")
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [controller],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.confidence ?? 0, 0.9, accuracy: 1e-9,
+                       "controller confidence must be unaffected by the penalty refactor")
+        XCTAssertEqual(snapshot.recordMovementEvents.first?.source, "controller")
+    }
+}
+
+// MARK: - Offline camera replay (video → production camera path → vs controller)
+
+final class CameraReplayTests: XCTestCase {
+
+    /// Thin adapter: Vision observation → canonical joint samples. This is the
+    /// "Vision observation" boundary; the tracking/notation logic lives in the
+    /// shared `CameraMovementProcessor` (never duplicated here).
+    private func joints(from observation: VNHumanHandPoseObservation,
+                        minimumConfidence: Float) -> [String: HandAnchorSample] {
+        let names: [VNHumanHandPoseObservation.JointName] = [
+            .indexTip, .middleTip, .ringTip, .littleTip, .thumbTip,
+            .indexDIP, .middleDIP, .ringDIP, .littleDIP, .thumbIP,
+            .indexPIP, .middlePIP, .ringPIP, .littlePIP,
+            .thumbCMC, .indexMCP, .middleMCP, .ringMCP, .littleMCP, .wrist
+        ]
+        var result: [String: HandAnchorSample] = [:]
+        for name in names {
+            guard let p = try? observation.recognizedPoint(name),
+                  p.confidence >= minimumConfidence else { continue }
+            result[MacCaptureEngine.canonicalAnchorJointName(name)] = HandAnchorSample(location: p.location, confidence: p.confidence)
+        }
+        return result
+    }
+
+    func testReplayTake002CameraThroughProductionPath() throws {
+        guard let videoPath = ProcessInfo.processInfo.environment["SCRATCHLAB_CAMREPLAY_VIDEO"] else {
+            throw XCTSkip("SCRATCHLAB_CAMREPLAY_VIDEO not set")
+        }
+        guard let notationPath = ProcessInfo.processInfo.environment["SCRATCHLAB_TAKE002_JSON"] else {
+            throw XCTSkip("SCRATCHLAB_TAKE002_JSON not set")
+        }
+
+        // Controller ground truth.
+        let notationData = try Data(contentsOf: URL(fileURLWithPath: notationPath))
+        let root = try JSONSerialization.jsonObject(with: notationData) as? [String: Any] ?? [:]
+        let rawMidi = root["mixerMidiEvents"] as? [[String: Any]] ?? []
+        let midi: [CaptureCore.RawMixerMIDIEvent] = rawMidi.compactMap {
+            guard let v = $0["value"] as? Int, let t = $0["takeRelativeTime"] as? Double,
+                  let ch = $0["channel"] as? Int, let ctl = $0["controller"] as? Int,
+                  let dev = $0["deviceName"] as? String, let n = $0["normalizedValue"] as? Double else { return nil }
+            return CaptureCore.RawMixerMIDIEvent(timestamp: t, takeRelativeTime: t, deviceName: dev,
+                                                 channel: ch, controller: ctl, value: v, normalizedValue: n, mappedControl: nil)
+        }
+        let controllerMovements = CaptureCore.derivePlatterMovementEvents(
+            from: midi, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+
+        // Video frame reader (platform adapter).
+        let asset = AVURLAsset(url: URL(fileURLWithPath: videoPath))
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let fps = 30.0
+        let duration = CMTimeGetSeconds(asset.duration)
+        let frameCount = Int(duration * fps)
+
+        // MANUALLY-SUPPLIED platter centre from a desk-view rig layout's right
+        // deck. This is NOT automatic calibration — it is labelled as manual.
+        let rigRect = CGRect(x: 0.03, y: 0.08, width: 0.94, height: 0.62)
+        let zones = DJRigLayout.zones(in: rigRect, tuning: .deskView)
+        let rightDeck = zones.first(where: { $0.role == .rightDeck }) ?? zones.last!
+        let centre = rightDeck.center
+        let manualRigLayout = DJRigLayout(zones: zones, confidence: 0.32)
+
+        let handRequest = VNDetectHumanHandPoseRequest()
+        handRequest.regionOfInterest = CGRect(x: 0.03, y: 0.08, width: 0.94, height: 0.84)
+
+        // Shared production camera processor + production notation builder.
+        var processor = CameraMovementProcessor()
+        let debugSession = MacCaptureEngine.RoutineMovementDebugSession(handPoseInterval: 0.04)
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: 0, debugSession: debugSession)
+
+        var framesReceived = 0
+        var framesAnalyzed = 0
+        var validAnchors = 0
+        var anchorSwitches = 0
+        var confidenceFailures = 0
+        var calibrationFailures = 0
+
+        for i in 0..<frameCount {
+            let now = Double(i) / fps
+            guard processor.shouldProcess(frameAt: now, interval: 0.04) else { continue }
+            framesAnalyzed += 1
+
+            let time = CMTime(seconds: now, preferredTimescale: 600)
+            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { continue }
+            framesReceived += 1
+
+            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
+            try? handler.perform([handRequest])
+            let jointsMap = handRequest.results?.first.map {
+                joints(from: $0, minimumConfidence: 0.07)
+            } ?? [:]
+
+            let obs = processor.process(frameAt: now, joints: jointsMap,
+                                        platterCentre: centre,
+                                        geometryConfidence: manualRigLayout.confidence)
+            if obs.calibrationInsufficient { calibrationFailures += 1 }
+            guard obs.detected else { confidenceFailures += 1; continue }
+            validAnchors += 1
+            if obs.anchorSwitched { anchorSwitches += 1 }
+            builder.recordObservation(state: obs.state, position: obs.position,
+                                      confidence: obs.confidence, now: now)
+        }
+
+        let rawEvents = builder.movementEvents(now: Double(frameCount) / fps)
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: rawEvents,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            debugSession: debugSession)
+        let cameraMovements = snapshot.recordMovementEvents
+
+        print("REPLAY framesReceived=\(framesReceived) framesAnalyzed=\(framesAnalyzed) validAnchors=\(validAnchors) anchorSwitches=\(anchorSwitches) confidenceFailures=\(confidenceFailures) calibrationFailures=\(calibrationFailures)")
+        print("REPLAY cameraRawEvents=\(rawEvents.count) cameraMovements=\(cameraMovements.count) controllerMovements=\(controllerMovements.count)")
+        for (i, e) in rawEvents.enumerated() {
+            print("REPLAY rawEvent[\(i)] dir=\(e.direction) t=[\(String(format: "%.2f", e.startTime))-\(String(format: "%.2f", e.endTime))] conf=\(String(format: "%.3f", e.confidence))")
+        }
+        for (i, e) in cameraMovements.enumerated() {
+            print("REPLAY fused[\(i)] dir=\(e.direction) t=[\(String(format: "%.2f", e.startTime))-\(String(format: "%.2f", e.endTime))] conf=\(String(format: "%.3f", e.confidence)) src=\(e.source)")
+        }
+        let ds = debugSession.snapshot()
+        print("REPLAY rawDrops=\(ds.rawDropReasons) normalizedDrops=\(ds.normalizedDropReasons) trustDrops=\(ds.trustDropReasons) fusedCount=\(ds.fusedMovementEvents)")
+
+        // One-to-one matching: each controller movement matches at most one
+        // camera movement, and vice versa.
+        var cameraUsed = Set<Int>()
+        var matched = 0
+        var wrongWay = 0
+        var timingErrors: [Double] = []
+        for cm in controllerMovements {
+            let midpoint = (cm.startTime + cm.endTime) / 2
+            let best = cameraMovements.enumerated()
+                .filter { !cameraUsed.contains($0.offset) }
+                .min { abs(($0.element.startTime + $0.element.endTime) / 2 - midpoint) < abs(($1.element.startTime + $1.element.endTime) / 2 - midpoint) }
+            guard let best, abs((best.element.startTime + best.element.endTime) / 2 - midpoint) < 0.35 else { continue }
+            cameraUsed.insert(best.offset)
+            matched += 1
+            timingErrors.append(abs((best.element.startTime + best.element.endTime) / 2 - midpoint))
+            if best.element.direction != cm.direction { wrongWay += 1 }
+        }
+
+        // Region 10.64–14.98 s: assert a documented minimum.
+        let regionController = controllerMovements.filter { $0.startTime >= 10.64 && $0.endTime <= 14.98 }
+        let regionCamera = cameraMovements.filter { $0.startTime >= 10.64 && $0.endTime <= 14.98 }
+        let regionControllerForward = regionController.filter { $0.direction == "forward" }.count
+        let regionControllerBackward = regionController.filter { $0.direction == "backward" }.count
+        let regionCameraForward = regionCamera.filter { $0.direction == "forward" }.count
+        let regionCameraBackward = regionCamera.filter { $0.direction == "backward" }.count
+
+        print("REPLAY matched=\(matched) wrongWay=\(wrongWay) meanTimingError=\(timingErrors.isEmpty ? 0 : timingErrors.reduce(0,+) / Double(timingErrors.count))")
+        print("REPLAY region controller=(f:\(regionControllerForward), b:\(regionControllerBackward)) camera=(f:\(regionCameraForward), b:\(regionCameraBackward))")
+
+        // Persist → reload (Review) → export (production mapping) → decode.
+        let saved = try JSONEncoder().encode(snapshot)
+        let reloaded = try JSONDecoder().decode(CaptureCore.DetectedNotationSnapshot.self, from: saved)
+        XCTAssertEqual(reloaded.recordMovementEvents, snapshot.recordMovementEvents)
+        let exported = snapshot.recordMovementEvents.map { SessionExportRecordMovementEvent(from: $0) }
+        let decodedExport = try JSONDecoder().decode([SessionExportRecordMovementEvent].self, from: JSONEncoder().encode(exported))
+        XCTAssertEqual(decodedExport, exported)
+
+        // Honest assertion: the harness must run and resolve anchors. The camera
+        // fallback is NOT asserted to produce notation here — with the manually
+        // supplied rig centre it resolves few raw events, none of which survive
+        // fusion (the fusion applies the unconfirmed-confidence camera penalty on
+        // every pass). That is the honest, reported state: the camera fallback is
+        // EXPERIMENTAL/INSUFFICIENT for this take, and controller telemetry stays
+        // authoritative. Do not claim "camera complete".
+        XCTAssertGreaterThan(framesReceived, 0)
+        XCTAssertGreaterThan(validAnchors, 0, "camera replay must resolve hand anchors")
+        XCTAssertEqual(cameraMovements.count, 0, "camera fallback is insufficient for this take (no fused movements) — controller is authoritative")
+    }
+}
+
+// MARK: - Vision joint-name → canonical anchor key mapping
+
+final class AnchorJointNameMappingTests: XCTestCase {
+    func testVisionJointNamesMapToCanonicalBaseKeys() {
+        // Regresses the VNHLKWRI→"wrist" mapping bug: the anchor math keys on
+        // human-readable names, not Vision's opaque raw keys.
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.wrist), "wrist")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.indexMCP), "indexMCP")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.middleMCP), "middleMCP")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.ringMCP), "ringMCP")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.littleMCP), "littleMCP")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.thumbCMC), "thumbCMC")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.indexTip), "indexTip")
+        XCTAssertEqual(MacCaptureEngine.canonicalAnchorJointName(.thumbTip), "thumbTip")
+    }
+}
+
+// MARK: - Real SessionExportCoordinator + Review-loading round trip
+
+final class SessionExportRoundTripTests: XCTestCase {
+
+    @MainActor
+    func testRealReviewLoaderAndExportMappingRoundTrip() throws {
+        // Build a controller snapshot through the real fusion.
+        let controllerEvent = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1, endTime: 0.4, startPosition: 0.1, endPosition: 0.6,
+            direction: "forward", movementKind: .normalPush, speed: 1.6,
+            confidence: 0.9, source: "controller")
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [controllerEvent],
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1)
+
+        // Write a temporary sidecar carrying the detected notation.
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScratchLabExportRoundTrip-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sidecar = CaptureCore.LocalRecordingSidecar(
+            sessionID: "test-session", takeID: "test-take", appLocalTakeNumber: 1,
+            recordingRole: "routine", platform: "macOS", appSurface: "analyzer",
+            sourceDeviceName: "Rane ONE MKII", startedAt: Date(),
+            recordingStatus: "finalized", mediaFileName: "test.mov",
+            sidecarFileName: "test.json", detectedNotation: snapshot)
+        let sidecarURL = tempDir.appendingPathComponent("test.json")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(sidecar).write(to: sidecarURL)
+
+        // REAL Review-loading helper (decodes the on-disk sidecar via the same
+        // SessionArchiveBuilder the exporter/Review use). Compare the SEMANTIC
+        // notation model (not `capturedAt`, whose sub-second Date precision the
+        // iso8601 codec does not preserve).
+        let reloaded = try SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL)
+        XCTAssertEqual(reloaded.detectedNotation?.recordMovementEvents, snapshot.recordMovementEvents,
+                       "Review loading must round-trip the saved movement events")
+        XCTAssertEqual(reloaded.detectedNotation?.detectionSources, snapshot.detectionSources)
+        XCTAssertEqual(reloaded.detectedNotation?.notationSource, snapshot.notationSource)
+        XCTAssertEqual(reloaded.detectedNotation?.notationConfidence ?? 0, snapshot.notationConfidence ?? 0, accuracy: 1e-9)
+
+        // REAL export mapping (the same init(from:) the exporter calls), then
+        // encode/decode the exported notation records.
+        let exported = snapshot.recordMovementEvents.map { SessionExportRecordMovementEvent(from: $0) }
+        let decodedExport = try JSONDecoder().decode([SessionExportRecordMovementEvent].self, from: JSONEncoder().encode(exported))
+        XCTAssertEqual(decodedExport, exported)
+        XCTAssertEqual(decodedExport.first?.source, "controller")
+        XCTAssertEqual(decodedExport.first?.confidence ?? 0, 0.9, accuracy: 1e-9)
+        XCTAssertEqual(decodedExport.first?.direction, "forward")
+    }
 }

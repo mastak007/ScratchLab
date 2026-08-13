@@ -281,12 +281,13 @@ final class ScratchSamplePlaybackController {
             return // Priming: baseline captured, nothing to publish yet.
         }
 
-        #if DEBUG
-        // Intermittent hot-cue-retrigger investigation (2026-08-14):
-        // captured before this tick's delta is folded in, so the anomaly
-        // check below can tell real motion from a spurious reset.
-        let previousPhaseForTrace = Double(currentSampleFrame)
+        // Captured before this tick's delta is folded in, so the loop-wrap
+        // anomaly check below can tell real motion from a spurious reset. This
+        // is used in Release too (the wrap detection is production behavior),
+        // so it must NOT be gated to DEBUG.
         let accumulatedStepsBeforeThisTick = midiContinuousAccumulatedSteps
+        #if DEBUG
+        let previousPhaseForTrace = Double(currentSampleFrame)
         #endif
         // The full signed delta always folds into the phase anchor, even on
         // a tick whose velocity was sanitized to 0 — real motion is never

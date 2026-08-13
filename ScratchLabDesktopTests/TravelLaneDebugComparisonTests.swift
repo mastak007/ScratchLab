@@ -68,13 +68,19 @@ final class TravelLaneDebugComparisonTests: XCTestCase {
 
     // 2. Timing (x) is identical: the first stroke covers the same time span in both lanes.
     func testTimingIdenticalAcrossLanes() {
+        // Speed-bucket lane (continuous): the first stroke is ONE segment
+        // covering its full [0.2, 0.5] window.
         let s = firstStrokeSegment(speedBucketPath)
-        let t = firstStrokeSegment(travelPath())
         XCTAssertEqual(s?.startTime ?? -1, 0.2, accuracy: 1e-9)
-        XCTAssertEqual(t?.startTime ?? -1, 0.2, accuracy: 1e-9)
-        // Both out-halves end at the stroke mid-time (0.35).
-        XCTAssertEqual(s?.endTime ?? -1, 0.35, accuracy: 1e-9)
-        XCTAssertEqual(t?.endTime ?? -1, 0.35, accuracy: 1e-9)
+        XCTAssertEqual(s?.endTime ?? -1, 0.5, accuracy: 1e-9)
+
+        // Travel lane (unchanged out/return grammar): the first stroke's
+        // out + return halves collectively cover the same [0.2, 0.5] window.
+        let tStrokeSegs = travelPath().segments.filter {
+            if case .stroke = $0.kind { return true }; return false
+        }
+        XCTAssertEqual(tStrokeSegs.first?.startTime ?? -1, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(tStrokeSegs[1].endTime, 0.5, accuracy: 1e-9)
     }
 
     // 3. In the travel lane, the full-travel stroke reaches the rail (normalized extreme 1.0).

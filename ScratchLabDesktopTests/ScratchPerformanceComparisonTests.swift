@@ -8,6 +8,7 @@
 // (babyScratchCycle deliberately authors none).
 
 import Foundation
+import CoreGraphics
 import Testing
 @testable import ScratchLab
 
@@ -971,5 +972,744 @@ struct ScratchPerformanceScoreTests {
         #expect(score.missingFaderEdgeCount == 1) // closed edge unplayed
         #expect(abs((score.faderTiming ?? 0) - 100) < 1e-9)
         #expect(abs((score.faderCompleteness ?? 0) - 50) < 1e-9)
+    }
+}
+
+// MARK: - Semantic error derivation
+
+@Suite("SemanticError derivation")
+struct SemanticErrorDerivationTests {
+
+    @Test("Matched strokes early/late by the tolerance produce timing errors")
+    func timingEarlyLate() throws {
+        let target = babyPhrase(cycles: 1)
+        let windows = fixtureWindows(strokeWindow: 0.2, strokeTolerance: 0.05)
+
+        let early = performedTimeline(strokes: perfectPerformance(of: target, shiftBeats: -0.1))
+        let earlyResult = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: early, windows: windows, bpm: fixtureBPM))
+        let earlyErrors = SemanticError.derive(
+            from: earlyResult, target: target, performed: early, clock: fixtureClock())
+        #expect(earlyErrors.filter { $0.kind == .early }.count == 2)
+        // beatPosition anchors to the target stroke's start beat.
+        #expect(earlyErrors.filter { $0.kind == .early }.allSatisfy { $0.beatPosition != nil })
+
+        let late = performedTimeline(strokes: perfectPerformance(of: target, shiftBeats: 0.1))
+        let lateResult = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: late, windows: windows, bpm: fixtureBPM))
+        let lateErrors = SemanticError.derive(
+            from: lateResult, target: target, performed: late, clock: fixtureClock())
+        #expect(lateErrors.filter { $0.kind == .late }.count == 2)
+    }
+
+    @Test("A matched stroke played the wrong way is a platter direction error")
+    func wrongDirection() throws {
+        let target = babyPhrase(cycles: 1)
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.0, end: 0.5, direction: .backward), // target[0] forward
+            performedStroke(start: 0.5, end: 1.0, direction: .forward)   // target[1] backward
+        ])
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        let errors = SemanticError.derive(
+            from: result, target: target, performed: performed, clock: fixtureClock())
+        #expect(errors.filter { $0.kind == .wrongDirection }.count == 2)
+    }
+
+    @Test("Unplayed target strokes are missed-movement errors at their target beat")
+    func missedMovement() throws {
+        let target = babyPhrase(cycles: 1)
+        let performed = performedTimeline(strokes: [])
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        let errors = SemanticError.derive(
+            from: result, target: target, performed: performed, clock: fixtureClock())
+        #expect(errors.filter { $0.kind == .missedMovement }.count == 2)
+        // Each missed error sits at its own target stroke's start beat.
+        #expect(errors.filter { $0.kind == .missedMovement }
+            .map(\.beatPosition).compactMap { $0 }.sorted() == [0.0, 0.5])
+    }
+
+    @Test("Performed strokes beyond the pattern are movement-too-long errors")
+    func movementTooLong() throws {
+        let target = babyPhrase(cycles: 1)
+        let performed = performedTimeline(strokes: perfectPerformance(of: target) + [
+            performedStroke(start: 2.0, end: 2.5, direction: .forward)
+        ])
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        let errors = SemanticError.derive(
+            from: result, target: target, performed: performed, clock: fixtureClock())
+        #expect(errors.filter { $0.kind == .movementTooLong }.count == 1)
+    }
+
+    @Test("No fader errors are invented for a target with no canonical fader channel")
+    func noFaderErrorsWithoutChannel() throws {
+        let target = babyPhrase(cycles: 1) // babyScratchCycle authors no faderEvents
+        let performed = performedTimeline(
+            strokes: perfectPerformance(of: target), hasFaderCapture: true)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        let errors = SemanticError.derive(
+            from: result, target: target, performed: performed, clock: fixtureClock())
+        #expect(errors.allSatisfy { $0.family != .fader })
+    }
+
+    @Test("Early/late/missed/extra fader cuts map to the fader error kinds")
+    func faderCutErrors() throws {
+        let target = try #require(TargetScratchPhrase.phrase(repeating: faderedPattern, cycles: 1))
+        // target fader edges: open@0.0, closed@0.5.
+
+        // Late closed cut (0.6 vs 0.5 → +0.1 beats, outside ±0.05 tolerance).
+        let lateCut = performedTimeline(
+            strokes: perfectPerformance(of: target),
+            faderEdges: [
+                .init(beat: 0.0, state: .open, source: "midi"),
+                .init(beat: 0.6, state: .closed, source: "midi")
+            ],
+            hasFaderCapture: true)
+        let lateResult = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: lateCut, windows: fixtureWindows(), bpm: fixtureBPM))
+        let lateErrors = SemanticError.derive(
+            from: lateResult, target: target, performed: lateCut, clock: fixtureClock())
+        #expect(lateErrors.contains { $0.kind == .lateCut })
+        // beatPosition anchors to the target fader edge's beat (0.5).
+        #expect(lateErrors.first { $0.kind == .lateCut }?.beatPosition == 0.5)
+
+        // Missing closed cut → missedCut.
+        let missedCut = performedTimeline(
+            strokes: perfectPerformance(of: target),
+            faderEdges: [.init(beat: 0.0, state: .open, source: "midi")],
+            hasFaderCapture: true)
+        let missedResult = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: missedCut, windows: fixtureWindows(), bpm: fixtureBPM))
+        let missedErrors = SemanticError.derive(
+            from: missedResult, target: target, performed: missedCut, clock: fixtureClock())
+        #expect(missedErrors.contains { $0.kind == .missedCut })
+
+        // Extra cut beyond the target → extraCut.
+        let extraCut = performedTimeline(
+            strokes: perfectPerformance(of: target),
+            faderEdges: [
+                .init(beat: 0.0, state: .open, source: "midi"),
+                .init(beat: 0.5, state: .closed, source: "midi"),
+                .init(beat: 1.0, state: .open, source: "midi")
+            ],
+            hasFaderCapture: true)
+        let extraResult = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: extraCut, windows: fixtureWindows(), bpm: fixtureBPM))
+        let extraErrors = SemanticError.derive(
+            from: extraResult, target: target, performed: extraCut, clock: fixtureClock())
+        #expect(extraErrors.contains { $0.kind == .extraCut })
+    }
+
+    @Test("Errors are priority-ordered timing → platter → fader")
+    func priorityOrdering() throws {
+        let target = babyPhrase(cycles: 1)
+        // One early stroke (timing), one extra stroke (platter). Baby phrase
+        // has no fader channel, so no fader errors.
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: -0.1, end: 0.4, direction: .forward), // early match to target[0]
+            performedStroke(start: 0.5, end: 1.0, direction: .backward),  // correct match to target[1]
+            performedStroke(start: 2.0, end: 2.5, direction: .forward)   // extra
+        ])
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        let errors = SemanticError.derive(
+            from: result, target: target, performed: performed, clock: fixtureClock())
+        let families = errors.map(\.family)
+        // Stable: every timing error precedes every platter error.
+        #expect(families == families.sorted { (lhs, rhs) in
+            let rank: [SemanticError.Family: Int] = [.timing: 0, .platter: 1, .fader: 2]
+            return rank[lhs]! < rank[rhs]!
+        })
+        #expect(!families.isEmpty)
+    }
+
+    @Test("Concise family and kind labels are stable and complete")
+    func labels() {
+        func err(_ family: SemanticError.Family, _ kind: SemanticError.Kind) -> SemanticError {
+            SemanticError(family: family, kind: kind, beatPosition: nil,
+                          magnitudeMilliseconds: nil, expected: "", performed: "")
+        }
+        #expect(err(.timing, .early).familyLabel == "TIMING")
+        #expect(err(.platter, .missedMovement).familyLabel == "PLATTER")
+        #expect(err(.fader, .extraCut).familyLabel == "FADER")
+        #expect(err(.timing, .early).kindLabel == "Early")
+        #expect(err(.timing, .late).kindLabel == "Late")
+        #expect(err(.platter, .wrongDirection).kindLabel == "Wrong direction")
+        #expect(err(.platter, .missedMovement).kindLabel == "Missed movement")
+        #expect(err(.fader, .earlyCut).kindLabel == "Cut early")
+        #expect(err(.fader, .missedCut).kindLabel == "Missed cut")
+    }
+}
+
+// MARK: - Performed platter geometry (unified target/performed grammar)
+
+@Suite("Performed platter geometry")
+struct PerformedPlatterGeometryTests {
+
+    private func performedEvent(
+        start: Double, end: Double, direction: String,
+        kind: ScratchMovementKind = .normalPush,
+        startPos: Double = 0.0, endPos: Double = 1.0
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        .init(startTime: start, endTime: end, startPosition: startPos, endPosition: endPos,
+              direction: direction, movementKind: kind, speed: 1,
+              confidence: 0.9, source: "test")
+    }
+
+    private func path(_ events: [CaptureCore.DetectedNotationRecordMovementEvent],
+                      duration: TimeInterval = 1.0,
+                      normalizingTo frame: ClosedRange<CGFloat>? = nil) -> MotionPath {
+        let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
+        let content = LaneContent(strokes: strokes, segments: [], beatsPerMinute: nil,
+                                  duration: duration, loops: false)
+        if let frame {
+            return ScratchStrokeGeometry.motionPath(for: content, normalizingTo: frame)
+        }
+        return ScratchStrokeGeometry.motionPath(for: content)
+    }
+
+    private func strokeSegments(_ path: MotionPath) -> [MotionSegment] {
+        path.segments.filter { if case .stroke = $0.kind { return true }; return false }
+    }
+
+    @Test("One forward stroke is one continuous increasing segment — no midpoint return")
+    func forwardIsOneIncreasingSegment() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.1, endPos: 0.6)
+        ])
+        let segs = strokeSegments(p)
+        #expect(segs.count == 1)                                  // no out/return halves
+        #expect(segs[0].endPosition > segs[0].startPosition)      // continuously rising
+        #expect(segs[0].startTime == 0.0)
+        #expect(segs[0].endTime == 0.5)
+    }
+
+    @Test("One backward stroke is one continuous decreasing segment")
+    func backwardIsOneDecreasingSegment() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "backward", kind: .normalPull,
+                           startPos: 0.6, endPos: 0.1)
+        ])
+        let segs = strokeSegments(p)
+        #expect(segs.count == 1)
+        #expect(segs[0].endPosition < segs[0].startPosition)
+    }
+
+    @Test("An equal forward/backward pair returns to its starting position")
+    func balancedPairReturnsToStart() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.0, endPos: 0.78),
+            performedEvent(start: 0.5, end: 1.0, direction: "backward", kind: .normalPull,
+                           startPos: 0.78, endPos: 0.0)
+        ])
+        #expect(abs(p.position(at: 1.0) - p.position(at: 0.0)) < 1e-9)
+        #expect(p.position(at: 0.0) < p.position(at: 0.5))  // peak above the start
+    }
+
+    @Test("The reversal occurs exactly at the authored forward/backward boundary")
+    func reversalAtAuthoredBoundary() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.0, endPos: 0.78),
+            performedEvent(start: 0.5, end: 1.0, direction: "backward", kind: .normalPull,
+                           startPos: 0.78, endPos: 0.0)
+        ])
+        // The peak (turnaround) is at the boundary, and only there.
+        #expect(abs(p.position(at: 0.5) - 1.0) < 1e-9)
+        #expect(p.position(at: 0.25) < p.position(at: 0.5))
+        #expect(p.position(at: 0.75) < p.position(at: 0.5))
+    }
+
+    @Test("A gap holds the previous position rather than resetting to start")
+    func gapHoldsPreviousPosition() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.3, direction: "forward",
+                           startPos: 0.0, endPos: 0.5),
+            performedEvent(start: 0.7, end: 1.0, direction: "backward", kind: .normalPull,
+                           startPos: 0.5, endPos: 0.1)
+        ])
+        // Flat across the gap — the position is held, not dropped back to 0.
+        #expect(abs(p.position(at: 0.5) - p.position(at: 0.3)) < 1e-9)
+        #expect(abs(p.position(at: 0.7) - p.position(at: 0.3)) < 1e-9)
+        #expect(p.position(at: 0.5) > 0.5)  // held high, not reset
+    }
+
+    @Test("An incomplete forward-only phrase stays at its measured endpoint")
+    func incompleteForwardStaysAtEndpoint() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.1, endPos: 0.6)
+        ], duration: 2.0)
+        let end = p.position(at: 0.5)
+        #expect(abs(p.position(at: 1.5) - end) < 1e-9)   // flat after the stroke
+        #expect(abs(p.position(at: 2.0) - end) < 1e-9)
+    }
+
+    @Test("Performed rendering preserves captured start/end-position relationships")
+    func preservesCapturedStartEndRelationships() {
+        // Forward moves 0.0 → 0.6, backward returns only to 0.2 (short). The
+        // backward stroke must begin where the forward ended and NOT be
+        // re-authored back to zero — its measured 0.4 travel stays proportional.
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.0, endPos: 0.6),
+            performedEvent(start: 0.5, end: 1.0, direction: "backward", kind: .normalPull,
+                           startPos: 0.6, endPos: 0.2)
+        ])
+        let fwd = strokeSegments(p).first { if case .stroke(.forward) = $0.kind { return true }; return false }
+        let back = strokeSegments(p).first { if case .stroke(.backward) = $0.kind { return true }; return false }
+        #expect(fwd != nil && back != nil)
+
+        // Continuity: the backward stroke begins where the forward ended.
+        #expect(abs(back!.startPosition - fwd!.endPosition) < 1e-9)
+        // Proportional travel: forward 0.6, backward 0.4 → 1.0 vs 0.666… of range.
+        let fwdTravel = fwd!.endPosition - fwd!.startPosition
+        let backTravel = fwd!.endPosition - back!.endPosition
+        #expect(abs(fwdTravel - 1.0) < 1e-9)
+        #expect(abs(backTravel - (0.4 / 0.6)) < 1e-6)
+        // The short backward stroke did NOT fabricate a return to the start.
+        #expect(back!.endPosition > 1e-6)
+    }
+
+    @Test("Target-frame normalization gives TARGET and MY PERFORMANCE the same mapping")
+    func targetFrameNormalizationShared() throws {
+        let target = try #require(ScratchNotation.babyScratchCycle.materialized(bpm: 79))
+        let targetContent = LaneContent(notation: target)
+        let targetFrame = ScratchStrokeGeometry.rawRange(for: targetContent)
+        let targetPath = ScratchStrokeGeometry.motionPath(for: targetContent)
+        let secondsPerBeat = 60.0 / 79.0
+
+        // Performed mirrors the target's travel exactly (0 → 0.78 → 0).
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.0, endPos: 0.78),
+            performedEvent(start: 0.5, end: 1.0, direction: "backward", kind: .normalPull,
+                           startPos: 0.78, endPos: 0.0)
+        ], normalizingTo: targetFrame)
+
+        // Same raw frame → the start, turnaround and return land on the same Y.
+        #expect(abs(p.position(at: 0.0) - targetPath.position(at: 0.0)) < 1e-6)
+        #expect(abs(p.position(at: 0.5)
+                    - targetPath.position(at: 0.5 * secondsPerBeat)) < 1e-6)
+        #expect(abs(p.position(at: 1.0)
+                    - targetPath.position(at: 1.0 * secondsPerBeat)) < 1e-6)
+        #expect(abs(p.position(at: 0.5) - 1.0) < 1e-6)          // shared peak
+        #expect(abs(p.position(at: 0.0) - 0.0) < 1e-6)          // shared start
+    }
+
+    @Test("An incomplete performed take stays incomplete — no fabricated stroke")
+    func incompleteTakeStaysIncomplete() {
+        let p = path([
+            performedEvent(start: 0.0, end: 0.5, direction: "forward",
+                           startPos: 0.0, endPos: 0.78)
+        ], duration: 2.0)
+        #expect(strokeSegments(p).count == 1)  // one stroke, no invented backward pair
+    }
+
+    @Test("Non-stroke and indeterminate-direction events are dropped, not fabricated")
+    func nonStrokeAndIndeterminateDropped() {
+        let hold = performedEvent(start: 0.0, end: 0.5, direction: "forward", kind: .hold)
+        let indeterminate = performedEvent(start: 0.5, end: 1.0, direction: "sideways",
+                                           kind: .normalPush)
+        #expect(PerformedStrokeAdapter.laneStroke(from: hold) == nil)
+        #expect(PerformedStrokeAdapter.laneStroke(from: indeterminate) == nil)
+    }
+
+    @Test("Performed content carries no invented fader spans")
+    func performedContentHasNoInventedFader() {
+        let events = [performedEvent(start: 0.0, end: 0.5, direction: "forward")]
+        let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
+        let content = LaneContent(strokes: strokes, segments: [], beatsPerMinute: nil,
+                                  duration: 1.0, loops: false)
+        #expect(content.faderEvents.isEmpty)  // no fader trace invented
+    }
+
+    @Test("Absent crossfader capture yields no fader channel, never an invented open")
+    func absentFaderCaptureIsHonest() {
+        let timeline = PerformedScratchTimelineAdapter.makeTimeline(
+            movementEvents: [movementEvent(start: 0.0, end: 0.5, direction: "forward")],
+            mixerMidiEvents: [],  // no crossfader evidence
+            clock: fixtureClock(),
+            faderThresholds: fixtureFaderThresholds)
+        #expect(timeline.hasFaderCapture == false)
+        #expect(timeline.faderEdges.isEmpty)
+    }
+}
+
+// MARK: - Learner-facing fader summary
+
+@Suite("Learner-facing fader summary")
+struct LearnerFaderSummaryTests {
+
+    @Test("Baby Scratch fader summary uses product language, not implementation terminology")
+    func faderSummaryIsProductLanguage() {
+        let summary = FaderChannelComparison.noCanonicalFaderChannel.learnerFaderSummary
+        #expect(summary == "Open throughout · no cuts expected")
+        #expect(!summary.contains("fader channel"))
+        #expect(FaderChannelComparison.noPerformedFaderCapture.learnerFaderSummary == "Fader not captured")
+    }
+}
+
+// MARK: - Alignment stage (boundary classification + phase selection)
+
+@Suite("ScratchPerformanceAlignment boundaries")
+struct ScratchAlignmentBoundaryTests {
+
+    // MARK: Take 002 real fixture (controller, 90 BPM, 4-beat count-in).
+
+    private let take002BPM = 90.0
+    private let take002CountInBeats = 4.0
+
+    private func take002Clock() -> PerformanceBeatClock {
+        PerformanceBeatClock(bpm: take002BPM,
+                             beatZeroTime: take002CountInBeats * 60.0 / take002BPM)!
+    }
+
+    /// (startSeconds, endSeconds, direction) transcribed verbatim from
+    /// `take-002_detected_notation.json` `recordMovementEvents`.
+    private let take002Events: [(Double, Double, ScratchNotationDirection)] = [
+        (1.5146462499978952, 2.4363626666599885, .backward),
+        (2.4363626666599885, 2.845634291676106, .forward),
+        (2.845634291676106, 3.1519701666547917, .backward),
+        (3.1519701666547917, 3.5014462916587945, .forward),
+        (3.5014462916587945, 3.8063345833215863, .backward),
+        (3.8063345833215863, 4.146148125000764, .forward),
+        (4.146148125000764, 4.473817874997621, .backward),
+        (4.473817874997621, 4.866465416678693, .forward),
+        (4.866465416678693, 5.187679833325092, .backward),
+        (5.187679833325092, 5.5746627083281055, .forward),
+        (5.5746627083281055, 5.873708458326291, .backward),
+        (5.873708458326291, 6.243476416653721, .forward),
+        (6.243476416653721, 6.578827874996932, .backward),
+        (6.578827874996932, 6.9608047916553915, .forward),
+        (6.9608047916553915, 7.296657333325129, .backward),
+        (7.296657333325129, 7.654348375013797, .forward),
+        (7.654348375013797, 8.033418833336327, .backward),
+        (8.033418833336327, 8.400547916680807, .forward),
+        (8.400547916680807, 8.74373654165538, .backward),
+        (8.74373654165538, 9.129666624998208, .forward),
+        (9.129666624998208, 9.500838541658595, .backward),
+        (9.500838541658595, 9.879409999994095, .forward),
+        (9.879409999994095, 10.193485083320411, .backward),
+        (10.193485083320411, 10.597464249993209, .forward),
+        (10.597464249993209, 10.934087791654747, .backward),
+        (10.934087791654747, 11.303995083348127, .forward),
+        (11.303995083348127, 11.603331833321135, .backward),
+        (11.603331833321135, 11.979828500014264, .forward),
+        (11.979828500014264, 12.328220124996733, .backward),
+        (12.328220124996733, 12.709310000005644, .forward),
+        (12.709310000005644, 13.047487708332483, .backward),
+        (13.047487708332483, 13.479020124999806, .forward),
+        (13.479020124999806, 13.788163624994922, .backward),
+        (13.788163624994922, 13.940816749993246, .forward),
+    ]
+
+    private func take002Timeline() -> PerformedScratchTimeline {
+        let clock = take002Clock()
+        let strokes = take002Events.map { start, end, direction in
+            PerformedScratchTimeline.Stroke(
+                startBeat: clock.beats(fromSeconds: start),
+                endBeat: clock.beats(fromSeconds: end),
+                direction: direction,
+                confidence: 0.95,
+                source: "controller")
+        }
+        return performedTimeline(strokes: strokes)
+    }
+
+    /// The production Review target for Take 002: 17 cycles (34 strokes),
+    /// tiled from the raw evidence end beat.
+    private func take002Target() -> TargetScratchPhrase {
+        babyPhrase(cycles: 17)
+    }
+
+    @Test("Take 002: 34 movements, setup + 16 stable cycles + incomplete final")
+    func take002Regression() throws {
+        let target = take002Target()
+        let performed = take002Timeline()
+        let windows = try #require(ScratchComparisonWindows.derived(
+            from: target,
+            strokeCorrectToleranceBeats: NotationFeedbackState.lateOffsetThresholdMs
+                * take002BPM / 60_000.0,
+            faderCorrectToleranceBeats: NotationFeedbackState.lateOffsetThresholdMs
+                * take002BPM / 60_000.0))
+
+        // Captured record is unchanged — 34 movements, alternating B/F.
+        #expect(performed.strokes.count == 34)
+        #expect(performed.strokes[0].direction == .backward)
+        #expect(performed.strokes[1].direction == .forward)
+
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices == [0])
+        #expect(alignment.boundaryIncompletePerformedIndices == [33])
+        #expect(alignment.scoredPerformedRange == 1..<33)   // 32 strokes / 16 cycles
+        #expect(alignment.unscoredTargetStrokeIndices == [32, 33]) // over-tiled 17th cycle
+        #expect(!alignment.explanation.isEmpty)
+
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: take002BPM))
+        #expect(result.matchedStrokes.count == 32)
+        #expect(result.missingTargetStrokeIndices.isEmpty)
+        #expect(result.extraPerformedStrokeIndices.isEmpty)
+        #expect(result.boundarySetupPerformedStrokeIndices == [0])
+        #expect(result.boundaryIncompletePerformedStrokeIndices == [33])
+        #expect(result.unscoredTargetStrokeIndices == [32, 33])
+        // The stable 32 strokes align as 16 forward/back cycles — no wrong-way.
+        #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == true })
+        #expect(result.matchedStrokes.map(\.targetIndex) == Array(0..<32))
+        // Direction sequence of the scored window is F/B alternating.
+        #expect(result.matchedStrokes.map { target.strokes[$0.targetIndex].direction }
+                == Array(repeating: [ScratchNotationDirection.forward,
+                                     ScratchNotationDirection.backward], count: 16).flatMap { $0 })
+    }
+
+    @Test("Take 002: a one-stroke setup shift no longer inverts every direction")
+    func take002NoWrongWayFromSetup() throws {
+        let target = take002Target()
+        let performed = take002Timeline()
+        let windows = try #require(ScratchComparisonWindows.derived(
+            from: target, strokeCorrectToleranceBeats: 0.08, faderCorrectToleranceBeats: 0.08))
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: windows, bpm: take002BPM))
+        // No matched stroke is flagged wrong-way because of the leading setup.
+        #expect(result.matchedStrokes.contains { $0.directionCorrect == false } == false)
+        let score = ScratchPerformanceScore.score(result: result, windows: windows)
+        #expect(score.wrongDirectionCount == 0)
+    }
+
+    // MARK: Edge cases.
+
+    private func babyTarget(cycles: Int) -> TargetScratchPhrase { babyPhrase(cycles: cycles) }
+
+    @Test("Clean phrase beginning forward has no boundary and no wrong-way")
+    func cleanPhraseForwardNoSetup() throws {
+        let target = babyTarget(cycles: 2)
+        let performed = performedTimeline(strokes: perfectPerformance(of: target))
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices.isEmpty)
+        #expect(alignment.boundaryIncompletePerformedIndices.isEmpty)
+        #expect(alignment.scoredPerformedRange == 0..<4)
+        #expect(alignment.unscoredTargetStrokeIndices.isEmpty)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(result.matchedStrokes.count == 4)
+        #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == true })
+    }
+
+    @Test("Valid phrase beginning exactly at recording start aligns to phase zero")
+    func phraseAtRecordingStart() throws {
+        let target = babyTarget(cycles: 1)
+        // Start exactly at beat 0 (no count-in, no leading offset).
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .backward)
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices.isEmpty)
+        #expect(alignment.scoredPerformedRange == 0..<2)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == true })
+        #expect(result.missingTargetStrokeIndices.isEmpty)
+    }
+
+    @Test("Backward setup followed by a clean forward/back phrase is trimmed as setup")
+    func backwardSetupThenCleanPhrase() throws {
+        let target = babyTarget(cycles: 2)
+        // Leading backward setup is a strong duration outlier (2.0 beats vs 0.5).
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: -2.0, end: 0.0, direction: .backward), // slow setup
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .backward),
+            performedStroke(start: 1.0, end: 1.5, direction: .forward),
+            performedStroke(start: 1.5, end: 2.0, direction: .backward)
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices == [0])
+        #expect(alignment.scoredPerformedRange == 1..<5)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(result.matchedStrokes.count == 4)
+        #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == true })
+        #expect(result.boundarySetupPerformedStrokeIndices == [0])
+        #expect(result.extraPerformedStrokeIndices.isEmpty)
+    }
+
+    @Test("A genuine first-stroke wrong direction is not hidden as setup")
+    func genuineFirstStrokeWrongDirection() throws {
+        let target = babyTarget(cycles: 2)
+        // All strokes equal duration — the leading backward is a real error,
+        // not a slow setup, so it stays scored and inverts every stroke.
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.0, end: 0.5, direction: .backward),
+            performedStroke(start: 0.5, end: 1.0, direction: .forward),
+            performedStroke(start: 1.0, end: 1.5, direction: .backward),
+            performedStroke(start: 1.5, end: 2.0, direction: .forward)
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices.isEmpty)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(result.matchedStrokes.count == 4)
+        #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == false })
+    }
+
+    @Test("A genuine extra movement inside the phrase is reported as extra")
+    func genuineExtraInsidePhrase() throws {
+        let target = babyTarget(cycles: 1)
+        var strokes = perfectPerformance(of: target) // F, B
+        strokes.insert(performedStroke(start: 0.25, end: 0.75, direction: .forward), at: 1)
+        let performed = performedTimeline(strokes: strokes)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(!result.extraPerformedStrokeIndices.isEmpty)
+        #expect(result.boundarySetupPerformedStrokeIndices.isEmpty)
+        #expect(result.boundaryIncompletePerformedStrokeIndices.isEmpty)
+    }
+
+    @Test("A genuine missed movement inside the phrase is reported as missing")
+    func genuineMissedInsidePhrase() throws {
+        let target = babyTarget(cycles: 2)
+        var strokes = perfectPerformance(of: target) // 4 strokes
+        strokes.remove(at: 2)
+        let performed = performedTimeline(strokes: strokes)
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(result.missingTargetStrokeIndices == [2])
+        #expect(result.boundarySetupPerformedStrokeIndices.isEmpty)
+    }
+
+    @Test("An incomplete first movement is classified as boundary incomplete")
+    func incompleteFirstMovement() throws {
+        let target = babyTarget(cycles: 2)
+        // Leading truncated stroke (0.15 beats vs 0.5 median) then a clean phrase.
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: -0.15, end: 0.0, direction: .backward),
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .backward),
+            performedStroke(start: 1.0, end: 1.5, direction: .forward),
+            performedStroke(start: 1.5, end: 2.0, direction: .backward)
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundaryIncompletePerformedIndices.contains(0))
+        #expect(alignment.boundarySetupPerformedIndices.isEmpty)
+    }
+
+    @Test("An incomplete final movement is classified as boundary incomplete")
+    func incompleteFinalMovement() throws {
+        let target = babyTarget(cycles: 2)
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .backward),
+            performedStroke(start: 1.0, end: 1.5, direction: .forward),
+            performedStroke(start: 1.5, end: 2.0, direction: .backward),
+            performedStroke(start: 2.0, end: 2.15, direction: .forward) // truncated
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundaryIncompletePerformedIndices == [4])
+        #expect(alignment.scoredPerformedRange == 0..<4)
+    }
+
+    @Test("Tempo drift without phase shifting keeps directions aligned")
+    func tempoDriftWithoutPhaseShift() throws {
+        let target = babyTarget(cycles: 4) // 8 strokes, F/B alternating
+        // Drift +0.0 … +0.7 beats across 8 strokes; directions still alternate.
+        let performed = performedTimeline(strokes: (0..<8).map { i in
+            let dir: ScratchNotationDirection = (i % 2 == 0) ? .forward : .backward
+            let start = Double(i) * 0.5 + Double(i) * 0.09
+            return performedStroke(start: start, end: start + 0.5, direction: dir)
+        })
+        let result = try #require(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: fixtureBPM))
+        #expect(result.matchedStrokes.count == 8)
+        #expect(result.matchedStrokes.allSatisfy { $0.directionCorrect == true })
+        // Timing shifts early → late but never mis-pairs into wrong-way.
+        #expect(result.matchedStrokes.first?.timing == .correct || result.matchedStrokes.first?.timing == .early)
+        #expect(result.matchedStrokes.last?.timing == .late)
+    }
+
+    @Test("An equal-duration leading stroke is not removed merely because it is first")
+    func equalDurationSetupNotRemoved() throws {
+        let target = babyTarget(cycles: 2)
+        // Leading backward has the SAME duration as the phrase strokes — no
+        // duration evidence for setup, so it must remain a scored stroke.
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: -0.5, end: 0.0, direction: .backward),
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .backward),
+            performedStroke(start: 1.0, end: 1.5, direction: .forward),
+            performedStroke(start: 1.5, end: 2.0, direction: .backward)
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices.isEmpty)
+        #expect(alignment.boundaryIncompletePerformedIndices.isEmpty)
+        // It is not silently dropped; it participates in scoring.
+        #expect(alignment.scoredPerformedRange == 0..<5)
+    }
+
+    @Test("Alignment is BPM-independent and needs no beat grid")
+    func bpmIndependentAndNoBeatGrid() throws {
+        // align() reads only beat-domain durations and directions — it takes
+        // no BPM and no clock, so the same beat-domain phrase classifies the
+        // same regardless of the tempo that produced it.
+        let target = babyTarget(cycles: 2)
+        let performed = performedTimeline(strokes: [
+            performedStroke(start: -2.0, end: 0.0, direction: .backward), // 2.0-beat setup
+            performedStroke(start: 0.0, end: 0.5, direction: .forward),
+            performedStroke(start: 0.5, end: 1.0, direction: .backward),
+            performedStroke(start: 1.0, end: 1.5, direction: .forward),
+            performedStroke(start: 1.5, end: 2.0, direction: .backward)
+        ])
+        let alignment = ScratchPerformanceAlignment.align(target: target, performed: performed)
+        #expect(alignment.boundarySetupPerformedIndices == [0])
+        // compare() with an unusable tempo refuses gracefully (the "no BPM" case).
+        #expect(ScratchPerformanceAlignment.compare(
+            target: target, performed: performed, windows: fixtureWindows(), bpm: 0) == nil)
+    }
+
+    @Test("Empty and one-event captures align without boundary classification")
+    func emptyAndOneEvent() {
+        let target = babyTarget(cycles: 2)
+        let empty = ScratchPerformanceAlignment.align(target: target, performed: performedTimeline(strokes: []))
+        #expect(empty.scoredPerformedRange.isEmpty)
+        #expect(empty.boundarySetupPerformedIndices.isEmpty)
+
+        let single = ScratchPerformanceAlignment.align(
+            target: target,
+            performed: performedTimeline(strokes: [
+                performedStroke(start: 0.0, end: 0.5, direction: .forward)
+            ]))
+        #expect(single.boundarySetupPerformedIndices.isEmpty)
+        #expect(single.boundaryIncompletePerformedIndices.isEmpty)
+        #expect(single.scoredPerformedRange == 0..<1)
+    }
+
+    @Test("Alignment is source-neutral: camera vs controller produce the same classification")
+    func sourceNeutral() {
+        let target = babyTarget(cycles: 2)
+        func timeline(source: String) -> PerformedScratchTimeline {
+            performedTimeline(strokes: [
+                PerformedScratchTimeline.Stroke(startBeat: -2.0, endBeat: 0.0, direction: .backward,
+                                                confidence: 0.5, source: source),
+                PerformedScratchTimeline.Stroke(startBeat: 0.0, endBeat: 0.5, direction: .forward,
+                                                confidence: 0.5, source: source),
+                PerformedScratchTimeline.Stroke(startBeat: 0.5, endBeat: 1.0, direction: .backward,
+                                                confidence: 0.5, source: source),
+                PerformedScratchTimeline.Stroke(startBeat: 1.0, endBeat: 1.5, direction: .forward,
+                                                confidence: 0.5, source: source),
+                PerformedScratchTimeline.Stroke(startBeat: 1.5, endBeat: 2.0, direction: .backward,
+                                                confidence: 0.5, source: source)
+            ])
+        }
+        let controller = ScratchPerformanceAlignment.align(target: target, performed: timeline(source: "controller"))
+        let camera = ScratchPerformanceAlignment.align(target: target, performed: timeline(source: "video"))
+        #expect(controller.boundarySetupPerformedIndices == [0])
+        #expect(controller.boundarySetupPerformedIndices == camera.boundarySetupPerformedIndices)
+        #expect(controller.scoredPerformedRange == camera.scoredPerformedRange)
     }
 }

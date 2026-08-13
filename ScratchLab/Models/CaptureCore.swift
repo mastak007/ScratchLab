@@ -6106,6 +6106,183 @@ enum CaptureCore {
         return derived
     }
 
+    /// Decodes a relative ring-counter platter stream (e.g. RANE ONE MKII CC6)
+    /// into physically-coherent movement events — WITHOUT touching the camera
+    /// `HandDirectionTracker`.
+    ///
+    /// Sign contract (documented and tested, provisional on camera correlation):
+    ///   positive CC6 delta → "forward", negative → "backward". This is
+    ///   consistent with the verified ring-counter ("forward +1, reverse −1")
+    ///   and with Take 002's single camera event (a `backward` stroke overlapping
+    ///   a negative CC6 run).
+    ///
+    /// Modular signed deltas avoid false reversals at 127↔0 / 0↔127. Consecutive
+    /// same-sign deltas (adjacent-event gaps ≤ `maxEventGap`) form a run; runs
+    /// shorter than `minRunDuration`, or with fewer than `minRunSteps` net steps,
+    /// are rejected as isolated one-step noise / stationary chatter. The
+    /// integrated position is normalized to 0…1 over the stream's own min/max so
+    /// the shared normalizer/fusion thresholds keep their existing [0,1] scale.
+    /// Stage-by-stage counts of a platter telemetry decode, so the exact
+    /// pipeline reduction (filtered → raw runs → noise-filtered → normalized)
+    /// is observable and testable rather than a black box.
+    struct PlatterDecodeDiagnostics: Equatable {
+        /// CC6 events that matched controller/channel/device filters.
+        let filteredEventCount: Int
+        /// Same-sign runs before the noise-rejection gates.
+        let rawRunCount: Int
+        /// Runs surviving `minRunDuration` and `minRunSteps` (== the emitted
+        /// event count — this is the decoder's "noise-filtered" stage).
+        let noiseFilteredRunCount: Int
+    }
+
+    /// Stage-by-stage decode diagnostics for a platter telemetry stream.
+    /// Mirrors `derivePlatterMovementEvents` exactly (same core, same filters),
+    /// but returns the intermediate counts.
+    static func platterMovementDecodeDiagnostics(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int? = nil,
+        deviceName: String? = nil,
+        ringModulus: Int = 128,
+        minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8,
+        maxEventGap: Double = 0.10
+    ) -> PlatterDecodeDiagnostics {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap)
+        return core.diagnostics
+    }
+
+    static func derivePlatterMovementEvents(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int? = nil,
+        deviceName: String? = nil,
+        ringModulus: Int = 128,
+        minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8,
+        maxEventGap: Double = 0.10
+    ) -> [DetectedNotationRecordMovementEvent] {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap)
+        return core.events
+    }
+
+    /// Shared decode core: filters, integrates modular signed deltas, segments
+    /// same-sign runs, and emits movement events, returning both the events and
+    /// the stage-by-stage diagnostics.
+    private static func decodePlatterCore(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int?,
+        deviceName: String?,
+        ringModulus: Int,
+        minRunDuration: Double,
+        minRunSteps: Int,
+        maxEventGap: Double
+    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics) {
+        let events = mixerMidiEvents
+            .filter {
+                $0.controller == controller
+                    && (channel == nil || $0.channel == channel)
+                    && (deviceName == nil || $0.deviceName == deviceName)
+            }
+            .sorted { $0.takeRelativeTime < $1.takeRelativeTime }
+        let filteredEventCount = events.count
+        guard events.count >= 2 else {
+            return ([], PlatterDecodeDiagnostics(
+                filteredEventCount: filteredEventCount, rawRunCount: 0,
+                noiseFilteredRunCount: 0))
+        }
+
+        let half = ringModulus / 2
+
+        // 1. Unwrap modular signed deltas and integrate a cumulative position
+        //    (steps). positions[i] = cumulative steps at event i.
+        var cumulative = 0
+        var positions: [Double] = [0]
+        var deltas: [Int] = []
+        deltas.reserveCapacity(events.count - 1)
+        for i in 1..<events.count {
+            var delta = events[i].value - events[i - 1].value
+            if delta > half { delta -= ringModulus }
+            else if delta < -half { delta += ringModulus }
+            cumulative += delta
+            deltas.append(delta)
+            positions.append(Double(cumulative))
+        }
+
+        // 2. Segment deltas into same-sign runs. A zero delta is ignored; a gap
+        //    larger than maxEventGap, or a sign flip, closes the current run.
+        struct Run { let startIdx: Int; let endIdx: Int }
+        var runs: [Run] = []
+        var runSign = 0
+        var runStart = 0
+        for i in 0..<deltas.count {
+            let sign = deltas[i] > 0 ? 1 : (deltas[i] < 0 ? -1 : 0)
+            if sign == 0 { continue }
+            let gap = events[i + 1].takeRelativeTime - events[i].takeRelativeTime
+            let breaksRun = gap > maxEventGap || (runSign != 0 && sign != runSign)
+            if runSign != 0 && breaksRun {
+                runs.append(Run(startIdx: runStart, endIdx: i))
+                runStart = i
+                runSign = sign
+            } else {
+                if runSign == 0 { runStart = i }
+                runSign = sign
+            }
+        }
+        if runSign != 0 {
+            runs.append(Run(startIdx: runStart, endIdx: deltas.count))
+        }
+        let rawRunCount = runs.count
+
+        // 3. Normalize the integrated position to 0…1 over the stream's range.
+        let minPos = positions.min() ?? 0
+        let maxPos = positions.max() ?? 0
+        let span = max(maxPos - minPos, 1.0)
+
+        // 4. Emit events for runs that survive the noise-rejection gates.
+        var result: [DetectedNotationRecordMovementEvent] = []
+        result.reserveCapacity(runs.count)
+        for run in runs {
+            let startTime = events[run.startIdx].takeRelativeTime
+            let endTime = events[run.endIdx].takeRelativeTime
+            let duration = endTime - startTime
+            let startPos = (positions[run.startIdx] - minPos) / span
+            let endPos = (positions[run.endIdx] - minPos) / span
+            let displacement = positions[run.endIdx] - positions[run.startIdx]
+            guard duration > 0,
+                  duration >= minRunDuration,
+                  abs(displacement) >= Double(minRunSteps) else { continue }
+            let direction = displacement > 0 ? "forward" : "backward"
+            let speed = abs(displacement) / duration
+            // High-confidence direct telemetry: floor 0.7, rising toward 1.0 for
+            // longer runs — never 1.0 merely because a source was detected.
+            let confidence = min(0.95, 0.7 + Double(abs(displacement)) / 1000.0)
+            result.append(DetectedNotationRecordMovementEvent(
+                startTime: startTime,
+                endTime: endTime,
+                startPosition: startPos,
+                endPosition: endPos,
+                direction: direction,
+                movementKind: direction == "forward" ? .normalPush : .normalPull,
+                speed: speed,
+                confidence: confidence,
+                source: "controller"
+            ))
+        }
+        return (result, PlatterDecodeDiagnostics(
+            filteredEventCount: filteredEventCount, rawRunCount: rawRunCount,
+            noiseFilteredRunCount: result.count))
+    }
+
     struct LocalRecordingSidecar: Codable, Equatable {
         static let currentSchemaVersion = "scratchlab_local_recording_sidecar_v1"
 

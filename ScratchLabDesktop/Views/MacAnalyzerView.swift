@@ -244,10 +244,6 @@ private struct DebugTimecodeCaptureCard: View {
 #endif
 
 struct MacAnalyzerView: View {
-    private static let babyScratchReplayModel = LiveNotationOverlayModel.replayNotation(
-        from: ScratchNotation.babyScratchFull76BeatQuantized
-    )
-
     private static let practiceBeatModeColumns = [
         GridItem(.flexible(), spacing: 10),
         GridItem(.flexible(), spacing: 10)
@@ -1150,9 +1146,8 @@ struct MacAnalyzerView: View {
     ///   Practice with Beat → wall-clock from practiceBeatStartUptime
     ///   Listen (scratch only) → demoModeController.demoPlayer.currentPlaybackTime
     private var practiceNotationStrip: some View {
-        let replayModel = Self.babyScratchReplayModel
-        return Group {
-            if !replayModel.isEmpty {
+        Group {
+            if let notation = ScratchNotation.babyScratchFull76BeatQuantized ?? ScratchNotation.babyScratch {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text("Live Notation")
@@ -1187,19 +1182,20 @@ struct MacAnalyzerView: View {
                             .foregroundStyle(.white.opacity(0.68))
 
                         TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
-                            LiveNotationOverlayView(
-                                model: replayModel,
-                                currentTime: practiceNotationCurrentTime,
-                                background: .translucent,
-                                drawMode: .replayReveal,
-                                viewportSeconds: 3.2,
-                                beatGridBPM: 79,
-                                beatGridFirstBeatTime: 0.336,
-                                beatsPerBar: 4,
-                                maximumAmplitude: 0.35,
-                                faderAuthorityNotation: ScratchNotation.babyScratch
+                            let now = practiceNotationCurrentTime
+                            // Same shared notation component COPY/RESULT/REVIEW
+                            // use. A 3.2 s live window keeps the playhead at the
+                            // old 45%-from-left anchor once past the lead-in; the
+                            // window left-clamps at phrase start so the playhead
+                            // sweeps from the left edge during the first bar.
+                            ScratchPhraseChartView(
+                                source: .target(notation),
+                                bpm: 79,
+                                targetWindow: (now - 1.44)...(now + 1.76),
+                                playheadTime: now,
+                                showPlayhead: true
                             )
-                            .frame(height: 80)
+                            .frame(height: 140)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .padding(.top, 4)
                         }
@@ -6344,8 +6340,15 @@ struct MacAnalyzerView: View {
     private struct ReviewPerformanceComparisonModel {
         let notation: ScratchNotation
         let overlay: ScratchComparisonOverlay
+        /// Raw captured movement evidence, shifted onto the target's time
+        /// origin so the stacked MY PERFORMANCE chart shares the TARGET
+        /// chart's axis. Measured, never fabricated.
+        let performedEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
         let score: ScratchPerformanceScore
         let coaching: [String]
+        /// Priority-ordered semantic errors derived from the same comparison
+        /// result the overlay/score render — one error language, one source.
+        let semanticErrors: [SemanticError]
         let faderChannel: FaderChannelComparison
         let bpm: Double
         let cycles: Int
@@ -6505,11 +6508,29 @@ struct MacAnalyzerView: View {
                     offsetMilliseconds: $0.offsetMilliseconds)
             }
         )
+        // Raw performed strokes, shifted onto the target's time origin so the
+        // stacked MY PERFORMANCE chart shares the TARGET chart's axis (phrase
+        // beat 0 = time 0). No direction or timing is invented — this is the
+        // captured movement evidence exactly as measured.
+        let performedEvents = snapshot.recordMovementEvents.map { event in
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime - clock.beatZeroTime,
+                endTime: event.endTime - clock.beatZeroTime,
+                startPosition: event.startPosition,
+                endPosition: event.endPosition,
+                direction: event.direction,
+                movementKind: event.movementKind,
+                speed: event.speed,
+                confidence: event.confidence,
+                source: event.source)
+        }
         return .ready(ReviewPerformanceComparisonModel(
             notation: notation,
             overlay: shifted,
+            performedEvents: performedEvents,
             score: ScratchPerformanceScore.score(result: result, windows: windows),
             coaching: NotationFeedbackState.coachingMessages(for: result, limit: 3),
+            semanticErrors: SemanticError.derive(from: result, target: target, performed: performed, clock: clock),
             faderChannel: result.faderChannel,
             bpm: bpm,
             cycles: cycles
@@ -6537,32 +6558,64 @@ struct MacAnalyzerView: View {
                     .padding(12)
                     .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             case .ready(let model):
-                VStack(alignment: .leading, spacing: 6) {
-                    // Direct TARGET / MY PERFORMANCE labels — not
-                    // colour-dependent, accessible.
-                    HStack(spacing: 24) {
+                // Stacked comparison — TARGET above, MY PERFORMANCE below, on
+                // the same musical-time axis. Direct labels keep the two
+                // readable without relying on colour alone. Both charts
+                // consume ONE common domain (the target's duration), so a
+                // given musical time lands on the same x in both.
+                let domain = ScratchPhraseChartComparisonDomain.commonDomain(
+                    targetDuration: model.notation.timelineDuration)
+                // The TARGET's vertical platter frame stabilizes the performed
+                // row, so the neutral position and a given travel land on the
+                // same Y in both charts regardless of how sparse the take is.
+                let performedFrame = ScratchStrokeGeometry.rawRange(
+                    for: LaneContent(notation: model.notation))
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Label("TARGET", systemImage: "target")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color(white: 0.55))
+                        ScratchPhraseChartView(source: .target(model.notation), bpm: model.bpm,
+                                               targetWindow: domain)
+                            .frame(height: 96)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
                         Label("MY PERFORMANCE", systemImage: "person.fill")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color(red: 0.30, green: 0.70, blue: 1.00))
+                        ScratchPhraseChartView(source: .performedPlatter(model.performedEvents), bpm: model.bpm,
+                                               capturedWindow: domain,
+                                               performedFrame: performedFrame)
+                            .frame(height: 96)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
+                }
+
+                reviewComparisonScoreRows(model.score, faderChannel: model.faderChannel)
+
+                SemanticErrorListView(errors: model.semanticErrors, maxErrors: 4)
+
+                // Opt-in beat-aligned overlay for detailed inspection — not
+                // the default comparison view.
+                DisclosureGroup {
+                    Text("Dots at stroke starts: green on time · amber early · orange late · red wrong direction · hollow missed · white extra. Slashes show what you played; cyan/rose is the target.")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
                     ScratchPhraseChartView(
                         source: .target(model.notation),
                         bpm: model.bpm,
                         comparisonOverlay: model.overlay
                     )
-                    .frame(height: 170)
+                    .frame(height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } label: {
+                    Label("Detailed overlay", systemImage: "square.stack.3d.up")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                Text("Dots at stroke starts: green on time · amber early · orange late · red wrong direction · hollow missed · white extra. Slashes show what you played; cyan/rose is the target.")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .fixedSize(horizontal: false, vertical: true)
-
-                reviewComparisonScoreRows(model.score, faderChannel: model.faderChannel)
 
                 if let firstAttempt = reviewFirstCycleAttempt {
                     Divider().overlay(Color.white.opacity(0.08))
@@ -6614,10 +6667,10 @@ struct MacAnalyzerView: View {
             switch faderChannel {
             case .noCanonicalFaderChannel:
                 reviewComparisonScoreRow("Fader", nil,
-                                         detail: "target authors no fader channel")
+                                         detail: faderChannel.learnerFaderSummary)
             case .noPerformedFaderCapture:
                 reviewComparisonScoreRow("Fader", nil,
-                                         detail: "no crossfader capture in this take")
+                                         detail: faderChannel.learnerFaderSummary)
             case .compared:
                 reviewComparisonScoreRow("Fader timing", score.faderTiming,
                                          detail: "\(score.matchedFaderEdgeCount) matched")
@@ -6937,7 +6990,14 @@ struct MacAnalyzerView: View {
         }
         if !snapshot.recordMovementEvents.isEmpty {
             if snapshot.notationSource == "detected" {
-                return ReviewCapturedSource(label: "Video motion", systemImage: "figure.wave", color: .green)
+                switch snapshot.recordMovementEvents.first?.source {
+                case "controller":
+                    return ReviewCapturedSource(label: "Controller platter", systemImage: "dial.medium", color: .green)
+                case "timecode_live":
+                    return ReviewCapturedSource(label: "DVS timecode", systemImage: "waveform.path", color: .green)
+                default:
+                    return ReviewCapturedSource(label: "Video motion", systemImage: "figure.wave", color: .green)
+                }
             }
             return ReviewCapturedSource(label: "Motion only", systemImage: "figure.wave", color: amber)
         }
@@ -7447,6 +7507,8 @@ struct MacAnalyzerView: View {
             }
 
             reviewComparisonScoreRows(result.score, faderChannel: result.comparison.faderChannel)
+
+            SemanticErrorListView(errors: result.semanticErrors, maxErrors: 4)
 
             if let coaching = result.coaching.first {
                 Text(coaching)

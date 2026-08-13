@@ -422,6 +422,25 @@ struct SessionExportRecordMovementEvent: Codable, Equatable, Sendable {
     let source: String?
 }
 
+extension SessionExportRecordMovementEvent {
+    /// The production export mapping from the in-memory captured movement event
+    /// to the on-disk export record. This is the SINGLE source of truth for the
+    /// field-for-field contract — the exporter and the round-trip tests both use
+    /// it, so a test can never drift from what the exporter actually writes.
+    init(from event: CaptureCore.DetectedNotationRecordMovementEvent) {
+        self.init(
+            direction: event.direction,
+            startTime: event.startTime,
+            endTime: event.endTime,
+            startPosition: event.startPosition,
+            endPosition: event.endPosition,
+            movementKind: event.movementKind.rawValue,
+            speed: event.speed,
+            confidence: event.confidence,
+            source: event.source)
+    }
+}
+
 struct SessionExportAudioEvent: Codable, Equatable, Sendable {
     let startTime: Double?
     let endTime: Double?
@@ -893,6 +912,39 @@ struct SessionValidationReport: Equatable, Sendable {
     var summaryText: String {
         issues.first ?? suggestedError.userMessage
     }
+}
+
+/// Copies one DEBUG companion file into the staged `debug/` folder, fixing up
+/// `takeID`/`takeNumber` from the export context. An ABSENT companion is
+/// optional (no-op); a PRESENT but unreadable / malformed / unencodable /
+/// unwritable companion throws so the export fails visibly. File-scope (not a
+/// member of the `@MainActor` `SessionExportCoordinator`) so it is nonisolated
+/// and unit-testable; the call site in `stagePackage` remains `#if DEBUG`.
+func copyDebugCompanion(
+    suffix: String,
+    sidecarURL: URL,
+    takeID: String,
+    takeNumber: Int,
+    debugDir: URL,
+    fileManager: FileManager
+) throws {
+    let sidecarBase = sidecarURL.deletingPathExtension().lastPathComponent
+    let companionURL = sidecarURL
+        .deletingLastPathComponent()
+        .appendingPathComponent("\(sidecarBase)_\(suffix).json")
+    guard fileManager.fileExists(atPath: companionURL.path) else { return }
+    let data = try Data(contentsOf: companionURL)
+    guard var companionJSON = try JSONSerialization.jsonObject(with: data)
+        as? [String: Any] else {
+        throw SessionExportError.unableToPrepareExport
+    }
+    companionJSON["takeID"] = takeID
+    companionJSON["takeNumber"] = takeNumber
+    let fixedData = try JSONSerialization.data(
+        withJSONObject: companionJSON, options: [.prettyPrinted, .sortedKeys])
+    try fileManager.createDirectory(at: debugDir, withIntermediateDirectories: true)
+    let debugURL = debugDir.appendingPathComponent("take-\(takeNumber)_\(suffix).json")
+    try fixedData.write(to: debugURL)
 }
 
 @MainActor
@@ -1960,33 +2012,28 @@ struct SessionArchiveBuilder: Sendable {
             try notationData.write(to: notationURL, options: .atomic)
 
 #if DEBUG
-            // Copy companion raw-platter debug file if it exists next to the sidecar.
-            // Written by MacAnalyzerView from the in-memory raw platter timeline
-            // before export. No mutation to LocalRecordingSidecar or export schema.
-            let sidecarBase = takeContext.take.sidecarURL
-                .deletingPathExtension().lastPathComponent
-            let companionURL = takeContext.take.sidecarURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("\(sidecarBase)_raw_platter_debug.json")
-            if fileManager.fileExists(atPath: companionURL.path) {
-                let debugDir = stagedSessionURL
-                    .appendingPathComponent("debug", isDirectory: true)
-                let debugURL = debugDir
-                    .appendingPathComponent("take-\(takeContext.take.takeNumber)_raw_platter_debug.json")
-                let companionData = try? Data(contentsOf: companionURL)
-                // Fix up takeID / takeNumber from the export context.
-                if let data = companionData,
-                   var companionJSON = try? JSONSerialization.jsonObject(
-                    with: data) as? [String: Any] {
-                    companionJSON["takeID"] = takeContext.sidecar.takeID
-                    companionJSON["takeNumber"] = takeContext.take.takeNumber
-                    if let fixedData = try? JSONSerialization.data(
-                        withJSONObject: companionJSON, options: [.prettyPrinted, .sortedKeys]) {
-                        try? fileManager.createDirectory(at: debugDir,
-                            withIntermediateDirectories: true)
-                        try? fixedData.write(to: debugURL)
-                    }
-                }
+            // Copy DEBUG companion files (raw-platter debug, per-observation
+            // movement trace, aggregate movement diagnostics) if they exist next
+            // to the sidecar. An ABSENT companion is optional and skipped; a
+            // PRESENT but unreadable / malformed / unencodable / unwritable
+            // companion is a visible export failure, never silently swallowed.
+            // No mutation to LocalRecordingSidecar or export schema.
+            let companionSuffixes = [
+                "raw_platter_debug",
+                "movement_trace",
+                "movement_diagnostics",
+            ]
+            let debugDir = stagedSessionURL
+                .appendingPathComponent("debug", isDirectory: true)
+            for suffix in companionSuffixes {
+                try copyDebugCompanion(
+                    suffix: suffix,
+                    sidecarURL: takeContext.take.sidecarURL,
+                    takeID: takeContext.sidecar.takeID,
+                    takeNumber: takeContext.take.takeNumber,
+                    debugDir: debugDir,
+                    fileManager: fileManager
+                )
             }
 #endif
 
@@ -2224,17 +2271,7 @@ struct SessionArchiveBuilder: Sendable {
 
         let detectedNotation = sidecar.detectedNotation
         let detectedMovementEvents = (detectedNotation?.recordMovementEvents ?? []).map {
-            SessionExportRecordMovementEvent(
-                direction: $0.direction,
-                startTime: $0.startTime,
-                endTime: $0.endTime,
-                startPosition: $0.startPosition,
-                endPosition: $0.endPosition,
-                movementKind: $0.movementKind.rawValue,
-                speed: $0.speed,
-                confidence: $0.confidence,
-                source: $0.source
-            )
+            SessionExportRecordMovementEvent(from: $0)
         }
         let detectedAudioEvents = (detectedNotation?.audioEvents ?? []).map {
             SessionExportAudioEvent(

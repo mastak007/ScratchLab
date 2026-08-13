@@ -59,10 +59,11 @@ final class ScratchStrokeGeometryTravelAmplitudeTests: XCTestCase {
         ]
         let path = ScratchStrokeGeometry.motionPath(for: content(strokes))
         let strokeSegs = path.segments.filter { if case .stroke = $0.kind { return true }; return false }
-        XCTAssertGreaterThanOrEqual(strokeSegs.count, 4)
-        let c = centre(path)
-        // First stroke (travel 0.2) deflects less than second (travel 1.0), despite both being FAST.
-        XCTAssertLessThan(abs(strokeSegs[0].endPosition - c), abs(strokeSegs[2].endPosition - c))
+        XCTAssertEqual(strokeSegs.count, 2)  // one continuous segment per stroke
+        // First stroke (travel 0.2) moves less than second (travel 1.0), despite both being FAST.
+        let firstTravel = abs(strokeSegs[0].endPosition - strokeSegs[0].startPosition)
+        let secondTravel = abs(strokeSegs[1].endPosition - strokeSegs[1].startPosition)
+        XCTAssertLessThan(firstTravel, secondTravel)
     }
 
     func testFullTravelReachesRail() {

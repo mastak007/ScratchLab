@@ -362,6 +362,23 @@ enum FaderChannelComparison: Equatable, Sendable {
                   extraPerformedIndices: [Int])
 }
 
+extension FaderChannelComparison {
+    /// Learner-facing one-line fader summary — product language, never
+    /// implementation terminology. `.noCanonicalFaderChannel` is the Baby
+    /// Scratch case (the only canonical pattern today): the fader is open
+    /// throughout and no cut is expected.
+    var learnerFaderSummary: String {
+        switch self {
+        case .noCanonicalFaderChannel:
+            return "Open throughout · no cuts expected"
+        case .noPerformedFaderCapture:
+            return "Fader not captured"
+        case .compared(let matched, let missing, let extra):
+            return "\(matched.count) cuts matched · \(missing.count) missed · \(extra.count) extra"
+        }
+    }
+}
+
 /// Renderer-independent comparison primitives for one target phrase vs one
 /// performed take. Deliberately not collapsed into a score; carries no UI
 /// strings. Consumed later by UI/coaching layers.
@@ -369,27 +386,200 @@ struct ScratchPerformanceComparisonResult: Equatable, Sendable {
     let matchedStrokes: [MatchedStrokeComparison]
     /// Target strokes with no performed match inside the window.
     let missingTargetStrokeIndices: [Int]
-    /// Performed strokes claimed by no target stroke.
+    /// Performed strokes claimed by no target stroke — boundary (setup /
+    /// incomplete) strokes are reported separately, never as ordinary extras.
     let extraPerformedStrokeIndices: [Int]
     let faderChannel: FaderChannelComparison
     /// Tempo the millisecond projections were computed at.
     let bpm: Double
+    /// Performed strokes classified as leading preparatory setup. These stay
+    /// in the captured record and are reported as evidence, but are excluded
+    /// from direction/extra penalties.
+    let boundarySetupPerformedStrokeIndices: [Int]
+    /// Performed strokes classified as incomplete boundary strokes (a
+    /// truncated stroke at the leading or trailing edge). Retained evidence,
+    /// excluded from direction/extra penalties.
+    let boundaryIncompletePerformedStrokeIndices: [Int]
+    /// Target strokes tiled beyond the performed phrase and therefore unscored
+    /// — never reported as missed. Empty unless the caller tiled the target
+    /// past the scored performed window.
+    let unscoredTargetStrokeIndices: [Int]
+    /// Human-readable explanation of the chosen phase/offset, for diagnostics.
+    let alignmentExplanation: String
+
+    // Defaults keep the synthesized memberwise initializer source-compatible
+    // with callers that construct a result directly for tests.
+    init(matchedStrokes: [MatchedStrokeComparison],
+         missingTargetStrokeIndices: [Int],
+         extraPerformedStrokeIndices: [Int],
+         faderChannel: FaderChannelComparison,
+         bpm: Double,
+         boundarySetupPerformedStrokeIndices: [Int] = [],
+         boundaryIncompletePerformedStrokeIndices: [Int] = [],
+         unscoredTargetStrokeIndices: [Int] = [],
+         alignmentExplanation: String = "") {
+        self.matchedStrokes = matchedStrokes
+        self.missingTargetStrokeIndices = missingTargetStrokeIndices
+        self.extraPerformedStrokeIndices = extraPerformedStrokeIndices
+        self.faderChannel = faderChannel
+        self.bpm = bpm
+        self.boundarySetupPerformedStrokeIndices = boundarySetupPerformedStrokeIndices
+        self.boundaryIncompletePerformedStrokeIndices = boundaryIncompletePerformedStrokeIndices
+        self.unscoredTargetStrokeIndices = unscoredTargetStrokeIndices
+        self.alignmentExplanation = alignmentExplanation
+    }
 }
 
 // MARK: - Alignment
 
+/// The output of the source-neutral alignment stage: which performed strokes
+/// form the scored phrase, which are boundary evidence, and which target
+/// strokes (if any) were tiled beyond the performed phrase.
+///
+/// Alignment never mutates the captured record — `PerformedScratchTimeline`
+/// and its strokes are untouched. Boundary strokes remain present in that
+/// array; this type only records their classification so comparison/scoring
+/// can exclude them from in-phrase penalties while still surfacing them as
+/// evidence.
+struct ScratchAlignment: Equatable, Sendable {
+    /// Performed strokes classified as leading preparatory setup (indices into
+    /// `PerformedScratchTimeline.strokes`).
+    let boundarySetupPerformedIndices: [Int]
+    /// Performed strokes classified as incomplete boundary strokes (a
+    /// truncated stroke at the leading or trailing edge).
+    let boundaryIncompletePerformedIndices: [Int]
+    /// The contiguous scored performed window `[start, end)`.
+    let scoredPerformedRange: Range<Int>
+    /// Target strokes tiled beyond the performed phrase and therefore unscored
+    /// (indices into `TargetScratchPhrase.strokes`).
+    let unscoredTargetStrokeIndices: [Int]
+    /// Human-readable explanation of the chosen phase/offset, for diagnostics.
+    let explanation: String
+
+    /// Scored performed indices in ascending order.
+    var scoredPerformedIndices: [Int] { Array(scoredPerformedRange) }
+}
+
 enum ScratchPerformanceAlignment {
 
-    /// Deterministic one-to-one greedy matching, in target order.
+    // Boundary-classification evidence, all in beat-domain durations. A leading
+    // stroke markedly longer than its neighbours is slow preparatory setup; a
+    // stroke markedly shorter than its neighbours is a truncated/incomplete
+    // boundary stroke. These are deliberately coarse, relative to the phrase's
+    // own median so they stay BPM- and source-independent.
+    /// A leading stroke whose duration exceeds this multiple of the median is
+    /// treated as slow preparatory setup rather than an in-phrase stroke.
+    static let setupDurationFactor = 1.6
+    /// A stroke whose duration falls below this multiple of the median is
+    /// treated as an incomplete (truncated) boundary stroke.
+    static let incompleteDurationFactor = 0.55
+    /// Minimum number of full target cycles that must remain in the scored
+    /// window before a boundary is trimmed — a short phrase must not be
+    /// over-trimmed on the strength of a single outlier ("insufficient
+    /// neighbouring cycles").
+    static let minimumScoredCycles = 2
+
+    /// Runs the alignment stage: identifies boundary (setup / incomplete)
+    /// performed strokes, the scored performed window, and any over-tiled
+    /// target strokes, and selects the phase (target stroke 0 pairs with the
+    /// first scored performed stroke).
     ///
-    /// For each target stroke (ascending index) the nearest unmatched
-    /// performed stroke within `strokeMatchWindowBeats` of its start beat is
-    /// claimed; equal distances break toward the earlier performed index.
-    /// Unclaimed target strokes are missing; unclaimed performed strokes are
-    /// extra. Fader edges match the same way but only against edges of the
-    /// same state — an open edge never matches a close edge.
+    /// Deterministic and source-neutral: it reads only beat positions and
+    /// directions, never `source`/`confidence`, and never reinterprets an
+    /// individual stroke's captured direction. Phase is chosen from timing and
+    /// structural evidence (duration outliers at the phrase edges), never by
+    /// flipping directions to maximise a score.
+    static func align(
+        target: TargetScratchPhrase,
+        performed: PerformedScratchTimeline
+    ) -> ScratchAlignment {
+        let strokes = performed.strokes
+        let n = strokes.count
+        let targetCount = target.strokes.count
+
+        guard n > 0 else {
+            return ScratchAlignment(boundarySetupPerformedIndices: [],
+                                    boundaryIncompletePerformedIndices: [],
+                                    scoredPerformedRange: 0..<0,
+                                    unscoredTargetStrokeIndices: [],
+                                    explanation: "No performed strokes to align.")
+        }
+
+        let durations = strokes.map { $0.endBeat - $0.startBeat }
+        let median = Self.median(durations)
+        let cyclesPerStroke = Self.strokesPerCycle(in: target)
+        let requiredStrokes = cyclesPerStroke * Self.minimumScoredCycles
+
+        // Leading boundary: a contiguous prefix of duration outliers (long →
+        // setup, short → incomplete). Stops at the first stroke whose duration
+        // is not a strong outlier.
+        var leadingSetup: [Int] = []
+        var leadingIncomplete: [Int] = []
+        var scoredStart = 0
+        if median > 0 {
+            while scoredStart < n {
+                let d = durations[scoredStart]
+                if d > Self.setupDurationFactor * median {
+                    leadingSetup.append(scoredStart)
+                    scoredStart += 1
+                } else if d < Self.incompleteDurationFactor * median {
+                    leadingIncomplete.append(scoredStart)
+                    scoredStart += 1
+                } else {
+                    break
+                }
+            }
+        }
+
+        // Trailing boundary: a contiguous suffix of short (incomplete) outliers.
+        var trailingIncomplete: [Int] = []
+        var scoredEnd = n
+        if median > 0 {
+            while scoredEnd > 0, durations[scoredEnd - 1] < Self.incompleteDurationFactor * median {
+                trailingIncomplete.append(scoredEnd - 1)
+                scoredEnd -= 1
+            }
+        }
+        trailingIncomplete.reverse()
+
+        // Guard against over-trimming: if the scored window no longer contains
+        // enough cycles to establish a stable run, keep the whole phrase.
+        if scoredEnd - scoredStart < requiredStrokes {
+            leadingSetup = []
+            leadingIncomplete = []
+            trailingIncomplete = []
+            scoredStart = 0
+            scoredEnd = n
+        }
+
+        let scoredCount = scoredEnd - scoredStart
+        var unscoredTarget: [Int] = []
+        if scoredCount > 0, scoredCount % cyclesPerStroke == 0, scoredCount < targetCount {
+            unscoredTarget = Array(scoredCount..<targetCount)
+        }
+
+        let explanation = Self.explain(setup: leadingSetup,
+                                       incomplete: leadingIncomplete + trailingIncomplete,
+                                       scoredRange: scoredStart..<scoredEnd,
+                                       unscoredTarget: unscoredTarget,
+                                       medianBeats: median,
+                                       durations: durations)
+        return ScratchAlignment(
+            boundarySetupPerformedIndices: leadingSetup,
+            boundaryIncompletePerformedIndices: leadingIncomplete + trailingIncomplete,
+            scoredPerformedRange: scoredStart..<scoredEnd,
+            unscoredTargetStrokeIndices: unscoredTarget,
+            explanation: explanation
+        )
+    }
+
+    /// Deterministic target-vs-performed comparison built on the alignment
+    /// stage. Boundary strokes are excluded from in-phrase direction/extra
+    /// penalties and over-tiled target strokes are reported unscored, so a
+    /// preparatory setup stroke or a truncated final stroke never inverts the
+    /// direction comparison for the stable phrase.
     ///
-    /// `nil` when `bpm` is unusable (windows are validated at construction).
+    /// `nil` when `bpm` is unusable.
     static func compare(
         target: TargetScratchPhrase,
         performed: PerformedScratchTimeline,
@@ -404,38 +594,38 @@ enum ScratchPerformanceAlignment {
             return offsetBeats < 0 ? .early : .late
         }
 
-        // Strokes.
-        let strokeAssignments = greedyAssignments(
-            targetBeats: target.strokes.map(\.startBeat),
-            performedBeats: performed.strokes.map(\.startBeat),
-            window: windows.strokeMatchWindowBeats
-        )
-        var matchedStrokes: [MatchedStrokeComparison] = []
-        var missingTargetStrokeIndices: [Int] = []
-        var claimedPerformed = Set<Int>()
-        for (targetIndex, performedIndex) in strokeAssignments.enumerated() {
-            guard let performedIndex else {
-                missingTargetStrokeIndices.append(targetIndex)
-                continue
-            }
-            claimedPerformed.insert(performedIndex)
+        let alignment = align(target: target, performed: performed)
+        let scoredStart = alignment.scoredPerformedRange.lowerBound
+        let scoredEnd = alignment.scoredPerformedRange.upperBound
+        let scoredCount = scoredEnd - scoredStart
+        let scoredTargetCount = alignment.unscoredTargetStrokeIndices.isEmpty
+            ? target.strokes.count
+            : (alignment.unscoredTargetStrokeIndices.first ?? target.strokes.count)
+
+        func makeMatch(targetIndex: Int, performedIndex: Int) -> MatchedStrokeComparison {
             let targetStroke = target.strokes[targetIndex]
             let performedStroke = performed.strokes[performedIndex]
             let offsetBeats = performedStroke.startBeat - targetStroke.startBeat
-            matchedStrokes.append(
-                MatchedStrokeComparison(
-                    targetIndex: targetIndex,
-                    performedIndex: performedIndex,
-                    offsetBeats: offsetBeats,
-                    offsetMilliseconds: offsetBeats * millisecondsPerBeat,
-                    timing: timingVerdict(offsetBeats: offsetBeats,
-                                          tolerance: windows.strokeCorrectToleranceBeats),
-                    directionCorrect: performedStroke.direction.map { $0 == targetStroke.direction }
-                )
+            return MatchedStrokeComparison(
+                targetIndex: targetIndex,
+                performedIndex: performedIndex,
+                offsetBeats: offsetBeats,
+                offsetMilliseconds: offsetBeats * millisecondsPerBeat,
+                timing: timingVerdict(offsetBeats: offsetBeats,
+                                      tolerance: windows.strokeCorrectToleranceBeats),
+                directionCorrect: performedStroke.direction.map { $0 == targetStroke.direction }
             )
         }
-        let extraPerformedStrokeIndices = performed.strokes.indices
-            .filter { !claimedPerformed.contains($0) }
+
+        // Strokes.
+        let (matchedStrokes, missingTargetStrokeIndices, extraPerformedStrokeIndices) =
+            matchStrokes(performed: performed.strokes,
+                         scoredStart: scoredStart,
+                         scoredEnd: scoredEnd,
+                         target: target,
+                         scoredTargetCount: scoredTargetCount,
+                         window: windows.strokeMatchWindowBeats,
+                         makeMatch: makeMatch)
 
         // Fader channel.
         let faderChannel: FaderChannelComparison
@@ -488,32 +678,173 @@ enum ScratchPerformanceAlignment {
             missingTargetStrokeIndices: missingTargetStrokeIndices,
             extraPerformedStrokeIndices: extraPerformedStrokeIndices,
             faderChannel: faderChannel,
-            bpm: bpm
+            bpm: bpm,
+            boundarySetupPerformedStrokeIndices: alignment.boundarySetupPerformedIndices,
+            boundaryIncompletePerformedStrokeIndices: alignment.boundaryIncompletePerformedIndices,
+            unscoredTargetStrokeIndices: alignment.unscoredTargetStrokeIndices,
+            alignmentExplanation: alignment.explanation
         )
     }
 
-    /// One performed index (or nil) per target index. Greedy in target order;
-    /// nearest unmatched candidate within `window`; ties break toward the
-    /// earlier performed index.
-    private static func greedyAssignments(
-        targetBeats: [Double],
-        performedBeats: [Double],
-        window: Double
-    ) -> [Int?] {
-        var claimed = Set<Int>()
-        return targetBeats.map { targetBeat in
-            let candidates = performedBeats.indices.filter { index in
-                !claimed.contains(index) && abs(performedBeats[index] - targetBeat) <= window
-            }
-            let chosen = candidates.min { lhs, rhs in
-                let lhsDistance = abs(performedBeats[lhs] - targetBeat)
-                let rhsDistance = abs(performedBeats[rhs] - targetBeat)
-                if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
-                return lhs < rhs
-            }
-            if let chosen { claimed.insert(chosen) }
-            return chosen
+    /// One-to-one monotonic stroke matching over the scored windows.
+    ///
+    /// When the scored performed and target windows have equal length and
+    /// their direction sequences agree (or the performed direction is
+    /// indeterminate), strokes pair by index — this is drift-tolerant: tempo
+    /// drift shifts the *timing* verdicts, never the pairing, so a stable
+    /// alternating phrase is never mis-paired into wrong-way or missing/extra.
+    /// Otherwise (count or direction mismatch) a direction-aware monotonic
+    /// two-pointer match locates the genuine missing/extra strokes within the
+    /// caller's match window.
+    private static func matchStrokes(
+        performed: [PerformedScratchTimeline.Stroke],
+        scoredStart: Int,
+        scoredEnd: Int,
+        target: TargetScratchPhrase,
+        scoredTargetCount: Int,
+        window: Double,
+        makeMatch: (Int, Int) -> MatchedStrokeComparison
+    ) -> (matched: [MatchedStrokeComparison], missing: [Int], extra: [Int]) {
+        let scoredCount = scoredEnd - scoredStart
+
+        func compatible(_ p: ScratchNotationDirection?, _ t: ScratchNotationDirection) -> Bool {
+            p == nil || p == t
         }
+
+        // Fast path: same length and every direction agrees → index pairing.
+        if scoredCount == scoredTargetCount, scoredCount > 0 {
+            var allCompatible = true
+            for k in 0..<scoredCount
+            where !compatible(performed[scoredStart + k].direction, target.strokes[k].direction) {
+                allCompatible = false
+                break
+            }
+            if allCompatible {
+                var matched: [MatchedStrokeComparison] = []
+                matched.reserveCapacity(scoredCount)
+                for k in 0..<scoredCount {
+                    matched.append(makeMatch(k, scoredStart + k))
+                }
+                return (matched, [], [])
+            }
+        }
+
+        // Direction-aware monotonic two-pointer match.
+        var matched: [MatchedStrokeComparison] = []
+        var missing: [Int] = []
+        var extra: [Int] = []
+        var i = scoredStart
+        var j = 0
+        while i < scoredEnd && j < scoredTargetCount {
+            let p = performed[i]
+            let t = target.strokes[j]
+            let offset = p.startBeat - t.startBeat
+            if compatible(p.direction, t.direction) {
+                if abs(offset) <= window {
+                    matched.append(makeMatch(j, i))
+                    i += 1
+                    j += 1
+                } else if offset < 0 {
+                    extra.append(i)
+                    i += 1
+                } else {
+                    missing.append(j)
+                    j += 1
+                }
+            } else {
+                // Direction mismatch: if the next target slot matches p's
+                // direction and is nearer, the current target slot is missing
+                // (p belongs to the following slot); otherwise it is a genuine
+                // wrong-direction stroke for this slot.
+                let belongsNext = j + 1 < scoredTargetCount
+                    && p.direction != nil
+                    && p.direction == target.strokes[j + 1].direction
+                    && abs(p.startBeat - target.strokes[j + 1].startBeat) < abs(offset)
+                if belongsNext {
+                    missing.append(j)
+                    j += 1
+                } else if abs(offset) <= window {
+                    matched.append(makeMatch(j, i))
+                    i += 1
+                    j += 1
+                } else if offset < 0 {
+                    extra.append(i)
+                    i += 1
+                } else {
+                    missing.append(j)
+                    j += 1
+                }
+            }
+        }
+        while i < scoredEnd {
+            extra.append(i)
+            i += 1
+        }
+        while j < scoredTargetCount {
+            missing.append(j)
+            j += 1
+        }
+        return (matched, missing, extra)
+    }
+
+    /// The number of strokes per target cycle, derived from the period of the
+    /// tiled target's direction sequence. For the canonical Baby Scratch cycle
+    /// (`forward`, `backward`) this is 2. Returns the whole target length when
+    /// no periodic direction structure is detectable.
+    private static func strokesPerCycle(in target: TargetScratchPhrase) -> Int {
+        let directions = target.strokes.map(\.direction)
+        let n = directions.count
+        guard n > 0 else { return 1 }
+        for period in 1...n where n % period == 0 {
+            var periodic = true
+            for i in period..<n where directions[i] != directions[i - period] {
+                periodic = false
+                break
+            }
+            if periodic { return period }
+        }
+        return n
+    }
+
+    private static func median(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[mid - 1] + sorted[mid]) / 2
+        }
+        return sorted[mid]
+    }
+
+    private static func explain(setup: [Int],
+                                incomplete: [Int],
+                                scoredRange: Range<Int>,
+                                unscoredTarget: [Int],
+                                medianBeats: Double,
+                                durations: [Double]) -> String {
+        var parts: [String] = []
+        if !setup.isEmpty {
+            let detail = setup.map { index in
+                "stroke \(index) (duration \(Self.fmt(durations[index])) beats ≈ \(Self.fmt(durations[index] / medianBeats))× median)"
+            }.joined(separator: ", ")
+            parts.append("boundary setup: \(detail)")
+        }
+        if !incomplete.isEmpty {
+            let detail = incomplete.map { index in
+                "stroke \(index) (duration \(Self.fmt(durations[index])) beats ≈ \(Self.fmt(durations[index] / medianBeats))× median)"
+            }.joined(separator: ", ")
+            parts.append("boundary incomplete: \(detail)")
+        }
+        let scoredCount = scoredRange.upperBound - scoredRange.lowerBound
+        parts.append("scored \(scoredCount) performed stroke(s) at indices \(scoredRange.lowerBound)..<\(scoredRange.upperBound)")
+        if !unscoredTarget.isEmpty {
+            parts.append("unscored target stroke(s) \(unscoredTarget.first!)..<\(unscoredTarget.last! + 1) (over-tiled)")
+        }
+        return parts.joined(separator: "; ")
+    }
+
+    private static func fmt(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 }
 
@@ -615,6 +946,12 @@ struct ScratchComparisonOverlay: Equatable, Sendable {
         case missingTarget
         /// Performed evidence no target slot claimed.
         case extraPerformed
+        /// Performed evidence classified as leading preparatory setup —
+        /// retained as evidence, never scored.
+        case boundarySetup
+        /// Performed evidence classified as an incomplete boundary stroke —
+        /// retained as evidence, never scored.
+        case boundaryIncomplete
     }
 
     struct StrokeMark: Equatable, Sendable {
@@ -690,6 +1027,28 @@ struct ScratchComparisonOverlay: Equatable, Sendable {
                 direction: stroke.direction
             ))
         }
+        for index in result.boundarySetupPerformedStrokeIndices
+        where performed.strokes.indices.contains(index) {
+            let stroke = performed.strokes[index]
+            strokeMarks.append(StrokeMark(
+                startTime: clock.seconds(fromBeats: stroke.startBeat),
+                endTime: clock.seconds(fromBeats: stroke.endBeat),
+                kind: .boundarySetup,
+                offsetMilliseconds: nil,
+                direction: stroke.direction
+            ))
+        }
+        for index in result.boundaryIncompletePerformedStrokeIndices
+        where performed.strokes.indices.contains(index) {
+            let stroke = performed.strokes[index]
+            strokeMarks.append(StrokeMark(
+                startTime: clock.seconds(fromBeats: stroke.startBeat),
+                endTime: clock.seconds(fromBeats: stroke.endBeat),
+                kind: .boundaryIncomplete,
+                offsetMilliseconds: nil,
+                direction: stroke.direction
+            ))
+        }
         strokeMarks.sort { lhs, rhs in
             if lhs.startTime != rhs.startTime { return lhs.startTime < rhs.startTime }
             return markOrder(lhs.kind) < markOrder(rhs.kind)
@@ -740,6 +1099,8 @@ struct ScratchComparisonOverlay: Equatable, Sendable {
         case .matched: return 0
         case .missingTarget: return 1
         case .extraPerformed: return 2
+        case .boundarySetup: return 3
+        case .boundaryIncomplete: return 4
         }
     }
 }
@@ -1044,6 +1405,37 @@ extension SemanticError {
         case .timing: return 0
         case .platter: return 1
         case .fader: return 2
+        }
+    }
+}
+
+extension SemanticError {
+
+    /// Concise, non-localized family eyebrow for grouping and marker display.
+    /// Kept as data (not UI strings) so a single renderer owns the styling;
+    /// the value is a stable uppercase token, not a sentence.
+    var familyLabel: String {
+        switch family {
+        case .timing: return "TIMING"
+        case .platter: return "PLATTER"
+        case .fader: return "FADER"
+        }
+    }
+
+    /// Concise direct kind label for a row or marker — the error name the
+    /// `expected`/`performed` sentences expand on.
+    var kindLabel: String {
+        switch kind {
+        case .early: return "Early"
+        case .late: return "Late"
+        case .wrongDirection: return "Wrong direction"
+        case .movementTooShort: return "Movement too short"
+        case .movementTooLong: return "Movement too long"
+        case .missedMovement: return "Missed movement"
+        case .missedCut: return "Missed cut"
+        case .extraCut: return "Extra cut"
+        case .earlyCut: return "Cut early"
+        case .lateCut: return "Cut late"
         }
     }
 }

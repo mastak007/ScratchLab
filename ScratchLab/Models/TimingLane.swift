@@ -54,6 +54,14 @@ struct LaneStroke: Equatable, Sendable {
     /// amplitude. Demo / scored / reel / notation strokes carry no travel and stay nil, so their
     /// rendering is unchanged. A real production source for this is PR 2 (provenance), not this PR.
     let normalizedTravel: Double?
+    /// Optional measured platter/hand position endpoints (0...1) carried from a captured
+    /// movement event. When BOTH are present the geometry renders the stroke as the exact
+    /// measured `measuredStartPosition → measuredEndPosition` span instead of integrating a
+    /// speed/travel amplitude — so the MY PERFORMANCE row preserves the captured trace
+    /// rather than re-authoring a centre→rail→centre bump. Authored strokes (Demo / scored /
+    /// reel / notation) carry nil and integrate amplitude as before.
+    let measuredStartPosition: Double?
+    let measuredEndPosition: Double?
 
     init(startTime: TimeInterval,
          endTime: TimeInterval,
@@ -61,7 +69,9 @@ struct LaneStroke: Equatable, Sendable {
          speed: ScratchNotationSpeedClassification,
          faderState: ScratchNotationFaderState,
          isGhost: Bool,
-         normalizedTravel: Double? = nil) {
+         normalizedTravel: Double? = nil,
+         measuredStartPosition: Double? = nil,
+         measuredEndPosition: Double? = nil) {
         self.startTime = startTime
         self.endTime = endTime
         self.direction = direction
@@ -69,6 +79,8 @@ struct LaneStroke: Equatable, Sendable {
         self.faderState = faderState
         self.isGhost = isGhost
         self.normalizedTravel = normalizedTravel
+        self.measuredStartPosition = measuredStartPosition
+        self.measuredEndPosition = measuredEndPosition
     }
 
     var duration: TimeInterval { max(0, endTime - startTime) }
@@ -105,7 +117,9 @@ extension LaneStroke {
                           speed: speed,
                           faderState: faderState,
                           isGhost: isGhost,
-                          normalizedTravel: normalizedTravel)
+                          normalizedTravel: normalizedTravel,
+                          measuredStartPosition: measuredStartPosition,
+                          measuredEndPosition: measuredEndPosition)
     }
 }
 

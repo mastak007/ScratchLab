@@ -193,7 +193,7 @@ final class VisionCaptureGateTests: XCTestCase {
             for _ in 0..<3 {
                 builder.recordObservation(
                     state: .movingLeft,
-                    position: CGPoint(x: x, y: 0.5),
+                    position: Double(x),
                     confidence: 1.0,
                     now: t
                 )
@@ -204,7 +204,7 @@ final class VisionCaptureGateTests: XCTestCase {
             for _ in 0..<3 {
                 builder.recordObservation(
                     state: .movingRight,
-                    position: CGPoint(x: x, y: 0.5),
+                    position: Double(x),
                     confidence: 1.0,
                     now: t
                 )
@@ -229,7 +229,7 @@ final class VisionCaptureGateTests: XCTestCase {
         for x in positions {
             builder.recordObservation(
                 state: .movingLeft,       // backward: x should increase
-                position: CGPoint(x: x, y: 0.5),
+                position: Double(x),
                 confidence: 1.0,
                 now: t
             )
@@ -238,7 +238,7 @@ final class VisionCaptureGateTests: XCTestCase {
         // Switch direction to flush the active movement.
         builder.recordObservation(
             state: .movingRight,
-            position: CGPoint(x: 0.47, y: 0.5),
+            position: 0.47,
             confidence: 1.0,
             now: t
         )
@@ -263,7 +263,7 @@ final class VisionCaptureGateTests: XCTestCase {
         for _ in 0..<20 {
             builder.recordObservation(
                 state: .steady,
-                position: CGPoint(x: CGFloat.random(in: 0.45...0.55), y: 0.5),
+                position: Double.random(in: 0.45...0.55),
                 confidence: 0.0,
                 now: t
             )

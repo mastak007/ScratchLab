@@ -431,3 +431,55 @@ struct ScratchLabStepHeader: View {
         .accessibilityLabel("Step \(number): \(title)")
     }
 }
+
+// MARK: - SemanticErrorListView
+//
+// Reusable list of the formal TIMING / PLATTER / FADER semantic errors
+// (`SemanticError`, from `ScratchPerformanceComparison`). Renders only the
+// most actionable errors first — the derivation already sorts timing →
+// platter → fader — each as one concise row: a monospaced family eyebrow, a
+// direct kind label, and the performed-side explanation. The expected
+// behaviour stays available as a hover tooltip so the full expected →
+// performed pair is reachable without cluttering the row. Family colour is a
+// restrained accent, never a full-red wash.
+
+struct SemanticErrorListView: View {
+    let errors: [SemanticError]
+    var maxErrors: Int = 4
+
+    private var visible: [SemanticError] {
+        Array(errors.prefix(maxErrors))
+    }
+
+    var body: some View {
+        if !visible.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(visible.enumerated()), id: \.offset) { _, error in
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(error.familyLabel)
+                            .font(ScratchLabDesign.Typo.metricLabel)
+                            .foregroundStyle(Self.familyColor(error.family))
+                            .kerning(0.4)
+                        Text(error.kindLabel)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(error.performed)
+                            .font(ScratchLabDesign.Typo.bodySecondary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .help(error.expected)
+                }
+            }
+        }
+    }
+
+    private static func familyColor(_ family: SemanticError.Family) -> Color {
+        switch family {
+        case .timing: return ScratchLabDesign.Sem.warning
+        case .platter: return ScratchLabDesign.Sem.info
+        case .fader:  return ScratchLabDesign.Notation.fader
+        }
+    }
+}

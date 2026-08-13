@@ -980,6 +980,13 @@ struct CapturedNotationDisplayView: View {
     private var isAudioOnlyPartial: Bool {
         snapshot.notationSource == "partial" && !hasMovementEvents && hasAudioEvents
     }
+
+    /// Camera was the movement source but produced no trusted notation — the
+    /// honest "Camera movement insufficient" state (never "successful detected").
+    private var cameraMovementInsufficient: Bool {
+        snapshot.detectionSources.contains("video")
+            && !snapshot.recordMovementEvents.contains { $0.source == "fused" }
+    }
     private var visibleDetectionSources: [String] {
         snapshot.detectionSources.filter { source in
             let lowercased = source.lowercased()
@@ -987,6 +994,16 @@ struct CapturedNotationDisplayView: View {
                 && !lowercased.contains("baby_nobeat.wav")
                 && !lowercased.contains("baby_no beat")
                 && !lowercased.contains("baby scratch template")
+        }.map { source in
+            // Truthful, human-readable source labels (never a raw internal token).
+            switch source {
+            case "controller": return "Controller platter"
+            case "timecode_live": return "DVS timecode"
+            case "video": return "Video motion"
+            case "audio": return "Audio"
+            case "midi": return "MIDI fader"
+            default: return source
+            }
         }
     }
 
@@ -1041,6 +1058,7 @@ struct CapturedNotationDisplayView: View {
         let hasAudioOnly     = !isDetected && !isPartial && !hasMovementEvents && hasAudioEvents
         let sourceLabel: String = {
             if isDetected            { return "Detected notation" }
+            if cameraMovementInsufficient { return "Camera movement insufficient" }
             if isAudioOnlyPartial {
                 return mixedStateHint
                     ? "Motion captured · no usable movement strokes found"

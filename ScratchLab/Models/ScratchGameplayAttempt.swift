@@ -121,6 +121,11 @@ struct PracticeAttemptResult: Equatable, Sendable {
     /// `NotationFeedbackState.coachingMessages(for:)` verbatim — no second
     /// coaching engine.
     let coaching: [String]
+    /// Priority-ordered semantic errors derived from `comparison` via
+    /// `SemanticError.derive` — the formal TIMING / PLATTER / FADER error
+    /// language the result surface renders. Purely a projection of
+    /// `comparison`; nothing here re-judges correctness.
+    let semanticErrors: [SemanticError]
 
     /// `score.overall`, unmodified.
     var overallScore: Double? { score.overall }
@@ -197,13 +202,22 @@ enum PracticeAttemptBuilder {
         ) else { return nil }
         let score = ScratchPerformanceScore.score(result: result, windows: windows)
         let coaching = NotationFeedbackState.coachingMessages(for: result, limit: 3)
+        // Semantic error derivation is a pure projection of `result`; the
+        // clock argument only anchors `beatPosition` (currently beat-relative
+        // and unused by any seconds consumer). A cycle-0 attempt aligns
+        // pattern beat 0 with window beat 0, so a zero anchor is the correct
+        // frame for the single-cycle attempt this builder produces.
+        let semanticErrors = PerformanceBeatClock(bpm: bpm, beatZeroTime: 0)
+            .map { SemanticError.derive(from: result, target: target, performed: windowedPerformed, clock: $0) }
+            ?? []
         return PracticeAttemptResult(
             techniqueID: techniqueID,
             bpm: bpm,
             window: window,
             comparison: result,
             score: score,
-            coaching: coaching
+            coaching: coaching,
+            semanticErrors: semanticErrors
         )
     }
 }

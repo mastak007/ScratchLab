@@ -102,6 +102,7 @@ func lowLatencyTimecodeTapFormatChoice(
     return .explicitHardwareInput
 }
 
+#if DEBUG && ENABLE_TIMECODE_LIVE_TAP
 func lowLatencyTimecodeTapHasRequiredChannels(
     actualChannelCount: Int,
     selection: TimecodeCMSampleBufferAdapter.ChannelPairSelection
@@ -115,6 +116,7 @@ func lowLatencyTimecodeTapHasRequiredChannels(
     }
     return actualChannelCount >= requiredChannelCount
 }
+#endif
 
 struct LowLatencyTimecodeTapHeartbeat: Equatable {
     static let minimumFreshnessInterval: TimeInterval = 0.10
@@ -797,7 +799,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         case replaySourceTrusted
     }
 
-    struct RoutineMovementDiagnosticsSnapshot {
+    struct RoutineMovementDiagnosticsSnapshot: Codable, Equatable {
         let framesReceived: Int
         let framesAnalyzed: Int
         let handObservationsReceived: Int
@@ -834,6 +836,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         /// path (not counted as drops because replay evidence is
         /// deterministic).  Always zero for live captures.
         let replaySourceTrusted: Int
+        /// Times the hand-anchor identity changed (base↔tip, or a different
+        /// joint set). Anatomical joint switching inflates this counter; a
+        /// temporally-stable base anchor drives it toward zero.
+        var anchorSwitches: Int = 0
+        /// The most recent anchor identity, e.g. `base:wrist,indexMCP,middleMCP`
+        /// or `tipFallback:indexTip`. Observable proof of which joints form the
+        /// anchor and whether the stable base is being used.
+        var lastAnchorIdentity: String? = nil
         let recentSamples: [String]
         let recentDirections: [String]
     }
@@ -870,6 +880,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         var impossibleJumpRejects = 0
         var platterObserveAttempted = 0
         var platterObserveSkippedNotRecording = 0
+        var anchorSwitches = 0
+        private var lastAnchorIdentity: String?
 
         private var rawDropReasons: [RoutineMovementRawDropReason: Int] = [:]
         private var normalizedDropReasons: [RoutineMovementNormalizedDropReason: Int] = [:]
@@ -916,6 +928,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         func recordNormalizedDrop(_ reason: RoutineMovementNormalizedDropReason) {
             normalizedDropReasons[reason, default: 0] += 1
+        }
+
+        /// Records a normalized/confidence rejection with its exact reason and
+        /// the confidence before and after the adjustment that rejected it.
+        func recordNormalizedDrop(
+            _ reason: RoutineMovementNormalizedDropReason,
+            confidenceBefore: Double,
+            confidenceAfter: Double
+        ) {
+            normalizedDropReasons[reason, default: 0] += 1
+            append(&recentSamples, value: "drop:\(reason.rawValue) conf=\(String(format: "%.3f", confidenceBefore))→\(String(format: "%.3f", confidenceAfter))")
         }
 
         func recordMerge() {
@@ -1005,6 +1028,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             platterObserveSkippedNotRecording += 1
         }
 
+        /// Records the hand-anchor identity for one frame. Increments
+        /// `anchorSwitches` whenever the identity changed (base↔tip or a
+        /// different joint set), and keeps the latest identity string for the
+        /// exported diagnostics.
+        func recordAnchorIdentity(jointNames: [String], mode: String, switched: Bool) {
+            let identity = "\(mode):\(jointNames.joined(separator: ","))"
+            if switched {
+                anchorSwitches += 1
+            }
+            lastAnchorIdentity = identity
+        }
+
         func recordTrustDrop(_ reason: RoutineMovementTrustDropReason) {
             trustDropReasons[reason, default: 0] += 1
         }
@@ -1044,6 +1079,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 normalizedDropReasons: dictionary(from: normalizedDropReasons),
                 trustDropReasons: dictionary(from: trustDropReasons),
                 replaySourceTrusted: replaySourceTrusted,
+                anchorSwitches: anchorSwitches,
+                lastAnchorIdentity: lastAnchorIdentity,
                 recentSamples: recentSamples,
                 recentDirections: recentDirections
             )
@@ -1277,6 +1314,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let startTime: TimeInterval
             let startPosition: Double?
             let startConfidence: Double
+            let source: String
             var latestTime: TimeInterval
             var latestPosition: Double?
             var latestConfidence: Double
@@ -1289,67 +1327,78 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         private var activeMovement: ActiveMovement?
         private var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
         private let debugSession: RoutineMovementDebugSession?
+        private let traceRecorder: MovementTraceRecorder?
 
         init(
             startedAt: CFTimeInterval = CACurrentMediaTime(),
-            debugSession: RoutineMovementDebugSession? = nil
+            debugSession: RoutineMovementDebugSession? = nil,
+            traceRecorder: MovementTraceRecorder? = nil
         ) {
             self.startedAt = startedAt
             self.debugSession = debugSession
+            self.traceRecorder = traceRecorder
         }
 
         func recordObservation(
             state: HandMotionState,
-            position: CGPoint?,
+            position: Double?,
             confidence: Double,
-            now: CFTimeInterval = CACurrentMediaTime()
+            source: String = "detected",
+            now: CFTimeInterval = CACurrentMediaTime(),
+            observationID: Int? = nil
         ) {
             #if DEBUG
-            debugSession?.recordBuilderSample(state: state, position: position, confidence: confidence)
+            debugSession?.recordBuilderSample(
+                state: state,
+                position: position.map { CGPoint(x: $0, y: 0) },
+                confidence: confidence)
             #endif
             let newDirection = Self.direction(for: state)
-            let normalizedPosition = position.map { Double(min(max($0.x, 0), 1)) }
             let elapsed = max(0, now - startedAt)
 
             if var activeMovement {
                 if activeMovement.direction == newDirection {
                     updateActiveMovement(
                         &activeMovement,
-                        position: normalizedPosition,
+                        position: position,
                         confidence: confidence,
                         elapsed: elapsed
                     )
                     self.activeMovement = activeMovement
                     #if DEBUG
                     debugSession?.recordBuilderInputExtended()
+                    recordBuilderAction(observationID, at: now, action: "extended", reason: nil, eventIndex: nil)
                     #endif
                     return
                 }
 
-                finishActiveMovement(activeMovement)
+                finishActiveMovement(activeMovement, at: now, observationID: observationID)
                 self.activeMovement = nil
             }
 
             guard newDirection == .forward || newDirection == .back else {
                 #if DEBUG
                 debugSession?.recordBuilderInputRejectedDirection(state: state)
+                recordBuilderAction(observationID, at: now, action: "rejected", reason: String(describing: state), eventIndex: nil)
                 #endif
                 return
             }
             #if DEBUG
             debugSession?.recordBuilderInputAccepted()
+            recordBuilderAction(observationID, at: now, action: "started", reason: nil, eventIndex: nil)
             #endif
 
             let movement = ActiveMovement(
                 direction: newDirection,
                 startTime: elapsed,
-                startPosition: normalizedPosition,
+                startPosition: position,
                 startConfidence: confidence,
+                source: source,
                 latestTime: elapsed,
-                latestPosition: normalizedPosition,
+                latestPosition: position,
                 latestConfidence: confidence,
                 furthestTime: elapsed,
-                furthestPosition: normalizedPosition,
+                furthestPosition: position,
                 peakConfidence: confidence
             )
             self.activeMovement = movement
@@ -1357,6 +1406,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             debugSession?.recordActiveMovementStart()
             #endif
         }
+
+        #if DEBUG
+        /// Records the actual builder execution for `observationID`, keyed to
+        /// the point the builder actually processed the observation (on MainActor).
+        private func recordBuilderAction(
+            _ observationID: Int?,
+            at now: CFTimeInterval,
+            action: String,
+            reason: String?,
+            eventIndex: Int?
+        ) {
+            guard let observationID else { return }
+            traceRecorder?.recordBuilderExecution(
+                index: observationID,
+                executionTime: now,
+                action: action,
+                rejectionReason: reason,
+                finishedEventIndex: eventIndex,
+                skippedReason: nil
+            )
+        }
+        #endif
 
         func movementEvents(
             now: CFTimeInterval = CACurrentMediaTime()
@@ -1369,7 +1440,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     confidence: activeMovement.latestConfidence,
                     elapsed: elapsed
                 )
-                finishActiveMovement(activeMovement)
+                finishActiveMovement(activeMovement, at: now, observationID: nil)
             }
             activeMovement = nil
             return events
@@ -1388,32 +1459,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard let position else { return }
             activeMovement.latestPosition = position
 
-            guard let currentExtreme = activeMovement.furthestPosition else {
-                activeMovement.furthestPosition = position
-                activeMovement.furthestTime = elapsed
-                return
-            }
-
-            // Camera-space X is unmirrored: rightward = x increasing.
-            // .back  = semantic backward = camera-rightward → track MAXIMUM x (largest seen)
-            // .forward = semantic forward = camera-leftward → track MINIMUM x (smallest seen)
-            let shouldAdvanceExtreme: Bool
-            switch activeMovement.direction {
-            case .back:
-                shouldAdvanceExtreme = position >= currentExtreme
-            case .forward:
-                shouldAdvanceExtreme = position <= currentExtreme
-            default:
-                shouldAdvanceExtreme = false
-            }
-
-            if shouldAdvanceExtreme {
+            // Source-neutral "furthest" tracking: the extreme is the position
+            // with the greatest absolute deviation from the start — correct for
+            // image X (backward = increasing) and angular position (forward =
+            // increasing) alike, and never encodes a per-source sign convention.
+            let reference = activeMovement.startPosition ?? position
+            let currentDeviation = abs(position - reference)
+            let furthestDeviation = activeMovement.furthestPosition.map { abs($0 - reference) } ?? currentDeviation
+            if currentDeviation >= furthestDeviation {
                 activeMovement.furthestPosition = position
                 activeMovement.furthestTime = elapsed
             }
         }
 
-        private func finishActiveMovement(_ activeMovement: ActiveMovement) {
+        private func finishActiveMovement(_ activeMovement: ActiveMovement,
+                                          at now: CFTimeInterval,
+                                          observationID: Int?) {
             #if DEBUG
             debugSession?.recordActiveMovementFinishAttempt()
             #endif
@@ -1429,6 +1490,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard endTime > activeMovement.startTime else {
                 #if DEBUG
                 debugSession?.recordRawDrop(.endTimeEqualsStart)
+                recordBuilderAction(observationID, at: now, action: "finished", reason: "endTimeEqualsStart", eventIndex: nil)
                 #endif
                 return
             }
@@ -1436,6 +1498,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard duration >= 0.020 else {
                 #if DEBUG
                 debugSession?.recordRawDrop(.durationTooShort)
+                recordBuilderAction(observationID, at: now, action: "finished", reason: "durationTooShort", eventIndex: nil)
                 #endif
                 return
             }
@@ -1446,6 +1509,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard distance >= Self.minRawMovementPositionDelta else {
                 #if DEBUG
                 debugSession?.recordRawDrop(.deltaTooSmall)
+                recordBuilderAction(observationID, at: now, action: "finished", reason: "deltaTooSmall", eventIndex: nil)
                 #endif
                 return
             }
@@ -1464,11 +1528,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 movementKind: .hold,
                 speed: speed,
                 confidence: confidence,
-                source: "detected"
+                source: activeMovement.source
             )
             events.append(event)
             #if DEBUG
             debugSession?.recordRawMovementEventCreated()
+            recordBuilderAction(observationID, at: now, action: "finished", reason: nil, eventIndex: events.count - 1)
             #endif
         }
 
@@ -1548,32 +1613,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             guard duration >= Self.minStrokeDuration || overlapsAudio else {
                 #if DEBUG
-                debugSession?.recordNormalizedDrop(.durationTooShort)
+                debugSession?.recordNormalizedDrop(.durationTooShort, confidenceBefore: event.confidence, confidenceAfter: event.confidence)
                 #endif
                 return nil
             }
             guard delta >= Self.minPositionDelta else {
                 #if DEBUG
-                debugSession?.recordNormalizedDrop(.deltaTooSmall)
+                debugSession?.recordNormalizedDrop(.deltaTooSmall, confidenceBefore: event.confidence, confidenceAfter: event.confidence)
                 #endif
                 return nil
             }
             guard speed >= Self.minSpeedForStroke else {
                 #if DEBUG
-                debugSession?.recordNormalizedDrop(.speedTooLow)
-                #endif
-                return nil
-            }
-
-            var confidence = min(1, max(0, event.confidence))
-            if overlapsAudio {
-                confidence = min(1, confidence + 0.08)
-            } else {
-                confidence *= Self.unconfirmedConfidenceMultiplier
-            }
-            guard confidence >= Self.minConfidenceForStroke else {
-                #if DEBUG
-                debugSession?.recordNormalizedDrop(.confidenceTooLow)
+                debugSession?.recordNormalizedDrop(.speedTooLow, confidenceBefore: event.confidence, confidenceAfter: event.confidence)
                 #endif
                 return nil
             }
@@ -1586,11 +1638,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             )
             guard movementKind != .hold else {
                 #if DEBUG
-                debugSession?.recordNormalizedDrop(.movementKindHold)
+                debugSession?.recordNormalizedDrop(.movementKindHold, confidenceBefore: event.confidence, confidenceAfter: event.confidence)
                 #endif
                 return nil
             }
 
+            // Idempotent: physical validation + kind classification ONLY. Confidence
+            // is NOT mutated here — the single documented `adjustConfidence` stage
+            // owns confidence, so repeated normalization cannot compound the penalty.
             return CaptureCore.DetectedNotationRecordMovementEvent(
                 startTime: event.startTime,
                 endTime: event.endTime,
@@ -1599,9 +1654,62 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 direction: event.direction,
                 movementKind: movementKind,
                 speed: speed,
-                confidence: confidence,
+                confidence: event.confidence,
                 source: event.source
             )
+        }
+
+        /// The result of the single, documented source-confidence adjustment.
+        struct ConfidenceAdjustment {
+            let event: CaptureCore.DetectedNotationRecordMovementEvent
+            let before: Double
+            let after: Double
+            /// `"directTelemetry"` | `"audioCorroborated"` | `"cameraPenalized"` |
+            /// `"alreadyAdjusted"` — the exact adjustment applied (or not).
+            let kind: String
+        }
+
+        /// The SINGLE, documented source-confidence stage.
+        ///
+        /// Idempotent: an event whose source is already `"video"`/`"fused"` has
+        /// been adjusted in a prior stage and is returned unchanged, so repeated
+        /// normalization/fusion passes can never compound the penalty.
+        ///
+        /// - Direct telemetry (`controller` / `timecode_live`) is authoritative and
+        ///   NEVER adjusted (no penalty, and audio never lowers it).
+        /// - Camera builder output (`detected`): audio corroboration raises it ONCE
+        ///   (`+0.08`, source → `fused`); an uncorroborated camera movement is
+        ///   penalized ONCE (`× unconfirmedConfidenceMultiplier`, source → `video`).
+        func adjustConfidence(
+            event: CaptureCore.DetectedNotationRecordMovementEvent,
+            audioEvents: [ScratchAudioNotationEventCandidate]
+        ) -> ConfidenceAdjustment {
+            let overlapsAudio = overlapsAudioActivity(event: event, audioEvents: audioEvents)
+            switch event.source {
+            case "controller", "timecode_live":
+                return ConfidenceAdjustment(event: event, before: event.confidence, after: event.confidence, kind: "directTelemetry")
+            case "video", "fused":
+                // Already adjusted — idempotent, never re-applied.
+                return ConfidenceAdjustment(event: event, before: event.confidence, after: event.confidence, kind: "alreadyAdjusted")
+            default:  // "detected" — camera builder output
+                if overlapsAudio {
+                    let after = min(1, event.confidence + 0.08)
+                    let adjusted = CaptureCore.DetectedNotationRecordMovementEvent(
+                        startTime: event.startTime, endTime: event.endTime,
+                        startPosition: event.startPosition, endPosition: event.endPosition,
+                        direction: event.direction, movementKind: event.movementKind, speed: event.speed,
+                        confidence: after, source: "fused")
+                    return ConfidenceAdjustment(event: adjusted, before: event.confidence, after: after, kind: "audioCorroborated")
+                } else {
+                    let after = min(1, max(0, event.confidence * Self.unconfirmedConfidenceMultiplier))
+                    let adjusted = CaptureCore.DetectedNotationRecordMovementEvent(
+                        startTime: event.startTime, endTime: event.endTime,
+                        startPosition: event.startPosition, endPosition: event.endPosition,
+                        direction: event.direction, movementKind: event.movementKind, speed: event.speed,
+                        confidence: after, source: "video")
+                    return ConfidenceAdjustment(event: adjusted, before: event.confidence, after: after, kind: "cameraPenalized")
+                }
+            }
         }
 
         func classifyMovementKind(
@@ -1779,7 +1887,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 detectionSources.append("audio")
             }
             if !motionEvents.isEmpty {
-                detectionSources.append("video")
+                // Label the movement source truthfully from the input events'
+                // provenance — camera builder events ("detected") map to the
+                // historical "video" label, while direct telemetry keeps its own.
+                switch motionEvents.first?.source {
+                case "controller": detectionSources.append("controller")
+                case "timecode_live": detectionSources.append("timecode_live")
+                default: detectionSources.append("video")
+                }
             }
 
             return CaptureCore.DetectedNotationSnapshot(
@@ -1825,14 +1940,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     #endif
                     return false
                 }
-                guard event.source == "fused" || event.source == "detected" else {
+                let isDirectTelemetry = event.source == "controller" || event.source == "timecode_live"
+                guard event.source == "fused" || event.source == "detected" || isDirectTelemetry else {
                     #if DEBUG
                     debugSession?.recordTrustDrop(.notFused)
                     #endif
                     return false
                 }
                 let overlap = audioOverlapRatio(for: event, audioEvents: burstAudioEvents)
-                guard overlap >= Self.minAudioOverlapRatioForDirectionalNotation || event.source == "detected" else {
+                // Direct telemetry is independently directional — audio may
+                // improve timing/confidence but is never required to retain it.
+                guard overlap >= Self.minAudioOverlapRatioForDirectionalNotation
+                    || event.source == "detected" || isDirectTelemetry else {
                     #if DEBUG
                     debugSession?.recordTrustDrop(.lowAudioOverlap)
                     #endif
@@ -1874,66 +1993,47 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                         usedMotionIndexes.insert(match.index)
                         continue
                     }
-                    // Use motion-event times so classify() computes speed
-                    // from the motion-derived duration, not the (potentially
-                    // wider) audio-burst span. Audio overlap for trust-gate
-                    // purposes is still measured against the audio event via
-                    // audioOverlapRatio — this only fixes the speed dilution.
-                    let provisionalEvent = CaptureCore.DetectedNotationRecordMovementEvent(
-                        startTime: motionEvent.startTime,
-                        endTime: motionEvent.endTime,
-                        startPosition: motionEvent.startPosition,
-                        endPosition: motionEvent.endPosition,
-                        direction: motionEvent.direction,
-                        movementKind: .hold,
-                        speed: 0,
-                        confidence: min(1, max(0, (motionEvent.confidence + audioEvent.confidence) / 2)),
-                        source: "fused"
+                    // Single confidence adjustment: audio corroboration (or
+                    // unchanged for direct telemetry). Physical classification
+                    // already ran in normalize; it is idempotent and never
+                    // re-mutates confidence.
+                    let adjustment = normalizer.adjustConfidence(
+                        event: motionEvent,
+                        audioEvents: [audioEvent]
                     )
-                    if let classified = normalizer.classify(
-                        event: provisionalEvent,
-                        audioEvents: [audioEvent],
-                        debugSession: debugSession
-                    ) {
-                        // Only consume the motion index once the fused event
-                        // survives classify(). Failed fused events fall
-                        // through to the unmatched/video path below.
+                    guard adjustment.event.confidence >= RoutineNotationEventNormalizer.minConfidenceForStroke else {
+                        #if DEBUG
+                        debugSession?.recordNormalizedDrop(.confidenceTooLow, confidenceBefore: adjustment.before, confidenceAfter: adjustment.after)
+                        #endif
                         usedMotionIndexes.insert(match.index)
-                        fused.append(classified)
+                        continue
                     }
+                    usedMotionIndexes.insert(match.index)
+                    fused.append(adjustment.event)
                 }
             }
 
             for (index, motionEvent) in normalizedMotionEvents.enumerated() where !usedMotionIndexes.contains(index) {
                 if isReplaySource {
-                    // Deterministic platter replay: no live Vision
-                    // uncertainty, no audio to fuse against.  Preserve
-                    // the normalized event unchanged — do not apply
-                    // the unconfirmed-confidence multiplier a second
-                    // time and do not re-classify (which would apply
-                    // the multiplier a third time).  The builder has
-                    // already verified minimum duration and delta.
+                    // Deterministic platter replay: no live Vision uncertainty,
+                    // no audio to fuse against. Preserve unchanged — never apply
+                    // the camera penalty to a deterministic reconstruction.
                     fused.append(motionEvent)
-                } else {
-                    let downgradedEvent = CaptureCore.DetectedNotationRecordMovementEvent(
-                        startTime: motionEvent.startTime,
-                        endTime: motionEvent.endTime,
-                        startPosition: motionEvent.startPosition,
-                        endPosition: motionEvent.endPosition,
-                        direction: motionEvent.direction,
-                        movementKind: motionEvent.movementKind,
-                        speed: motionEvent.speed,
-                        confidence: min(1, max(0, motionEvent.confidence * RoutineNotationEventNormalizer.unconfirmedConfidenceMultiplier)),
-                        source: "video"
-                    )
-                    if let classified = normalizer.classify(
-                        event: downgradedEvent,
-                        audioEvents: burstAudioEvents,
-                        debugSession: debugSession
-                    ) {
-                        fused.append(classified)
-                    }
+                    continue
                 }
+                // Single confidence adjustment: direct telemetry is unchanged;
+                // an uncorroborated camera movement is penalized ONCE here.
+                let adjustment = normalizer.adjustConfidence(
+                    event: motionEvent,
+                    audioEvents: burstAudioEvents
+                )
+                guard adjustment.event.confidence >= RoutineNotationEventNormalizer.minConfidenceForStroke else {
+                    #if DEBUG
+                    debugSession?.recordNormalizedDrop(.confidenceTooLow, confidenceBefore: adjustment.before, confidenceAfter: adjustment.after)
+                    #endif
+                    continue
+                }
+                fused.append(adjustment.event)
             }
 
             let finalEvents = normalizer.normalize(
@@ -2777,6 +2877,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var directCaptureDeviceUID: String?
     @Published private(set) var isCameraActive = false
     @Published private(set) var isRoutineRecording = false
+    /// True while the asynchronous second half of routine finalization is still
+    /// pending (admission closed, awaiting the admitted builder tasks). Prevents
+    /// a second take from starting and re-opening the gate before the prior
+    /// take's builder has been drained.
+    private var isRoutineFinalizationPending = false
     @Published private(set) var routineRecordingStatus = "Pick camera and audio to record a routine."
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
@@ -3217,6 +3322,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let videoQueue = DispatchQueue(label: "scratchlab.mac.capture.video")
     private let audioQueue = DispatchQueue(label: "scratchlab.mac.capture.audio")
     private let performerMonitorDemandQueue = DispatchQueue(label: "scratchlab.mac.capture.performer-demand")
+    /// Background serial queue for the asynchronous second half of routine-take
+    /// finalization. `builderAdmissionGate` completion is notified here (never
+    /// on the main queue) so the main queue / MainActor is never blocked waiting
+    /// for the admitted `@MainActor` builder tasks.
+    private let finalizationQueue = DispatchQueue(label: "scratchlab.mac.capture.finalize")
     private let handPoseRequest = VNDetectHumanHandPoseRequest()
     private let scratchDetector = MacScratchDetector()
     private let rigLayoutDetector = DJRigLayoutDetector()
@@ -3241,6 +3351,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// AVCaptureFileOutput delegate queue (drain). Mirrors the
     /// `midiCaptureLock` pattern already used for raw MIDI events.
     private let platterRecorderLock = NSLock()
+    /// Per-take builder admission gate. Replaces a bare `DispatchGroup`: video
+    /// processing keeps running during finalization, so admission and closing
+    /// must share one lock so no `enter()` can escape the barrier. `wait()` is
+    /// called on the AVCaptureFileOutput delegate queue (never MainActor), so it
+    /// cannot block the MainActor waiting for itself.
+    private let builderAdmissionGate = BuilderAdmissionGate()
 
 #if DEBUG
     // MARK: - DVS notation slice 2 (implementation plan, planning-only slice
@@ -3375,7 +3491,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var isLiveInputSuspendedForReview = false
     private let idleHandPoseInterval: CFTimeInterval = 0.12
     private let routineRecordingHandPoseInterval: CFTimeInterval = 0.04
-    private var lastVisionFrameTime: CFTimeInterval = 0
+    /// The shared, non-UI camera movement processor (cadence → stable anchor →
+    /// platter geometry → angular tracker → builder observation). Used by live
+    /// capture AND offline replay, so tracking/notation logic is not duplicated.
+    private var cameraProcessor = CameraMovementProcessor()
+    /// True when the current frame lacked a reliable platter centre, so the
+    /// camera cannot contribute directional notation (fail-closed — never a
+    /// silent fallback to raw X).
+    private(set) var cameraPlatterCalibrationInsufficient = false
     private var lastPerformerMonitorFrameTime: CFTimeInterval = 0
     private let audioLevelPublishInterval: CFTimeInterval = 0.05
     private var lastPublishedAudioLevelTime: CFTimeInterval = 0
@@ -3392,6 +3515,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var frozenReviewDiagnostics: DebugStats?
     private var activeRoutineMovementDebugSession: RoutineMovementDebugSession?
     private var debugLastRawDirection: HandDirectionTracker.Direction = .idle
+    /// Per-observation movement trace recorder. Frozen at take finalization and
+    /// exported as `debug/take-N_movement_trace.json` so the exact live
+    /// observation stream (raw points, misses, timestamps, dedup, builder
+    /// inputs) is available for offline replay — not just aggregate counters.
+    private let movementTraceRecorder = MovementTraceRecorder()
+    /// Host-time anchor captured at recording start, used to produce
+    /// take-relative trace timestamps.
+    private var movementTraceRecordingStartHostTime: Double = 0
+    /// Frozen at take finalization; drained by the export companion writer so a
+    /// later take cannot overwrite the trace/diagnostics of an earlier one.
+    private(set) var lastMovementTraceExport: MovementTraceExport?
+    private(set) var lastMovementDiagnosticsSnapshot: RoutineMovementDiagnosticsSnapshot?
     #endif
 
     #if DEBUG
@@ -3896,6 +4031,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func startRoutineRecording(captureTiming: CaptureTimingMetadata? = nil) {
+        // A prior take's asynchronous finalization may still be pending; refuse
+        // to start a new take (and re-open the admission gate) until it completes.
+        guard !isRoutineFinalizationPending else { return }
+
+        // Reset the shared camera processor (cadence phase, held anchor, and
+        // accumulated angle/direction) so a prior take cannot leak into this one.
+        cameraProcessor.reset()
+        cameraPlatterCalibrationInsufficient = false
+
         let selectedVideoID = selectedVideoDeviceUniqueID
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
@@ -3975,11 +4119,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 try self.writeRoutineRecordingSidecar(preparedRecording.sidecar, to: preparedRecording.sidecarURL)
                 self.activeRoutineRecordingSidecar = preparedRecording.sidecar
                 self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
+                // Per-take builder admission gate. Shared (non-DEBUG) so Debug
+                // and Release admit builder observations identically; only the
+                // diagnostic trace/instrumentation below is DEBUG-scoped.
+                self.builderAdmissionGate.open()
                 #if DEBUG
                 let movementDebugSession = RoutineMovementDebugSession(handPoseInterval: self.routineRecordingHandPoseInterval)
                 self.activeRoutineMovementDebugSession = movementDebugSession
                 self.publishRoutineMovementDiagnostics(movementDebugSession.snapshot())
-                self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder(debugSession: movementDebugSession)
+                // Arm the per-observation movement trace for this take. Started
+                // here (before movieOutput) so the first observation lands with a
+                // take-relative time near zero; the prior take's trace is dropped.
+                self.movementTraceRecordingStartHostTime = CACurrentMediaTime()
+                self.movementTraceRecorder.startRecording(at: self.movementTraceRecordingStartHostTime)
+                self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder(
+                    debugSession: movementDebugSession,
+                    traceRecorder: self.movementTraceRecorder
+                )
                 #else
                 self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder()
                 #endif
@@ -5401,42 +5557,119 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return directory
     }
 
-    private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) -> (statusMessage: String, sessionID: String?, sidecar: CaptureCore.LocalRecordingSidecar?) {
-        defer {
-            activeRoutineRecordingSidecar = nil
-            activeRoutineRecordingSidecarURL = nil
-            activeRoutineDetectedNotationBuilder = nil
-            activeRoutineAudioNotationDetector = nil
-            #if DEBUG
-            activeRoutineMovementDebugSession = nil
-            #endif
-            pendingRoutineTakeIdentity = nil
-            pendingWatchReply = nil
-        }
-
+    /// Synchronous first half of routine-take finalization.
+    ///
+    /// Runs on the AVFoundation completion (main) queue and MUST return without
+    /// blocking: `didFinishRecordingTo` is delivered on the main dispatch queue,
+    /// and the admitted builder tasks are `@MainActor`, so a synchronous
+    /// `DispatchGroup.wait()` here would deadlock. This closes admission,
+    /// captures the take's state, and schedules the second half via
+    /// `group.notify(queue: finalizationQueue)`.
+    private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) {
         let captureErrorDescription = error?.localizedDescription
-        guard var sidecar = activeRoutineRecordingSidecar else {
-            if captureErrorDescription != nil {
-                return ("Recording ended before it could be saved.", nil, nil)
-            }
-            return ("Finalizing \(outputFileURL.lastPathComponent)...", nil, nil)
+
+        guard let sidecar = activeRoutineRecordingSidecar else {
+            let message = captureErrorDescription != nil
+                ? "Recording ended before it could be saved."
+                : "Finalizing \(outputFileURL.lastPathComponent)..."
+            publishRoutineFinalization(
+                outputFileURL: outputFileURL,
+                captureErrorDescription: captureErrorDescription,
+                statusMessage: message,
+                sessionID: nil,
+                sidecar: nil)
+            return
         }
 
+        // Capture everything the async second half needs. The builder is kept
+        // ATTACHED so already-admitted tasks can still feed it.
+        let builder = activeRoutineDetectedNotationBuilder
+        let sidecarURL = activeRoutineRecordingSidecarURL
+            ?? CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: outputFileURL)
         let labelSource = lastScratchDetection == nil ? "unknown" : "detected"
-        let audioSnapshot = activeRoutineAudioNotationDetector?.snapshot() ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
-        let motionEvents = activeRoutineDetectedNotationBuilder?.movementEvents() ?? []
+        let audioDetector = activeRoutineAudioNotationDetector
+        // The selected MIDI source is the authoritative device for CC6 platter
+        // decode. Captured here (main queue, before the async second half) so
+        // the decode is deterministic even if a device list refresh lands later.
+        let selectedPlatterSourceName = selectedMIDIInputSourceName
+        #if DEBUG
+        let debugSession = activeRoutineMovementDebugSession
+        #else
+        let debugSession: RoutineMovementDebugSession? = nil
+        #endif
+
+        // Atomically close admission — no later admit() succeeds; late
+        // observations are synchronously marked postFinalization on the capture
+        // path.
+        let group = builderAdmissionGate.close()
+
+        // Prevent a second take from starting until async finalization completes.
+        isRoutineFinalizationPending = true
+
+        // Resume on a background queue after the group empties. This never blocks
+        // the main queue / MainActor, so the admitted @MainActor tasks can run.
+        group.notify(queue: finalizationQueue) { [weak self] in
+            self?.completeRoutineFinalization(
+                outputFileURL: outputFileURL,
+                captureErrorDescription: captureErrorDescription,
+                sidecar: sidecar,
+                sidecarURL: sidecarURL,
+                builder: builder,
+                audioDetector: audioDetector,
+                labelSource: labelSource,
+                selectedPlatterSourceName: selectedPlatterSourceName,
+                debugSession: debugSession)
+        }
+    }
+
+    /// Asynchronous second half of routine-take finalization, run on
+    /// `finalizationQueue` after the builder admission group empties. Detaches
+    /// and drains the builder, freezes diagnostics, writes the sidecar +
+    /// companions, clears take state, and publishes the completed UI state.
+    private func completeRoutineFinalization(
+        outputFileURL: URL,
+        captureErrorDescription: String?,
+        sidecar: CaptureCore.LocalRecordingSidecar,
+        sidecarURL: URL,
+        builder: RoutineDetectedNotationBuilder?,
+        audioDetector: ScratchAudioNotationDetector?,
+        labelSource: String,
+        selectedPlatterSourceName: String,
+        debugSession: RoutineMovementDebugSession?
+    ) {
+        var sidecar = sidecar
+
+        // The group has emptied — no admitted task remains, so detaching the
+        // builder is now safe.
+        activeRoutineDetectedNotationBuilder = nil
+
+        let audioSnapshot = audioDetector?.snapshot()
+            ?? ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil)
+        let finalizationHostTime = CACurrentMediaTime()
+        let motionEvents = builder?.movementEvents(now: finalizationHostTime) ?? []
         ScratchLabPerformanceSignpost.event(
             "MovementEventBuild",
             count: motionEvents.count,
-            take: sidecar.appLocalTakeNumber
-        )
+            take: sidecar.appLocalTakeNumber)
         let capturedMidi = drainCapturedMidiCCEvents()
         reconnectSelectedMIDIInput()
-        // Phase 3.1 — drain the sibling raw-platter recorder. The
-        // timeline is stored in-memory only; `DetectedNotationSnapshot`
-        // and the v4 session export schema are NOT modified. Future
-        // consumers (renderer overlay, fixture comparison) can read
-        // `lastDrainedPlatterPositionTimeline` directly.
+
+        // Decode direct platter telemetry (RANE ONE MKII CC6 ring counter) into
+        // movement events. This is the preferred record-movement source when
+        // present; camera hand-tracking is a fallback / diagnostic only.
+        //
+        // Fail-closed: the decoder is invoked ONLY when the selected MIDI
+        // device was resolved. A nil device name would otherwise disable
+        // `derivePlatterMovementEvents`' device filter and accept every
+        // channel-1 CC6 device. `resolvedControllerMovementEvents` returns []
+        // when the selected source is absent/unresolved, so the camera (or DVS)
+        // fallback is used instead of silently decoding arbitrary traffic.
+        let controllerEvents = Self.resolvedControllerMovementEvents(
+            selectedMIDISourceName: selectedPlatterSourceName,
+            capturedMidi: capturedMidi)
+        let usesControllerMovement = !controllerEvents.isEmpty
+
+        // Drain the sibling raw-platter recorder (in-memory only).
         platterRecorderLock.lock()
         let platterEndRelative = max(0, CACurrentMediaTime() - platterRecordingStartTime)
         lastDrainedPlatterPositionTimeline = platterPositionRecorder
@@ -5444,60 +5677,47 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         platterRecordingStartTime = 0
         platterRecorderLock.unlock()
         #if DEBUG
-        // Drain the DVS notation accumulator the same way — in-memory
-        // only, `DetectedNotationSnapshot`/the v4 export schema are NOT
-        // modified here. `finalizedTimeline()` returns nil when nothing
-        // was ever accumulated (routing off, or no trusted window arrived
-        // this take), matching `lastDrainedPlatterPositionTimeline`'s nil
-        // case for an equivalent reason.
         timecodeNotationLock.lock()
         lastDrainedTimecodeNotationTimeline = timecodeNotationAccumulator?.finalizedTimeline()
         timecodeNotationDiagnosticsStorage.finalize(
             sampleCount: lastDrainedTimecodeNotationTimeline?.samples.count ?? 0,
-            eventCount: 0
-        )
+            eventCount: 0)
         timecodeNotationAccumulator = nil
         timecodeNotationLock.unlock()
         #endif
+
         let normalizeID = ScratchLabPerformanceSignpost.begin("MovementNormalize")
-#if DEBUG
-        let fusingDebugSession = activeRoutineMovementDebugSession
-#else
-        let fusingDebugSession: RoutineMovementDebugSession? = nil
-#endif
-        // DVS notation slice 3 (see TASKS.md/AI_HANDOFF.md): when notation
-        // routing is enabled and a trusted DVS timeline exists, DVS becomes
-        // authoritative for `recordMovementEvents` — never merged with
-        // camera-tracked `motionEvents`. `RoutineNotationFusionEngine`
-        // itself is unchanged; only which array it receives as
-        // `motionEvents` differs. In Release builds (no `notationRoutingEnabled`
-        // property at all) this is always exactly `motionEvents`, so
-        // behavior there is byte-identical to before this slice.
         #if DEBUG
-        let resolvedMotionEvents = TimecodeNotationCapturePrecedence.resolvedMovementEvents(
+        let cameraOrDVS = TimecodeNotationCapturePrecedence.resolvedMovementEvents(
             notationRoutingEnabled: notationRoutingEnabled,
             cameraMovementEvents: motionEvents,
-            drainedTimecodeNotationTimeline: lastDrainedTimecodeNotationTimeline
-        )
+            drainedTimecodeNotationTimeline: lastDrainedTimecodeNotationTimeline)
         timecodeNotationLock.lock()
         timecodeNotationDiagnosticsStorage.finalize(
             sampleCount: lastDrainedTimecodeNotationTimeline?.samples.count ?? 0,
-            eventCount: notationRoutingEnabled ? resolvedMotionEvents.count : 0
-        )
+            eventCount: notationRoutingEnabled ? cameraOrDVS.count : 0)
         timecodeNotationLock.unlock()
         #else
-        let resolvedMotionEvents = motionEvents
+        let cameraOrDVS = motionEvents
         #endif
+        // Controller telemetry is authoritative when present; camera/DVS is the
+        // fallback. The two are never merged into one event stream.
+        let resolvedMotionEvents = usesControllerMovement ? controllerEvents : cameraOrDVS
         var notationSnapshot = RoutineNotationFusionEngine().snapshot(
             audioSnapshot: audioSnapshot,
             motionEvents: resolvedMotionEvents,
             detectedLabel: lastScratchDetection?.scratchName,
             labelSource: labelSource,
             labelConfidence: lastScratchDetection?.confidence,
-            debugSession: fusingDebugSession
+            debugSession: debugSession
         ).withMixerMidiEvents(capturedMidi)
+        // Controller provenance is preserved through fusion and `snapshot`
+        // truthfully labels it (no post-hoc retag). Only the DEBUG DVS path
+        // still needs `withTimecodeLiveMovementProvenance` because its events
+        // are produced by a separate adapter and the fusion historically
+        // relabelled them "video".
         #if DEBUG
-        if notationRoutingEnabled, lastDrainedTimecodeNotationTimeline != nil {
+        if !usesControllerMovement, notationRoutingEnabled, lastDrainedTimecodeNotationTimeline != nil {
             notationSnapshot = notationSnapshot.withTimecodeLiveMovementProvenance()
         }
         #endif
@@ -5506,10 +5726,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             movement: notationSnapshot.recordMovementEvents.count,
             audio: notationSnapshot.audioEvents.count,
             fader: notationSnapshot.faderEvents.count,
-            take: sidecar.appLocalTakeNumber
-        )
+            take: sidecar.appLocalTakeNumber)
+
         #if DEBUG
-        publishRoutineMovementDiagnostics(activeRoutineMovementDebugSession?.snapshot())
+        let frozenDiagnostics = debugSession?.snapshot()
+        publishRoutineMovementDiagnostics(frozenDiagnostics)
+        lastMovementDiagnosticsSnapshot = frozenDiagnostics
+        lastMovementTraceExport = movementTraceRecorder.export(
+            takeID: sidecar.takeID,
+            takeNumber: sidecar.appLocalTakeNumber,
+            finalizationHostTime: finalizationHostTime)
         replayDiagnosticsFromPlatterTimeline()
         writeReplayDiagnosticsToDisk()
         #endif
@@ -5519,31 +5745,78 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureErrorDescription: captureErrorDescription
         )
         .withDetectedNotation(notationSnapshot)
-        let sidecarURL = activeRoutineRecordingSidecarURL
-            ?? CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: outputFileURL)
 
+        #if DEBUG
+        writeMovementCompanionFilesForTake(sidecar: sidecar, sidecarURL: sidecarURL)
+        #endif
+
+        var statusMessage: String
+        var sessionID: String?
+        var finalizedSidecar: CaptureCore.LocalRecordingSidecar?
         do {
             try? CaptureJournalStore.appendMediaCommitted(
                 storageKind: .routine,
-                sidecar: sidecar
-            )
+                sidecar: sidecar)
             try writeRoutineRecordingSidecar(sidecar, to: sidecarURL)
             Task { @MainActor in
                 self.lastRoutineDetectedNotation = notationSnapshot
             }
             try? CaptureJournalStore.appendTransactionFinalized(
                 storageKind: .routine,
-                sidecar: sidecar
-            )
-            if captureErrorDescription != nil {
-                return ("Recording ended before it could be saved completely.", nil, sidecar)
-            }
-            return ("Finalizing \(outputFileURL.lastPathComponent)...", sidecar.sessionID, sidecar)
+                sidecar: sidecar)
+            finalizedSidecar = sidecar
+            sessionID = sidecar.sessionID
+            statusMessage = captureErrorDescription != nil
+                ? "Recording ended before it could be saved completely."
+                : "Finalizing \(outputFileURL.lastPathComponent)..."
         } catch {
-            if captureErrorDescription != nil {
-                return ("Recording ended before it could be saved completely.", nil, sidecar)
+            statusMessage = captureErrorDescription != nil
+                ? "Recording ended before it could be saved completely."
+                : "Finalizing \(outputFileURL.lastPathComponent)..."
+            sessionID = nil
+            finalizedSidecar = nil
+        }
+
+        // Clear per-take state so a later take can start.
+        activeRoutineRecordingSidecar = nil
+        activeRoutineRecordingSidecarURL = nil
+        activeRoutineAudioNotationDetector = nil
+        #if DEBUG
+        activeRoutineMovementDebugSession = nil
+        #endif
+        pendingRoutineTakeIdentity = nil
+        pendingWatchReply = nil
+
+        publishRoutineFinalization(
+            outputFileURL: outputFileURL,
+            captureErrorDescription: captureErrorDescription,
+            statusMessage: statusMessage,
+            sessionID: sessionID,
+            sidecar: finalizedSidecar)
+    }
+
+    /// Publishes the completed take's UI state on the MainActor and clears the
+    /// finalization-pending flag.
+    private func publishRoutineFinalization(
+        outputFileURL: URL,
+        captureErrorDescription: String?,
+        statusMessage: String,
+        sessionID: String?,
+        sidecar: CaptureCore.LocalRecordingSidecar?
+    ) {
+        Task { @MainActor in
+            self.isRoutineRecording = false
+            if captureErrorDescription == nil {
+                self.lastRoutineRecordingURL = outputFileURL
+                if let sidecar {
+                    self.upsertRoutineTakeArtifactStatus(
+                        self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing))
+                }
             }
-            return ("Finalizing \(outputFileURL.lastPathComponent)...", nil, sidecar)
+            self.lastRoutineRecordingSessionID = sessionID
+            self.routineRecordingStatus = statusMessage
+            self.isRoutineFinalizationPending = false
+            self.refreshRoutineArtifactStatuses()
         }
     }
 
@@ -5552,6 +5825,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         try data.write(to: url, options: .atomic)
         try? CaptureAuditStore.persist(sidecar: sidecar, storageKind: .routine)
     }
+
+    #if DEBUG
+    /// Persists the frozen movement trace + diagnostics beside `sidecarURL` at
+    /// take finalization, using this take's identity. Atomic writes; a write or
+    /// encode failure is surfaced, not swallowed.
+    private func writeMovementCompanionFilesForTake(
+        sidecar: CaptureCore.LocalRecordingSidecar,
+        sidecarURL: URL
+    ) {
+        let sidecarBase = sidecarURL.deletingPathExtension().lastPathComponent
+        let dir = sidecarURL.deletingLastPathComponent()
+        var encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var errors: [String] = []
+
+        if let trace = lastMovementTraceExport {
+            let traceURL = dir.appendingPathComponent("\(sidecarBase)_movement_trace.json")
+            do {
+                try encoder.encode(trace).write(to: traceURL, options: .atomic)
+            } catch {
+                errors.append("movement_trace: \(error.localizedDescription)")
+            }
+        }
+        if let diagnostics = lastMovementDiagnosticsSnapshot {
+            let export = MovementDiagnosticsExport(
+                schemaVersion: "scratchlab_movement_diagnostics_v1",
+                takeID: sidecar.takeID,
+                takeNumber: sidecar.appLocalTakeNumber,
+                diagnostics: diagnostics
+            )
+            let diagnosticsURL = dir.appendingPathComponent("\(sidecarBase)_movement_diagnostics.json")
+            do {
+                try encoder.encode(export).write(to: diagnosticsURL, options: .atomic)
+            } catch {
+                errors.append("movement_diagnostics: \(error.localizedDescription)")
+            }
+        }
+        if !errors.isEmpty {
+            let message = "Movement diagnostics could not be written: \(errors.joined(separator: "; "))"
+            Task { @MainActor in
+                self.reportRoutineRecordingIssue(message)
+            }
+        }
+    }
+    #endif
 
     private func recoverInterruptedRoutineCaptures() {
         do {
@@ -5747,6 +6065,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         defer { ScratchLabPerformanceSignpost.end("CameraFrameProcess", signpostID) }
 
         let now = CACurrentMediaTime()
+        let presentationTime = Self.sampleBufferPresentationTime(sampleBuffer)
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         #if DEBUG
@@ -5768,8 +6087,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         // Hand pose always runs at the active rate; the rig detector manages its own cadence.
-        guard now - lastVisionFrameTime >= activeHandPoseInterval else { return }
-        lastVisionFrameTime = now
+        // Accumulated-deadline scheduling (not "reset to the accepted frame") so
+        // a 30 fps source is never quantized down to 15 fps by the 40 ms gate.
+        // The shared camera processor owns the cadence phase.
+        guard cameraProcessor.shouldProcess(frameAt: now, interval: activeHandPoseInterval) else { return }
 
         #if DEBUG
         debugFramesAnalyzed += 1
@@ -5785,6 +6106,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         do {
             try requestHandler.perform([handPoseRequest])
+            let visionCompletionTime = CACurrentMediaTime()
             #if DEBUG
             if handPoseRequest.results?.first != nil {
                 debugVisionReturnedHand += 1
@@ -5795,38 +6117,46 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let activeThreshold: Float = isRoutineRecording
                 ? recordingJointConfidenceThreshold
                 : standardJointConfidenceThreshold
-            let rawTrackedPoint = observation.flatMap {
-                trackedHandPoint(from: $0, layout: layout, trackingRegion: trackingRegion,
-                                 minimumJointConfidence: activeThreshold)
-            }
+            let joints = observation.map {
+                extractHandJoints(from: $0, trackingRegion: trackingRegion,
+                                  minimumJointConfidence: activeThreshold)
+            } ?? [:]
 
-            guard let rawTrackedPoint else {
+            // Shared production camera processor: cadence → stable anchor →
+            // platter geometry → angular tracker → builder observation. The SAME
+            // processor drives live capture and offline replay.
+            let platterCentre = cameraPlatterCentre(for: layout)
+            let geometryConfidence = layout?.confidence ?? 0.32
+            let processed = cameraProcessor.process(
+                frameAt: now,
+                joints: joints, platterCentre: platterCentre,
+                geometryConfidence: geometryConfidence)
+            cameraPlatterCalibrationInsufficient = processed.calibrationInsufficient
+
+            #if DEBUG
+            if let anchorMode = processed.anchorMode {
+                activeRoutineMovementDebugSession?.recordAnchorIdentity(
+                    jointNames: processed.anchorJointNames,
+                    mode: anchorMode.rawValue,
+                    switched: processed.anchorSwitched)
+            }
+            #endif
+
+            guard processed.detected, let rawTrackedPoint = processed.anchorPoint else {
                 #if DEBUG
                 debugTrackedPointReturnedNil += 1
                 #endif
-                // Continuity bridge: during recording, fill the platter recorder with
-                // the last accepted point for short gaps so the raw timeline stays
-                // dense. The direction tracker and builder state are intentionally
-                // frozen — not feeding miss() prevents the holdFrames countdown from
-                // consuming the bridge window prematurely.
-                if isRoutineRecording,
-                   let lastPoint = lastContinuityHandPoint,
-                   now - lastContinuityHandPointTime < platterContinuityGapSeconds {
-                    platterRecorderLock.lock()
-                    if platterPositionRecorder.isRecording {
-                        let takeRelativeTime = max(0, now - platterRecordingStartTime)
-                        platterPositionRecorder.observe(point: lastPoint, at: takeRelativeTime)
-                    }
-                    platterRecorderLock.unlock()
-                    #if DEBUG
-                    debugContinuityFilledSamples += 1
-                    #endif
-                } else {
-                    lastContinuityHandPoint = nil
-                    handleHandTrackingMiss()
-                }
+                // No usable anchor (no hand, or the time-bounded anchor hold
+                // expired). The processor already fed the rotation tracker a miss.
+                lastContinuityHandPoint = nil
+                handleHandTrackingMiss(presentationTime: presentationTime,
+                                       processingStartTime: now,
+                                       visionCompletionTime: visionCompletionTime,
+                                       kind: .miss,
+                                       rejectedPoint: nil)
                 return
             }
+            let rawJointConfidence = processed.anchorConfidence
 
             // Reject impossible positional jumps: a new point requiring hand velocity
             // exceeding maxPlatterJumpVelocity is Vision noise, not real motion.
@@ -5841,7 +6171,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     activeRoutineMovementDebugSession?.recordImpossibleJumpReject()
                     #endif
                     lastContinuityHandPoint = nil
-                    handleHandTrackingMiss()
+                    handleHandTrackingMiss(presentationTime: presentationTime,
+                                           processingStartTime: now,
+                                           visionCompletionTime: visionCompletionTime,
+                                           kind: .jumpRejected,
+                                           rejectedPoint: rawTrackedPoint)
                     return
                 }
             }
@@ -5857,16 +6191,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             missedHandTrackingFrames = 0
 
-            // Feed the raw point into the tracker (unsmoothed = accurate velocity).
+            // Keep the legacy X tracker fed (unsmoothed = accurate velocity) for
+            // coach display + its diagnostics; its direction/confidence no longer
+            // feed notation — the angular processor is the notation authority.
             let direction = handDirectionTracker.recordObservation(rawPoint: rawTrackedPoint, at: now)
-            // Phase 3.1 — also feed the same raw point into the
-            // sibling raw-platter recorder. `observe(...)` is a no-op
-            // when `isRecording == false`, so this safely covers
-            // pre-recording / post-recording video frames too.
+
+            // Platter recorder: continuous ANGULAR position (radians), never raw X.
             platterRecorderLock.lock()
             if platterPositionRecorder.isRecording {
                 let takeRelativeTime = max(0, now - platterRecordingStartTime)
-                platterPositionRecorder.observe(point: rawTrackedPoint, at: takeRelativeTime)
+                let angularRadians = processed.position.map { $0 * 2 * Double.pi } ?? 0
+                platterPositionRecorder.observe(point: CGPoint(x: angularRadians, y: 0), at: takeRelativeTime)
                 #if DEBUG
                 debugObserveAttempted += 1
                 activeRoutineMovementDebugSession?.recordPlatterObserveAttempted()
@@ -5878,7 +6213,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 #endif
             }
             platterRecorderLock.unlock()
-            let movementState = handMotionState(from: direction)
+
+            // The processor already mapped angular rotation → semantic direction.
+            let movementState = processed.state
 
             #if DEBUG
             if movementState == .steady {
@@ -5894,19 +6231,48 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             #endif
 
-            // Use the smoothed point only for display position.
+            // Smoothed point is DISPLAY ONLY; the builder receives the angular
+            // position, not this image point.
             let currentPoint = smoothedTrackingPoint(from: rawTrackedPoint)
             #if DEBUG
             activeRoutineMovementDebugSession?.recordSample(
                 rawPoint: rawTrackedPoint,
                 displayedPoint: currentPoint,
-                confidence: Double(handDirectionTracker.confidence),
+                confidence: processed.confidence,
                 rawDirection: direction,
                 semanticState: movementState
             )
             publishRoutineMovementDiagnostics(activeRoutineMovementDebugSession?.snapshot())
+            // Compute the dedup outcome before publish mutates lastPublished*
+            // so the trace records exactly what the builder will receive.
+            let dedupRejected = shouldDedupHandTracking(detected: true, position: currentPoint, state: movementState)
+            let observationID = recordMovementTraceObservation(
+                kind: .real,
+                presentationTime: presentationTime,
+                processingStartTime: now,
+                visionCompletionTime: visionCompletionTime,
+                trackerPoint: rawTrackedPoint,
+                trackerTime: now,
+                jointConfidence: Double(rawJointConfidence),
+                builderPoint: currentPoint,
+                builderState: movementState,
+                builderConfidence: processed.confidence,
+                rawDirection: direction,
+                idleReason: handDirectionTracker.lastIdleReason,
+                trackerConfidence: Double(handDirectionTracker.confidence),
+                semanticDirection: movementState,
+                rejectedPoint: nil,
+                dedupRejected: dedupRejected
+            )
+            publishHandTrackingIfNeeded(detected: true, position: currentPoint, state: movementState,
+                                        movementPosition: processed.position,
+                                        movementConfidence: processed.confidence,
+                                        observationID: observationID)
+            #else
+            publishHandTrackingIfNeeded(detected: true, position: currentPoint, state: movementState,
+                                        movementPosition: processed.position,
+                                        movementConfidence: processed.confidence)
             #endif
-            publishHandTrackingIfNeeded(detected: true, position: currentPoint, state: movementState)
         } catch {
             Task { @MainActor in
                 self.statusMessage = "Hand tracking paused. Adjust framing and try again."
@@ -6133,40 +6499,56 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return DJRigLayout(zones: DJRigLayout.zones(in: union, tuning: currentZoneTuning), confidence: 0.32)
     }
 
-    private func trackedHandPoint(
+    /// Result of `trackedHandPoint`: the resolved anchor point plus its identity,
+    /// so diagnostics can record WHICH joints formed the anchor (and whether it
+    /// switched this frame).
+    /// Canonical joint key for the stable-anchor math. Vision's
+    /// `JointName.rawValue.rawValue` is an opaque key (`VNHLKWRI`, `VNHLKITIP`,
+    /// …), not the human-readable name the anchor math keys on, so this maps
+    /// every joint we query onto the canonical name (`wrist`, `indexMCP`, …).
+    static func canonicalAnchorJointName(_ name: VNHumanHandPoseObservation.JointName) -> String {
+        switch name {
+        case .wrist: return "wrist"
+        case .thumbCMC: return "thumbCMC"
+        case .indexMCP: return "indexMCP"
+        case .middleMCP: return "middleMCP"
+        case .ringMCP: return "ringMCP"
+        case .littleMCP: return "littleMCP"
+        case .thumbTip: return "thumbTip"
+        case .indexTip: return "indexTip"
+        case .middleTip: return "middleTip"
+        case .ringTip: return "ringTip"
+        case .littleTip: return "littleTip"
+        case .thumbIP: return "thumbIP"
+        case .indexDIP: return "indexDIP"
+        case .middleDIP: return "middleDIP"
+        case .ringDIP: return "ringDIP"
+        case .littleDIP: return "littleDIP"
+        case .indexPIP: return "indexPIP"
+        case .middlePIP: return "middlePIP"
+        case .ringPIP: return "ringPIP"
+        case .littlePIP: return "littlePIP"
+        default: return name.rawValue.rawValue
+        }
+    }
+
+    /// Extracts canonical joint samples (confidence + ROI gated) from a Vision
+    /// hand-pose observation. Stateless — the stable anchor and angular tracking
+    /// live in `CameraMovementProcessor`, not here. Returns an empty dictionary
+    /// when no joint passes the gates.
+    private func extractHandJoints(
         from observation: VNHumanHandPoseObservation,
-        layout: DJRigLayout?,
         trackingRegion: CGRect,
-        minimumJointConfidence: Float = 0.16
-    ) -> CGPoint? {
-        let deckZones = layout?.zones.filter { $0.role != .mixer } ?? []
-        let mixerZone = layout?.zone(for: .mixer)
-        let highlightedZone = layout?.zone(for: highlightedZoneRole)
+        minimumJointConfidence: Float
+    ) -> [String: HandAnchorSample] {
         let jointNames: [VNHumanHandPoseObservation.JointName] = [
             .indexTip, .middleTip, .ringTip, .littleTip, .thumbTip,
             .indexDIP, .middleDIP, .ringDIP, .littleDIP, .thumbIP,
             .indexPIP, .middlePIP, .ringPIP, .littlePIP,
+            .thumbCMC, .indexMCP, .middleMCP, .ringMCP, .littleMCP,
             .wrist
         ]
-        let jointWeights: [VNHumanHandPoseObservation.JointName: CGFloat] = [
-            .indexTip: 1.0,
-            .middleTip: 0.95,
-            .ringTip: 0.85,
-            .littleTip: 0.7,
-            .thumbTip: 0.75,
-            .indexDIP: 0.78,
-            .middleDIP: 0.74,
-            .ringDIP: 0.66,
-            .littleDIP: 0.58,
-            .thumbIP: 0.55,
-            .indexPIP: 0.42,
-            .middlePIP: 0.40,
-            .ringPIP: 0.34,
-            .littlePIP: 0.28,
-            .wrist: 0.12
-        ]
-
-        var bestCandidate: (point: CGPoint, score: CGFloat)?
+        var joints: [String: HandAnchorSample] = [:]
 
         #if DEBUG
         self.debugJointsInspectedTotal += jointNames.count
@@ -6179,7 +6561,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 #endif
                 continue
             }
-
             let point = recognizedPoint.location
             guard trackingRegion.contains(point) else {
                 #if DEBUG
@@ -6187,38 +6568,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 #endif
                 continue
             }
-
             #if DEBUG
             self.debugJointsAcceptedCandidates += 1
             if recognizedPoint.confidence < standardJointConfidenceThreshold {
                 self.debugJointsRelaxedAccepted += 1
             }
             #endif
-            var score = CGFloat(recognizedPoint.confidence) * 1.6
-            score += jointWeights[jointName] ?? 0
-            score += (1 - point.y) * 0.95
-
-            if deckZones.contains(where: { expanded($0.boundingBox, dx: 0.04, dy: 0.08).contains(point) }) {
-                score += 0.45
-            } else {
-                score -= 0.18
-            }
-
-            if let highlightedZone, expanded(highlightedZone.boundingBox, dx: 0.03, dy: 0.08).contains(point) {
-                score += 0.25
-            }
-
-            if let mixerZone, expanded(mixerZone.boundingBox, dx: 0.02, dy: 0.06).contains(point) {
-                score -= 0.22
-            }
-
-            if let bestCandidate, score <= bestCandidate.score {
-                continue
-            }
-            bestCandidate = (point, score)
+            joints[Self.canonicalAnchorJointName(jointName)] = HandAnchorSample(
+                location: point, confidence: recognizedPoint.confidence)
         }
-
-        return bestCandidate?.point
+        return joints
     }
 
     private func preferredHandTrackingRegion(for layout: DJRigLayout?) -> CGRect {
@@ -6233,6 +6592,25 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return CGRect(x: 0, y: 0, width: 1, height: 1)
         }
         return region
+    }
+
+    /// Resolves the platter centre for physical-rotation tracking from the
+    /// calibrated active-deck geometry. Returns nil when there is no reliable
+    /// deck geometry to anchor the platter, which the caller treats as
+    /// "camera calibration insufficient" (fail-closed, never raw X).
+    ///
+    /// The platter is approximated as the active deck zone's centre: the
+    /// highlighted deck when set, otherwise the right deck (the Rane right
+    /// platter is the scratch deck). No per-frame anchor dependency — the centre
+    /// is geometry-derived so it is identical across live and replay.
+    private func cameraPlatterCentre(for layout: DJRigLayout?) -> CGPoint? {
+        guard let layout else { return nil }
+        let deckZones = layout.zones.filter { $0.role != .mixer }
+        guard !deckZones.isEmpty else { return nil }
+        if let highlighted = layout.zone(for: highlightedZoneRole), highlighted.role != .mixer {
+            return highlighted.center
+        }
+        return deckZones.last?.center  // right deck default
     }
 
     private func smoothedTrackingPoint(from point: CGPoint) -> CGPoint {
@@ -6250,7 +6628,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return smoothed
     }
 
-    private func handleHandTrackingMiss() {
+    private func handleHandTrackingMiss(presentationTime: Double,
+                                        processingStartTime: Double,
+                                        visionCompletionTime: Double?,
+                                        kind: MovementTraceObservation.PointKind,
+                                        rejectedPoint: CGPoint?) {
         missedHandTrackingFrames += 1
 
         #if DEBUG
@@ -6258,19 +6640,77 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         #endif
 
         let direction = handDirectionTracker.recordMiss()
+        // NOTE: the rotation tracker's miss is fed by the shared camera
+        // processor (which owns it), not here — a double miss would corrupt the
+        // elapsed-time hold/reset accounting.
 
         if direction == .searching {
             // Extended miss — clear all hand state.
             smoothedHandPoint = nil
-            publishHandTrackingIfNeeded(detected: false, position: nil, state: .searching)
+            #if DEBUG
+            let observationID = recordMovementTraceObservation(
+                kind: kind,
+                presentationTime: presentationTime,
+                processingStartTime: processingStartTime,
+                visionCompletionTime: visionCompletionTime,
+                trackerPoint: nil,
+                trackerTime: processingStartTime,
+                jointConfidence: nil,
+                builderPoint: nil, builderState: .searching, builderConfidence: nil,
+                rawDirection: direction, idleReason: nil,
+                trackerConfidence: Double(handDirectionTracker.confidence),
+                semanticDirection: .searching,
+                rejectedPoint: rejectedPoint,
+                dedupRejected: false
+            )
+            publishHandTrackingIfNeeded(detected: false, position: nil, state: .searching,
+                                        movementPosition: nil, movementConfidence: 0,
+                                        observationID: observationID)
+            #else
+            publishHandTrackingIfNeeded(detected: false, position: nil, state: .searching,
+                                        movementPosition: nil, movementConfidence: 0)
+            #endif
         } else {
             // Brief miss — hold the last position and direction so the coach doesn't flicker.
             let movementState = handMotionState(from: direction)
+            #if DEBUG
+            let dedupRejected = shouldDedupHandTracking(
+                detected: smoothedHandPoint != nil,
+                position: smoothedHandPoint,
+                state: movementState)
+            let observationID = recordMovementTraceObservation(
+                kind: kind,
+                presentationTime: presentationTime,
+                processingStartTime: processingStartTime,
+                visionCompletionTime: visionCompletionTime,
+                trackerPoint: nil,
+                trackerTime: processingStartTime,
+                jointConfidence: nil,
+                builderPoint: smoothedHandPoint,
+                builderState: movementState,
+                builderConfidence: Double(handDirectionTracker.confidence),
+                rawDirection: direction,
+                idleReason: nil,
+                trackerConfidence: Double(handDirectionTracker.confidence),
+                semanticDirection: movementState,
+                rejectedPoint: rejectedPoint,
+                dedupRejected: dedupRejected
+            )
             publishHandTrackingIfNeeded(
                 detected: smoothedHandPoint != nil,
                 position: smoothedHandPoint,
-                state: movementState
+                state: movementState,
+                movementPosition: nil, movementConfidence: 0,
+                observationID: observationID
             )
+            #else
+            publishHandTrackingIfNeeded(
+                detected: smoothedHandPoint != nil,
+                position: smoothedHandPoint,
+                state: movementState,
+                movementPosition: nil, movementConfidence: 0
+            )
+            #endif
         }
     }
 
@@ -6316,11 +6756,88 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func publishHandTrackingIfNeeded(detected: Bool, position: CGPoint?, state: HandMotionState) {
+    /// Whether `publishHandTrackingIfNeeded` would suppress this observation.
+    /// Pure function of the last-published state — kept separate so the trace
+    /// recorder can record the same dedup outcome the builder will see.
+    private func shouldDedupHandTracking(detected: Bool, position: CGPoint?, state: HandMotionState) -> Bool {
         let stateChanged = lastPublishedHandMotionState != state
-        guard lastPublishedHandDetected != detected
+        return !(lastPublishedHandDetected != detected
             || lastPublishedHandPosition != position
-            || stateChanged else {
+            || stateChanged)
+    }
+
+    /// Host-time presentation timestamp of a video sample buffer. Falls back
+    /// to the current host clock when the buffer carries no valid PTS.
+    private static func sampleBufferPresentationTime(_ sampleBuffer: CMSampleBuffer) -> Double {
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        if pts.isValid { return pts.seconds }
+        if pts.isIndefinite { return CACurrentMediaTime() }
+        return CACurrentMediaTime()
+    }
+
+    #if DEBUG
+    /// Records one chronological movement-trace observation at enqueue time and
+    /// returns its stable observation ID. DEBUG-only — the trace is the
+    /// capture-evidence path; it must never depend on MainActor.
+    ///
+    /// `builderPoint`/`builderState`/`builderConfidence` are the ACTUAL builder
+    /// input: they must be nil whenever the builder was not fed (dedup rejected,
+    /// continuity-filled, or a miss/jump that never reached publication).
+    @discardableResult
+    private func recordMovementTraceObservation(
+        kind: MovementTraceObservation.PointKind,
+        presentationTime: Double,
+        processingStartTime: Double,
+        visionCompletionTime: Double?,
+        trackerPoint: CGPoint?,
+        trackerTime: Double,
+        jointConfidence: Double?,
+        builderPoint: CGPoint?,
+        builderState: HandMotionState?,
+        builderConfidence: Double?,
+        rawDirection: HandDirectionTracker.Direction?,
+        idleReason: HandDirectionTracker.IdleReason?,
+        trackerConfidence: Double?,
+        semanticDirection: HandMotionState?,
+        rejectedPoint: CGPoint?,
+        dedupRejected: Bool
+    ) -> Int {
+        // The builder is only fed when the point actually reached publication
+        // (not dedup-rejected). Record its inputs as nil otherwise.
+        let fedToBuilder = !dedupRejected
+        guard isRoutineRecording else { return -1 }
+        let takeRelativeTime = max(0, processingStartTime - movementTraceRecordingStartHostTime)
+        return movementTraceRecorder.recordObservation(
+            kind: kind,
+            presentationTime: presentationTime,
+            processingStartTime: processingStartTime,
+            visionCompletionTime: visionCompletionTime,
+            takeRelativeTime: takeRelativeTime,
+            trackerPoint: trackerPoint.map(MovementTraceObservation.Point.init),
+            trackerTime: trackerTime,
+            jointConfidence: jointConfidence,
+            builderPoint: fedToBuilder ? builderPoint.map(MovementTraceObservation.Point.init) : nil,
+            builderState: fedToBuilder ? builderState.map { String(describing: $0) } : nil,
+            builderConfidence: fedToBuilder ? builderConfidence : nil,
+            rawDirection: rawDirection.map { String(describing: $0) },
+            idleReason: idleReason?.rawValue,
+            trackerConfidence: trackerConfidence,
+            semanticDirection: semanticDirection.map { String(describing: $0) },
+            rejectedPoint: rejectedPoint.map(MovementTraceObservation.Point.init),
+            dedupRejected: dedupRejected
+        )
+    }
+    #endif
+
+    private func publishHandTrackingIfNeeded(
+        detected: Bool,
+        position: CGPoint?,          // display point (smoothed image space)
+        state: HandMotionState,
+        movementPosition: Double?,   // angular position for the builder
+        movementConfidence: Double,  // evidence-based angular confidence for the builder
+        observationID: Int? = nil
+    ) {
+        guard !shouldDedupHandTracking(detected: detected, position: position, state: state) else {
             #if DEBUG
             activeRoutineMovementDebugSession?.recordPublishHandTrackingDedupSkip()
             #endif
@@ -6331,31 +6848,78 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         #endif
 
         let prevState = lastPublishedHandMotionState
+        let stateChanged = prevState != state
         lastPublishedHandDetected = detected
         lastPublishedHandPosition = position
         lastPublishedHandMotionState = state
 
-        // Capture tracker values before crossing thread boundary.
+        // The legacy X-direction tracker's confidence is only a CXL/coach signal;
+        // it must NEVER determine angular notation confidence. `movementConfidence`
+        // (angular) is the notation authority.
         let motionConfidence = Double(handDirectionTracker.confidence)
         let cxlDir = cxlDirectionFrom(state)
         let cxlSrc = cxlSignalSource()
         let cxlPrevDir = cxlDirectionFrom(prevState)
 
+        // Admit the builder task through the per-take gate. nil means admission
+        // is closed (post-finalization or no active take) — the builder is then
+        // never fed.
+        let token = builderAdmissionGate.admit()
+        #if DEBUG
+        // Rejected admission must be recorded synchronously on the capture path,
+        // not in an untracked MainActor task, so the skip metadata is already in
+        // the frozen trace at export time.
+        if token == nil, let observationID {
+            movementTraceRecorder.recordBuilderExecution(
+                index: observationID,
+                executionTime: CACurrentMediaTime(),
+                action: "skipped",
+                rejectionReason: nil,
+                finishedEventIndex: nil,
+                skippedReason: "postFinalization"
+            )
+        }
+        #endif
         Task { @MainActor in
+            defer { token?.group.leave() }
             self.handDetected = detected
             self.handPosition = position
             self.handMotionState = state
 
-            if self.isRoutineRecording {
-                self.activeRoutineDetectedNotationBuilder?.recordObservation(
+            // A task may only mutate the builder if its take is still current.
+            let isCurrentTake = token.map { builderAdmissionGate.isCurrent($0.generation) } ?? false
+            let builder = self.activeRoutineDetectedNotationBuilder
+            if token != nil, isCurrentTake, let builder, self.isRoutineRecording {
+                builder.recordObservation(
                     state: state,
-                    position: position,
-                    confidence: motionConfidence
+                    position: movementPosition,
+                    confidence: movementConfidence,
+                    now: CACurrentMediaTime(),
+                    observationID: observationID
                 )
                 #if DEBUG
                 self.publishRoutineMovementDiagnostics(self.activeRoutineMovementDebugSession?.snapshot())
                 #endif
+            } else if token != nil {
+                #if DEBUG
+                // Admitted, but recording stopped/finalized/superseded before this
+                // task ran. Recorded here (inside the admitted task, before its
+                // `leave()`), so the finalization barrier waits for it.
+                if let observationID {
+                    let skippedReason = (!isCurrentTake || builder == nil) ? "postFinalization" : "recordingStopped"
+                    self.movementTraceRecorder.recordBuilderExecution(
+                        index: observationID,
+                        executionTime: CACurrentMediaTime(),
+                        action: "skipped",
+                        rejectionReason: nil,
+                        finishedEventIndex: nil,
+                        skippedReason: skippedReason
+                    )
+                }
+                #endif
             }
+            // token == nil: the postFinalization skip was already recorded
+            // synchronously above; nothing more to do here.
 
             // CXL: record motion stroke on active-direction transitions.
             if self.cxlRecorder.isRecording && stateChanged {
@@ -6574,6 +7138,40 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let sampleRate: Double
     }
 
+    private static let maximumAudioPacketFrameCount = 1_048_576
+    private static let maximumAudioPacketChannelCount = 64
+
+    /// Derives the conversion bound from Core Media's frame count and the declared channel
+    /// layout. `AudioBuffer.mDataByteSize` is only proof that enough bytes are available; it
+    /// must not become the iteration count because inconsistent metadata can otherwise create
+    /// an effectively unbounded Range on the realtime capture queue.
+    static func validatedAudioSampleCount(
+        frameCount: Int,
+        bufferChannelCount: Int,
+        bytesPerSample: Int,
+        availableByteCount: Int
+    ) -> Int? {
+        guard frameCount > 0,
+              frameCount <= maximumAudioPacketFrameCount,
+              bufferChannelCount > 0,
+              bufferChannelCount <= maximumAudioPacketChannelCount,
+              bytesPerSample > 0,
+              availableByteCount >= 0 else {
+            return nil
+        }
+
+        let (sampleCount, sampleCountOverflow) = frameCount.multipliedReportingOverflow(
+            by: bufferChannelCount
+        )
+        guard !sampleCountOverflow else { return nil }
+
+        let (requiredByteCount, requiredByteCountOverflow) = sampleCount.multipliedReportingOverflow(
+            by: bytesPerSample
+        )
+        guard !requiredByteCountOverflow, requiredByteCount <= availableByteCount else { return nil }
+        return sampleCount
+    }
+
     static func audioPacket(from sampleBuffer: CMSampleBuffer) -> AudioPacket? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
@@ -6586,7 +7184,26 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
         let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
         let bitsPerChannel = Int(asbd.mBitsPerChannel)
-        let channelCount = max(1, Int(asbd.mChannelsPerFrame))
+        let channelCount = Int(asbd.mChannelsPerFrame)
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard channelCount > 0,
+              channelCount <= maximumAudioPacketChannelCount,
+              frameCount > 0,
+              frameCount <= maximumAudioPacketFrameCount else {
+            return nil
+        }
+
+        let bytesPerSample: Int
+        if isFloat && bitsPerChannel == 32 {
+            bytesPerSample = MemoryLayout<Float>.size
+        } else if !isFloat && bitsPerChannel == 16 {
+            bytesPerSample = MemoryLayout<Int16>.size
+        } else if !isFloat && bitsPerChannel == 32 {
+            bytesPerSample = MemoryLayout<Int32>.size
+        } else {
+            return nil
+        }
+
         let maximumBufferCount = isNonInterleaved ? channelCount : 1
         let audioBufferListSize = MemoryLayout<AudioBufferList>.size
             + max(0, maximumBufferCount - 1) * MemoryLayout<AudioBuffer>.size
@@ -6617,23 +7234,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let buffers = UnsafeMutableAudioBufferListPointer(audioBufferListPointer)
         guard !buffers.isEmpty, buffers.count <= maximumBufferCount else { return nil }
+        if isNonInterleaved {
+            guard buffers.count == channelCount,
+                  buffers.allSatisfy({ $0.mNumberChannels == 1 }) else {
+                return nil
+            }
+        } else {
+            guard buffers.count == 1,
+                  Int(buffers[0].mNumberChannels) == channelCount else {
+                return nil
+            }
+        }
+
         var channelSamples: [[Float]] = []
+        channelSamples.reserveCapacity(buffers.count)
 
         for buffer in buffers {
-            guard let rawData = buffer.mData else { continue }
+            guard let rawData = buffer.mData,
+                  let sampleCount = validatedAudioSampleCount(
+                    frameCount: frameCount,
+                    bufferChannelCount: Int(buffer.mNumberChannels),
+                    bytesPerSample: bytesPerSample,
+                    availableByteCount: Int(buffer.mDataByteSize)
+                  ) else {
+                return nil
+            }
 
             if isFloat && bitsPerChannel == 32 {
                 let samples = rawData.assumingMemoryBound(to: Float.self)
-                let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
                 channelSamples.append(Array(UnsafeBufferPointer(start: samples, count: sampleCount)))
             } else if bitsPerChannel == 16 {
                 let samples = rawData.assumingMemoryBound(to: Int16.self)
-                let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Int16>.size
-                channelSamples.append((0..<sampleCount).map { Float(samples[$0]) / Float(Int16.max) })
+                var converted: [Float] = []
+                converted.reserveCapacity(sampleCount)
+                for index in 0..<sampleCount {
+                    converted.append(Float(samples[index]) / Float(Int16.max))
+                }
+                channelSamples.append(converted)
             } else if bitsPerChannel == 32 {
                 let samples = rawData.assumingMemoryBound(to: Int32.self)
-                let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Int32>.size
-                channelSamples.append((0..<sampleCount).map { Float(samples[$0]) / Float(Int32.max) })
+                var converted: [Float] = []
+                converted.reserveCapacity(sampleCount)
+                for index in 0..<sampleCount {
+                    converted.append(Float(samples[index]) / Float(Int32.max))
+                }
+                channelSamples.append(converted)
             }
         }
 
@@ -8899,6 +9544,50 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return availableSources.first?.id ?? ""
     }
 
+    /// Resolves the device identity used to decode right-platter CC6 telemetry.
+    ///
+    /// The app's ACTUALLY SELECTED MIDI source is the only authoritative device
+    /// — never "whichever device happened to emit the first channel-1 CC6
+    /// event" (arrival-order nondeterministic, and it silently mixes devices).
+    /// Returns `nil` when the selected source is unavailable, or did not itself
+    /// emit right-platter CC6, so a mixed / mis-routed stream fails closed
+    /// instead of decoding another device's (or the other deck's) ring counter.
+    static func platterDeviceNameForDecode(
+        selectedMIDISourceName: String,
+        capturedMidi: [CaptureCore.RawMixerMIDIEvent]
+    ) -> String? {
+        let name = selectedMIDISourceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != "Not Connected" else { return nil }
+        guard capturedMidi.contains(where: {
+            $0.deviceName == name && $0.controller == 6 && $0.channel == 1
+        }) else {
+            return nil
+        }
+        return name
+    }
+
+    /// Finalization-routing helper: decode right-platter CC6 telemetry into
+    /// movement events, FAILING CLOSED when the selected MIDI source is absent
+    /// or did not itself emit CC6.
+    ///
+    /// This is the exact helper `completeRoutineFinalization` uses. It must
+    /// never pass a nil device name into `derivePlatterMovementEvents`, because
+    /// a nil device disables that decoder's device filter and would accept
+    /// every channel-1 CC6 device (including another controller / deck).
+    static func resolvedControllerMovementEvents(
+        selectedMIDISourceName: String,
+        capturedMidi: [CaptureCore.RawMixerMIDIEvent]
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        guard let deviceName = platterDeviceNameForDecode(
+            selectedMIDISourceName: selectedMIDISourceName,
+            capturedMidi: capturedMidi
+        ) else {
+            return []
+        }
+        return CaptureCore.derivePlatterMovementEvents(
+            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName)
+    }
+
     // MARK: - Scratch Bank Pad Monitor Label
 
     /// Builds a compact human-readable label for a scratch bank pad CC event.
@@ -9413,7 +10102,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             // Feed builder (no dedup — every sample, synthetic path).
             builder.recordObservation(
                 state: movementState,
-                position: builderPoint,
+                position: runningX,
                 confidence: Double(tracker.confidence),
                 now: now
             )
@@ -9670,23 +10359,10 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
             self.activeRoutineAudioCaptureWriter = nil
             self.publishRoutineAudioCaptureDiagnostics(snapshot)
         }
-        let completion = finalizeRoutineRecording(outputFileURL: outputFileURL, error: error)
-        Task { @MainActor in
-            self.isRoutineRecording = false
-
-            if error == nil {
-                self.lastRoutineRecordingURL = outputFileURL
-                if let sidecar = completion.sidecar {
-                    self.upsertRoutineTakeArtifactStatus(
-                        self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing)
-                    )
-                }
-            }
-
-            self.lastRoutineRecordingSessionID = completion.sessionID
-            self.routineRecordingStatus = completion.statusMessage
-            self.refreshRoutineArtifactStatuses()
-        }
+        // finalizeRoutineRecording returns immediately (it schedules the async
+        // second half via the admission gate's group.notify); the UI state is
+        // published when that async half completes.
+        finalizeRoutineRecording(outputFileURL: outputFileURL, error: error)
     }
 }
 
@@ -9699,5 +10375,1098 @@ private extension Color {
         let green = Double((int >> 8) & 0xFF) / 255.0
         let blue = Double(int & 0xFF) / 255.0
         self.init(red: red, green: green, blue: blue)
+    }
+}
+
+// MARK: - Per-observation movement trace (DEBUG diagnostic)
+
+// DEBUG-only per-observation movement trace for capture diagnosis. Records
+// EVERY hand-tracking observation a routine take processes — the raw tracked
+// point, the smoothed point, the tracker's raw direction and idle reason, the
+// semantic direction, the publication-dedup outcome, and both the PROPOSED
+// (enqueued) and ACTUAL (executed) builder inputs — so the movement-loss
+// diagnosis can be reproduced offline without reconstructing observations from
+// the integrated platter timeline (which drops raw X/Y, joint confidence,
+// Vision misses, continuity substitutions, publication timing, and MainActor
+// delay).
+//
+// Pure Foundation + CoreGraphics; no SwiftUI, no Vision, no I/O beyond Codable
+// encoding. The recorder is wired and drained by MacCaptureEngine under
+// `#if DEBUG`; Release builds are unaffected.
+
+/// One chronological hand-tracking observation.
+struct MovementTraceObservation: Codable, Equatable {
+    /// How the observation originated.
+    enum PointKind: String, Codable, Equatable {
+        /// A real Vision point fed to the tracker and builder.
+        case real
+        /// A short-gap continuity fill: the platter recorder is fed the last
+        /// point, but the tracker and builder are intentionally frozen.
+        case continuityFill
+        /// No point returned: the tracker is fed a miss, the builder is not fed.
+        case miss
+        /// A real point rejected as an impossible positional jump; the tracker
+        /// is fed exactly one miss (this is the only trace record for the frame).
+        case jumpRejected
+    }
+
+    /// A normalised [0,1] image-space point.
+    struct Point: Codable, Equatable {
+        let x: Double
+        let y: Double
+
+        init(x: Double, y: Double) {
+            self.x = x
+            self.y = y
+        }
+
+        init(_ point: CGPoint) {
+            self.init(x: Double(point.x), y: Double(point.y))
+        }
+
+        var cgPoint: CGPoint { CGPoint(x: x, y: y) }
+    }
+
+    /// Monotonic, take-local observation ID, assigned BEFORE the observation
+    /// is enqueued to the builder, so the actual builder result can be
+    /// attached back to this exact observation.
+    let index: Int
+    let kind: PointKind
+
+    // Host-time timestamps (seconds).
+    let presentationTime: Double        // capture/presentation timestamp (authoritative)
+    let processingStartTime: Double     // when processing began
+    let visionCompletionTime: Double?   // when Vision finished (nil for miss/continuity)
+    let takeRelativeTime: Double        // take-relative seconds
+
+    // Actual tracker input (nil for miss/jump/continuity — the tracker is fed
+    // a miss or nothing instead).
+    let trackerPoint: Point?
+    let trackerTime: Double             // `at` passed to the tracker (host seconds)
+
+    // Enqueue info (recorded at publication time, before the MainActor hop).
+    let enqueueTime: Double             // when the builder task was enqueued (host seconds)
+    let enqueueSequence: Int            // monotonic enqueue order
+
+    // Actual builder input. nil when the builder did NOT process this
+    // observation (dedup rejected, continuity-filled, or never reached
+    // publication). These values are identical to what was enqueued — position,
+    // state, and confidence are captured before the MainActor hop.
+    let builderPoint: Point?            // smoothed/displayed point the builder received
+    let builderState: String?           // HandMotionState the builder received
+    let builderConfidence: Double?      // tracker confidence the builder received
+
+    // Actual builder execution (recorded by the builder on the MainActor, keyed
+    // by `index`). nil when the builder never executed this observation.
+    let builderExecutionTime: Double?   // actual MainActor `now`
+    let builderExecutionSequence: Int?  // actual execution order
+    let builderAction: String?          // started / extended / rejected / finished
+    let builderRejectionReason: String? // steady/searching or raw drop reason
+    let finishedEventIndex: Int?        // builder event index when action == finished
+    let builderSkippedReason: String?   // nil=executed; "recordingStopped"/"postFinalization"/"wrongInstance"
+
+    // Tracker diagnostics (live, for comparison with replay).
+    let rawDirection: String?           // committed tracker direction
+    let idleReason: String?             // tracker idle reason (when idle)
+    let trackerConfidence: Double?      // tracker confidence after this observation
+    let semanticDirection: String?      // HandMotionState derived from the direction
+    let jointConfidence: Double?        // winning joint's Vision confidence (real only)
+    let rejectedPoint: Point?           // jumpRejected: the raw point that was rejected (diagnostic)
+
+    /// Whether publication dedup suppressed this observation (so the builder
+    /// was not fed even though a point/state was available).
+    let dedupRejected: Bool
+}
+
+/// The on-disk format of a `take-NNN_movement_trace.json` file.
+struct MovementTraceExport: Codable, Equatable {
+    let schemaVersion: String
+    let takeID: String
+    let takeNumber: Int
+    /// Host-time anchor of the recording start (used by replay to reproduce
+    /// builder-relative elapsed times).
+    let recordingStartHostTime: Double
+    /// Host-time the builder was drained at finalization. The builder's drain
+    /// advances the final active movement's `furthestTime` to this instant, so
+    /// the exact replay must drain at the SAME time to reproduce the event's
+    /// `endTime` exactly.
+    let finalizationHostTime: Double
+    let observations: [MovementTraceObservation]
+}
+
+/// The on-disk format of a `take-NNN_movement_diagnostics.json` file: the
+/// completed aggregate `RoutineMovementDiagnosticsSnapshot` plus the take
+/// identity the export coordinator fills in.
+struct MovementDiagnosticsExport: Codable, Equatable {
+    let schemaVersion: String
+    let takeID: String
+    let takeNumber: Int
+    let diagnostics: MacCaptureEngine.RoutineMovementDiagnosticsSnapshot
+}
+
+/// Accumulates a chronological movement trace for one routine take.
+///
+/// Serialized by a lock: observations are recorded on the video queue, the
+/// builder reports its execution on the MainActor, and the drain happens on the
+/// AVCaptureFileOutput delegate queue at take finalization — the same
+/// serialized-ownership discipline the platter recorder uses.
+final class MovementTraceRecorder {
+
+    private let lock = NSLock()
+    private var observations: [MovementTraceObservation] = []
+    private var nextIndex = 0
+    private var nextEnqueueSequence = 0
+    private var nextBuilderExecutionSequence = 0
+
+    /// The host-time anchor the replay should use for builder-relative time.
+    private(set) var recordingStartHostTime: Double = 0
+
+    init() {}
+
+    func startRecording(at hostTime: Double) {
+        lock.lock()
+        observations.removeAll(keepingCapacity: true)
+        nextIndex = 0
+        nextEnqueueSequence = 0
+        nextBuilderExecutionSequence = 0
+        recordingStartHostTime = hostTime
+        lock.unlock()
+    }
+
+    /// Records one observation at enqueue time and returns its stable
+    /// observation ID. Called on the video queue.
+    @discardableResult
+    func recordObservation(
+        kind: MovementTraceObservation.PointKind,
+        presentationTime: Double,
+        processingStartTime: Double,
+        visionCompletionTime: Double?,
+        takeRelativeTime: Double,
+        trackerPoint: MovementTraceObservation.Point?,
+        trackerTime: Double,
+        jointConfidence: Double?,
+        builderPoint: MovementTraceObservation.Point?,
+        builderState: String?,
+        builderConfidence: Double?,
+        rawDirection: String?,
+        idleReason: String?,
+        trackerConfidence: Double?,
+        semanticDirection: String?,
+        rejectedPoint: MovementTraceObservation.Point?,
+        dedupRejected: Bool
+    ) -> Int {
+        lock.lock()
+        let index = nextIndex
+        nextIndex += 1
+        let enqueueSequence = nextEnqueueSequence
+        nextEnqueueSequence += 1
+        let observation = MovementTraceObservation(
+            index: index,
+            kind: kind,
+            presentationTime: presentationTime,
+            processingStartTime: processingStartTime,
+            visionCompletionTime: visionCompletionTime,
+            takeRelativeTime: takeRelativeTime,
+            trackerPoint: trackerPoint,
+            trackerTime: trackerTime,
+            enqueueTime: processingStartTime,
+            enqueueSequence: enqueueSequence,
+            builderPoint: builderPoint,
+            builderState: builderState,
+            builderConfidence: builderConfidence,
+            builderExecutionTime: nil,
+            builderExecutionSequence: nil,
+            builderAction: nil,
+            builderRejectionReason: nil,
+            finishedEventIndex: nil,
+            builderSkippedReason: nil,
+            rawDirection: rawDirection,
+            idleReason: idleReason,
+            trackerConfidence: trackerConfidence,
+            semanticDirection: semanticDirection,
+            jointConfidence: jointConfidence,
+            rejectedPoint: rejectedPoint,
+            dedupRejected: dedupRejected
+        )
+        observations.append(observation)
+        lock.unlock()
+        return index
+    }
+
+    /// Records the actual builder execution for observation `index`. Called on
+    /// the MainActor by the builder itself.
+    func recordBuilderExecution(
+        index: Int,
+        executionTime: Double,
+        action: String,
+        rejectionReason: String?,
+        finishedEventIndex: Int?,
+        skippedReason: String?
+    ) {
+        lock.lock()
+        guard let position = observations.indices.first(where: { observations[$0].index == index }) else {
+            lock.unlock()
+            return
+        }
+        let executionSequence = nextBuilderExecutionSequence
+        nextBuilderExecutionSequence += 1
+        let current = observations[position]
+        observations[position] = MovementTraceObservation(
+            index: current.index,
+            kind: current.kind,
+            presentationTime: current.presentationTime,
+            processingStartTime: current.processingStartTime,
+            visionCompletionTime: current.visionCompletionTime,
+            takeRelativeTime: current.takeRelativeTime,
+            trackerPoint: current.trackerPoint,
+            trackerTime: current.trackerTime,
+            enqueueTime: current.enqueueTime,
+            enqueueSequence: current.enqueueSequence,
+            builderPoint: current.builderPoint,
+            builderState: current.builderState,
+            builderConfidence: current.builderConfidence,
+            builderExecutionTime: executionTime,
+            builderExecutionSequence: executionSequence,
+            builderAction: action,
+            builderRejectionReason: rejectionReason,
+            finishedEventIndex: finishedEventIndex,
+            builderSkippedReason: skippedReason,
+            rawDirection: current.rawDirection,
+            idleReason: current.idleReason,
+            trackerConfidence: current.trackerConfidence,
+            semanticDirection: current.semanticDirection,
+            jointConfidence: current.jointConfidence,
+            rejectedPoint: current.rejectedPoint,
+            dedupRejected: current.dedupRejected
+        )
+        lock.unlock()
+    }
+
+    func export(takeID: String, takeNumber: Int, finalizationHostTime: Double) -> MovementTraceExport {
+        lock.lock()
+        let snapshot = observations
+        lock.unlock()
+        return MovementTraceExport(
+            schemaVersion: "scratchlab_movement_trace_v1",
+            takeID: takeID,
+            takeNumber: takeNumber,
+            recordingStartHostTime: recordingStartHostTime,
+            finalizationHostTime: finalizationHostTime,
+            observations: snapshot
+        )
+    }
+}
+
+/// Replays an exported movement trace through the REAL live pipeline
+/// (`HandDirectionTracker → RoutineDetectedNotationBuilder →
+/// RoutineNotationEventNormalizer → RoutineNotationFusionEngine`) to reproduce
+/// the live take's result offline.
+///
+/// Unlike the legacy platter-timeline replay, this consumes the recorded
+/// observation trace directly. Two replay modes are provided:
+///   • `idealReplay` — feeds the builder in enqueue order with frame/sample
+///     time, the idealised (no MainActor delay, no skip) pipeline. Baseline.
+///   • `exactReplay` — feeds the builder in the ACTUAL recorded execution order
+///     with the ACTUAL execution time, skipping observations whose builder task
+///     never executed. Reproduces the live builder sequence.
+enum MovementTraceReplay {
+
+    /// Maps a tracker direction to its semantic `HandMotionState`, mirroring
+    /// `MacCaptureEngine.handMotionState(from:)`.
+    static func semanticState(from direction: HandDirectionTracker.Direction) -> MacCaptureEngine.HandMotionState {
+        switch direction {
+        case .movingForward: return .movingLeft   // camera +X → semantic backward
+        case .movingBackward: return .movingRight // camera −X → semantic forward
+        case .idle: return .steady
+        case .searching: return .searching
+        }
+    }
+
+    /// Parses a recorded `builderState` string back into a `HandMotionState`.
+    static func semanticState(from string: String) -> MacCaptureEngine.HandMotionState? {
+        switch string {
+        case "movingLeft": return .movingLeft
+        case "movingRight": return .movingRight
+        case "steady": return .steady
+        case "searching": return .searching
+        default: return nil
+        }
+    }
+
+    private enum BuilderOrder { case ideal, exact }
+
+    private static func runPipeline(
+        observations: [MovementTraceObservation],
+        audioEvents: [ScratchAudioNotationEventCandidate],
+        handPoseInterval: CFTimeInterval,
+        order: BuilderOrder,
+        drainTime: Double?
+    ) -> (snapshot: MacCaptureEngine.RoutineMovementDiagnosticsSnapshot,
+          events: [CaptureCore.DetectedNotationRecordMovementEvent]) {
+        let tracker = HandDirectionTracker()
+        let debugSession = MacCaptureEngine.RoutineMovementDebugSession(handPoseInterval: handPoseInterval)
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(
+            startedAt: observations.first?.presentationTime ?? 0,
+            debugSession: debugSession
+        )
+        var states: [Int: MacCaptureEngine.HandMotionState] = [:]
+
+        // Pass 1: feed the tracker in enqueue order, mirroring the live
+        // tracker-side debug recording (recordSample + steady idle reasons).
+        for observation in observations {
+            let direction: HandDirectionTracker.Direction
+            switch observation.kind {
+            case .real:
+                if let point = observation.trackerPoint {
+                    direction = tracker.recordObservation(rawPoint: point.cgPoint, at: observation.trackerTime)
+                } else {
+                    direction = tracker.recordMiss()
+                }
+            case .miss, .jumpRejected:
+                direction = tracker.recordMiss()
+            case .continuityFill:
+                continue
+            }
+            let state = semanticState(from: direction)
+            states[observation.index] = state
+            if observation.kind == .real {
+                debugSession.recordSample(
+                    rawPoint: observation.trackerPoint?.cgPoint,
+                    displayedPoint: observation.builderPoint?.cgPoint,
+                    confidence: observation.trackerConfidence ?? 0,
+                    rawDirection: direction,
+                    semanticState: state
+                )
+            }
+            if state == .steady {
+                debugSession.recordSteadyIdleReason(tracker.lastIdleReason)
+            }
+        }
+
+        // Pass 2: feed the builder in the requested order.
+        let ordered: [MovementTraceObservation]
+        switch order {
+        case .ideal:
+            ordered = observations
+        case .exact:
+            ordered = observations
+                .filter { $0.builderExecutionSequence != nil }
+                .sorted { ($0.builderExecutionSequence ?? 0) < ($1.builderExecutionSequence ?? 0) }
+        }
+        for observation in ordered {
+            // Dedup-rejected and never-published observations are NEVER fed.
+            guard !observation.dedupRejected,
+                  let stateString = observation.builderState,
+                  let state = semanticState(from: stateString),
+                  observation.builderPoint != nil || observation.builderState != nil else { continue }
+            // Exact replay honours actual execution time and skips.
+            if order == .exact {
+                guard observation.builderSkippedReason == nil,
+                      let executionTime = observation.builderExecutionTime else { continue }
+                builder.recordObservation(
+                    state: state,
+                    position: observation.builderPoint.map { Double($0.x) },
+                    confidence: observation.builderConfidence ?? 0,
+                    now: executionTime
+                )
+            } else {
+                builder.recordObservation(
+                    state: state,
+                    position: observation.builderPoint.map { Double($0.x) },
+                    confidence: observation.builderConfidence ?? 0,
+                    now: observation.enqueueTime
+                )
+            }
+        }
+
+        let rawEvents = builder.movementEvents(
+            now: drainTime ?? observations.last?.presentationTime ?? 0
+        )
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: audioEvents, confidence: nil),
+            motionEvents: rawEvents,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            debugSession: debugSession
+        )
+        return (debugSession.snapshot(), snapshot.recordMovementEvents)
+    }
+
+    /// Idealised replay: builder fed in enqueue order with frame time. No
+    /// MainActor delay, no skip. This is the comparison baseline.
+    static func idealReplay(
+        observations: [MovementTraceObservation],
+        audioEvents: [ScratchAudioNotationEventCandidate],
+        handPoseInterval: CFTimeInterval,
+        drainTime: Double? = nil
+    ) -> (snapshot: MacCaptureEngine.RoutineMovementDiagnosticsSnapshot,
+          events: [CaptureCore.DetectedNotationRecordMovementEvent]) {
+        runPipeline(observations: observations, audioEvents: audioEvents,
+                    handPoseInterval: handPoseInterval, order: .ideal, drainTime: drainTime)
+    }
+
+    /// Exact replay: builder fed in the ACTUAL recorded execution order with
+    /// the ACTUAL execution time; observations whose builder task was skipped
+    /// or never executed are excluded. `drainTime` is the live finalization
+    /// instant (recorded in the trace) so the drain reproduces the event's
+    /// `endTime` exactly.
+    static func exactReplay(
+        observations: [MovementTraceObservation],
+        audioEvents: [ScratchAudioNotationEventCandidate],
+        handPoseInterval: CFTimeInterval,
+        drainTime: Double? = nil
+    ) -> (snapshot: MacCaptureEngine.RoutineMovementDiagnosticsSnapshot,
+          events: [CaptureCore.DetectedNotationRecordMovementEvent]) {
+        runPipeline(observations: observations, audioEvents: audioEvents,
+                    handPoseInterval: handPoseInterval, order: .exact, drainTime: drainTime)
+    }
+}
+
+// MARK: - Builder admission gate
+
+/// Per-take, lock-protected admission gate for notation-builder tasks.
+///
+/// The finalization barrier must be race-free: video processing keeps running
+/// while a take finalizes, so a bare `DispatchGroup.enter()` can happen after
+/// `wait()` has already returned (the group reaches zero and a later `enter()`
+/// escapes the barrier). This gate makes admission and closing share one lock:
+///
+///   • `open()` starts a new take's window with a fresh generation and group.
+///   • `admit()` atomically checks "still open for this generation" and enters
+///     the group, returning a token tied to that generation.
+///   • `close()` atomically closes admission first, so every later `admit()`
+///     returns nil; the returned group is then waited on.
+///   • `isCurrent(_:)` lets an admitted task skip mutating a builder that has
+///     already been replaced by a later take.
+///
+/// `wait()` runs on the AVCaptureFileOutput delegate queue, never on the
+/// MainActor, so it cannot block the MainActor waiting for itself.
+final class BuilderAdmissionGate {
+    private let lock = NSLock()
+    private var generation = 0
+    private var isOpen = false
+    private var group = DispatchGroup()
+
+    /// A token tied to one take: its generation and the group to `leave()`.
+    struct Token {
+        let generation: Int
+        let group: DispatchGroup
+    }
+
+    /// Opens admission for a new take and returns its generation.
+    @discardableResult
+    func open() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        generation += 1
+        isOpen = true
+        group = DispatchGroup()
+        return generation
+    }
+
+    /// Atomically admits an enqueue if the gate is open. Returns the token to
+    /// `leave()` on completion, or nil if admission is closed (or the take was
+    /// replaced). The check and `enter()` share one lock — never a bare boolean
+    /// checked separately from `DispatchGroup.enter()`.
+    func admit() -> Token? {
+        lock.lock(); defer { lock.unlock() }
+        guard isOpen else { return nil }
+        group.enter()
+        return Token(generation: generation, group: group)
+    }
+
+    /// Atomically closes admission. Returns the group to `wait()` on. After
+    /// this, every later `admit()` returns nil.
+    func close() -> DispatchGroup {
+        lock.lock(); defer { lock.unlock() }
+        isOpen = false
+        return group
+    }
+
+    /// Whether `generation` is still the active generation. Used by an admitted
+    /// task to avoid mutating a builder that belongs to a later take.
+    func isCurrent(_ generation: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return generation == self.generation
+    }
+}
+
+/// Accumulated-deadline hand-pose cadence scheduler.
+///
+/// The previous gate (`now - lastAccepted >= interval`) reset its timestamp to
+/// the ACCEPTED frame, so a 30 fps source (≈33 ms) against a 40 ms interval
+/// could only accept every ≈66 ms — quantizing 30 fps to ≈15 fps. This
+/// scheduler advances an accumulated deadline instead, preserving phase, so the
+/// achieved rate tracks `1/interval` (≈25 fps for a 40 ms interval) rather than
+/// half of it.
+///
+/// A drift guard re-anchors the deadline after a stall so a catch-up burst
+/// cannot fire back-to-back. `reset()` is called at the start of each take so
+/// scheduling never bleeds across takes. Purely deterministic: `now` is passed
+/// in, never read from the clock.
+struct HandPoseCadenceScheduler {
+    private(set) var interval: CFTimeInterval
+    private var nextDeadline: CFTimeInterval = -.infinity
+
+    init(interval: CFTimeInterval) {
+        self.interval = interval
+    }
+
+    /// Whether the frame arriving at `now` should be analyzed. Advances the
+    /// accumulated deadline when it returns `true`.
+    mutating func shouldProcess(frameAt now: CFTimeInterval) -> Bool {
+        if nextDeadline == -.infinity {
+            nextDeadline = now + interval
+            return true
+        }
+        guard now >= nextDeadline else { return false }
+        nextDeadline += interval
+        if nextDeadline <= now {
+            // Fell behind (stall then burst) — re-anchor rather than fire a
+            // catch-up burst of back-to-back frames.
+            nextDeadline = now + interval
+        }
+        return true
+    }
+
+    /// Reset the accumulated phase; call at the start of a take.
+    mutating func reset() {
+        nextDeadline = -.infinity
+    }
+}
+
+// MARK: - Temporally-stable hand anchor
+
+/// One joint's contribution to the hand anchor.
+struct HandAnchorSample: Equatable {
+    let location: CGPoint
+    let confidence: Float
+}
+
+enum HandAnchorMode: String, Equatable {
+    /// Confidence-weighted palm/base anchor (wrist + MCP ring) — temporally
+    /// stable because it does not track a single fingertip that can flicker.
+    case base
+    /// Single highest-confidence fingertip — fallback only, used when the base
+    /// is unavailable.
+    case tipFallback
+}
+
+/// The resolved hand anchor for one frame.
+struct HandAnchorSelection: Equatable {
+    let point: CGPoint
+    let confidence: Float
+    let mode: HandAnchorMode
+    /// Joint names that formed the anchor (identity, for diagnostics).
+    let jointNames: [String]
+    /// Whether the anchor identity (mode or joint set) changed this frame.
+    let switched: Bool
+}
+
+/// Pure anchor math: confidence-weighted base anchor + fingertip fallback.
+/// No Vision, no state — deterministic and unit-testable.
+enum HandAnchorMath {
+    /// Wrist + MCP/CMC joints that form the stable palm/base anchor.
+    static let baseJointNames = ["wrist", "thumbCMC", "indexMCP", "middleMCP", "ringMCP", "littleMCP"]
+    /// Fingertip joints used as the fallback anchor.
+    static let tipJointNames = ["thumbTip", "indexTip", "middleTip", "ringTip", "littleTip"]
+
+    /// Confidence-weighted palm/base anchor from the wrist + MCP ring. Requires
+    /// the wrist (the anchor core) plus at least one MCP joint; returns nil
+    /// otherwise so the caller can fall back to a fingertip. The wrist carries
+    /// the palm's translational motion while the MCP joints pin its orientation,
+    /// so the weighted point does not jump when a single finger curls.
+    static func baseAnchor(
+        from joints: [String: HandAnchorSample]
+    ) -> (point: CGPoint, confidence: Float, jointNames: [String])? {
+        guard joints["wrist"] != nil else { return nil }
+        var weightedX = 0.0, weightedY = 0.0, totalWeight = 0.0
+        var names: [String] = []
+        for name in baseJointNames {
+            guard let sample = joints[name], sample.confidence > 0 else { continue }
+            let w = Double(sample.confidence)
+            weightedX += Double(sample.location.x) * w
+            weightedY += Double(sample.location.y) * w
+            totalWeight += w
+            names.append(name)
+        }
+        let hasMCP = names.contains(where: { $0 != "wrist" })
+        guard hasMCP, totalWeight > 0 else { return nil }
+        let confidence = Float(totalWeight / Double(names.count))
+        return (CGPoint(x: weightedX / totalWeight, y: weightedY / totalWeight),
+                confidence, names.sorted())
+    }
+
+    /// Highest-confidence fingertip (fallback). Returns nil when no tip is
+    /// present.
+    static func bestTipAnchor(
+        from joints: [String: HandAnchorSample]
+    ) -> (point: CGPoint, confidence: Float, jointNames: [String])? {
+        let best = tipJointNames
+            .compactMap { name -> (String, HandAnchorSample)? in
+                joints[name].map { (name, $0) }
+            }
+            .max { $0.1.confidence < $1.1.confidence }
+        guard let best else { return nil }
+        return (best.1.location, best.1.confidence, [best.0])
+    }
+}
+
+/// Temporally-stable hand anchor: prefers the base (wrist + MCP) anchor and
+/// holds it across brief losses, falling back to a fingertip only when the base
+/// is gone for longer (or was never present), and reacquiring the base as soon
+/// as it returns. Holds are TIME-BOUNDED (not frame-counted), so behaviour is
+/// identical at any frame rate; after the holds expire the tracker returns nil
+/// so the caller enters its miss path (and a stale anchor never feeds the
+/// angular tracker). Pure and deterministic — Vision joint samples + host time
+/// are passed in.
+struct HandAnchorTracker {
+    /// Seconds the base (wrist + MCP) anchor is held after the base is lost,
+    /// before falling back to a fingertip.
+    static let baseHoldDuration: Double = 0.12
+    /// Seconds a fingertip fallback is held after the tip is lost, before the
+    /// anchor expires entirely (returns nil → caller miss path).
+    static let tipHoldDuration: Double = 0.10
+
+    private var last: HandAnchorSelection?
+    /// Host time of the last REAL (non-held) anchor observation. nil until the
+    /// first anchor is seen.
+    private var lastSeenTime: Double?
+
+    mutating func update(joints: [String: HandAnchorSample], at time: Double) -> HandAnchorSelection? {
+        if let base = HandAnchorMath.baseAnchor(from: joints) {
+            let switched = last?.mode != .base || last?.jointNames != base.jointNames
+            let selection = HandAnchorSelection(
+                point: base.point, confidence: base.confidence, mode: .base,
+                jointNames: base.jointNames, switched: switched)
+            last = selection
+            lastSeenTime = time
+            return selection
+        }
+
+        let tip = HandAnchorMath.bestTipAnchor(from: joints)
+
+        // Base lost briefly: hold the base anchor. `lastSeenTime` is NOT
+        // advanced, so the hold is bounded by real elapsed time since the base
+        // was last seen.
+        if let last, last.mode == .base, let lastSeenTime,
+           time - lastSeenTime <= Self.baseHoldDuration {
+            let held = HandAnchorSelection(
+                point: last.point, confidence: last.confidence, mode: .base,
+                jointNames: last.jointNames, switched: false)
+            self.last = held
+            return held
+        }
+
+        // Fall back to a fingertip.
+        if let tip {
+            let switched = last?.mode != .tipFallback || last?.jointNames != tip.jointNames
+            let selection = HandAnchorSelection(
+                point: tip.point, confidence: tip.confidence, mode: .tipFallback,
+                jointNames: tip.jointNames, switched: switched)
+            last = selection
+            lastSeenTime = time
+            return selection
+        }
+
+        // Tip lost briefly: hold the tip anchor.
+        if let last, last.mode == .tipFallback, let lastSeenTime,
+           time - lastSeenTime <= Self.tipHoldDuration {
+            return last
+        }
+
+        // No base, no tip, and any hold has expired — the anchor is lost.
+        return nil
+    }
+
+    mutating func reset() {
+        last = nil
+        lastSeenTime = nil
+    }
+}
+
+// MARK: - Physical platter rotation (angular direction, not raw camera X)
+
+/// Signed rotational direction around the platter centre.
+enum PlatterRotationDirection: String, Equatable {
+    case counterClockwise  // positive angular displacement
+    case clockwise         // negative angular displacement
+    case idle
+    case searching
+}
+
+/// Why a platter-rotation observation was rejected (fail-closed).
+enum PlatterRotationRejection: String, Equatable {
+    case tooCloseToCentre
+    case implausibleJump
+    case unreliableGeometry
+}
+
+/// One platter-rotation observation result.
+struct PlatterRotationObservation: Equatable {
+    /// Wrapped angle in [-π, π] around the centre.
+    let angle: Double
+    /// Unwrapped cumulative angle — the continuous angular position preserved
+    /// for notation geometry.
+    let continuousAngle: Double
+    /// Signed angular displacement since the previous accepted sample.
+    let angularDisplacement: Double
+    /// Signed angular velocity (radians/second).
+    let angularVelocity: Double
+    let direction: PlatterRotationDirection
+    let rejection: PlatterRotationRejection?
+}
+
+/// Pure angular math + the single documented camera orientation contract.
+enum PlatterRotationMath {
+    /// Angle of `point` around `centre`, in [-π, π], via `atan2(dy, dx)`.
+    static func angle(of point: CGPoint, centre: CGPoint) -> Double {
+        atan2(Double(point.y - centre.y), Double(point.x - centre.x))
+    }
+
+    /// Signed shortest angular difference `to - from`, in (-π, π], correctly
+    /// unwrapping across the ±π boundary (so 179° → -179° is +2°, not -358°).
+    static func shortestSignedDelta(from: Double, to: Double) -> Double {
+        var delta = (to - from).truncatingRemainder(dividingBy: 2 * .pi)
+        if delta > .pi { delta -= 2 * .pi }
+        else if delta < -.pi { delta += 2 * .pi }
+        return delta
+    }
+
+    /// The single documented camera orientation contract: positive angular
+    /// displacement (counter-clockwise) maps to record "forward", negative
+    /// (clockwise) to "backward". PROVISIONAL — mirrors the CC6 decoder's sign
+    /// contract and is the ONE place to flip if a hardware correlation shows it
+    /// inverted. `isMirrored` compensates for a mirrored camera feed, whose
+    /// handedness is flipped relative to physical motion.
+    static func recordDirection(
+        for direction: PlatterRotationDirection,
+        isMirrored: Bool
+    ) -> MacCaptureEngine.LiveRecordDirection? {
+        switch direction {
+        case .counterClockwise: return isMirrored ? .backward : .forward
+        case .clockwise: return isMirrored ? .forward : .backward
+        case .idle, .searching: return nil
+        }
+    }
+
+    /// Evidence-based angular movement confidence, combining the independent
+    /// evidence channels into one [0,1] value. The legacy X-direction tracker's
+    /// confidence must NEVER feed angular notation — this is the angular
+    /// authority (anchor confidence, geometry confidence, displacement/velocity
+    /// quality, hysteresis state, and observation freshness).
+    static func angularConfidence(
+        anchorConfidence: Double,      // 0…1 — Vision joint confidence of the stable anchor
+        geometryConfidence: Double,    // 0…1 — platter/rig geometry confidence
+        angularSpeed: Double,          // abs radians/second — displacement/velocity quality
+        direction: PlatterRotationDirection,  // hysteresis state
+        freshnessSeconds: Double       // seconds since the last valid observation
+    ) -> Double {
+        let anchor = min(1, max(0, anchorConfidence))
+        let geometry = min(1, max(0, geometryConfidence))
+        // Sustained angular speed is strong evidence of real motion; near-zero
+        // speed (jitter) is weak evidence.
+        let speedQuality = min(1, angularSpeed / 2.0)
+        // A committed direction is more trustworthy than a pending/idle one.
+        let commitFactor: Double
+        switch direction {
+        case .counterClockwise, .clockwise: commitFactor = 1.0
+        case .idle: commitFactor = 0.4
+        case .searching: commitFactor = 0.0
+        }
+        // A just-observed anchor is fully trusted; a held/stale one decays.
+        let freshness = max(0, 1 - freshnessSeconds / 0.5)
+        let confidence = anchor * geometry * (0.4 + 0.6 * speedQuality) * commitFactor * freshness
+        return min(1, max(0, confidence))
+    }
+}
+
+/// Stateful platter-rotation tracker: derives signed angular displacement and
+/// velocity around a platter centre from successive hand-anchor points, with
+/// centre rejection, implausible-jump rejection, and commit/hold hysteresis —
+/// all on ELAPSED TIME (not frame counts), so timing behaviour is identical at
+/// 15/25/30/60 fps. Never raw camera-space X. Purely deterministic; `time` is
+/// passed in.
+struct PlatterRotationTracker {
+    static let velocityThreshold: Double = 0.30        // rad/s to count as moving
+    static let displacementThreshold: Double = 0.03    // rad net displacement per window
+    static let commitDuration: Double = 0.08           // seconds of agreeing direction before commit
+    static let holdDuration: Double = 0.12             // seconds to hold direction after a miss
+    static let resetDuration: Double = 0.35            // seconds of miss before searching
+    static let historyCapacity = 4
+    static let minRadius: Double = 0.02                // reject points too close to centre
+    static let maxAngularVelocity: Double = 12.0       // rad/s ceiling for jump rejection
+
+    private struct Sample {
+        let angle: Double
+        let time: Double
+    }
+
+    private var history: [Sample] = []
+    private var committed: PlatterRotationDirection = .idle
+    private var pending: PlatterRotationDirection = .idle
+    private var pendingSince: Double?
+    private(set) var direction: PlatterRotationDirection = .idle
+    private(set) var continuousAngle: Double = 0
+    private var lastAngle: Double?
+    private var lastTime: Double?
+    /// Host time of the last successful observation (freshness + miss hold/reset).
+    private(set) var lastObservationTime: Double?
+
+    /// Process a successful anchor observation at `point` around `centre`.
+    @discardableResult
+    mutating func observe(point: CGPoint, centre: CGPoint, at time: Double) -> PlatterRotationObservation {
+        let dx = Double(point.x - centre.x)
+        let dy = Double(point.y - centre.y)
+        let radius = (dx * dx + dy * dy).squareRoot()
+        guard radius >= Self.minRadius else {
+            return PlatterRotationObservation(
+                angle: 0, continuousAngle: continuousAngle, angularDisplacement: 0,
+                angularVelocity: 0, direction: .idle, rejection: .tooCloseToCentre)
+        }
+
+        let angle = atan2(dy, dx)
+        var displacement = 0.0
+        var velocity = 0.0
+
+        if let lastAngle {
+            displacement = PlatterRotationMath.shortestSignedDelta(from: lastAngle, to: angle)
+            if let lastTime {
+                let dt = max(time - lastTime, 0.001)
+                velocity = displacement / dt
+                guard abs(velocity) <= Self.maxAngularVelocity else {
+                    return PlatterRotationObservation(
+                        angle: angle, continuousAngle: continuousAngle, angularDisplacement: 0,
+                        angularVelocity: velocity, direction: .idle, rejection: .implausibleJump)
+                }
+            }
+            continuousAngle += displacement
+        }
+        lastAngle = angle
+        lastTime = time
+        lastObservationTime = time
+
+        history.append(Sample(angle: continuousAngle, time: time))
+        if history.count > Self.historyCapacity {
+            history.removeFirst()
+        }
+
+        let raw = computeRawDirection()
+        updateCommitted(with: raw, at: time)
+        direction = committed
+        return PlatterRotationObservation(
+            angle: angle, continuousAngle: continuousAngle, angularDisplacement: displacement,
+            angularVelocity: velocity, direction: direction, rejection: nil)
+    }
+
+    /// Process a missed frame (no usable anchor). Holds the last committed
+    /// direction for `holdDuration`, then drops to idle, then searching after
+    /// `resetDuration` — all measured in elapsed time since the last observation.
+    @discardableResult
+    mutating func miss(at time: Double) -> PlatterRotationDirection {
+        if let lastObservationTime, time - lastObservationTime >= Self.resetDuration {
+            history.removeAll()
+            committed = .idle
+            pending = .idle
+            pendingSince = nil
+            direction = .searching
+            return .searching
+        }
+        if let lastObservationTime, time - lastObservationTime <= Self.holdDuration {
+            direction = committed
+            return direction
+        }
+        direction = .idle
+        return .idle
+    }
+
+    mutating func reset() {
+        history.removeAll()
+        committed = .idle
+        pending = .idle
+        pendingSince = nil
+        direction = .idle
+        continuousAngle = 0
+        lastAngle = nil
+        lastTime = nil
+        lastObservationTime = nil
+    }
+
+    private func computeRawDirection() -> PlatterRotationDirection {
+        guard history.count >= 2 else { return .idle }
+
+        var weightedVelocity = 0.0
+        var totalWeight = 0.0
+        for i in 1..<history.count {
+            let dt = max(history[i].time - history[i - 1].time, 0.001)
+            let delta = history[i].angle - history[i - 1].angle
+            let stepVelocity = delta / dt
+            let weight = Double(i)
+            weightedVelocity += stepVelocity * weight
+            totalWeight += weight
+        }
+        let netDisplacement = history[history.count - 1].angle - history[0].angle
+        guard totalWeight > 0, abs(netDisplacement) >= Self.displacementThreshold else {
+            return .idle
+        }
+        let velocity = weightedVelocity / totalWeight
+        if velocity > Self.velocityThreshold { return .counterClockwise }
+        if velocity < -Self.velocityThreshold { return .clockwise }
+        return .idle
+    }
+
+    private mutating func updateCommitted(with raw: PlatterRotationDirection, at time: Double) {
+        if raw == pending {
+            // Same pending direction: commit once it has persisted for
+            // `commitDuration` (elapsed time, frame-rate independent).
+            if committed != raw, let since = pendingSince, time - since >= Self.commitDuration {
+                committed = raw
+            }
+        } else {
+            pending = raw
+            pendingSince = time
+            // Idle/searching commit immediately (no hysteresis).
+            if raw == .idle || raw == .searching {
+                committed = raw
+            }
+        }
+    }
+}
+
+// MARK: - Source-neutral movement observation + shared camera processor
+
+/// Source-neutral movement observation for the notation builder. The builder
+/// consumes direction, a scalar position, confidence, and provenance WITHOUT
+/// knowing whether the position scalar is image-space X or continuous angular
+/// displacement. For the camera, `position` is the unwrapped angular position
+/// (in revolutions); the smoothed image point is a display concern and never
+/// reaches the builder.
+struct MovementObservation {
+    let state: MacCaptureEngine.HandMotionState
+    let position: Double?        // scalar, source-neutral (angular revolutions for camera)
+    let confidence: Double
+    let source: String           // provenance ("detected" = camera builder, etc.)
+}
+
+/// The shared, non-UI camera movement pipeline:
+/// frame/timestamp → cadence → stable anchor → calibrated platter geometry →
+/// angular tracker → builder observation. Used by BOTH live capture and offline
+/// replay so the tracking/notation logic is never duplicated. Platform capture
+/// APIs (AVCapture / AVAssetReader) remain thin adapters that only extract the
+/// Vision joint samples and the platter centre.
+struct CameraMovementProcessor {
+    private var cadence = HandPoseCadenceScheduler(interval: 0)
+    private var anchorTracker = HandAnchorTracker()
+    private var rotationTracker = PlatterRotationTracker()
+    /// Whether the mirrored-orientation contract is in effect.
+    let isMirrored: Bool
+
+    init(isMirrored: Bool = false) {
+        self.isMirrored = isMirrored
+    }
+
+    /// One processed frame's output.
+    struct Observation {
+        /// Whether a usable hand anchor was resolved this frame (false → miss).
+        let detected: Bool
+        let state: MacCaptureEngine.HandMotionState
+        /// Continuous angular position in revolutions (`angle / 2π`), for the
+        /// notation builder. nil when no usable angular position exists.
+        let position: Double?
+        /// Evidence-based angular confidence (never the X tracker's).
+        let confidence: Double
+        let source: String
+        /// Raw anchor point (for display smoothing only).
+        let anchorPoint: CGPoint?
+        let anchorConfidence: Float
+        /// Anchor identity (for diagnostics): which joints formed the anchor and
+        /// whether it switched this frame.
+        let anchorJointNames: [String]
+        let anchorMode: HandAnchorMode?
+        let anchorSwitched: Bool
+        /// True when the platter centre could not be resolved — the camera
+        /// cannot contribute directional notation (fail-closed, never raw X).
+        let calibrationInsufficient: Bool
+    }
+
+    /// Cadence gate — call BEFORE Vision so skipped frames never run the
+    /// expensive hand-pose request. The processor owns the cadence phase so the
+    /// same scheduling applies to live capture and offline replay.
+    mutating func shouldProcess(frameAt now: Double, interval: Double) -> Bool {
+        if cadence.interval != interval {
+            cadence = HandPoseCadenceScheduler(interval: interval)
+        }
+        return cadence.shouldProcess(frameAt: now)
+    }
+
+    /// Process the extracted joints (Vision already ran; cadence already gated
+    /// via `shouldProcess`). Returns the builder observation.
+    mutating func process(
+        frameAt now: Double,
+        joints: [String: HandAnchorSample],
+        platterCentre: CGPoint?,
+        geometryConfidence: Float
+    ) -> Observation {
+        let calibrationInsufficient = (platterCentre == nil)
+
+        guard let anchor = anchorTracker.update(joints: joints, at: now) else {
+            _ = rotationTracker.miss(at: now)
+            return Observation(
+                detected: false, state: .searching, position: nil, confidence: 0,
+                source: "detected", anchorPoint: nil, anchorConfidence: 0,
+                anchorJointNames: [], anchorMode: nil, anchorSwitched: false,
+                calibrationInsufficient: calibrationInsufficient)
+        }
+
+        guard let centre = platterCentre else {
+            _ = rotationTracker.miss(at: now)
+            return Observation(
+                detected: true, state: .searching, position: nil, confidence: 0,
+                source: "detected", anchorPoint: anchor.point,
+                anchorConfidence: anchor.confidence,
+                anchorJointNames: anchor.jointNames, anchorMode: anchor.mode,
+                anchorSwitched: anchor.switched, calibrationInsufficient: true)
+        }
+
+        let rotation = rotationTracker.observe(point: anchor.point, centre: centre, at: now)
+        if rotation.rejection != nil {
+            return Observation(
+                detected: true, state: .steady,
+                position: rotation.continuousAngle / (2 * .pi), confidence: 0,
+                source: "detected", anchorPoint: anchor.point,
+                anchorConfidence: anchor.confidence,
+                anchorJointNames: anchor.jointNames, anchorMode: anchor.mode,
+                anchorSwitched: anchor.switched, calibrationInsufficient: false)
+        }
+
+        let state = handMotionState(for: rotation.direction)
+        let freshness = rotationTracker.lastObservationTime.map { max(0, now - $0) } ?? 0
+        let confidence = PlatterRotationMath.angularConfidence(
+            anchorConfidence: Double(anchor.confidence),
+            geometryConfidence: Double(geometryConfidence),
+            angularSpeed: abs(rotation.angularVelocity),
+            direction: rotation.direction,
+            freshnessSeconds: freshness)
+
+        return Observation(
+            detected: true, state: state,
+            position: rotation.continuousAngle / (2 * .pi), confidence: confidence,
+            source: "detected", anchorPoint: anchor.point,
+            anchorConfidence: anchor.confidence,
+            anchorJointNames: anchor.jointNames, anchorMode: anchor.mode,
+            anchorSwitched: anchor.switched, calibrationInsufficient: false)
+    }
+
+    private func handMotionState(for direction: PlatterRotationDirection) -> MacCaptureEngine.HandMotionState {
+        guard let record = PlatterRotationMath.recordDirection(for: direction, isMirrored: isMirrored) else {
+            return direction == .searching ? .searching : .steady
+        }
+        return record == .forward ? .movingRight : .movingLeft
+    }
+
+    mutating func reset() {
+        cadence.reset()
+        anchorTracker.reset()
+        rotationTracker.reset()
     }
 }

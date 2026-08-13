@@ -110,13 +110,13 @@ struct MotionPath: Equatable, Sendable {
 /// Turns lane content into its platter-position curve.
 enum ScratchStrokeGeometry {
 
-    /// Per-stroke amplitude — how far the platter deflects from centre.
-    /// A slow drag reads as a small bump; a medium push is mid-amplitude; a
-    /// fast stab hits the rail. The speed bucket is the only signal driving
+    /// Per-stroke amplitude — how far the platter moves in one stroke.
+    /// A slow drag reads as a small excursion; a medium push is mid-amplitude;
+    /// a fast stab hits the rail. The speed bucket is the only signal driving
     /// this first amplitude pass — duration, direction sign, fader state and
-    /// confidence stay out of it. The centre / rest position is always raw
-    /// 0, so the loop seam (which sits at centre) closes regardless of how
-    /// the rail end is scaled.
+    /// confidence stay out of it. Rest / starting position is always raw 0,
+    /// so a balanced forward/backward pair returns to 0 and the loop seam
+    /// closes regardless of how the rail end is scaled.
     private static func rawAmplitude(for stroke: LaneStroke) -> CGFloat {
         // Travel-driven amplitude takes precedence when present (PR 2 supplies it from analysis);
         // otherwise the existing speed-bucket amplitude is used unchanged.
@@ -130,112 +130,117 @@ enum ScratchStrokeGeometry {
         }
     }
 
-    /// Derives the platter-position curve for `content`. Each stroke is a
-    /// brief deflection from the resting centre toward its rail and back: a
-    /// forward push rises, a backward pull dips, both within the stroke's
-    /// own `[startTime, endTime]` window, and how far each one rises or dips
-    /// is driven by `rawAmplitude(for:)` — a fast stab reaches the rail, a
-    /// slow drag falls short of it. The lead-in, the gaps between strokes
-    /// and the trailing tail stay flat at the centre — the platter's
-    /// resting position — so every scratched stroke shows as a distinct
-    /// bump aligned in time to its audio and the loop seam still closes at
-    /// centre. There is no cumulative integration, so an unbalanced pattern
-    /// cannot drift; and consecutive same-direction strokes each show as
-    /// their own bump rather than collapsing into one move followed by a
-    /// long flat run. The raw curve is then normalized into 0...1.
-    static func motionPath(for content: LaneContent) -> MotionPath {
+    /// Derives the platter-position curve for `content` as ONE continuous
+    /// physical position trace, not a series of isolated out/return bumps.
+    /// The platter starts at its resting position (raw 0) and integrates
+    /// forward: a forward stroke raises the position over its full
+    /// `[startTime, endTime]` window, a backward stroke lowers it, and the
+    /// next stroke begins exactly where the previous one ended. Gaps and
+    /// holds keep the position flat, so the platter never springs back to
+    /// centre between strokes. A balanced forward/backward pair returns to
+    /// its starting position; an unbalanced or incomplete phrase ends
+    /// wherever its last stroke left it (no fabricated closing move). A
+    /// stroke with measured endpoints (`LaneStroke.measuredStartPosition` /
+    /// `.measuredEndPosition`) is drawn as that exact measured span instead
+    /// of an integrated amplitude — that is how the MY PERFORMANCE row
+    /// preserves captured motion truthfully.
+    /// A raw (un-normalized) platter-position span before the 0…1 vertical
+    /// normalization. Raw 0 is the platter's starting/rest position; forward
+    /// motion raises it and backward motion lowers it, cumulatively.
+    private struct RawMotionSpan {
+        let kind: MotionSegmentKind
+        let start: TimeInterval
+        let end: TimeInterval
+        let startPos: CGFloat
+        let endPos: CGFloat
+        let speed: ScratchNotationSpeedClassification
+        let isGhost: Bool
+    }
+
+    /// Builds the ordered raw spans for `content` (one directional segment
+    /// per stroke + holds), shared by every normalization variant so a stroke
+    /// is shaped identically no matter which vertical frame the caller
+    /// chooses. Stroke times are preserved exactly — each stroke is a single
+    /// segment covering `[stroke.startTime, stroke.endTime]` and nothing else.
+    private static func rawSpans(for content: LaneContent) -> [RawMotionSpan] {
         let duration = max(content.duration, 0.001)
         let strokes = content.strokes.sorted { $0.startTime < $1.startTime }
         let epsilon = 1e-6
 
         guard !strokes.isEmpty else {
             // No strokes — one flat hold across the whole timeline.
-            return MotionPath(
-                segments: [MotionSegment(kind: .hold, startTime: 0, endTime: duration,
-                                         startPosition: 0.5, endPosition: 0.5,
-                                         speed: .medium, isGhost: false)],
-                timeRange: 0...duration)
+            return [RawMotionSpan(kind: .hold, start: 0, end: duration,
+                                  startPos: 0, endPos: 0,
+                                  speed: .medium, isGhost: false)]
         }
 
-        // 1. Ordered sub-spans. Each stroke becomes two: an "out" sub from
-        //    centre to its rail and a "return" sub back to centre, meeting at
-        //    the stroke's mid-time. The lead-in, gap-holds and trailing tail
-        //    rest flat at the centre. Stroke times are preserved exactly —
-        //    the out + return halves cover [stroke.startTime, stroke.endTime]
-        //    and nothing else.
-        struct Span {
-            let kind: MotionSegmentKind
-            let start: TimeInterval
-            let end: TimeInterval
-            /// Un-normalized cross-axis position. 0 = centre (rest), ±1 = rails.
-            let startPos: CGFloat
-            let endPos: CGFloat
-            let speed: ScratchNotationSpeedClassification
-            let isGhost: Bool
-        }
-        var spans: [Span] = []
-
-        func appendHold(start: TimeInterval, end: TimeInterval, isGhost: Bool) {
+        var spans: [RawMotionSpan] = []
+        func appendHold(start: TimeInterval, end: TimeInterval, position: CGFloat,
+                        isGhost: Bool) {
             guard end > start + epsilon else { return }
-            spans.append(Span(kind: .hold, start: start, end: end,
-                              startPos: 0, endPos: 0,
-                              speed: .medium, isGhost: isGhost))
+            spans.append(RawMotionSpan(kind: .hold, start: start, end: end,
+                                       startPos: position, endPos: position,
+                                       speed: .medium, isGhost: isGhost))
         }
 
-        appendHold(start: 0, end: strokes[0].startTime, isGhost: strokes[0].isGhost)
+        // The platter starts at rest (raw 0) for authored content, or at the
+        // first measured position for captured content, and integrates from
+        // there. Holds freeze `current`; strokes move it.
+        var current: CGFloat = strokes[0].measuredStartPosition.map { CGFloat($0) } ?? 0
+
+        appendHold(start: 0, end: strokes[0].startTime, position: current,
+                   isGhost: strokes[0].isGhost)
 
         for (index, stroke) in strokes.enumerated() {
-            // Sign comes from direction; magnitude comes from the per-stroke
-            // amplitude. Centre / rest stays at raw 0, so out-halves leave
-            // centre, return-halves come back to centre, and the loop seam
-            // closes at centre regardless of which speed buckets are in the
-            // phrase.
-            let sign: CGFloat = (stroke.direction == .forward) ? 1 : -1
-            let rail: CGFloat = sign * rawAmplitude(for: stroke)
-            let strokeDuration = stroke.endTime - stroke.startTime
-            if strokeDuration <= epsilon {
-                // Degenerate zero-duration stroke — render as one
-                // instantaneous mark to the rail without dividing by zero.
-                spans.append(Span(kind: .stroke(stroke.direction),
-                                  start: stroke.startTime, end: stroke.endTime,
-                                  startPos: 0, endPos: rail,
-                                  speed: stroke.speed, isGhost: stroke.isGhost))
+            // One directional segment over the stroke's full window. Measured
+            // endpoints are used verbatim (preserving the captured trace);
+            // authored strokes integrate a signed amplitude from the current
+            // position.
+            let startPos: CGFloat
+            let endPos: CGFloat
+            if let measuredStart = stroke.measuredStartPosition,
+               let measuredEnd = stroke.measuredEndPosition {
+                startPos = CGFloat(measuredStart)
+                endPos = CGFloat(measuredEnd)
             } else {
-                let mid = (stroke.startTime + stroke.endTime) / 2
-                // Out half: centre → rail. The platter leaves rest, deflects.
-                spans.append(Span(kind: .stroke(stroke.direction),
-                                  start: stroke.startTime, end: mid,
-                                  startPos: 0, endPos: rail,
-                                  speed: stroke.speed, isGhost: stroke.isGhost))
-                // Return half: rail → centre. The platter springs back to rest.
-                spans.append(Span(kind: .stroke(stroke.direction),
-                                  start: mid, end: stroke.endTime,
-                                  startPos: rail, endPos: 0,
-                                  speed: stroke.speed, isGhost: stroke.isGhost))
+                let sign: CGFloat = (stroke.direction == .forward) ? 1 : -1
+                let delta = sign * rawAmplitude(for: stroke)
+                startPos = current
+                endPos = current + delta
             }
+            spans.append(RawMotionSpan(kind: .stroke(stroke.direction),
+                                       start: stroke.startTime, end: stroke.endTime,
+                                       startPos: startPos, endPos: endPos,
+                                       speed: stroke.speed, isGhost: stroke.isGhost))
+            current = endPos
             if index + 1 < strokes.count {
                 appendHold(start: stroke.endTime,
                            end: strokes[index + 1].startTime,
+                           position: current,
                            isGhost: stroke.isGhost)
             }
         }
 
         if let last = strokes.last {
-            appendHold(start: last.endTime, end: duration, isGhost: last.isGhost)
+            appendHold(start: last.endTime, end: duration, position: current,
+                       isGhost: last.isGhost)
         }
 
-        // 2. Normalize raw positions into 0...1. Because every stroke leaves
-        //    and returns to the centre, the path is naturally seamless when
-        //    tiled for a looping pattern — both ends sit at the centre — and
-        //    `content.loops` needs no extra closure step.
-        let allRaw = spans.flatMap { [$0.startPos, $0.endPos] }
-        let low = allRaw.min() ?? -1
-        let high = allRaw.max() ?? 1
+        return spans
+    }
+
+    /// Normalizes raw spans into 0…1 over an explicit raw `[low, high]` frame
+    /// and packages them as a `MotionPath`. A balanced phrase returns to its
+    /// starting position, so a looping pattern is naturally seamless when
+    /// tiled.
+    private static func normalizedPath(spans: [RawMotionSpan],
+                                       low: CGFloat, high: CGFloat,
+                                       duration: TimeInterval) -> MotionPath {
+        let epsilon = 1e-6
         let range = high - low
         func normalized(_ value: CGFloat) -> CGFloat {
             range > epsilon ? (value - low) / range : 0.5
         }
-
         let segments = spans.map {
             MotionSegment(kind: $0.kind,
                           startTime: $0.start, endTime: $0.end,
@@ -243,6 +248,39 @@ enum ScratchStrokeGeometry {
                           endPosition: normalized($0.endPos),
                           speed: $0.speed, isGhost: $0.isGhost)
         }
-        return MotionPath(segments: segments, timeRange: 0...duration)
+        return MotionPath(segments: segments, timeRange: 0...max(duration, 0.001))
+    }
+
+    static func motionPath(for content: LaneContent) -> MotionPath {
+        let spans = rawSpans(for: content)
+        let positions = spans.flatMap { [$0.startPos, $0.endPos] }
+        let low = positions.min() ?? -1
+        let high = positions.max() ?? 1
+        return normalizedPath(spans: spans, low: low, high: high,
+                              duration: max(content.duration, 0.001))
+    }
+
+    /// The same curve, but normalized against an explicit raw `[lowerBound,
+    /// upperBound]` frame instead of the content's own min/max. The stacked
+    /// TARGET / MY PERFORMANCE comparison passes the TARGET's `rawRange(for:)`
+    /// here so a sparse performed take keeps the target's vertical coordinate
+    /// frame — the neutral position and a given travel land on the same Y in
+    /// both rows rather than rescaling to the performed take's own extremes.
+    static func motionPath(for content: LaneContent,
+                           normalizingTo frame: ClosedRange<CGFloat>) -> MotionPath {
+        let spans = rawSpans(for: content)
+        return normalizedPath(spans: spans,
+                              low: frame.lowerBound, high: frame.upperBound,
+                              duration: max(content.duration, 0.001))
+    }
+
+    /// The raw vertical frame `[min, max]` that `content`'s own
+    /// `motionPath(for:)` normalization uses — the value the performed row
+    /// reuses as its frame so both rows share one vertical coordinate frame.
+    static func rawRange(for content: LaneContent) -> ClosedRange<CGFloat> {
+        let positions = rawSpans(for: content).flatMap { [$0.startPos, $0.endPos] }
+        let low = positions.min() ?? -1
+        let high = positions.max() ?? 1
+        return low...high
     }
 }

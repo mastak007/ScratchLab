@@ -1,6 +1,155 @@
 # AI Handoff
 
-## 2026-08-11 — Target-vs-performed batch: visualization + coaching + scoring + practice expansion (branch `feature/notation-canonical-model-20260811`, committed locally, NOT pushed)
+## 2026-08-14 — Baby Scratch comparison alignment fix (uncommitted)
+
+Fixed the Review target-vs-performed comparison so Take 002's leading backward
+setup stroke no longer phase-shifts the whole phrase into 17 wrong-way results.
+Evidence ZIP `session_2026_08_14_notation_baby_scratch_90_bpm.zip` (Take 002:
+34 controller movements, `B/F/B/F…`). Nothing staged/committed/pushed.
+
+### Root cause
+
+`ScratchPerformanceAlignment.compare` anchored to absolute beat time and
+greedily paired target stroke 0 with performed stroke 0. Take 002's slow
+leading backward setup stroke (0.92 s ≈ 2.6× median) shifted every pair by one
+stroke → 17 wrong-way; an incomplete final stroke + an over-tiled 17th cycle
+added 4 missed / 4 extra → ~40%.
+
+### Fix (comparison/scoring alignment only)
+
+Added `ScratchPerformanceAlignment.align(target:performed:) -> ScratchAlignment`
+— a deterministic, source-neutral stage that classifies boundary/setup and
+boundary/incomplete strokes from duration evidence (never "first/last
+unconditionally", never flipping directions to raise score), selects phase, and
+flags over-tiled target strokes as unscored. `compare` now matches one-to-one
+monotonically (drift-tolerant index pairing for a coherent same-count phrase,
+direction-aware window match otherwise). Captured/exported notation untouched.
+
+- `ScratchLab/Models/ScratchPerformanceComparison.swift` — `ScratchAlignment`,
+  new result fields (`boundarySetup…`, `boundaryIncomplete…`,
+  `unscoredTargetStrokeIndices`, `alignmentExplanation`), `align`, rewritten
+  `compare`/`matchStrokes`, overlay `MarkKind.boundarySetup/boundaryIncomplete`.
+- `ScratchLabDesktop/Views/ScratchPhraseChartView.swift` — dim boundary marks.
+- `ScratchLabDesktopTests/ScratchPerformanceComparisonTests.swift` — 15 new
+  `ScratchPerformanceAlignment boundaries` tests (real Take 002 fixture +
+  edge cases).
+
+### Take 002 result
+
+32 matched / 0 missing / 0 extra / 0 wrong-way; boundary setup `[0]`,
+incomplete `[33]`, unscored target `[32,33]`; 16 F/B cycles; timing 13 early /
+4 correct / 15 late (performer ~6% slow); overall 60.4 (was 40).
+
+### Verification
+
+macOS Debug ✓, Release ✓, build-for-testing ✓, `git diff --check` clean. 15/15
+new + all existing comparison suites pass via `xcrun xctest`. Full bundle: 2
+swift-testing issues = pre-existing crossfader-lane-label checks; XCTest
+failures = pre-existing bundle-resource / iOS-target-membership.
+
+
+
+Repair of the camera fallback path and proof of the controller telemetry round
+trip, on top of the prior uncommitted controller work. Two source reviews found
+defects; this entry records the fully corrected state. Nothing staged or pushed.
+
+### Root cause (camera path)
+
+1. **Cadence.** 40 ms gate reset to the accepted frame → 30 fps quantized to
+   ~15 fps. Fixed with an accumulated-deadline scheduler (frame-rate
+   independent).
+2. **Anchor.** Per-frame highest-scoring joint (anatomical switching), plus a
+   key-mapping bug (`JointName.rawValue.rawValue` is `VNHLKWRI`, not `"wrist"`).
+   Fixed with a time-bounded confidence-weighted wrist+MCP base anchor +
+   fingertip fallback + `canonicalAnchorJointName`.
+3. **Direction.** Raw camera X → signed angular displacement around the platter
+   centre (atan2 + unwrap + orientation contract + centre/jump rejection),
+   fail-closed to "camera calibration insufficient".
+4. **Device routing.** CC6 decode resolved from the first ch1 CC6 event
+   (nondeterministic); nil device disabled the decoder filter. Now
+   `resolvedControllerMovementEvents` fails closed (nil → zero controller
+   events → camera fallback).
+5. **Builder geometry.** The notation builder consumed image-space X. Now a
+   source-neutral `MovementObservation` (semantic direction, scalar position,
+   angular confidence, source) feeds the builder; the smoothed image point is
+   display-only. The builder's "furthest" tracking is source-neutral
+   (absolute deviation from start). Evidence-based angular confidence
+   (`PlatterRotationMath.angularConfidence`) replaces `handDirectionTracker.confidence`.
+6. **Confidence lifecycle (second review).** The uncorroborated-camera penalty
+   was applied up to four times (initial normalize + unmatched downgrade +
+   downgrade classify + final normalize → ×0.62⁴). Fixed: `classify` is now
+   idempotent (physical validation only), and a single documented
+   `adjustConfidence` stage applies the camera penalty (or audio `+0.08`) exactly
+   ONCE, keyed on source so "video"/"fused" are never re-adjusted.
+
+### Shared camera processor
+
+`CameraMovementProcessor` (cadence → anchor → geometry → angular → builder
+observation) is the single non-UI pipeline used by BOTH live capture and the
+offline replay test. The replay drains the real `RoutineDetectedNotationBuilder`,
+runs real fusion, persists/reloads the snapshot via `SessionArchiveBuilder`.
+`decodeSidecarForAudit`, and uses the production export mapping
+(`SessionExportRecordMovementEvent.init(from:)`, also used by
+`SessionExportCoordinator`).
+
+### Controller round-trip counts (verified)
+
+`take-002` `mixerMidiEvents` = **8,656** CC6 ch1 events: filtered 8656 →
+decoder runs **50** → noise-filtered **35** → fusion **30** = 2 merges + 3 drops
+(`deltaTooSmall:2`, `speedTooLow:1`). The DEV_LOG "35 → 32 (3 dropped)" was
+WRONG (it is 30; two reductions are merges). 30 trusted/saved/Review/export,
+source `controller`, 20 audio bursts, 26 audio-correlated. Controller confidence
+(0.9) is unaffected by the confidence refactor.
+
+### Offline camera replay (production path, Take 002 camA, after confidence fix)
+
+460 frames → 454 valid anchors → **3 raw builder events → 0 fused movements**,
+each dropped by `confidenceTooLow` after the single ×0.62 penalty
+(raw 0.116/0.192/0.172 → 0.072/0.119/0.107, all < 0.12). The camera fallback is
+**EXPERIMENTAL/INSUFFICIENT** (3 movements vs 30 controller, in the wrong
+15–17 s region). Reported honestly; controller stays authoritative.
+
+### Files changed (this session)
+
+- `ScratchLab/Models/CaptureCore.swift` — `PlatterDecodeDiagnostics` +
+  `platterMovementDecodeDiagnostics`; decoder refactored onto `decodePlatterCore`.
+- `ScratchLab/Services/SessionExportCoordinator.swift` — extracted
+  `SessionExportRecordMovementEvent.init(from:)` (single export-mapping source).
+- `ScratchLabDesktop/Services/MacCaptureEngine.swift` — device routing,
+  `HandPoseCadenceScheduler`, `HandAnchorTracker`/`HandAnchorMath`,
+  `PlatterRotationMath`/`PlatterRotationTracker`, `MovementObservation`,
+  `CameraMovementProcessor`, `canonicalAnchorJointName`, builder source-neutral
+  scalar position, `resolvedControllerMovementEvents`, idempotent
+  `classify` + single-stage `adjustConfidence`.
+- `ScratchLabDesktop/Views/NotationVisualizerView.swift` — truthful source
+  labels ("Controller platter" / "DVS timecode" / "Video motion" / "Audio" /
+  "MIDI fader") + "Camera movement insufficient" state.
+- `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift` + `VisionCaptureGateTests.swift` — new/updated tests.
+
+### Verification
+
+- macOS Debug build ✓, macOS Release `build` ✓, `git diff --check` ✓.
+- Focused suites all pass (controller 14, cadence 7, anchor 8, rotation 9,
+  source-priority/degraded 8, Take002 round-trip 4, export round-trip 1,
+  MovementTrace 20, VisionCaptureGate 18, AnchorJointNameMapping 1).
+- **Full `xcodebuild test` RAN (no hang)**: XCTest 2807 tests / 51 skipped /
+  21 failures; swift-testing 310 tests / 42 suites / 2 issues. The 21 XCTest
+  failures = 1 (mine — a source-string assertion, since fixed) + 16
+  `ScratchSamplePlaybackControllerTests` + 1 `MIDILearnHangFixTests` + 1
+  `PracticeTargetNotationChartTests.testScratchPhraseChartViewIsOniOSTarget`
+  (this worktree has no iOS target). The 2 swift-testing issues are the
+  crossfader-lane-label checks. All non-mine failures are pre-existing.
+
+### Readiness
+
+- **Controller hardware validation: READY.** Routing, round trip, and export
+  are proven deterministically.
+- **Camera fallback: NOT READY — experimental.** Produces ~3 low-confidence
+  movements that all fail the confidence gate; needs real platter-centre
+  calibration. CC6 + angular orientation contracts remain PROVISIONAL (each a
+  single documented function to flip).
+
+
 
 The canonical target/performed comparison foundation (`6ede816`) is now
 wired into user-facing surfaces: a Review "Target vs performed" card
