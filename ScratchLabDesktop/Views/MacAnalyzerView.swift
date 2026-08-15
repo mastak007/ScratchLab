@@ -674,9 +674,12 @@ struct MacAnalyzerView: View {
     @State private var showPracticeLiveInput = false
     @State private var isShowingAllRoutineSessions = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
-    /// Which Capture stage's card is currently expanded. Auto-advances with
-    /// `currentCaptureStage`, but the user can reopen a completed stage to edit.
-    @State private var openCaptureStage: CaptureStage = .setup
+    /// Manual override for the expanded Capture stage; `nil` means "follow the
+    /// current stage automatically". Auto-advance clears this so the active
+    /// stage is always expanded first; the user may reopen a completed stage.
+    @State private var manuallyOpenedCaptureStage: CaptureStage? = nil
+    /// Whether the optional camera/visual-guide preview is expanded.
+    @State private var showCaptureCamera = false
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
     @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
     @State private var reviewStatusMessage = "Confirm before export."
@@ -966,7 +969,6 @@ struct MacAnalyzerView: View {
             await captureEngine.startDeviceDiscoveryAfterViewMount()
         }
         .onAppear {
-            openCaptureStage = currentCaptureStage
             captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
             if liveInputEnabled {
                 startMacLiveInput()
@@ -1035,8 +1037,9 @@ struct MacAnalyzerView: View {
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
         }
-        .onChange(of: currentCaptureStage) { _, newStage in
-            openCaptureStage = newStage
+        .onChange(of: currentCaptureStage) { _, _ in
+            // Auto-advance re-focuses the expanded stage onto the active one.
+            manuallyOpenedCaptureStage = nil
         }
         .onChange(of: practiceDurationRaw) { _, _ in
             guard !isPracticeSessionActive else { return }
@@ -1335,7 +1338,23 @@ struct MacAnalyzerView: View {
 
                 if !hasRoutineSessions {
                     captureEmptyStateStage
-                } else if stageLayout == .desktopDeck {
+                } else {
+                    captureCameraSection
+                }
+            }
+            .padding(ScratchLabDesign.Stage.outerPadding)
+            .background(ScratchLabDesign.Surface.canvas)
+        }
+    }
+
+    /// Camera is an optional visual guide, not the dominant Capture surface.
+    /// It stays collapsed unless the user explicitly opens it; recording does
+    /// not depend on it. The draggable rig overlay appears only inside the
+    /// expanded preview and only when calibration is unlocked.
+    private var captureCameraSection: some View {
+        DisclosureGroup(isExpanded: $showCaptureCamera) {
+            Group {
+                if stageLayout == .desktopDeck {
                     localCameraStage
                 } else {
                     HStack(spacing: ScratchLabDesign.Stage.headerToContent) {
@@ -1346,9 +1365,20 @@ struct MacAnalyzerView: View {
                     }
                 }
             }
-            .padding(ScratchLabDesign.Stage.outerPadding)
-            .background(ScratchLabDesign.Surface.canvas)
+            .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+        } label: {
+            HStack(spacing: 8) {
+                Label("Camera / visual guide", systemImage: "video")
+                    .font(ScratchLabDesign.Typo.disclosureLabel)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(showCaptureCamera ? "Open" : "Closed")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.horizontal, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var reviewWorkspace: some View {
@@ -3256,10 +3286,16 @@ struct MacAnalyzerView: View {
     }
 
     private var mainCaptureButtonTitle: String {
+        if captureEngine.isRoutineRecording {
+            return "Stop"
+        }
+        if isLastRecordingIncomplete {
+            return "Retry take"
+        }
         if !liveInputEnabled {
             return "Start Capture"
         }
-        return captureEngine.isRoutineRecording ? "Stop" : "Record"
+        return "Record"
     }
 
     private var reviewTakeID: String {
@@ -5106,6 +5142,13 @@ struct MacAnalyzerView: View {
                 color: .secondary
             )
         }
+        if isLastRecordingIncomplete {
+            return CaptureNextAction(
+                message: "Recording didn't complete — retry the take.",
+                systemImage: "exclamationmark.circle.fill",
+                color: ScratchLabDesign.Sem.warning
+            )
+        }
         if let routineMetadataStatusMessage {
             return CaptureNextAction(
                 message: routineMetadataStatusMessage,
@@ -5134,9 +5177,21 @@ struct MacAnalyzerView: View {
         )
     }
 
+    /// True when the most recent take finished without a valid recording —
+    /// `lastRoutineRecordingURL` stays nil and the engine leaves the
+    /// "Recording ended before it could be saved" status behind. This is the
+    /// signal that a failed/incomplete take must route to a retry state, not
+    /// to READY.
+    private var isLastRecordingIncomplete: Bool {
+        !captureEngine.isRoutineRecording
+            && captureEngine.lastRoutineRecordingURL == nil
+            && captureEngine.routineRecordingStatus.hasPrefix("Recording ended")
+    }
+
     private var currentCaptureStage: CaptureStage {
         if captureEngine.isRoutineRecording { return .record }
         if hasRecordedTake { return .review }
+        if isLastRecordingIncomplete { return .record }  // retry the take
         if selectedRoutineSession == nil { return .setup }
         // Metadata gate (session name / scratch type / BPM) is a setup fix;
         // a missing audio input is a readiness fix.
@@ -5148,13 +5203,17 @@ struct MacAnalyzerView: View {
     private var captureHardwareStatus: CaptureHardwareStatus {
         if captureEngine.isRoutineRecording { return .recording }
         if selectedRoutineSession == nil { return .setupRequired }
+        if isLastRecordingIncomplete { return .needsAttention }
         if routineStartDisabled || routineMetadataStatusMessage != nil { return .needsAttention }
         return .ready
     }
 
     private var capturePerformerLabel: String {
+        // Treat empty or 1–2 char names as display-empty (ad-hoc "k"/"h")
+        // — consistent with `routineSessionSubtitle` — so a meaningless
+        // one-character fallback never surfaces as a performer label.
         let name = routineSessionSetup.performerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Untitled" : name
+        return name.count >= 3 ? name : "Untitled"
     }
 
     private var captureTechniqueLabel: String {
@@ -5230,10 +5289,20 @@ struct MacAnalyzerView: View {
         currentCaptureStage.rawValue > stage.rawValue
     }
 
+    private var expandedCaptureStage: CaptureStage {
+        manuallyOpenedCaptureStage ?? currentCaptureStage
+    }
+
     private func captureStageOpenBinding(_ stage: CaptureStage) -> Binding<Bool> {
         Binding(
-            get: { openCaptureStage == stage },
-            set: { if $0 { openCaptureStage = stage } }
+            get: { expandedCaptureStage == stage },
+            set: { isOpen in
+                if isOpen {
+                    manuallyOpenedCaptureStage = stage
+                } else if manuallyOpenedCaptureStage == stage {
+                    manuallyOpenedCaptureStage = nil
+                }
+            }
         )
     }
 
@@ -5252,11 +5321,11 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(
                         captureStageIsComplete(stage)
                             ? ScratchLabDesign.Sem.success
-                            : (openCaptureStage == stage ? ScratchLabDesign.Sem.accent : .secondary)
+                            : (expandedCaptureStage == stage ? ScratchLabDesign.Sem.accent : .secondary)
                     )
                 Text(stage.title)
                     .font(ScratchLabDesign.Typo.disclosureLabel)
-                    .foregroundStyle(openCaptureStage == stage ? .primary : .secondary)
+                    .foregroundStyle(expandedCaptureStage == stage ? .primary : .secondary)
                 Spacer(minLength: 8)
             }
         }
@@ -5366,10 +5435,19 @@ struct MacAnalyzerView: View {
                     title: hasRecordedTake ? "Review the result" : "Record the take"
                 )
 
-                Label(Self.friendlyStatusMessage(captureEngine.routineRecordingStatus), systemImage: captureEngine.isRoutineRecording ? "record.circle.fill" : "film.stack.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : .secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Label(
+                    Self.friendlyStatusMessage(captureEngine.routineRecordingStatus),
+                    systemImage: captureEngine.isRoutineRecording
+                        ? "record.circle.fill"
+                        : (isLastRecordingIncomplete ? "exclamationmark.circle.fill" : "film.stack.fill")
+                )
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    captureEngine.isRoutineRecording
+                        ? ScratchLabDesign.Sem.danger
+                        : (isLastRecordingIncomplete ? ScratchLabDesign.Sem.warning : .secondary)
+                )
+                .fixedSize(horizontal: false, vertical: true)
 
                 if let routineMetadataStatusMessage {
                     Label(routineMetadataStatusMessage, systemImage: "exclamationmark.circle.fill")
