@@ -2871,42 +2871,50 @@ struct ResultsOverlayView: View {
                 .ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 24) {
-                    // Performance emoji
-                    Text(accuracy >= 90 ? "🔥" : accuracy >= 70 ? "👏" : "💪")
-                        .font(.system(size: 80))
+                VStack(spacing: 16) {
+                    // Result eyebrow — "LOCAL" names the real progression
+                    // outcome: the attempt was recorded on device, not uploaded.
+                    Text("RESULT · LOCAL")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ScratchLabDesign.Sem.success)
 
-                    // Result text
-                    VStack(spacing: 8) {
-                        Text(headline ?? (accuracy >= 90 ? "Practice goal cleared" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
+                    VStack(spacing: 4) {
+                        Text(resultHeadline)
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(.white)
 
-                        Text(sessionTitle ?? scratch.name)
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
+                        Text("\(Int(accuracy))%")
+                            .font(.system(size: 56, weight: .semibold))
+                            .foregroundStyle(ScratchLabDesign.Sem.accent)
                     }
+
+                    Text(sessionTitle ?? scratch.name)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
 
                     // Canonical TARGET notation + the capability-driven
-                    // performance region: a real MY PERFORMANCE panel only when
-                    // movement evidence exists, otherwise a truthful "trace
-                    // unavailable" state — never a fabricated trace.
-                    PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
-                        .padding(.horizontal, 32)
-
-                    // Stats grid
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
-                        ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
-                        ResultStat(value: "\(score)", label: "Practice estimate", icon: "star.fill")
-                        ResultStat(value: "\(attempts)", label: "Attempts", icon: "number")
-                        ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
-                    }
-                    .padding(.horizontal, 40)
-
-                    if let takeEvidence {
-                        PracticeTimingPreviewCard(summary: takeEvidence)
+                    // performance region (real MY PERFORMANCE only when movement
+                    // evidence exists; otherwise the truthful unavailable card).
+                    if !isCombo {
+                        PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
                             .padding(.horizontal, 32)
                     }
+
+                    VStack(spacing: 12) {
+                        resultCard(title: "Timing", body: timingBody, selected: true)
+                        resultCard(title: "Best streak", body: "\(bestStreak)", selected: false)
+                    }
+                    .padding(.horizontal, 32)
+
+                    Text("Timing is an on-device audio-onset estimate — it isn't saved, exported, or scored.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+
+                    Text("Practice estimate \(score) · \(attempts) attempts")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
 
                     if let reviewSummary {
                         PracticeReviewCard(summary: reviewSummary)
@@ -2916,54 +2924,67 @@ struct ResultsOverlayView: View {
                     if let detailNote {
                         Text(detailNote)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(0.72))
+                            .foregroundStyle(.white.opacity(0.72))
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 32)
                     }
 
-                    // Progress to mastery
-                    let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
-                    if accuracy < progressGoal {
-                        VStack(spacing: 8) {
-                            Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Practice progress estimate")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.white.opacity(0.5))
-
-                            ProgressView(value: accuracy, total: progressGoal)
-                                .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "FFD700")))
-                                .padding(.horizontal, 40)
-
-                            Text(primaryMetricLabel == "Phrase Lock"
-                                ? "\(Int(progressGoal - accuracy))% more to clear the phrase"
-                                : "\(Int(progressGoal - accuracy))% more to reach the practice goal")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white.opacity(0.4))
-                        }
-                    }
-
-                    // Buttons
                     VStack(spacing: 12) {
                         Button(action: onContinue) {
                             Text(continueButtonTitle)
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundColor(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(Color(hex: "FFD700"))
-                                .cornerRadius(12)
                         }
+                        .scratchLabPrimaryButton(fillsWidth: true)
 
                         Button(action: onExit) {
-                            Text("Back to Level")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.white.opacity(0.6))
+                            Text("Done")
                         }
+                        .scratchLabSecondaryButton(fillsWidth: true)
                     }
-                    .padding(.horizontal, 40)
+                    .padding(.horizontal, 32)
                 }
                 .padding(.vertical, 24)
             }
         }
+    }
+
+    private var isCombo: Bool { primaryMetricLabel == "Phrase Lock" }
+
+    private var resultHeadline: String {
+        headline ?? reviewSummary?.headline ?? "Practice complete"
+    }
+
+    private var timingBody: String {
+        guard let takeEvidence else { return "No timing evidence yet." }
+        let avg = Int(takeEvidence.averageAbsoluteBeatOffsetMs.rounded())
+        return "Average offset \(avg) ms · \(takeEvidence.onBeatCount) on-beat hits"
+    }
+
+    @ViewBuilder
+    private func resultCard(title: String, body: String, selected: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+            Text(body)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            selected ? ScratchLabDesign.Sem.accent.opacity(0.12) : Color.white.opacity(0.05),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    selected ? ScratchLabDesign.Sem.accent.opacity(0.6) : Color.white.opacity(0.1),
+                    lineWidth: selected ? 1.5 : 1
+                )
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(body)")
     }
 }
 
@@ -3059,7 +3080,7 @@ private struct PracticeReviewCard: View {
                 Image(systemName: directionIcon)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(directionColor)
-                Text(directionLabel)
+                Text(summary.headline)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
             }
@@ -3091,15 +3112,6 @@ private struct PracticeReviewCard: View {
         .cornerRadius(10)
     }
 
-    private var directionLabel: String {
-        switch summary.timingDirection {
-        case .noSignal: return "No scratches detected"
-        case .onBeat:   return "On beat"
-        case .early:    return "Slightly early"
-        case .late:     return "Slightly late"
-        }
-    }
-
     private var directionIcon: String {
         switch summary.timingDirection {
         case .noSignal: return "waveform.slash"
@@ -3114,91 +3126,6 @@ private struct PracticeReviewCard: View {
         case .noSignal:     return .white.opacity(0.5)
         case .onBeat:       return ScratchLabDesign.Sem.success
         case .early, .late: return ScratchLabDesign.Sem.warning
-        }
-    }
-}
-
-struct ResultStat: View {
-    let value: String
-    let label: String
-    let icon: String
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundColor(Color(hex: "FFD700"))
-
-            Text(value)
-                .font(.system(size: 24, weight: .bold))
-                .foregroundColor(.white)
-
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.5))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(12)
-    }
-}
-
-// Visually quieter than the stats grid above it — labels in muted white,
-// values in monospaced light type. Reads as supplementary coaching
-// context, not a primary score. Copy stays inside the PROFILE.md vocab:
-// "on-device audio onsets", "(preview)", "aren't saved, exported, or
-// scored". No classifier names, no confidence numbers.
-fileprivate struct PracticeTimingPreviewCard: View {
-    let summary: TakeEvidenceSummary
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("PRACTICE TIMING · PREVIEW")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.6)
-                .foregroundColor(.white.opacity(0.55))
-
-            VStack(alignment: .leading, spacing: 6) {
-                row(label: "Take length", value: takeLengthText)
-                row(label: "Attempts on mic", value: "\(summary.attempts)")
-                row(label: "On-beat estimate",
-                    value: "\(summary.onBeatCount) / \(summary.attempts) (preview)")
-                row(label: "Avg timing",
-                    value: "±\(avgOffsetMsText) ms (preview)")
-            }
-
-            Text("Timing estimates are based on on-device audio onsets. They aren't saved, exported, or scored.")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.45))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 12)
-        .padding(.horizontal, 14)
-        .background(Color.white.opacity(0.04))
-        .cornerRadius(10)
-    }
-
-    private var takeLengthText: String {
-        String(format: "%.1f s", summary.takeLengthSeconds)
-    }
-
-    private var avgOffsetMsText: String {
-        "\(Int(summary.averageAbsoluteBeatOffsetMs.rounded()))"
-    }
-
-    @ViewBuilder
-    private func row(label: String, value: String) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
-            Spacer(minLength: 8)
-            Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
-                .lineLimit(1)
         }
     }
 }

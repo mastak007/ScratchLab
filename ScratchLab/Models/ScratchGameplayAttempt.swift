@@ -386,4 +386,26 @@ struct PracticeReviewSummary: Equatable, Sendable {
             return nil
         }
     }
+
+    /// Short semantic outcome headline — the result/review surfaces' one-line
+    /// "how did it go" (e.g. "Nice control", "A touch early"). Derived from the
+    /// same timing/accuracy evidence as `coachingLine`, reusing the established
+    /// `NotationFeedbackState` accuracy thresholds. Never a platter-direction/
+    /// position claim.
+    var headline: String {
+        guard hasEvidence else { return "No scratches detected" }
+        switch timingDirection {
+        case .early: return "A touch early"
+        case .late: return "A touch late"
+        case .onBeat:
+            if averageAccuracy >= NotationFeedbackState.excellentAccuracyThreshold {
+                return "Nice control"
+            }
+            if averageAccuracy >= NotationFeedbackState.correctAccuracyThreshold {
+                return "Good timing"
+            }
+            return "Keep practicing"
+        case .noSignal: return "No scratches detected"
+        }
+    }
 }

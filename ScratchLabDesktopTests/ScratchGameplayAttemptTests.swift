@@ -451,6 +451,22 @@ struct PracticeReviewSummaryTests {
                                       earlyCount: 0, lateCount: 0).coachingLine
             == "Good timing and a clean match.")
     }
+
+    @Test("Headline is a semantic outcome, never a fabricated direction")
+    func headlineTiers() {
+        #expect(PracticeReviewSummary(attempts: 0, averageAccuracy: 0, onBeatCount: 0,
+                                      earlyCount: 0, lateCount: 0).headline == "No scratches detected")
+        #expect(PracticeReviewSummary(attempts: 5, averageAccuracy: 65, onBeatCount: 5,
+                                      earlyCount: 0, lateCount: 0).headline == "Keep practicing")
+        #expect(PracticeReviewSummary(attempts: 5, averageAccuracy: 75, onBeatCount: 5,
+                                      earlyCount: 0, lateCount: 0).headline == "Good timing")
+        #expect(PracticeReviewSummary(attempts: 5, averageAccuracy: 91, onBeatCount: 5,
+                                      earlyCount: 0, lateCount: 0).headline == "Nice control")
+        #expect(PracticeReviewSummary(attempts: 10, averageAccuracy: 60, onBeatCount: 4,
+                                      earlyCount: 5, lateCount: 1).headline == "A touch early")
+        #expect(PracticeReviewSummary(attempts: 10, averageAccuracy: 60, onBeatCount: 4,
+                                      earlyCount: 1, lateCount: 5).headline == "A touch late")
+    }
 }
 
 // MARK: - Practice result truthfulness (source-string regression)
@@ -478,6 +494,14 @@ struct PracticeResultTruthfulnessSourceTests {
         let practice = try source("ScratchLab/Views/PracticeModeView.swift")
         #expect(practice.contains("PracticeResultNotation.resolve(performedMovementEvents:"))
         #expect(practice.contains("PracticeResultNotationSection(target: targetNotation"))
+    }
+
+    @Test("The Result hierarchy is V3.2 (eyebrow + Done), not the legacy overlay")
+    func resultHierarchyIsV32() throws {
+        let practice = try source("ScratchLab/Views/PracticeModeView.swift")
+        #expect(practice.contains("RESULT · LOCAL"))
+        #expect(practice.contains("Text(\"Done\")"))
+        #expect(!practice.contains("\"Back to Level\""))
     }
 
     @Test("Baby Scratch target fader stays OPEN throughout")
