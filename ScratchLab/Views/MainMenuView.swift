@@ -14,24 +14,7 @@ struct MainMenuView: View {
     @State private var showingProfile = false
     @State private var showingSettings = false
     @State private var showingPracticeHub = false
-    @State private var showingCapturePlaceholder = false
-    @State private var showingReviewPlaceholder = false
     @State private var showingAdvancedHub = false
-    // Orphan routes — AdvancedHubView owns its own copy of this state and
-    // its own navigationDestinations. Left here so no view/destination wiring
-    // is deleted in this slice; safe to remove in a future cleanup pass.
-    @State private var showingCompanionCam = false
-    @State private var showingWatchCapture = false
-    @State private var showingPerformerMonitor = false
-    @State private var showingCoachPreview = false
-    @State private var showingDemoMode = false
-    #if DEBUG
-    @State private var showingVirtualPlatterPrototype = false
-    #endif
-
-    private var isIOSAppOnMac: Bool {
-        ProcessInfo.processInfo.isiOSAppOnMac
-    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -57,50 +40,21 @@ struct MainMenuView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
-        #if DEBUG && canImport(RealityKit)
-        .sheet(isPresented: $showingCoachPreview) {
-            NavigationStack {
-                CoachPreviewView()
-            }
-        }
-        #endif
         .onAppear {
             if progressManager.playerProfile == nil {
                 progressManager.createProfile(displayName: "New DJ")
             }
         }
-        .navigationDestination(isPresented: $showingPracticeHub) {
-            LevelSelectView()
-        }
-        .navigationDestination(isPresented: $showingCapturePlaceholder) {
-            CapturePlaceholderView()
-        }
-        .navigationDestination(isPresented: $showingReviewPlaceholder) {
-            ReviewPlaceholderView()
+        .fullScreenCover(isPresented: $showingPracticeHub) {
+            PracticeModeView(
+                scratch: ScratchLibrary.shared.scratch(byID: "baby_scratch") ?? ScratchLibrary.shared.allScratches[0],
+                usesSimplifiedReady: true
+            )
+            .environmentObject(audioEngine)
+            .environmentObject(progressManager)
         }
         .navigationDestination(isPresented: $showingAdvancedHub) {
             AdvancedHubView()
-        }
-        .navigationDestination(isPresented: $showingDemoMode) {
-            DemoModeView()
-        }
-        #if DEBUG
-        .navigationDestination(isPresented: $showingVirtualPlatterPrototype) {
-            VirtualPlatterPrototypeView()
-        }
-        #endif
-        .navigationDestination(isPresented: $showingCompanionCam) {
-            if isIOSAppOnMac {
-                UnsupportedCompanionCameraView()
-            } else {
-                CompanionCameraView()
-            }
-        }
-        .navigationDestination(isPresented: $showingWatchCapture) {
-            WatchCaptureHubView()
-        }
-        .navigationDestination(isPresented: $showingPerformerMonitor) {
-            IPadPerformerMonitorView()
         }
     }
     
@@ -277,42 +231,29 @@ struct MainMenuView: View {
     
     // MARK: - Menu Buttons
 
+    // V3.2: Home's card list (Practice/Capture/Review/Advanced) is retired.
+    // "Practice" duplicated the V3.2 Practice button in `homeContent`, which
+    // already routes to the same `showingPracticeHub` destination. Capture/
+    // Review were DEBUG-only placeholders — Figma's approved Home explicitly
+    // states they must not appear as active V3.2 Home cards, so they're no
+    // longer Home-reachable (their placeholder destinations are untouched;
+    // this only removes the premature entry point). Advanced/Mac Companion
+    // has no Figma Home equivalent but is real, currently-shipping
+    // functionality (Demo Mode, Watch Capture, Companion Cam, Performer
+    // Monitor) with no other entry point — kept, but as a de-emphasized
+    // secondary link rather than a legacy-style card.
     private var menuButtons: some View {
-        VStack(spacing: 16) {
-            MenuButton(
-                title: "Practice",
-                subtitle: "Hear the scratch, see the notation, copy it. Live mic listens.",
-                icon: "waveform",
-                accent: Color(hex: "22C55E"),
-                action: { showingPracticeHub = true }
-            )
-
-            #if DEBUG
-            MenuButton(
-                title: "Capture",
-                subtitle: "On-device take capture is coming.",
-                icon: "record.circle",
-                accent: Color(hex: "F59E0B"),
-                action: { showingCapturePlaceholder = true }
-            )
-
-            MenuButton(
-                title: "Review",
-                subtitle: "On-device review is coming.",
-                icon: "list.bullet.rectangle",
-                accent: Color(hex: "0EA5E9"),
-                action: { showingReviewPlaceholder = true }
-            )
-            #endif
-
-            MenuButton(
-                title: "Advanced / Mac Companion",
-                subtitle: "Demo, Mac relay tools, and advanced settings",
-                icon: "slider.horizontal.3",
-                accent: Color(hex: "64748B"),
-                action: { showingAdvancedHub = true }
-            )
+        Button(action: { showingAdvancedHub = true }) {
+            HStack(spacing: 6) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Advanced / Mac Companion")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            .frame(minHeight: 44)
         }
+        .accessibilityLabel("Advanced and Mac Companion tools")
     }
 
     private var performerMonitorSubtitle: String {
@@ -361,6 +302,10 @@ private struct UnsupportedCompanionCameraView: View {
     }
 }
 
+// Retained future placeholders (currently unreferenced): Capture and Review
+// are intentionally absent from the V3.2 production Home, but their "coming
+// soon" views and copy are kept so the future mobile Capture/Review surfaces
+// have a ready entry point to re-wire. No production route reaches them today.
 private struct CapturePlaceholderView: View {
     var body: some View {
         ZStack {
@@ -436,6 +381,7 @@ private struct AdvancedHubView: View {
     @State private var showingPerformerMonitor = false
     @State private var showingWatchCapture = false
     @State private var showingCoachPreview = false
+    @State private var showingPracticeModes = false
     #if DEBUG
     @State private var showingVirtualPlatterPrototype = false
     #endif
@@ -469,6 +415,9 @@ private struct AdvancedHubView: View {
         #endif
         .navigationDestination(isPresented: $showingDemoMode) {
             DemoModeView()
+        }
+        .navigationDestination(isPresented: $showingPracticeModes) {
+            LevelSelectView()
         }
         #if DEBUG
         .navigationDestination(isPresented: $showingVirtualPlatterPrototype) {
@@ -568,6 +517,14 @@ private struct AdvancedHubView: View {
 
     private var advancedMenuButtons: some View {
         VStack(spacing: 16) {
+            MenuButton(
+                title: "Practice modes",
+                subtitle: "Full setup: beat/BPM, assist modes, Chirp Flare, and the Baby Flow combo challenge.",
+                icon: "waveform",
+                accent: Color(hex: "22C55E"),
+                action: { showingPracticeModes = true }
+            )
+
             MenuButton(
                 title: "Try Demo",
                 subtitle: "See scratch feedback instantly",

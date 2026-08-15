@@ -53,7 +53,14 @@ struct PracticeModeView: View {
     let drillBPM: Double
     let comboChallenge: ComboScratch?
     let usesBackingTrack: Bool
-    
+    /// When true, the pre-session "ready" state shows the approved V3.2
+    /// `PracticeReadyOverlay` (Figma `iPhone / Practice Ready`: fixed Open
+    /// assist mode, `Start session` / `Watch`) instead of the full legacy
+    /// `SessionSetupOverlay` (beat/BPM, assist-mode picker, audio-input
+    /// selector, session length). The production Home → Practice route sets
+    /// this true; the full setup survives only on the Advanced route.
+    let usesSimplifiedReady: Bool
+
     @Environment(\.dismiss) var dismiss
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject var audioEngine: AudioEngine
@@ -123,6 +130,12 @@ struct PracticeModeView: View {
     @State private var onBeatHitCount: Int = 0
     @State private var cumulativeAbsoluteBeatOffsetMs: Double = 0
     @State private var sessionStartedAt: Date?
+    // Off-beat detections bucketed by the SIGN of the measured beat offset —
+    // supplementary REVIEW evidence for the post-take result surface. Never
+    // saved, scored, or exported; never a platter-direction/position claim
+    // (the mic input path measures timing only).
+    @State private var earlyHitCount: Int = 0
+    @State private var lateHitCount: Int = 0
 
     // Feedback
     @State private var lastFeedback: [String] = []
@@ -359,13 +372,15 @@ struct PracticeModeView: View {
         drillTimeline: ScratchRenderTimeline? = nil,
         drillBPM: Double = 90,
         comboChallenge: ComboScratch? = nil,
-        usesBackingTrack: Bool = false
+        usesBackingTrack: Bool = false,
+        usesSimplifiedReady: Bool = false
     ) {
         self.scratch = scratch
         self.drillTimeline = drillTimeline
         self.drillBPM = drillBPM
         self.comboChallenge = comboChallenge
         self.usesBackingTrack = usesBackingTrack
+        self.usesSimplifiedReady = usesSimplifiedReady
     }
     
     var body: some View {
@@ -430,6 +445,10 @@ struct PracticeModeView: View {
                         bestStreak: bestStreak,
                         detailNote: comboResultDetail,
                         takeEvidence: practiceTimingPreviewSummary,
+                        targetNotation: targetNotation,
+                        bpm: Double(practiceBeatStore.bpmValue),
+                        evidence: practiceResultNotation,
+                        reviewSummary: practiceReviewSummary,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
                         onContinue: { showingResults = false; resetSession() },
                         onExit: { dismiss() }
@@ -447,28 +466,43 @@ struct PracticeModeView: View {
                 
                 // Pre-session setup
                 if !isSessionActive && !showingResults {
-                    SessionSetupOverlay(
-                        scratch: activeScratch,
-                        practiceBeatStore: practiceBeatStore,
-                        selectedDuration: $selectedDuration,
-                        selectedAssistMode: assistModeBinding,
-                        durationOptions: durationOptions,
-                        sessionTitle: isComboChallengeMode ? "Combo Challenge" : "Practice",
-                        sessionDescription: isComboChallengeMode ? comboChallenge?.description : nil,
-                        objectiveText: comboSetupObjective,
-                        modeNote: setupModeNote,
-                        fixedDurationLabel: isComboChallengeMode ? "45 sec | looping phrase" : nil,
-                        startButtonTitle: isComboChallengeMode ? "Start Challenge" : "Start Session",
-                        selectedInputSource: audioEngine.currentInputSource,
-                        inputSourceOptions: practiceInputSources,
-                        activeInputName: audioEngine.activeInputName,
-                        inputRouteHint: practiceInputHint,
-                        topSafeAreaInset: geometry.safeAreaInsets.top,
-                        bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
-                        onSelectInputSource: { source in audioEngine.selectInputSource(source) },
-                        onStart: { startSession() },
-                        onBack: { dismiss() }
-                    )
+                    if usesSimplifiedReady {
+                        PracticeReadyOverlay(
+                            scratch: activeScratch,
+                            micStatusTitle: micStatusTitle,
+                            micStatusColor: micStatusColor,
+                            targetNotation: targetNotation,
+                            bpm: Double(practiceBeatStore.bpmValue),
+                            topSafeAreaInset: geometry.safeAreaInsets.top,
+                            bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
+                            onStart: { startOpenPractice() },
+                            onWatch: { startWatchPractice() },
+                            onBack: { dismiss() }
+                        )
+                    } else {
+                        SessionSetupOverlay(
+                            scratch: activeScratch,
+                            practiceBeatStore: practiceBeatStore,
+                            selectedDuration: $selectedDuration,
+                            selectedAssistMode: assistModeBinding,
+                            durationOptions: durationOptions,
+                            sessionTitle: isComboChallengeMode ? "Combo Challenge" : "Practice",
+                            sessionDescription: isComboChallengeMode ? comboChallenge?.description : nil,
+                            objectiveText: comboSetupObjective,
+                            modeNote: setupModeNote,
+                            fixedDurationLabel: isComboChallengeMode ? "45 sec | looping phrase" : nil,
+                            startButtonTitle: isComboChallengeMode ? "Start Challenge" : "Start Session",
+                            selectedInputSource: audioEngine.currentInputSource,
+                            inputSourceOptions: practiceInputSources,
+                            activeInputName: audioEngine.activeInputName,
+                            inputRouteHint: practiceInputHint,
+                            topSafeAreaInset: geometry.safeAreaInsets.top,
+                            bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
+                            onSelectInputSource: { source in audioEngine.selectInputSource(source) },
+                            onStart: { startSession() },
+                            onBack: { dismiss() }
+                        )
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1191,6 +1225,20 @@ struct PracticeModeView: View {
         }
     }
     
+    /// Production V3.2 "Start session" — runs the Open assist mode (static
+    /// target reference, mic listens) and starts the live scored session.
+    private func startOpenPractice() {
+        practiceAssistModeRaw = PracticeAssistMode.open.rawValue
+        startSession()
+    }
+
+    /// Production V3.2 "Watch" — runs the Demo assist mode (bundled demo audio
+    /// + notation play along; non-scored) so the learner watches and listens.
+    private func startWatchPractice() {
+        practiceAssistModeRaw = PracticeAssistMode.demo.rawValue
+        startSession()
+    }
+
     private func startSession() {
         let sessionDuration = activeSessionDuration
         timeRemaining = sessionDuration
@@ -1201,6 +1249,8 @@ struct PracticeModeView: View {
         bestStreak = 0
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
+        earlyHitCount = 0
+        lateHitCount = 0
         sessionStartedAt = Date()
         drillElapsedSeconds = 0
         drillLoopCount = 0
@@ -1317,6 +1367,8 @@ struct PracticeModeView: View {
         bestStreak = 0
         onBeatHitCount = 0
         cumulativeAbsoluteBeatOffsetMs = 0
+        earlyHitCount = 0
+        lateHitCount = 0
         sessionStartedAt = nil
         drillElapsedSeconds = 0
         drillLoopCount = 0
@@ -1366,6 +1418,10 @@ struct PracticeModeView: View {
         // through the post-take preview card.
         if result.timing.isOnBeat {
             onBeatHitCount += 1
+        } else if result.timing.beatOffset < 0 {
+            earlyHitCount += 1
+        } else {
+            lateHitCount += 1
         }
         cumulativeAbsoluteBeatOffsetMs += abs(result.timing.beatOffset)
 
@@ -1582,6 +1638,31 @@ struct PracticeModeView: View {
             onBeatCount: onBeatHitCount,
             averageAbsoluteBeatOffsetMs: avgOffset
         )
+    }
+
+    // Honest REVIEW evidence for the post-take result surface. Projected
+    // from the live timing aggregates — no platter direction/position claim,
+    // never saved, scored, or exported.
+    private var practiceReviewSummary: PracticeReviewSummary? {
+        guard practiceAssistMode != .demo else { return nil }
+        return PracticeReviewSummary(
+            attempts: attemptCount,
+            averageAccuracy: currentAccuracy,
+            onBeatCount: onBeatHitCount,
+            earlyCount: earlyHitCount,
+            lateCount: lateHitCount
+        )
+    }
+
+    // The Result surface's notation evidence is capability-driven: the live
+    // mic Practice path captures sound and timing only, so its movement-event
+    // list is empty and `resolve` returns `.targetOnly`. The decision itself
+    // lives in `PracticeResultNotation.resolve` (pure, evidence-driven) — a
+    // future DVS/MIDI/camera input path that supplies movement events here
+    // lights up the real TARGET + MY PERFORMANCE comparison with no change
+    // to the result view.
+    private var practiceResultNotation: PracticeResultNotation {
+        PracticeResultNotation.resolve(performedMovementEvents: [])
     }
 
     private func registerComboHitIfNeeded(_ result: ScratchAnalysisResult) -> Bool {
@@ -1917,6 +1998,124 @@ struct AccuracyBurstView: View {
         } else {
             return Color(hex: "F44336")
         }
+    }
+}
+
+// MARK: - Practice Ready (V3.2, Figma "iPhone / Practice Ready")
+
+// The production V3.2 pre-session screen (Figma node 33:18): fixed technique,
+// canonical TARGET notation, real mic/BPM status, and the two approved entry
+// actions — "Start session" (Open assist mode, scored mic practice) and
+// "Watch" (Demo assist mode, watch + listen). This replaces the legacy
+// `SessionSetupOverlay` (session length / assist-mode picker / audio-input
+// selector / beat controls) on the production route; those controls now live
+// only on the Advanced route.
+private struct PracticeReadyOverlay: View {
+    let scratch: Scratch
+    let micStatusTitle: String
+    let micStatusColor: Color
+    let targetNotation: ScratchNotation?
+    let bpm: Double
+    let topSafeAreaInset: CGFloat
+    let bottomSafeAreaInset: CGFloat
+    let onStart: () -> Void
+    let onWatch: () -> Void
+    let onBack: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.8)
+                .ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Button(action: onBack) {
+                            Image(systemName: "chevron.left")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.5))
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("Back")
+                        Spacer()
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PRACTICE · \(scratch.name.uppercased())")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(ScratchLabDesign.Sem.accent)
+                        Text("Copy the target")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+
+                    if let targetNotation {
+                        ScratchNotationPanel(
+                            lane: .target,
+                            presentation: .compact,
+                            source: .target(targetNotation),
+                            bpm: bpm
+                        )
+                    }
+
+                    HStack(spacing: 8) {
+                        statusPill(label: micStatusTitle, color: micStatusColor)
+                        statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
+                    }
+
+                    // Open practice card — the fixed production assist mode.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Open practice")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text("Static target reference. Mic listens; freestyle freely.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    }
+
+                    VStack(spacing: 12) {
+                        Button(action: onStart) {
+                            Text("Start session")
+                        }
+                        .scratchLabPrimaryButton(fillsWidth: true)
+
+                        Button(action: onWatch) {
+                            Text("Watch")
+                        }
+                        .scratchLabSecondaryButton(fillsWidth: true)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, topSafeAreaInset + 12)
+                .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
+            }
+        }
+    }
+
+    private func statusPill(label: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.06), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
     }
 }
 
@@ -2658,93 +2857,263 @@ struct ResultsOverlayView: View {
     let bestStreak: Int
     let detailNote: String?
     fileprivate var takeEvidence: TakeEvidenceSummary? = nil
+    let targetNotation: ScratchNotation?
+    let bpm: Double
+    let evidence: PracticeResultNotation
+    let reviewSummary: PracticeReviewSummary?
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
-    
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.9)
                 .ignoresSafeArea()
-            
-            VStack(spacing: 32) {
-                // Performance emoji
-                Text(accuracy >= 90 ? "🔥" : accuracy >= 70 ? "👏" : "💪")
-                    .font(.system(size: 80))
-                
-                // Result text
-                VStack(spacing: 8) {
-                    Text(headline ?? (accuracy >= 90 ? "Practice goal cleared" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
-                    
-                    Text(sessionTitle ?? scratch.name)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
-                }
-                
-                // Stats grid
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
-                    ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
-                    ResultStat(value: "\(score)", label: "Practice estimate", icon: "star.fill")
-                    ResultStat(value: "\(attempts)", label: "Attempts", icon: "number")
-                    ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
-                }
-                .padding(.horizontal, 40)
 
-                if let takeEvidence {
-                    PracticeTimingPreviewCard(summary: takeEvidence)
-                        .padding(.horizontal, 32)
-                }
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Performance emoji
+                    Text(accuracy >= 90 ? "🔥" : accuracy >= 70 ? "👏" : "💪")
+                        .font(.system(size: 80))
 
-                if let detailNote {
-                    Text(detailNote)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                }
-                
-                // Progress to mastery
-                let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
-                if accuracy < progressGoal {
+                    // Result text
                     VStack(spacing: 8) {
-                        Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Practice progress estimate")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
-                        
-                        ProgressView(value: accuracy, total: progressGoal)
-                            .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "FFD700")))
-                            .padding(.horizontal, 40)
-                        
-                        Text(primaryMetricLabel == "Phrase Lock"
-                            ? "\(Int(progressGoal - accuracy))% more to clear the phrase"
-                            : "\(Int(progressGoal - accuracy))% more to reach the practice goal")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white.opacity(0.4))
-                    }
-                }
-                
-                // Buttons
-                VStack(spacing: 12) {
-                    Button(action: onContinue) {
-                        Text(continueButtonTitle)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(Color(hex: "FFD700"))
-                            .cornerRadius(12)
-                    }
-                    
-                    Button(action: onExit) {
-                        Text("Back to Level")
-                            .font(.system(size: 14, weight: .medium))
+                        Text(headline ?? (accuracy >= 90 ? "Practice goal cleared" : accuracy >= 70 ? "GOOD JOB!" : "KEEP PRACTICING!"))
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(accuracy >= 90 ? Color(hex: "FFD700") : .white)
+
+                        Text(sessionTitle ?? scratch.name)
+                            .font(.system(size: 16, weight: .medium))
                             .foregroundColor(.white.opacity(0.6))
                     }
+
+                    // Canonical TARGET notation + the capability-driven
+                    // performance region: a real MY PERFORMANCE panel only when
+                    // movement evidence exists, otherwise a truthful "trace
+                    // unavailable" state — never a fabricated trace.
+                    PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
+                        .padding(.horizontal, 32)
+
+                    // Stats grid
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
+                        ResultStat(value: "\(Int(accuracy))%", label: primaryMetricLabel, icon: primaryMetricLabel == "Phrase Lock" ? "point.3.filled.connected.trianglepath.dotted" : "target")
+                        ResultStat(value: "\(score)", label: "Practice estimate", icon: "star.fill")
+                        ResultStat(value: "\(attempts)", label: "Attempts", icon: "number")
+                        ResultStat(value: "\(bestStreak)", label: "Best Streak", icon: "flame.fill")
+                    }
+                    .padding(.horizontal, 40)
+
+                    if let takeEvidence {
+                        PracticeTimingPreviewCard(summary: takeEvidence)
+                            .padding(.horizontal, 32)
+                    }
+
+                    if let reviewSummary {
+                        PracticeReviewCard(summary: reviewSummary)
+                            .padding(.horizontal, 32)
+                    }
+
+                    if let detailNote {
+                        Text(detailNote)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                    }
+
+                    // Progress to mastery
+                    let progressGoal = primaryMetricLabel == "Phrase Lock" ? 100.0 : 90.0
+                    if accuracy < progressGoal {
+                        VStack(spacing: 8) {
+                            Text(primaryMetricLabel == "Phrase Lock" ? "Progress to Phrase Clear" : "Practice progress estimate")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.white.opacity(0.5))
+
+                            ProgressView(value: accuracy, total: progressGoal)
+                                .progressViewStyle(LinearProgressViewStyle(tint: Color(hex: "FFD700")))
+                                .padding(.horizontal, 40)
+
+                            Text(primaryMetricLabel == "Phrase Lock"
+                                ? "\(Int(progressGoal - accuracy))% more to clear the phrase"
+                                : "\(Int(progressGoal - accuracy))% more to reach the practice goal")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white.opacity(0.4))
+                        }
+                    }
+
+                    // Buttons
+                    VStack(spacing: 12) {
+                        Button(action: onContinue) {
+                            Text(continueButtonTitle)
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color(hex: "FFD700"))
+                                .cornerRadius(12)
+                        }
+
+                        Button(action: onExit) {
+                            Text("Back to Level")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                    }
+                    .padding(.horizontal, 40)
                 }
-                .padding(.horizontal, 40)
+                .padding(.vertical, 24)
             }
+        }
+    }
+}
+
+// The Result surface's notation region: the canonical TARGET reference plus,
+// capability-driven, either a real MY PERFORMANCE panel (when performed
+// movement evidence exists) or a truthful "trace unavailable" state. The
+// decision lives in `PracticeResultNotation`; this view only renders it.
+private struct PracticeResultNotationSection: View {
+    let target: ScratchNotation?
+    let bpm: Double
+    let evidence: PracticeResultNotation
+
+    var body: some View {
+        if let target {
+            let domain = ScratchPhraseChartComparisonDomain.commonDomain(targetDuration: target.timelineDuration)
+            VStack(alignment: .leading, spacing: 12) {
+                ScratchNotationPanel(
+                    lane: .target,
+                    presentation: .compact,
+                    source: .target(target),
+                    bpm: bpm,
+                    domain: domain
+                )
+
+                switch evidence {
+                case .comparison(let performed):
+                    ScratchNotationPanel(
+                        lane: .performance,
+                        presentation: .compact,
+                        source: .performedPlatter(performed),
+                        bpm: bpm,
+                        domain: domain
+                    )
+                case .targetOnly:
+                    PerformanceTraceUnavailableCard()
+                }
+            }
+        }
+    }
+}
+
+// Truthful capability state for the region where Figma's Result frame shows a
+// stacked PERFORMANCE notation panel. The live mic Practice path records sound
+// and timing only — it never captures platter movement — so there is no motion
+// trace to compare against the target. This card says exactly that, without
+// implying failure: the distinction is evidence availability, not correctness.
+private struct PerformanceTraceUnavailableCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(ScratchLabDesign.Sem.warning)
+                Text("PERFORMANCE")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(ScratchLabDesign.Sem.warning)
+            }
+            Text("Performance trace unavailable for this input mode")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+            Text("Mic practice records sound and timing only — it doesn't capture platter movement, so there's no motion trace to compare against the target yet.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(ScratchLabDesign.Surface.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ScratchLabDesign.Sem.warning.opacity(0.35), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Performance trace unavailable for this input mode")
+    }
+}
+
+// Semantic Review continuation of the Result screen: honest coaching derived
+// from the session's timing aggregates (dominant early/late direction, on-beat
+// consistency, and the established coaching voice). No platter direction or
+// position is asserted — the mic input path can't support those claims.
+private struct PracticeReviewCard: View {
+    let summary: PracticeReviewSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("REVIEW")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.55))
+
+            HStack(spacing: 6) {
+                Image(systemName: directionIcon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(directionColor)
+                Text(directionLabel)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+
+            if let line = summary.coachingLine {
+                Text(line)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if summary.hasEvidence, let rate = summary.onBeatRate {
+                HStack(spacing: 8) {
+                    Text("On-beat estimate")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                    Spacer(minLength: 8)
+                    Text("\(summary.onBeatCount) / \(summary.attempts) · \(Int((rate * 100).rounded()))%")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(Color.white.opacity(0.04))
+        .cornerRadius(10)
+    }
+
+    private var directionLabel: String {
+        switch summary.timingDirection {
+        case .noSignal: return "No scratches detected"
+        case .onBeat:   return "On beat"
+        case .early:    return "Slightly early"
+        case .late:     return "Slightly late"
+        }
+    }
+
+    private var directionIcon: String {
+        switch summary.timingDirection {
+        case .noSignal: return "waveform.slash"
+        case .onBeat:   return "checkmark.circle.fill"
+        case .early:    return "gobackward"
+        case .late:     return "goforward"
+        }
+    }
+
+    private var directionColor: Color {
+        switch summary.timingDirection {
+        case .noSignal:     return .white.opacity(0.5)
+        case .onBeat:       return ScratchLabDesign.Sem.success
+        case .early, .late: return ScratchLabDesign.Sem.warning
         }
     }
 }

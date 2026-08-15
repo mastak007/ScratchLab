@@ -343,3 +343,150 @@ struct PracticeAttemptResultDeterminismTests {
         #expect(first == second)
     }
 }
+
+// MARK: - Practice result notation capability
+
+@Suite("PracticeResultNotation capability")
+struct PracticeResultNotationCapabilityTests {
+
+    private func movementEvent() -> CaptureCore.DetectedNotationRecordMovementEvent {
+        .init(startTime: 0, endTime: 0.5, startPosition: 0.2, endPosition: 0.6,
+              direction: "forward", movementKind: .normalPush, speed: 1.0,
+              confidence: 0.9, source: "timecode_live")
+    }
+
+    @Test("Empty movement evidence resolves to targetOnly, never a fabricated trace")
+    func emptyEventsResolveToTargetOnly() {
+        #expect(PracticeResultNotation.resolve(performedMovementEvents: []) == .targetOnly)
+    }
+
+    @Test("Present movement evidence resolves to a real comparison")
+    func presentEventsResolveToComparison() {
+        let event = movementEvent()
+        #expect(PracticeResultNotation.resolve(performedMovementEvents: [event])
+            == .comparison(performed: [event]))
+    }
+
+    @Test("targetOnly carries no performed payload to fabricate a trace from")
+    func targetOnlyHasNoPayload() {
+        if case .comparison = PracticeResultNotation.resolve(performedMovementEvents: []) {
+            Issue.record("empty events must never resolve to a comparison")
+        }
+    }
+
+    @Test("Capability resolution is evidence-driven, independent of a canonical target")
+    func resolutionIgnoresTargetPresence() {
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "baby_scratch") != nil)
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "no_such_technique") == nil)
+        // The decision is identical regardless of whether a target exists.
+        #expect(PracticeResultNotation.resolve(performedMovementEvents: []) == .targetOnly)
+    }
+
+    @Test("Capability resolution and materialization never mutate canonical notation")
+    func resolutionDoesNotMutateCanonicalNotation() throws {
+        let materialized = try #require(
+            ScratchNotation.canonicalBeatPattern(forScratchID: "baby_scratch")?.materialized(bpm: 90))
+        let before = materialized
+        _ = PracticeResultNotation.resolve(performedMovementEvents: [])
+        _ = materialized.timelineDuration
+        _ = materialized.faderAuthoritySpans(documentEnd: materialized.timelineDuration)
+        #expect(materialized == before)
+    }
+}
+
+// MARK: - Practice review summary
+
+@Suite("PracticeReviewSummary review evidence")
+struct PracticeReviewSummaryTests {
+
+    @Test("No detections yields noSignal and no coaching line")
+    func noEvidence() {
+        let s = PracticeReviewSummary(attempts: 0, averageAccuracy: 0, onBeatCount: 0,
+                                      earlyCount: 0, lateCount: 0)
+        #expect(!s.hasEvidence)
+        #expect(s.timingDirection == .noSignal)
+        #expect(s.onBeatRate == nil)
+        #expect(s.coachingLine == nil)
+    }
+
+    @Test("Dominant early off-beat detections yield .early and the early coaching voice")
+    func dominantEarly() {
+        let s = PracticeReviewSummary(attempts: 10, averageAccuracy: 60, onBeatCount: 4,
+                                      earlyCount: 5, lateCount: 1)
+        #expect(s.timingDirection == .early)
+        #expect(s.coachingLine?.contains("early") == true)
+    }
+
+    @Test("Dominant late off-beat detections yield .late and the late coaching voice")
+    func dominantLate() {
+        let s = PracticeReviewSummary(attempts: 10, averageAccuracy: 60, onBeatCount: 4,
+                                      earlyCount: 1, lateCount: 5)
+        #expect(s.timingDirection == .late)
+        #expect(s.coachingLine?.contains("late") == true)
+    }
+
+    @Test("Balanced early/late resolves to onBeat, never a fabricated direction")
+    func balancedOffBeatIsOnBeat() {
+        let s = PracticeReviewSummary(attempts: 10, averageAccuracy: 60, onBeatCount: 4,
+                                      earlyCount: 3, lateCount: 3)
+        #expect(s.timingDirection == .onBeat)
+    }
+
+    @Test("On-beat rate is derived from real counts, not a constant")
+    func onBeatRateIsDerived() {
+        let s = PracticeReviewSummary(attempts: 12, averageAccuracy: 82, onBeatCount: 9,
+                                      earlyCount: 2, lateCount: 1)
+        #expect(abs((s.onBeatRate ?? 0) - 9.0 / 12.0) < 1e-9)
+    }
+
+    @Test("Coaching line reuses the established 70/90 accuracy tiers")
+    func coachingTiers() {
+        #expect(PracticeReviewSummary(attempts: 5, averageAccuracy: 65, onBeatCount: 5,
+                                      earlyCount: 0, lateCount: 0).coachingLine
+            == "Slow it down and focus on one smooth forward-and-back motion.")
+        #expect(PracticeReviewSummary(attempts: 5, averageAccuracy: 75, onBeatCount: 5,
+                                      earlyCount: 0, lateCount: 0).coachingLine
+            == "Your timing was good. Repeat the motion more consistently.")
+        #expect(PracticeReviewSummary(attempts: 5, averageAccuracy: 91, onBeatCount: 5,
+                                      earlyCount: 0, lateCount: 0).coachingLine
+            == "Good timing and a clean match.")
+    }
+}
+
+// MARK: - Practice result truthfulness (source-string regression)
+
+@Suite("Practice result truthfulness (source-string)")
+struct PracticeResultTruthfulnessSourceTests {
+
+    private func source(_ relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    @Test("Figma sample values are not embedded in the Result view")
+    func noFigmaSampleValues() throws {
+        let practice = try source("ScratchLab/Views/PracticeModeView.swift")
+        #expect(!practice.contains("\"82% accuracy\""))
+        #expect(!practice.contains("Average offset 34 ms"))
+        #expect(!practice.contains("12 on-beat hits"))
+    }
+
+    @Test("The Result view routes to the capability decision, not a platform fork")
+    func resultUsesCapabilityResolver() throws {
+        let practice = try source("ScratchLab/Views/PracticeModeView.swift")
+        #expect(practice.contains("PracticeResultNotation.resolve(performedMovementEvents:"))
+        #expect(practice.contains("PracticeResultNotationSection(target: targetNotation"))
+    }
+
+    @Test("Baby Scratch target fader stays OPEN throughout")
+    func babyScratchFaderStaysOpen() throws {
+        let notation = try #require(
+            ScratchNotation.canonicalBeatPattern(forScratchID: "baby_scratch")?.materialized(bpm: 90))
+        let spans = notation.faderAuthoritySpans(documentEnd: notation.timelineDuration)
+        #expect(!spans.isEmpty)
+        #expect(spans.allSatisfy { $0.state == .open })
+        #expect(!spans.contains { $0.state == .closed })
+    }
+}

@@ -1,5 +1,125 @@
 # AI Handoff
 
+## 2026-08-15 — V3.2 legacy Practice removal + "MOVE TO ADVANCED" reroute (uncommitted)
+
+Follow-up to Phase 4, on `feature/v3.2-swiftui-20260815`. Removed the legacy
+iPhone Practice presentation from the production route per the course correction:
+production is now `Home → Practice Ready (Figma 33:18) → Live → Result`, fixed
+Baby Scratch / Open mode / mic auto / BPM badge; the superseded controls
+(beat/BPM, assist modes, Chirp Flare, Baby Flow combo) moved to Advanced.
+
+### Production route (new)
+
+`MainMenuView` "Practice" → `fullScreenCover` → `PracticeModeView(baby_scratch, usesSimplifiedReady: true)`.
+`PracticeModeView`'s ready state now branches:
+- `usesSimplifiedReady == true` → new `PracticeReadyOverlay` (Figma `iPhone / Practice Ready`:
+  `PRACTICE · BABY SCRATCH` eyebrow, "Copy the target", canonical TARGET
+  `ScratchNotationPanel` (compact), mic + BPM status pills, "Open practice" card,
+  `Start session` → Open mode, `Watch` → Demo mode). Production only.
+- `usesSimplifiedReady == false` → legacy `SessionSetupOverlay` (full). Advanced only.
+
+### Moved to Advanced
+
+`AdvancedHubView` gained a "Practice modes" `MenuButton` → `LevelSelectView`
+(keeps Chirp Flare, Baby Flow combo, and the full `SessionSetupOverlay` with
+beat/BPM + assist modes + audio input + session length).
+
+### Dead-code cleanup (done, no file deletion — symbols only)
+
+- `LevelSelectView.swift`: removed dead `LevelCard`, `ProgressIndicator`,
+  `LevelDetailView`, `ScratchCard` (0 or only-dead references; their
+  functionality was superseded by `LevelSelectView.practiceScratchCard`).
+  File is live (still reachable from Advanced); file now ends at `LevelSelectView`.
+- `MainMenuView.swift`: removed 8 orphaned `@State` routes + their destinations/
+  sheet (`showingCapturePlaceholder`, `showingReviewPlaceholder`, `showingCoachPreview`,
+  `showingDemoMode`, `showingVirtualPlatterPrototype`, `showingCompanionCam`,
+  `showingWatchCapture`, `showingPerformerMonitor`, plus `isIOSAppOnMac`) — all
+  duplicated in `AdvancedHubView`. `CapturePlaceholderView` / `ReviewPlaceholderView`
+  retained (future mobile Capture/Review intent), now unreferenced, with a
+  `// Retained future placeholders` comment.
+
+### Verification
+
+iOS (generic + iPhone 17 sim) ✓, iPad sim ✓, macOS ✓, macOS build-for-testing ✓,
+`git diff --check` clean, Phase 4 swift-testing suites all pass.
+
+### Files changed (this slice)
+
+- `ScratchLab/Views/MainMenuView.swift` — reroute + orphan removal + Advanced entry.
+- `ScratchLab/Views/PracticeModeView.swift` — `usesSimplifiedReady` + `PracticeReadyOverlay` + helpers.
+
+Nothing staged, committed, or pushed. No pbxproj edits. Do NOT begin Phase 5.
+
+---
+
+## 2026-08-15 — V3.2 Phase 4 Practice RESULT/REVIEW: truthful capability path (uncommitted)
+
+Continued Phase 4 on `feature/v3.2-swiftui-20260815`. Implemented the DECISION's
+truthful path: RESULT shows canonical TARGET notation + real aggregate metrics,
+and REVIEW shows real semantic/timing coaching — never a fabricated
+MY PERFORMANCE trace (the live mic Practice path produces no movement evidence).
+
+### What landed (all uncommitted)
+
+- `ScratchLab/Models/ScratchGameplayAttempt.swift` — two pure, testable types:
+  - `PracticeResultNotation` — capability decision. `resolve(performedMovementEvents:)`
+    maps an empty event list → `.targetOnly` (truthful "trace unavailable") and a
+    non-empty list → `.comparison(performed:)` (real TARGET + MY PERFORMANCE).
+    Evidence-driven, never platform-name-driven.
+  - `PracticeReviewSummary` — honest post-take Review projection from the live
+    `ScratchAnalysisResult` timing aggregates (attempts / averageAccuracy /
+    onBeatCount / earlyCount / lateCount). `timingDirection` (noSignal/onBeat/
+    early/late) and `coachingLine` reuse the existing `NotationFeedbackState`
+    70/90 thresholds and coaching voice; no platter direction/position claimed.
+- `ScratchLab/Views/PracticeModeView.swift` — the Result surface (`ResultsOverlayView`)
+  now renders (1) the canonical TARGET `ScratchNotationPanel` (compact) when a
+  target exists, (2) a truthful `PerformanceTraceUnavailableCard` in place of
+  Figma's stacked PERFORMANCE panel when no movement evidence exists (the current
+  mic path), and (3) a `PracticeReviewCard` semantic coaching section. The
+  existing real metrics (score/accuracy/attempts/streak) and the timing-preview
+  card are preserved unchanged. `handleScratchDetected` now also buckets off-beat
+  hits into `earlyHitCount`/`lateHitCount` (supplementary, never saved/scored/exported).
+  Content moved into a `ScrollView` to fit the taller card.
+- `ScratchLabDesktopTests/ScratchGameplayAttemptTests.swift` — 14 new swift-testing
+  tests across 3 suites: `PracticeResultNotation capability` (5), `PracticeReviewSummary
+  review evidence` (6), `Practice result truthfulness (source-string)` (3).
+
+### Figma reconciliation
+
+Result frame = node `35:99` ("Practice / Result"). Its PERFORMANCE
+`ScratchNotationPanel` (`35:117`) — and the Copy frame's `35:70` — expect a
+performed lane the mic-only iPhone input path cannot supply. There is NO existing
+Figma "unavailable/evidence" component; the smallest correction is to swap the
+PERFORMANCE panel for a warning-toned `SurfaceCard` carrying the truthful
+capability copy. **FIGMA RESULT SPEC REQUIRES CAPABILITY-STATE CORRECTION** —
+reported, not modified (waiting Karl's approval).
+
+### Verification
+
+- iOS (generic) build ✓, macOS build ✓, macOS build-for-testing ✓, iPad sim build ✓.
+- `git diff --check` clean.
+- 14/14 new swift-testing tests pass (full bundle: 2 pre-existing swift-testing
+  issues = crossfader-lane-label; 21 pre-existing XCTest failures = bundled-resource
+  / Timecode fixture — none related).
+
+### Files changed
+
+- `ScratchLab/Models/ScratchGameplayAttempt.swift` — +2 pure types.
+- `ScratchLab/Views/PracticeModeView.swift` — Result/Review UI + timing buckets.
+- `ScratchLabDesktopTests/ScratchGameplayAttemptTests.swift` — +14 tests.
+- (Pre-existing dirty, NOT touched: `ScratchLab/Views/MainMenuView.swift` — Phase 3 Home.)
+
+Nothing staged, committed, or pushed. No pbxproj edits (models/tests added to
+existing files; the "pbxproj diffs need separate manual approval" rule holds).
+
+### Next
+
+Karl to (1) live-verify on ~375/393/430pt iPhones (Home → Practice → Baby Scratch →
+WATCH/LISTEN → COPY → RESULT → REVIEW), (2) approve/deny the Figma capability-state
+correction, then (3) approve commit. Do NOT begin Phase 5.
+
+---
+
 ## 2026-08-14 — Baby Scratch comparison alignment fix (uncommitted)
 
 Fixed the Review target-vs-performed comparison so Take 002's leading backward

@@ -285,3 +285,105 @@ enum PracticeAttemptEvidenceResolver {
         )
     }
 }
+
+// MARK: - Practice result notation capability
+
+/// Decides which notation rows a Practice Result surface renders, purely from
+/// whether performed *movement* evidence exists — never from platform name,
+/// technique, or a hard-coded assumption.
+///
+/// The canonical TARGET row renders in both states; only the MY PERFORMANCE
+/// row is conditional on evidence. The live iPhone Practice input path (mic
+/// `ScratchAnalysisResult`) produces no movement evidence today, so it
+/// resolves `.targetOnly`. A future input path (DVS / MIDI / camera) that
+/// actually supplies `CaptureCore.DetectedNotationRecordMovementEvent`s
+/// resolves `.comparison` here with no code change — the decision is
+/// evidence-driven, not platform-specific.
+enum PracticeResultNotation: Equatable, Sendable {
+    /// Performed movement evidence exists → render TARGET + MY PERFORMANCE.
+    case comparison(performed: [CaptureCore.DetectedNotationRecordMovementEvent])
+    /// No performed movement evidence → render TARGET + a truthful
+    /// "evidence unavailable" state (never a fabricated performance trace).
+    case targetOnly
+
+    /// Pure capability resolution from the movement evidence a capture path
+    /// actually produced. An empty event list means "no evidence", not "no
+    /// mistakes" — the two must never be conflated, and neither may be
+    /// presented as a performance trace.
+    static func resolve(
+        performedMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> PracticeResultNotation {
+        performedMovementEvents.isEmpty ? .targetOnly : .comparison(performed: performedMovementEvents)
+    }
+}
+
+// MARK: - Practice review summary
+
+/// Honest post-take Review evidence, projected from the live
+/// `ScratchAnalysisResult` stream's aggregates. This is a VIEW of session
+/// state, not a scoring change: it reuses the established
+/// `NotationFeedbackState` accuracy thresholds and the existing coaching
+/// voice, and asserts no platter direction/position — the mic input path
+/// cannot support those claims.
+struct PracticeReviewSummary: Equatable, Sendable {
+
+    enum TimingDirection: Equatable, Sendable {
+        /// Nothing detected — no timing evidence to summarize.
+        case noSignal
+        /// Detections were on-beat (or early/late off-beat counts balanced).
+        case onBeat
+        /// Off-beat detections trended early.
+        case early
+        /// Off-beat detections trended late.
+        case late
+    }
+
+    let attempts: Int
+    let averageAccuracy: Double
+    let onBeatCount: Int
+    let earlyCount: Int
+    let lateCount: Int
+
+    /// True when at least one scratch was detected this session.
+    var hasEvidence: Bool { attempts > 0 }
+
+    /// The dominant timing direction. `noSignal` when nothing was detected;
+    /// `onBeat` when no detection fell clearly off-beat, or when early and
+    /// late off-beat counts balance — never a fabricated direction.
+    var timingDirection: TimingDirection {
+        guard hasEvidence else { return .noSignal }
+        if earlyCount == 0 && lateCount == 0 { return .onBeat }
+        if earlyCount > lateCount { return .early }
+        if lateCount > earlyCount { return .late }
+        return .onBeat
+    }
+
+    /// On-beat share of detections, or `nil` when nothing was detected.
+    var onBeatRate: Double? {
+        hasEvidence ? Double(onBeatCount) / Double(attempts) : nil
+    }
+
+    /// One honest coaching sentence derived from the aggregate, reusing the
+    /// established `NotationFeedbackState` accuracy thresholds and the
+    /// existing coaching voice — framed as an aggregate ("mostly") rather than
+    /// a single-detection claim. Never a platter-direction/position claim.
+    var coachingLine: String? {
+        guard hasEvidence else { return nil }
+        switch timingDirection {
+        case .early:
+            return "You were mostly early. Let the beat arrive before starting the motion."
+        case .late:
+            return "You were mostly late. Begin the motion a little sooner."
+        case .onBeat:
+            if averageAccuracy >= NotationFeedbackState.excellentAccuracyThreshold {
+                return "Good timing and a clean match."
+            }
+            if averageAccuracy >= NotationFeedbackState.correctAccuracyThreshold {
+                return "Your timing was good. Repeat the motion more consistently."
+            }
+            return "Slow it down and focus on one smooth forward-and-back motion."
+        case .noSignal:
+            return nil
+        }
+    }
+}
