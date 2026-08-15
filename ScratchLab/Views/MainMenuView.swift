@@ -10,6 +10,7 @@ struct MainMenuView: View {
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject var companionRelayBroadcaster: CompanionCameraBroadcaster
     @EnvironmentObject var watchMotionCaptureStore: WatchMotionCaptureStore
+    @EnvironmentObject var audioEngine: AudioEngine
     @State private var showingProfile = false
     @State private var showingSettings = false
     @State private var showingPracticeHub = false
@@ -38,8 +39,9 @@ struct MainMenuView: View {
                 BackgroundView()
 
                 ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
                         headerView
+                        homeContent
                         menuButtons
                     }
                     .padding(.horizontal, 20)
@@ -105,54 +107,110 @@ struct MainMenuView: View {
     // MARK: - Header
     
     private var headerView: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Button(action: { showingProfile = true }) {
-                HStack(spacing: 8) {
-                    Text(progressManager.playerProfile?.avatarEmoji ?? "🎧")
-                        .font(.system(size: 22))
-                    
-                    VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemTight) {
+            HStack(spacing: 12) {
+                Button(action: { showingProfile = true }) {
+                    HStack(spacing: 8) {
+                        Text(progressManager.playerProfile?.avatarEmoji ?? "🎧")
+                            .font(.system(size: 20))
                         Text(progressManager.playerProfile?.displayName ?? "New DJ")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.white)
-                        
-                        Text("Live practice")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Color(hex: "7DD3FC"))
                     }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-            }
-            
-            VStack(spacing: 4) {
-                Text("ScratchLab")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundColor(.white)
-
-                Text("Hear it. See the notation. Copy it.")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white.opacity(0.68))
-            }
-            .frame(maxWidth: .infinity)
-            
-            Button(action: { showingSettings = true }) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 44, height: 44)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                     .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
                     )
+                }
+                .accessibilityLabel("Profile: \(progressManager.playerProfile?.displayName ?? "New DJ")")
+
+                Spacer()
+
+                Button(action: { showingSettings = true }) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .accessibilityLabel("Settings")
             }
+
+            // V3.2 Home brand block — matches the approved Figma "iPhone / Home"
+            // frame (node 33:2). Reuses the shared page-title/subtitle tokens
+            // rather than Figma's literal 30px/14px-regular values, per the
+            // instruction to prefer the design system's semantic hierarchy
+            // over pixel-exact one-off sizes.
+            Text("ScratchLab")
+                .font(ScratchLabDesign.Typo.pageTitle)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            Text("Hear it. See the notation. Copy it.")
+                .font(ScratchLabDesign.Typo.pageSubtitle)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
         }
+    }
+
+    // MARK: - V3.2 Home content (Figma node 33:2)
+
+    /// The approved V3.2 Home body: a hero "Live practice" card, the primary
+    /// Practice action, a Recent result card driven by real session history,
+    /// a Device status card driven by real audio-engine state, and the
+    /// production-truth footnote about Capture/Review. Camera and DVS/timecode
+    /// sync are described with static, honest copy — camera is genuinely
+    /// optional for Practice and DVS sync is genuinely not part of the
+    /// iPhone flow in this app (a macOS + controller workflow), so neither
+    /// line is a placeholder or an invented capability claim.
+    private var homeContent: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
+            HomeInfoCard(
+                title: "Live practice",
+                detail: "Mic or wired USB input · session results stay on device.",
+                isEmphasized: true
+            )
+
+            Button(action: { showingPracticeHub = true }) {
+                Text("Practice")
+            }
+            .scratchLabPrimaryButton()
+
+            HomeInfoCard(title: "Recent result", detail: recentResultDetail)
+
+            HomeInfoCard(title: "Device status", detail: deviceStatusDetail)
+
+            Text("Capture and Review are intentionally absent until implemented.")
+                .font(.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.muted)
+        }
+    }
+
+    /// Most recent real session, or an honest first-run message — never a
+    /// fabricated score. Matches the codebase's existing accuracy convention
+    /// (already 0–100, e.g. `LevelSelectView.swift` `bestAccuracy`/`comboAccuracy`
+    /// usages) — no additional ×100 scaling.
+    private var recentResultDetail: String {
+        guard let recent = progressManager.sessionHistory.max(by: { $0.timestamp < $1.timestamp }) else {
+            return "No sessions yet — practice once to see your result here."
+        }
+        let name = recent.scratchName ?? "Scratch"
+        let percent = Int(recent.finalAccuracy.rounded())
+        let relative = RelativeDateTimeFormatter().localizedString(for: recent.timestamp, relativeTo: Date())
+        return "\(name) · \(percent)% · \(relative)"
+    }
+
+    /// Audio reflects the real, live `AudioEngine.isRunning` signal. Camera
+    /// and sync are static, accurate architectural facts (see doc comment
+    /// on `homeContent`), not derived from a live capability check.
+    private var deviceStatusDetail: String {
+        let audioPart = audioEngine.isRunning ? "Audio ready" : "Audio idle"
+        return "\(audioPart) · camera optional · sync off"
     }
 
     // TODO: orphan after Slice C — AdvancedHubView now owns the live
@@ -218,7 +276,7 @@ struct MainMenuView: View {
     }
     
     // MARK: - Menu Buttons
-    
+
     private var menuButtons: some View {
         VStack(spacing: 16) {
             MenuButton(
@@ -949,6 +1007,36 @@ private struct DemoModeView: View {
 }
 
 // MARK: - Menu Button Component
+
+// MARK: - Home info card (V3.2)
+
+/// Small Home-specific presentation component matching the Figma
+/// `SurfaceCard` contract (title + supporting detail, default/emphasized
+/// tone) — built entirely from shared `ScratchLabDesign` tokens and the
+/// existing `scratchLabCard(_:)` styles rather than a new bespoke theme.
+/// Figma's own component description notes no 1:1 SurfaceCard code
+/// component exists yet and screens build the equivalent inline; this is
+/// that inline equivalent, factored out once since Home uses it three times.
+private struct HomeInfoCard: View {
+    let title: String
+    let detail: String
+    var isEmphasized: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemTight) {
+            Text(title)
+                .font(ScratchLabDesign.Typo.cardHeading)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            Text(detail)
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .scratchLabCard(isEmphasized ? .lessonHero : .standard)
+        .accessibilityElement(children: .combine)
+    }
+}
 
 struct MenuButton: View {
     let title: String

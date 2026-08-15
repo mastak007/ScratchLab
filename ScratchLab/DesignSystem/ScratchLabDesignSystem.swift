@@ -102,7 +102,13 @@ enum ScratchLabDesign {
     // for recording, destructive actions, failure and urgent interruption.
 
     enum Sem {
-        static let accent: Color   = .accentColor
+        // V3.2 locked semantic accent — Figma `--scratchlab-color-bg-accent` /
+        // `--scratchlab-color-icon-accent` (#0EA5E9). Deliberately an explicit
+        // RGB literal, NOT `.accentColor`: this app's system AccentColor asset
+        // is gold (matches the app icon) — a separate, legacy system-tint
+        // concern this semantic token must stay decoupled from, so it resolves
+        // identically on macOS, iPhone, and iPad.
+        static let accent: Color   = Color(red: 14.0 / 255.0, green: 165.0 / 255.0, blue: 233.0 / 255.0)
         static let success: Color  = Color.platformSuccess
         static let warning: Color  = Color(red: 1.00, green: 0.72, blue: 0.10)   // ≈ #FFB81A
         static let danger: Color   = Color.platformDanger
@@ -145,7 +151,12 @@ enum ScratchLabDesign {
     // MARK: Buttons
 
     enum Button {
-        static let primaryHeight: CGFloat = 36
+        // V3.2: Figma's Button component states a 44pt minimum touch target
+        // explicitly; 36pt was below both that spec and Apple's HIG minimum.
+        // Applies to `.primary` and `.success` roles (the two call-to-action
+        // roles); secondary/tertiary/destructive are unchanged (not part of
+        // this correction).
+        static let primaryHeight: CGFloat = 44
         static let secondaryHeight: CGFloat = 30
         static let tertiaryHeight: CGFloat = 26
         static let destructiveHeight: CGFloat = 26
@@ -396,6 +407,12 @@ struct ScratchLabButtonStyle: ViewModifier {
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                // `.borderedProminent` fills from the ambient SwiftUI tint,
+                // not from `Sem.accent` directly — without this the button
+                // silently renders in the system AccentColor (gold) instead
+                // of the V3.2 semantic accent, even though `Sem.accent` is
+                // itself correct.
+                .tint(ScratchLabDesign.Sem.accent)
         case .success:
             content
                 .font(ScratchLabDesign.Typo.buttonPrimary)
