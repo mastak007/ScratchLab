@@ -283,4 +283,31 @@ enum ScratchStrokeGeometry {
         let high = positions.max() ?? 1
         return low...high
     }
+
+    /// One forward→backward reversal boundary on a continuous motion path —
+    /// the time a stroke changes direction, and the path's own position at
+    /// that instant (the apex the following backward stroke returns from).
+    struct TurnaroundAnchor: Equatable, Sendable {
+        let time: TimeInterval
+        let position: CGFloat
+    }
+
+    /// Explicit turnaround anchors at forward→backward direction-change
+    /// boundaries, derived from canonical stroke direction alone (never
+    /// inferred from drawn geometry). The single reversal-detection
+    /// implementation every consumer (macOS phrase chart, the shared
+    /// `ScratchNotationPanel`) reuses instead of re-deriving its own —
+    /// extracted verbatim from `ScratchPhraseChartView.drawTurnaroundMarkers`.
+    static func turnaroundAnchors(strokes: [LaneStroke], path: MotionPath) -> [TurnaroundAnchor] {
+        let sorted = strokes.sorted { $0.startTime < $1.startTime }
+        guard sorted.count >= 2 else { return [] }
+        var anchors: [TurnaroundAnchor] = []
+        for i in 0..<(sorted.count - 1) {
+            let a = sorted[i]
+            let b = sorted[i + 1]
+            guard a.direction == .forward, b.direction == .backward else { continue }
+            anchors.append(TurnaroundAnchor(time: a.endTime, position: path.position(at: a.endTime)))
+        }
+        return anchors
+    }
 }

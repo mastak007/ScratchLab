@@ -724,8 +724,8 @@ struct ScratchPhraseChartView: View {
                                         windowStart: Double,
                                         pps: CGFloat,
                                         strokeRegionHeight: CGFloat) {
-        let sorted = strokes.sorted { $0.startTime < $1.startTime }
-        guard sorted.count >= 2 else { return }
+        let anchors = ScratchStrokeGeometry.turnaroundAnchors(strokes: strokes, path: path)
+        guard !anchors.isEmpty else { return }
         let inset = strokeRegionHeight * ScratchMotionRenderer.crossInsetFraction
         let band = max(strokeRegionHeight - inset * 2, 1)
 
@@ -736,15 +736,10 @@ struct ScratchPhraseChartView: View {
             return (strokeRegionHeight - inset) - clamped * band
         }
 
-        for i in 0..<(sorted.count - 1) {
-            let a = sorted[i]
-            let b = sorted[i + 1]
-            guard a.direction == .forward, b.direction == .backward else { continue }
-            let x = CGFloat(a.endTime - windowStart) * pps
+        for anchor in anchors {
+            let x = CGFloat(anchor.time - windowStart) * pps
             guard x >= -20 else { continue }
-            // The reversal happens at the forward stroke's end position on
-            // the continuous path — the apex the backward stroke returns from.
-            let turnaroundY = screenY(for: path.position(at: a.endTime))
+            let turnaroundY = screenY(for: anchor.position)
 
             let d: CGFloat = 4.5
             var diamond = Path()

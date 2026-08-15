@@ -267,6 +267,11 @@
 		SLCORE00000000000000BF30 /* ScratchTimelineProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */; };
 		SLCORE00000000000000BF31 /* ScratchTimelineProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */; };
 		SLCORE00000000000000BF32 /* ScratchStrokeGeometryTravelAmplitudeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */; };
+		SNP1001000SNP001SNP00001 /* ScratchNotationPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNP1000000SNP001SNP00001 /* ScratchNotationPanel.swift */; };
+		SNP1001000SNP001SNP00002 /* ScratchNotationPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNP1000000SNP001SNP00001 /* ScratchNotationPanel.swift */; };
+		SNQ1001000SNQ001SNQ00001 /* ScratchNotationPanelPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNQ1000000SNQ001SNQ00001 /* ScratchNotationPanelPreview.swift */; };
+		SNQ1001000SNQ001SNQ00002 /* ScratchNotationPanelPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNQ1000000SNQ001SNQ00001 /* ScratchNotationPanelPreview.swift */; };
+		SNT1001000SNT001SNT00001 /* ScratchNotationPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNT1000000SNT001SNT00001 /* ScratchNotationPanelTests.swift */; };
 		SLCORE00000000000000BF33 /* ScratchDetectedNotationLaneAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */; };
 		SLCORE00000000000000BF34 /* ScratchDetectedNotationLaneAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR41 /* ScratchDetectedNotationLaneAdapterTests.swift */; };
 		SLCORE00000000000000BF50 /* ScratchRawPlatterLaneAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */; };
@@ -759,6 +764,8 @@
 		NLG2010000NLG002NLG00001 /* NotationLaneGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryTests.swift; sourceTree = "<group>"; };
 		NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugNotationLaneHostView.swift; sourceTree = "<group>"; };
 		NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryViewPreview.swift; sourceTree = "<group>"; };
+		SNP1000000SNP001SNP00001 /* ScratchNotationPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/ScratchNotationPanel.swift; sourceTree = "<group>"; };
+		SNQ1000000SNQ001SNQ00001 /* ScratchNotationPanelPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/ScratchNotationPanelPreview.swift; sourceTree = "<group>"; };
 		NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/NotationLaneGeometryView.swift; sourceTree = "<group>"; };
 		NLV2010000NLV002NLV00001 /* NotationLaneGeometryViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotationLaneGeometryViewTests.swift; sourceTree = "<group>"; };
 		NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Presentation/NotationPlayheadGeometry.swift; sourceTree = "<group>"; };
@@ -866,6 +873,7 @@
 		SLCORE00000000000000FR37 /* ScratchTimelineProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchTimelineProvenance.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchTimelineProvenanceTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchStrokeGeometryTravelAmplitudeTests.swift; sourceTree = "<group>"; };
+		SNT1000000SNT001SNT00001 /* ScratchNotationPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchNotationPanelTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchDetectedNotationLaneAdapter.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR41 /* ScratchDetectedNotationLaneAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchDetectedNotationLaneAdapterTests.swift; sourceTree = "<group>"; };
 		SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ScratchRawPlatterLaneAdapter.swift; sourceTree = "<group>"; };
@@ -1115,6 +1123,7 @@
 				SLCORE00000000000000FR34 /* ScratchNotationTravelMotionPathTests.swift */,
 				SLCORE00000000000000FR38 /* ScratchTimelineProvenanceTests.swift */,
 				SLCORE00000000000000FR39 /* ScratchStrokeGeometryTravelAmplitudeTests.swift */,
+				SNT1000000SNT001SNT00001 /* ScratchNotationPanelTests.swift */,
 				SLCORE00000000000000FR36 /* TravelLaneDebugComparisonTests.swift */,
 				SLCORE00000000000000FR13 /* scratch_timeline_cc6_baby_fixture.json */,
 				SLCORE00000000000000FR19 /* ScratchAnalysisRealFaderFixtureTests.swift */,
@@ -1278,6 +1287,8 @@
 				SBPG2FREF0001 /* ScratchBankPadGridView.swift */,
 				NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */,
 				NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */,
+				SNP1000000SNP001SNP00001 /* ScratchNotationPanel.swift */,
+				SNQ1000000SNQ001SNQ00001 /* ScratchNotationPanelPreview.swift */,
 				NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */,
 				DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */,
 			);
@@ -1901,6 +1912,8 @@
 				SRA1001000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift in Sources */,
 				NLV1001000NLV001NLV00001 /* NotationLaneGeometryView.swift in Sources */,
 				NLP1001000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift in Sources */,
+				SNP1001000SNP001SNP00001 /* ScratchNotationPanel.swift in Sources */,
+				SNQ1001000SNQ001SNQ00001 /* ScratchNotationPanelPreview.swift in Sources */,
 				NLH1001000NLH001NLH00001 /* DebugNotationLaneHostView.swift in Sources */,
 				DRN1001000DRN001DRN00001 /* DebugReviewNotationCard.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E6 /* CaptureReliability.swift in Sources */,
@@ -2037,6 +2050,7 @@
 				SLCORE00000000000000BF27 /* ScratchNotationTravelMotionPathTests.swift in Sources */,
 				SLCORE00000000000000BF31 /* ScratchTimelineProvenanceTests.swift in Sources */,
 				SLCORE00000000000000BF32 /* ScratchStrokeGeometryTravelAmplitudeTests.swift in Sources */,
+				SNT1001000SNT001SNT00001 /* ScratchNotationPanelTests.swift in Sources */,
 				SLCORE00000000000000BF29 /* TravelLaneDebugComparisonTests.swift in Sources */,
 				SLCORE00000000000000BF34 /* ScratchDetectedNotationLaneAdapterTests.swift in Sources */,
 				SLCORE00000000000000BF51 /* ScratchRawPlatterLaneAdapterTests.swift in Sources */,
@@ -2238,6 +2252,8 @@
 				SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */,
 				NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */,
 				NLP1001000NLP001NLP00002 /* NotationLaneGeometryViewPreview.swift in Sources */,
+				SNP1001000SNP001SNP00002 /* ScratchNotationPanel.swift in Sources */,
+				SNQ1001000SNQ001SNQ00002 /* ScratchNotationPanelPreview.swift in Sources */,
 				NLH1001000NLH001NLH00002 /* DebugNotationLaneHostView.swift in Sources */,
 				DRN1001000DRN001DRN00002 /* DebugReviewNotationCard.swift in Sources */,
 				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
