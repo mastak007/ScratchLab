@@ -318,6 +318,17 @@ struct PracticeModeView: View {
         }
     }
 
+    /// Shared `StatusBadge` variant for the live mic state — the V3.2 token
+    /// for what `micStatusColor` used to express as a raw color.
+    private var micStatusVariant: StatusBadgeVariant {
+        switch audioEngine.inputMonitorState {
+        case .micOff:     return .neutral
+        case .micLive:    return .success
+        case .listening:  return .accent
+        case .noSignal:   return .warning
+        }
+    }
+
     private var practiceInputSources: [AudioInputSource] {
         var sources: [AudioInputSource] = [.microphone]
         if audioEngine.hasExternalPracticeInput {
@@ -607,54 +618,61 @@ struct PracticeModeView: View {
     private var practiceStatusStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                PracticeStatusChip(
+                StatusBadge(
                     title: "Session",
                     value: isComboChallengeMode ? "Challenge" : "Live",
-                    color: Color(hex: "F44336")
+                    variant: .danger,
+                    systemImage: "waveform"
                 )
-                PracticeStatusChip(
+                StatusBadge(
                     title: "Audio",
                     value: micStatusTitle,
-                    color: micStatusColor
+                    variant: micStatusVariant,
+                    systemImage: micStatusIcon
                 )
                 if let audioError = audioEngine.lastAudioError {
-                    PracticeStatusChip(
+                    StatusBadge(
                         title: "Issue",
                         value: audioError,
-                        color: Color(hex: "F44336")
+                        variant: .danger,
+                        systemImage: "exclamationmark.triangle.fill"
                     )
                 }
                 if isGuidedDrillMode {
-                    PracticeStatusChip(
+                    StatusBadge(
                         title: "BPM",
                         value: "\(practiceBeatStore.bpmValue)",
-                        color: Color(hex: "38BDF8")
+                        variant: .accent,
+                        systemImage: "metronome"
                     )
                     if let activeDrillEventIndex {
-                        PracticeStatusChip(
+                        StatusBadge(
                             title: "Step",
                             value: "\(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)",
-                            color: Color(hex: "F59E0B")
+                            variant: .warning,
+                            systemImage: "number"
                         )
                     }
                 } else if !isCompactVertical {
                     // Hidden in iPhone landscape — redundant with the session
                     // title in `practiceTopHUD` and saves chip-strip width that
                     // otherwise pushes everything off-screen on narrow heights.
-                    PracticeStatusChip(
+                    StatusBadge(
                         title: "Scratch",
                         value: activeScratch.name,
-                        color: Color(hex: "38BDF8")
+                        variant: .accent,
+                        systemImage: "waveform"
                     )
                 }
-                PracticeStatusChip(
+                StatusBadge(
                     title: "Beat",
                     value: practiceBeatStore.isBeatEnabled
                         ? (practiceBeatStore.isPlaying
                             ? "\(practiceBeatStore.beatEngineMode.title) On"
                             : "\(practiceBeatStore.beatEngineMode.title) Ready")
                         : "Off",
-                    color: Color(hex: practiceBeatStore.isBeatEnabled ? "A855F7" : "22C55E")
+                    variant: practiceBeatStore.isBeatEnabled ? .success : .neutral,
+                    systemImage: practiceBeatStore.isBeatEnabled ? "metronome.fill" : "speaker.slash.fill"
                 )
             }
         }
@@ -729,47 +747,29 @@ struct PracticeModeView: View {
         }
     }
 
-    // Compact scored-practice metrics — understated so the lane stays dominant.
+    // Compact scored-practice metrics — shared StatusBadge instead of the
+    // legacy StatDisplay so the live HUD reads as the same V3.2 system.
+    private var leadingStatVariant: StatusBadgeVariant {
+        isComboChallengeMode ? .info : .warning
+    }
+
     @ViewBuilder
     private var practiceMetricsChip: some View {
-        if isCompactVertical {
-            // iPhone landscape: a single inline pill instead of two stacked
-            // StatDisplay columns. Same numbers, less vertical/horizontal
-            // pressure so the notation lane can claim its own height.
-            HStack(spacing: 10) {
-                HStack(spacing: 4) {
-                    Image(systemName: leadingStat.icon)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(leadingStat.color)
-                    Text(leadingStat.value)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-                HStack(spacing: 4) {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(Color(hex: "FFD700"))
-                    Text("\(currentScore)")
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color.black.opacity(0.5), in: Capsule())
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(leadingStat.label) \(leadingStat.value), Practice estimate \(currentScore)")
-        } else {
-            HStack(spacing: 12) {
-                StatDisplay(icon: leadingStat.icon, value: leadingStat.value,
-                            label: leadingStat.label, color: leadingStat.color)
-                StatDisplay(icon: "star.fill", value: "\(currentScore)",
-                            label: "Practice estimate", color: Color(hex: "FFD700"))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(Color.black.opacity(0.5), in: Capsule())
+        HStack(spacing: 8) {
+            StatusBadge(
+                title: leadingStat.label,
+                value: leadingStat.value,
+                variant: leadingStatVariant,
+                systemImage: leadingStat.icon
+            )
+            StatusBadge(
+                title: "Practice estimate",
+                value: "\(currentScore)",
+                variant: .accent,
+                systemImage: "star.fill"
+            )
         }
+        .accessibilityElement(children: .contain)
     }
 
     // Thin bottom chip row: contextual guidance plus the practice-beat control.
@@ -843,7 +843,7 @@ struct PracticeModeView: View {
             HStack(spacing: 6) {
                 Text("TIP")
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(Color(hex: "FFD700"))
+                    .foregroundColor(ScratchLabDesign.Sem.accent)
                 Text(currentTipText)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white.opacity(0.8))
@@ -1035,9 +1035,9 @@ struct PracticeModeView: View {
         if let lane = activeLane {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text("TARGET PATTERN · REFERENCE")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.85))
+                    Text("TARGET")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
                     Spacer()
                     notationStatusChip
                 }
@@ -1922,54 +1922,6 @@ struct AudioLevelIndicator: View {
 
 // MARK: - Stat Display
 
-struct PracticeStatusChip: View {
-    let title: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.58))
-
-            Text(value)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.black.opacity(0.46), in: Capsule())
-    }
-}
-
-struct StatDisplay: View {
-    let icon: String
-    let value: String
-    let label: String
-    let color: Color
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundColor(color)
-                Text(value)
-                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-            }
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
-        }
-    }
-}
-
 // MARK: - Accuracy Burst Animation
 
 struct AccuracyBurstView: View {
@@ -2021,6 +1973,11 @@ private struct PracticeReadyOverlay: View {
     let onStart: () -> Void
     let onWatch: () -> Void
     let onBack: () -> Void
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var presentation: ScratchNotationPanelPresentation {
+        ScratchLabAdaptiveLayout.notationPresentation(isRegularWidth: horizontalSizeClass == .regular)
+    }
 
     var body: some View {
         ZStack {
@@ -2054,7 +2011,7 @@ private struct PracticeReadyOverlay: View {
                     if let targetNotation {
                         ScratchNotationPanel(
                             lane: .target,
-                            presentation: .compact,
+                            presentation: presentation,
                             source: .target(targetNotation),
                             bpm: bpm
                         )
@@ -2153,7 +2110,7 @@ struct SessionSetupOverlay: View {
                     VStack(spacing: 6) {
                         Text(sessionTitle)
                             .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(Color(hex: "FFD700"))
+                            .foregroundColor(ScratchLabDesign.Sem.accent)
 
                         Text(scratch.name)
                             .font(.system(size: 28, weight: .bold))
@@ -2200,7 +2157,7 @@ struct SessionSetupOverlay: View {
                                             .foregroundColor(selectedDuration == option.1 ? .black : .white)
                                             .padding(.horizontal, 20)
                                             .padding(.vertical, 12)
-                                            .background(selectedDuration == option.1 ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                                            .background(selectedDuration == option.1 ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.1))
                                             .cornerRadius(12)
                                     }
                                 }
@@ -2225,7 +2182,7 @@ struct SessionSetupOverlay: View {
                                         .minimumScaleFactor(0.8)
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 10)
-                                        .background(selectedAssistMode == mode ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                                        .background(selectedAssistMode == mode ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.1))
                                         .cornerRadius(12)
                                 }
                             }
@@ -2275,7 +2232,7 @@ struct SessionSetupOverlay: View {
                                     .frame(maxWidth: .infinity)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 12)
-                                    .background(selectedInputSource == source ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                                    .background(selectedInputSource == source ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.1))
                                     .cornerRadius(12)
                                 }
                             }
@@ -2302,7 +2259,7 @@ struct SessionSetupOverlay: View {
                                 .foregroundColor(.black)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 16)
-                                .background(Color(hex: "FFD700"))
+                                .background(ScratchLabDesign.Sem.accent)
                                 .cornerRadius(16)
                         }
 
@@ -2494,7 +2451,7 @@ private struct ScratchCoachCard: View {
     @StateObject private var demoPlayer = ScratchCoachDemoAudioPlayer()
 
     private let theme = ScratchCoachCardTheme(
-        accentColor: Color(hex: "FFD700"),
+        accentColor: ScratchLabDesign.Sem.accent,
         primaryTextColor: .white,
         secondaryTextColor: .white.opacity(0.72),
         bubbleFill: Color.white.opacity(0.08),
@@ -2563,10 +2520,7 @@ private struct ScratchCoachCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(Color.white.opacity(0.08))
-        .cornerRadius(16)
+        .scratchLabCard(.standard)
         .padding(.horizontal, 16)
         .accessibilityIdentifier("scratchlab-coach-card")
         .onAppear {
@@ -2599,7 +2553,7 @@ private struct ScratchCoachCard: View {
             .foregroundColor(enabled ? .black : .white.opacity(0.5))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background(enabled ? Color(hex: "FFD700") : Color.white.opacity(0.08))
+            .background(enabled ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.08))
             .cornerRadius(10)
         }
         .disabled(!enabled)
@@ -2635,7 +2589,7 @@ private struct PracticeBeatControlsCard: View {
                         .foregroundColor(!practiceBeatStore.isBeatEnabled ? .black : .white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(!practiceBeatStore.isBeatEnabled ? Color(hex: "FFD700") : Color.white.opacity(0.1))
+                        .background(!practiceBeatStore.isBeatEnabled ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.1))
                         .cornerRadius(10)
                 }
                 .accessibilityIdentifier("practice-beat-no-beat-button")
@@ -2680,7 +2634,7 @@ private struct PracticeBeatControlsCard: View {
                                 .padding(.vertical, 12)
                                 .background(
                                     practiceBeatStore.selectedBeatMode == mode
-                                        ? Color(hex: "FFD700")
+                                        ? ScratchLabDesign.Sem.accent
                                         : Color.white.opacity(0.1)
                                 )
                                 .cornerRadius(10)
@@ -2739,7 +2693,7 @@ private struct PracticeBeatControlsCard: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
                                 .background(
-                                    practiceBeatStore.bpmValue == bpm ? Color(hex: "FFD700") : Color.white.opacity(0.1)
+                                    practiceBeatStore.bpmValue == bpm ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.1)
                                 )
                                 .cornerRadius(10)
                         }
@@ -2769,10 +2723,7 @@ private struct PracticeBeatControlsCard: View {
                     .foregroundColor(Color(hex: "F59E0B"))
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(Color.white.opacity(0.08))
-        .cornerRadius(16)
+        .scratchLabCard(.standard)
         .padding(.horizontal, 20)
         .accessibilityIdentifier(PracticeBeatUIContract.sectionAccessibilityID)
     }
@@ -2784,50 +2735,35 @@ struct PauseOverlayView: View {
     let onResume: () -> Void
     let onRestart: () -> Void
     let onExit: () -> Void
-    
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.9)
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 24) {
-                Text("PAUSED")
-                    .font(.system(size: 32, weight: .bold))
+                Text("Session paused")
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.white)
-                
+
                 VStack(spacing: 12) {
-                    PauseButton(title: "Resume", icon: "play.fill", color: Color(hex: "4CAF50"), action: onResume)
-                    PauseButton(title: "Restart", icon: "arrow.counterclockwise", color: Color(hex: "FF9800"), action: onRestart)
-                    PauseButton(title: "Exit", icon: "xmark", color: Color(hex: "F44336"), action: onExit)
+                    Button(action: onResume) {
+                        Label("Resume", systemImage: "play.fill")
+                    }
+                    .scratchLabPrimaryButton(fillsWidth: true)
+
+                    Button(action: onRestart) {
+                        Label("Restart", systemImage: "arrow.counterclockwise")
+                    }
+                    .scratchLabSecondaryButton(fillsWidth: true)
+
+                    Button(action: onExit) {
+                        Label("Exit", systemImage: "xmark")
+                    }
+                    .scratchLabDestructiveButton()
                 }
                 .padding(.horizontal, 40)
             }
-        }
-    }
-}
-
-struct PauseButton: View {
-    let title: String
-    let icon: String
-    let color: Color
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: icon)
-                Text(title)
-            }
-            .font(.system(size: 16, weight: .bold))
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(color.opacity(0.3))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(color, lineWidth: 2)
-            )
-            .cornerRadius(12)
         }
     }
 }
@@ -2996,6 +2932,11 @@ private struct PracticeResultNotationSection: View {
     let target: ScratchNotation?
     let bpm: Double
     let evidence: PracticeResultNotation
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var presentation: ScratchNotationPanelPresentation {
+        ScratchLabAdaptiveLayout.notationPresentation(isRegularWidth: horizontalSizeClass == .regular)
+    }
 
     var body: some View {
         if let target {
@@ -3003,7 +2944,7 @@ private struct PracticeResultNotationSection: View {
             VStack(alignment: .leading, spacing: 12) {
                 ScratchNotationPanel(
                     lane: .target,
-                    presentation: .compact,
+                    presentation: presentation,
                     source: .target(target),
                     bpm: bpm,
                     domain: domain
@@ -3013,7 +2954,7 @@ private struct PracticeResultNotationSection: View {
                 case .comparison(let performed):
                     ScratchNotationPanel(
                         lane: .performance,
-                        presentation: .compact,
+                        presentation: presentation,
                         source: .performedPlatter(performed),
                         bpm: bpm,
                         domain: domain

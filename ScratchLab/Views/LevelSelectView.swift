@@ -195,18 +195,18 @@ struct LevelSelectView: View {
             }
 
             HStack(spacing: 16) {
-                StatItem(
-                    icon: "link",
+                StatusBadge(
+                    title: "Best Run",
                     value: "\(Int(comboProgress?.comboAccuracy ?? 0))%",
-                    label: "Best Run",
-                    color: Color(hex: "00BCD4")
+                    variant: .info,
+                    systemImage: "link"
                 )
 
-                StatItem(
-                    icon: comboProgress?.comboCompleted == true ? "checkmark.seal.fill" : "repeat",
+                StatusBadge(
+                    title: "Status",
                     value: comboStatusValue,
-                    label: "Status",
-                    color: Color(hex: "FF9800")
+                    variant: .warning,
+                    systemImage: comboProgress?.comboCompleted == true ? "checkmark.seal.fill" : "repeat"
                 )
             }
 
@@ -282,18 +282,18 @@ struct LevelSelectView: View {
 
             if isBabyScratch {
                 HStack(spacing: 16) {
-                    StatItem(
-                        icon: "star.fill",
+                    StatusBadge(
+                        title: "Best estimate",
                         value: "\(Int(progressManager.babyScratchProgress?.bestAccuracy ?? 0))%",
-                        label: "Best estimate",
-                        color: Color(hex: "FFD700")
+                        variant: .warning,
+                        systemImage: "star.fill"
                     )
 
-                    StatItem(
-                        icon: "waveform.path.ecg",
+                    StatusBadge(
+                        title: "Attempts",
                         value: "\(progressManager.babyScratchProgress?.practiceCount ?? 0)",
-                        label: "Attempts",
-                        color: Color(hex: "4CAF50")
+                        variant: .success,
+                        systemImage: "waveform.path.ecg"
                     )
                 }
             } else {

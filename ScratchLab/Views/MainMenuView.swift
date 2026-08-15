@@ -167,68 +167,6 @@ struct MainMenuView: View {
         return "\(audioPart) · camera optional · sync off"
     }
 
-    // TODO: orphan after Slice C — AdvancedHubView now owns the live
-    // relay-status surface. Left unused for review continuity; remove in a
-    // follow-up cleanup once Slice C has shipped. Same for
-    // `watchRelayStatusText`, `performerMonitorSubtitle`, `performerMonitorIcon`.
-    private var systemStatusCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("LIVE INPUT READY")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Color(hex: "7DD3FC"))
-
-            Text("Run live scratch practice on this device with the microphone or a wired USB/interface input. You can also use it for deck video, performer monitor, and watch motion capture with ScratchLab on your main device.")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(.white.opacity(0.86))
-
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    LegacyStatusBadge(label: "Practice", value: "Live input", color: Color(hex: "22C55E"))
-                    LegacyStatusBadge(label: "Audio", value: "Mic or USB", color: Color(hex: "0EA5E9"))
-                }
-
-                HStack(spacing: 8) {
-                    LegacyStatusBadge(label: "Camera", value: "Deck video", color: Color(hex: "F59E0B"))
-                    LegacyStatusBadge(label: "Sync", value: "Optional", color: Color(hex: "6366F1"))
-                }
-            }
-
-            Divider()
-                .overlay(Color.white.opacity(0.08))
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("WATCH RELAY")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Color(hex: "A78BFA"))
-
-                Text(watchRelayStatusText)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white.opacity(0.86))
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 8) {
-                    LegacyStatusBadge(
-                        label: "Relay",
-                        value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
-                        color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
-                    )
-                    LegacyStatusBadge(
-                        label: "Watch",
-                        value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
-                        color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
-                    )
-                }
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-    
     // MARK: - Menu Buttons
 
     // V3.2: Home's card list (Practice/Capture/Review/Advanced) is retired.
@@ -494,15 +432,17 @@ private struct AdvancedHubView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                LegacyStatusBadge(
-                    label: "Relay",
+                StatusBadge(
+                    title: "Relay",
                     value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
-                    color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
+                    variant: companionRelayBroadcaster.connectedPeerNames.isEmpty ? .neutral : .success,
+                    systemImage: "bolt.horizontal"
                 )
-                LegacyStatusBadge(
-                    label: "Watch",
+                StatusBadge(
+                    title: "Watch",
                     value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
-                    color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
+                    variant: watchMotionCaptureStore.isWatchReachable ? .success : .neutral,
+                    systemImage: "applewatch.side.right"
                 )
             }
         }
@@ -529,7 +469,7 @@ private struct AdvancedHubView: View {
                 title: "Try Demo",
                 subtitle: "See scratch feedback instantly",
                 icon: "play.circle.fill",
-                accent: Color(hex: "FFD700"),
+                accent: ScratchLabDesign.Sem.accent,
                 action: { showingDemoMode = true }
             )
 
@@ -609,7 +549,7 @@ private struct DemoModeView: View {
     @State private var isBuildingExportPackage = false
 
     private let theme = ScratchCoachCardTheme(
-        accentColor: Color(hex: "FFD700"),
+        accentColor: ScratchLabDesign.Sem.accent,
         primaryTextColor: .white,
         secondaryTextColor: .white.opacity(0.72),
         bubbleFill: Color.white.opacity(0.08),
@@ -747,7 +687,7 @@ private struct DemoModeView: View {
             }
 
             HStack(spacing: 8) {
-                demoStatusBadge(label: "Audio", value: "Bundled WAV", color: Color(hex: "FFD700"))
+                demoStatusBadge(label: "Audio", value: "Bundled WAV", color: ScratchLabDesign.Sem.accent)
                 demoStatusBadge(label: "Hardware", value: "Not Required", color: Color(hex: "22C55E"))
             }
         }
@@ -875,7 +815,7 @@ private struct DemoModeView: View {
                 .foregroundColor(.black)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
-                .background(Color(hex: "FFD700"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(ScratchLabDesign.Sem.accent, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .disabled(isBuildingExportPackage || exportCoordinator.isPreparing)
         }
@@ -957,7 +897,7 @@ private struct DemoModeView: View {
             .foregroundColor(enabled ? .black : .white.opacity(0.5))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background(enabled ? Color(hex: "FFD700") : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(enabled ? ScratchLabDesign.Sem.accent : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .disabled(!enabled)
     }
@@ -1001,9 +941,7 @@ struct MenuButton: View {
     let icon: String
     let accent: Color
     let action: () -> Void
-    
-    @State private var isPressed = false
-    
+
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 16) {
@@ -1011,91 +949,35 @@ struct MenuButton: View {
                     .fill(accent.opacity(0.16))
                     .frame(width: 48, height: 48)
                     .overlay {
-                    Image(systemName: icon)
+                        Image(systemName: icon)
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(accent)
                     }
-                
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundColor(.white)
-                    
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
                     Text(subtitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white.opacity(0.68))
+                        .font(ScratchLabDesign.Typo.bodySecondary)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                
+
                 Spacer()
-                
+
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(accent.opacity(0.22), lineWidth: 1)
-            )
-            .scaleEffect(isPressed ? 0.98 : 1.0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .scratchLabCard(.standard)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())
-        .onLongPressGesture(minimumDuration: .infinity, pressing: { pressing in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = pressing
-            }
-        }, perform: {})
-    }
-}
-
-// MARK: - Shared Stat Item Component
-
-struct StatItem: View {
-    let icon: String
-    let value: String
-    let label: String
-    let color: Color
-
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(color)
-
-                Text(value)
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white)
-            }
-
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.5))
-        }
-    }
-}
-
-struct LegacyStatusBadge: View {
-    let label: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.56))
-
-            Text(value)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.white)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(subtitle)")
     }
 }
 
@@ -1121,31 +1003,38 @@ struct BackgroundView: View {
 struct ProfileView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var progressManager: ProgressManager
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(hex: "0D0D0D").ignoresSafeArea()
-                
+                BackgroundView()
+
                 VStack(spacing: 24) {
-                    // Avatar
                     Text(progressManager.playerProfile?.avatarEmoji ?? "🎧")
                         .font(.system(size: 80))
                         .padding()
                         .background(Color.white.opacity(0.1))
                         .clipShape(Circle())
-                    
-                    // Name
+
                     Text(progressManager.playerProfile?.displayName ?? "DJ")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    // Stats
-                    HStack(spacing: 40) {
-                        ProfileStat(value: "\(progressManager.playerProfile?.level ?? 1)", label: "Level")
-                        ProfileStat(value: "\(progressManager.playerProfile?.totalScore ?? 0)", label: "Practice estimate")
+                        .font(ScratchLabDesign.Typo.pageTitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    HStack(spacing: 8) {
+                        StatusBadge(
+                            title: "Level",
+                            value: "\(progressManager.playerProfile?.level ?? 1)",
+                            variant: .accent,
+                            systemImage: "chart.bar.fill"
+                        )
+                        StatusBadge(
+                            title: "Practice estimate",
+                            value: "\(progressManager.playerProfile?.totalScore ?? 0)",
+                            variant: .warning,
+                            systemImage: "star.fill"
+                        )
                     }
-                    
+
                     Spacer()
                 }
                 .padding(.top, 40)
@@ -1161,22 +1050,6 @@ struct ProfileView: View {
     }
 }
 
-struct ProfileStat: View {
-    let value: String
-    let label: String
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.system(size: 24, weight: .bold))
-                .foregroundColor(Color(hex: "FFD700"))
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
-        }
-    }
-}
-
 struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var audioEngine: AudioEngine
@@ -1185,8 +1058,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(hex: "0D0D0D").ignoresSafeArea()
-                
+                BackgroundView()
+
                 List {
                     Section("Audio Input") {
                         ForEach(visibleInputSources, id: \.self) { source in
@@ -1200,24 +1073,24 @@ struct SettingsView: View {
                                             .foregroundColor(.white)
                                         Text(source.description)
                                             .font(.caption)
-                                            .foregroundColor(.gray)
+                                            .foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     if selectedInput == source {
                                         Image(systemName: "checkmark")
-                                            .foregroundColor(Color(hex: "FFD700"))
+                                            .foregroundStyle(ScratchLabDesign.Sem.accent)
                                     }
                                 }
                             }
                         }
                     }
-                    
+
                     Section("About") {
                         HStack {
                             Text("Version")
                             Spacer()
                             Text(appVersionLabel)
-                                .foregroundColor(.gray)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -1543,7 +1416,7 @@ private struct IPadPerformerMonitorView: View {
             BackgroundView()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
                     performerHeader
 
                     if let image = receiver.latestFrameImage,
@@ -1553,6 +1426,7 @@ private struct IPadPerformerMonitorView: View {
                         emptyStateCard
                     }
 
+                    connectionCard
                     controlRow
                 }
                 .padding(24)
@@ -1565,131 +1439,89 @@ private struct IPadPerformerMonitorView: View {
         }
     }
 
+    // Figma Performer Monitor header (35:210 / 35:220): eyebrow + status badge
+    // + headline. The real connection state drives the badge and headline.
     private var performerHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Use this when you want ScratchLab feedback off the Serato screen.")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(.white.opacity(0.82))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("PERFORMER MONITOR")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                Spacer()
+                StatusBadge(
+                    title: "Status",
+                    value: receiver.connectedPeerNames.isEmpty ? "Waiting" : "Connected",
+                    variant: receiver.connectedPeerNames.isEmpty ? .neutral : .success,
+                    systemImage: receiver.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right"
+                )
+            }
+            Text(receiver.connectedPeerNames.isEmpty ? "Waiting for nearby ScratchLab" : "Deck view")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+    }
 
-            Text("Local network access lets ScratchLab find your Mac on your Wi-Fi. Nothing is uploaded.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.55))
+    private var emptyStateCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("No nearby feed yet")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("1. Open ScratchLab on your main device running Serato.\n2. Stay on the analyzer screen or open Performer Monitor there.\n3. Keep both devices on the same local network.\n4. This screen auto-connects when the nearby feed appears.\n5. If Nearby ScratchLab stays empty, use Advanced connection.")
+                .font(ScratchLabDesign.Typo.body)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 280, alignment: .leading)
+        .scratchLabCard(.standard)
+    }
 
-            Label(receiver.connectionStatus, systemImage: receiver.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundColor(receiver.connectedPeerNames.isEmpty ? .white.opacity(0.78) : Color(hex: "4CAF50"))
+    private var connectionCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(receiver.connectionStatus)
+                .font(ScratchLabDesign.Typo.cardHeading)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
             if !receiver.discoveredPeers.isEmpty && receiver.connectedPeerNames.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Nearby ScratchLab")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white.opacity(0.68))
-
-                    ForEach(receiver.discoveredPeers) { peer in
-                        HStack(spacing: 12) {
-                            Text(peer.name)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.white)
-
-                            Spacer()
-
-                            Button("Connect") {
-                                receiver.connect(to: peer)
-                            }
-                            .font(.system(size: 12, weight: .bold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color(hex: "0EA5E9"))
+                ForEach(receiver.discoveredPeers) { peer in
+                    HStack(spacing: 12) {
+                        Text(peer.name)
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.white)
-                            .cornerRadius(12)
-                        }
+                        Spacer()
+                        Button("Connect") { receiver.connect(to: peer) }
+                            .scratchLabPrimaryButton()
                     }
                 }
             }
 
             if receiver.connectedPeerNames.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Advanced connection")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white.opacity(0.68))
-
-                    HStack(spacing: 10) {
-                        TextField("Device name or address", text: $manualHost)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(12)
-
-                        Button("Connect") {
-                            receiver.connect(hostname: manualHost)
-                        }
-                        .font(.system(size: 12, weight: .bold))
-                        .padding(.horizontal, 14)
+                HStack(spacing: 10) {
+                    TextField("Device name or address", text: $manualHost)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .background(Color(hex: "0EA5E9"))
-                        .foregroundColor(.white)
+                        .background(Color.white.opacity(0.1))
                         .cornerRadius(12)
-                    }
-
-                    Text("Use this only if nearby discovery does not find ScratchLab.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.55))
+                    Button("Connect") { receiver.connect(hostname: manualHost) }
+                        .scratchLabPrimaryButton()
                 }
+                Text("Use this only if nearby discovery does not find ScratchLab.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
         }
-        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.08))
-        .cornerRadius(18)
-    }
-
-    private var emptyStateCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Waiting for nearby ScratchLab")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundColor(.white)
-
-            Text("1. Open ScratchLab on your main device running Serato.\n2. Stay on the analyzer screen or open Performer Monitor there.\n3. Keep both devices on the same local network.\n4. This screen will auto-connect when the nearby feed appears if it is the only one available.\n5. If Nearby ScratchLab stays empty, use Advanced connection.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.78))
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("If you are using an external display instead, move the Performer Monitor window there and you do not need this screen.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.55))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(22)
-        .frame(maxWidth: .infinity, minHeight: 280, alignment: .leading)
-        .background(Color.white.opacity(0.08))
-        .cornerRadius(20)
+        .scratchLabCard(.standard)
     }
 
     private var controlRow: some View {
         HStack(spacing: 12) {
-            Button("Reconnect") {
-                receiver.refresh()
-            }
-            .font(.system(size: 14, weight: .bold))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .background(Color(hex: "0EA5E9"))
-            .foregroundColor(.white)
-            .cornerRadius(14)
-
-            Button("Disconnect") {
-                receiver.disconnect()
-            }
-            .font(.system(size: 14, weight: .bold))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .background(Color.white.opacity(0.12))
-            .foregroundColor(.white)
-            .cornerRadius(14)
-
+            Button("Reconnect") { receiver.refresh() }
+                .scratchLabPrimaryButton()
+            Button("Disconnect") { receiver.disconnect() }
+                .scratchLabSecondaryButton()
             Spacer()
         }
     }

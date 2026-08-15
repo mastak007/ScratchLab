@@ -183,6 +183,28 @@ enum ScratchLabDesign {
     }
 }
 
+// MARK: - Adaptive layout policy
+
+/// Pure, deterministic adaptive-layout policy shared by iPhone and iPad.
+/// Maps a horizontal size class (passed as `isRegularWidth` so the policy is
+/// testable without SwiftUI) to the presentation decisions the V3.2 layout
+/// makes. The same content and state reorganize by available space — the
+/// policy never branches on platform identity, so iPhone and iPad reuse one
+/// content path with no semantic fork.
+enum ScratchLabAdaptiveLayout {
+    /// ScratchNotationPanel density: Standard on regular width (room for the
+    /// full 520×172 panel), Compact on compact width (340×146).
+    static func notationPresentation(isRegularWidth: Bool) -> ScratchNotationPanelPresentation {
+        isRegularWidth ? .standard : .compact
+    }
+
+    /// Whether the navigation sidebar is shown (regular width) or collapsed
+    /// into a single column (compact width).
+    static func usesNavigationSidebar(isRegularWidth: Bool) -> Bool {
+        isRegularWidth
+    }
+}
+
 // MARK: - Platform color mapping
 //
 // The only place `NSColor` / `UIColor` appear in the shared layer. Everything
