@@ -407,7 +407,6 @@
 		SBPER0001IOS /* ScratchBankPadEventRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPER0001FREF /* ScratchBankPadEventRouter.swift */; };
 		SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
 		MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */; };
-		SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPG2FREF0001 /* ScratchBankPadGridView.swift */; };
 		SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
 		NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVM0000000NVM001NVM00001 /* ScratchNotationViewportMapper.swift */; };
 		PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
@@ -617,13 +616,11 @@
 		A2000011 /* ProgressManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressManager.swift; sourceTree = "<group>"; };
 		A2000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A2000014 /* AIBattleModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBattleModeView.swift; sourceTree = "<group>"; };
 		A2000015 /* ScratchAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchAnalyzer.swift; sourceTree = "<group>"; };
 		A2000019 /* ScratchFormulaAST.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaAST.swift; sourceTree = "<group>"; };
 		A2000020 /* ScratchFormulaCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaCatalog.swift; sourceTree = "<group>"; };
 		A2000021 /* ScratchFormulaParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaParser.swift; sourceTree = "<group>"; };
 		A2000022 /* ScratchFormulaRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchFormulaRenderer.swift; sourceTree = "<group>"; };
-		A2000023 /* FormulaPlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormulaPlaygroundView.swift; sourceTree = "<group>"; };
 		A2000025 /* CompanionCameraBroadcaster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraBroadcaster.swift; sourceTree = "<group>"; };
 		A2000026 /* CompanionCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraView.swift; sourceTree = "<group>"; };
 		A2000027 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -813,7 +810,6 @@
 		SBPA0002FREF /* ScratchBankPadAudioPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadAudioPlayerTests.swift; sourceTree = "<group>"; };
 		SBPER0001FREF /* ScratchBankPadEventRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadEventRouter.swift; sourceTree = "<group>"; };
 		SBPER0002FREF /* ScratchBankPadEventRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadEventRouterTests.swift; sourceTree = "<group>"; };
-		SBPG2FREF0001 /* ScratchBankPadGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadGridView.swift; sourceTree = "<group>"; };
 		SBPG2FREF0002 /* ScratchBankPadGridViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadGridViewTests.swift; sourceTree = "<group>"; };
 		SBPGM0FREF0001 /* ScratchBankPadGridModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadGridModel.swift; sourceTree = "<group>"; };
 		SBPM0000FREF0001 /* ScratchBankPadMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchBankPadMapping.swift; sourceTree = "<group>"; };
@@ -1277,14 +1273,11 @@
 				A2000003 /* LevelSelectView.swift */,
 				A2000004 /* PracticeModeView.swift */,
 				SML0000000SML001SML00001 /* ScratchMotionLane.swift */,
-				A2000014 /* AIBattleModeView.swift */,
-				A2000023 /* FormulaPlaygroundView.swift */,
 				A2000026 /* CompanionCameraView.swift */,
 				A2000030 /* StagingInspectorView.swift */,
 				A2000033 /* ScratchCoachViews.swift */,
 				C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */,
 				VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */,
-				SBPG2FREF0001 /* ScratchBankPadGridView.swift */,
 				NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */,
 				NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */,
 				SNP1000000SNP001SNP00001 /* ScratchNotationPanel.swift */,
@@ -2217,7 +2210,6 @@
 				SBPER0001IOS /* ScratchBankPadEventRouter.swift in Sources */,
 				SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */,
 				MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */,
-				SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */,
 				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
 				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
 				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
