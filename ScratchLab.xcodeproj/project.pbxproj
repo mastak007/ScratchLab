@@ -358,6 +358,185 @@
 		VPB0MAC1VPB0MAC1VPB0MAC1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
 		VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */; };
 		VPRESMACVPRESMACVPRESMAC /* VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* VirtualPlatter */; };
+		A1000001 /* ScratchLabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* ScratchLabApp.swift */; };
+		A1000002 /* MainMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* MainMenuView.swift */; };
+		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
+		A1000003 /* LevelSelectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* LevelSelectView.swift */; };
+		A1000004 /* PracticeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* PracticeModeView.swift */; };
+		SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SML0000000SML001SML00001 /* ScratchMotionLane.swift */; };
+		SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPC0000001SPC001SPC00001 /* ScratchPhraseChartView.swift */; };
+		A1000025 /* CompanionCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000026 /* CompanionCameraView.swift */; };
+		A1000029 /* StagingInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000030 /* StagingInspectorView.swift */; };
+		A1000030 /* ScratchCoachViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000033 /* ScratchCoachViews.swift */; };
+		A1000005 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
+		MIDREG0IOS0001 /* MIDIControlRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0001 /* MIDIControlRole.swift */; };
+		MIDREG0IOS0002 /* MIDIControlBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0002 /* MIDIControlBinding.swift */; };
+		MIDREG0IOS0003 /* MIDIControllerProfileV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0003 /* MIDIControllerProfileV2.swift */; };
+		MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0004 /* MIDIHardwareRegistry.swift */; };
+		MIDREG0IOS0005 /* MIDIVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0005 /* MIDIVerification.swift */; };
+		MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0006 /* ParsedMIDIMessage.swift */; };
+		MIDREG0IOS0007 /* MIDILearnedMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0007 /* MIDILearnedMapping.swift */; };
+		MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0FREF0001 /* MIDIFaderCurve.swift */; };
+		CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0001 /* ControllerProfile.swift */; };
+		CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0002 /* ControllerProfileCatalog.swift */; };
+		CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0003 /* DDJFlx10Profile.swift */; };
+		CTLPRF0IOS0004 /* AlphaThetaProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0004 /* AlphaThetaProfiles.swift */; };
+		CTLPRF0IOS0005 /* RaneControllerProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0005 /* RaneControllerProfiles.swift */; };
+		CTLPRF0IOS0006 /* ReloopProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0006 /* ReloopProfiles.swift */; };
+		CTLPRF0IOS0007 /* OtherDJProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTLPRF0FREF0007 /* OtherDJProfiles.swift */; };
+		A1000006 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
+		D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */; };
+		SPCM002000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPCM000000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift */; };
+		SGAM002000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift in Sources */ = {isa = PBXBuildFile; fileRef = SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */; };
+		PGCO002000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */; };
+		PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
+		DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */; };
+		SRT0002000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRT0000000SRT001SRT00001 /* SessionReplayTimeline.swift */; };
+		PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRT0000000PRT001PRT00001 /* PracticeReelTimeline.swift */; };
+		TML0001000TML001TML00002 /* TimingLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = TML0000000TML001TML00001 /* TimingLane.swift */; };
+		SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSG0000000SSG001SSG00001 /* ScratchStrokeGeometry.swift */; };
+		NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */ = {isa = PBXBuildFile; fileRef = NFS1000000NFS001NFS00001 /* NotationFeedbackState.swift */; };
+		SBPM0001IOS00001 /* ScratchBankPadMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPM0000FREF0001 /* ScratchBankPadMapping.swift */; };
+		SBPGM0IOS00002 /* ScratchBankPadGridModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPGM0FREF0001 /* ScratchBankPadGridModel.swift */; };
+		RMKPLS0001IOS /* RaneOneMK2PadCandidateLabeler.swift in Sources */ = {isa = PBXBuildFile; fileRef = RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */; };
+		SBPER0001IOS /* ScratchBankPadEventRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPER0001FREF /* ScratchBankPadEventRouter.swift */; };
+		SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPTR0001FREF /* ScratchPlatterTracker.swift */; };
+		MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */; };
+		SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SBPG2FREF0001 /* ScratchBankPadGridView.swift */; };
+		SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMR0000000SMR001SMR00001 /* ScratchMotionRenderer.swift */; };
+		NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVM0000000NVM001NVM00001 /* ScratchNotationViewportMapper.swift */; };
+		PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPT0000000PPT001PPT00001 /* PlatterPositionTimeline.swift */; };
+		NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP1000000NGP001NGP00001 /* NotationPrimitive.swift */; };
+		NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP2000000NGP002NGP00001 /* GrammarParameters.swift */; };
+		NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGP3000000NGP003NGP00001 /* NotationPrimitiveDerivation.swift */; };
+		TGN1001000TGN001TGN00002 /* TimingGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = TGN1000000TGN001TGN00001 /* TimingGrid.swift */; };
+		GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAN1000000GAN001GAN00001 /* GridAnnotation.swift */; };
+		TWE1001000TWE001TWE00002 /* TimingWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = TWE1000000TWE001TWE00001 /* TimingWindow.swift */; };
+		PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHR1000000PHR001PHR00001 /* Phrase.swift */; };
+		ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* ExpectedTiming.swift */; };
+		PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = PTS1000000PTS001PTS00001 /* PhraseTimingSummary.swift */; };
+		APS1001000APS001APS00002 /* AudioPhraseSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = APS1000000APS001APS00001 /* AudioPhraseSummary.swift */; };
+		APG1001000APG001APG00002 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
+		TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* TimingOriginMarker.swift */; };
+		SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFV1000000SFV001SFV00001 /* ScratchFamily.swift */; };
+		SFA1001000SFA001SFA00002 /* ScratchFamilyAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFA1000000SFA001SFA00001 /* ScratchFamilyAttachment.swift */; };
+		SFS1001000SFS001SFS00002 /* ScratchFamilyAnnotationSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFS1000000SFS001SFS00001 /* ScratchFamilyAnnotationSet.swift */; };
+		SFM1001000SFM001SFM00002 /* ScratchFamilySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFM1000000SFM001SFM00001 /* ScratchFamilySummary.swift */; };
+		CEV1001000CEV001CEV00002 /* CoachingEventVocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */; };
+		CES1001000CES001CES00002 /* CoachingEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CES1000000CES001CES00001 /* CoachingEvent.swift */; };
+		DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE1000000DCE001DCE00001 /* DriftCoachingEvaluator.swift */; };
+		PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE1000000PCE001PCE00001 /* PhraseCoachingEvaluator.swift */; };
+		CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSM1000000CSM001CSM00001 /* CoachingEventSummary.swift */; };
+		NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPM1000000NPM001NPM00001 /* NotationPresentationModel.swift */; };
+		NLG1001000NLG001NLG00002 /* NotationLaneGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLG1000000NLG001NLG00001 /* NotationLaneGeometry.swift */; };
+		NPH1001000NPH001NPH00002 /* NotationPlayheadGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPH1000000NPH001NPH00001 /* NotationPlayheadGeometry.swift */; };
+		NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = NGG1000000NGG001NGG00001 /* NotationGridlineGeometry.swift */; };
+		NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = NVW1000000NVW001NVW00001 /* NotationViewportWindow.swift */; };
+		NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = NRM1000000NRM001NRM00001 /* NotationReplayModel.swift */; };
+		SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SNA1000000SNA001SNA00001 /* ScratchNotationPresentationAdapter.swift */; };
+		SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRA1000000SRA001SRA00001 /* SessionReplayPresentationAdapter.swift */; };
+		NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLV1000000NLV001NLV00001 /* NotationLaneGeometryView.swift */; };
+		NLP1001000NLP001NLP00002 /* NotationLaneGeometryViewPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLP1000000NLP001NLP00001 /* NotationLaneGeometryViewPreview.swift */; };
+		NLH1001000NLH001NLH00002 /* DebugNotationLaneHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = NLH1000000NLH001NLH00001 /* DebugNotationLaneHostView.swift */; };
+		DRN1001000DRN001DRN00002 /* DebugReviewNotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRN1000000DRN001DRN00001 /* DebugReviewNotationCard.swift */; };
+		C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */; };
+		A1000031 /* ScratchMotionAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000034 /* ScratchMotionAnalysis.swift */; };
+		VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00001VPL00001VPL00001 /* VirtualPlatter.swift */; };
+		VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */; };
+		A1000018 /* ScratchFormulaAST.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000019 /* ScratchFormulaAST.swift */; };
+		A1000019 /* ScratchFormulaCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* ScratchFormulaCatalog.swift */; };
+		A1000020 /* ScratchFormulaParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000021 /* ScratchFormulaParser.swift */; };
+		A1000021 /* ScratchFormulaRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000022 /* ScratchFormulaRenderer.swift */; };
+		A1000007 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* AudioEngine.swift */; };
+		A1000008 /* SampleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000008 /* SampleManager.swift */; };
+		A1000009 /* BackingTrackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000009 /* BackingTrackManager.swift */; };
+		A1000010 /* EquipmentDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* EquipmentDetector.swift */; };
+		A1000011 /* ProgressManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* ProgressManager.swift */; };
+		A1000014 /* ScratchAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015 /* ScratchAnalyzer.swift */; };
+		A1000024 /* CompanionCameraBroadcaster.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000025 /* CompanionCameraBroadcaster.swift */; };
+		C71F1102A1B2C3D4E5F60711 /* ClickTrackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71F1101A1B2C3D4E5F60711 /* ClickTrackEngine.swift */; };
+		C71F1202A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71F1201A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift */; };
+		C68BC19238996C9C92EB97A3 /* WatchMotionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDD250716FA81582843E833 /* WatchMotionCapture.swift */; };
+		2C64569FCF5593D3CB171D25 /* WatchMotionCaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B1 /* WatchMotionCaptureStore.swift */; };
+		2C64569FCF5593D3CB171D26 /* StagedCaptureRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */; };
+		2C64569FCF5593D3CB171D27 /* StagingInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B3 /* StagingInspector.swift */; };
+		AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */; };
+		F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
+		SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */; };
+		SQA0002000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */; };
+		SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRK0000000SRK001SRK00001 /* SessionReplayClock.swift */; };
+		6A677B41D9030E13F18D6FF9 /* SessionSharePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */; };
+		F3000002A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
+		1564CE6A18C3FD1BE1056920 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
+		923253E866827B1462A8E5DF /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
+		D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
+		8E2BDEAD0BB509A80C9FAB5F /* Archive+MemoryFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02E4CEF8129F5BD651B9FFE /* Archive+MemoryFile.swift */; };
+		B177BD601DFAC77063AACF21 /* Archive+Progress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472ED49B7202325C8D3C8887 /* Archive+Progress.swift */; };
+		8A689B811423AC79DCD5A667 /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
+		1F4E7DB75A0F6832D44313AA /* Archive+ReadingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */; };
+		6C241C848D84BB0B61DF45E3 /* Archive+Writing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B0FC101729EC232E4DCDC86 /* Archive+Writing.swift */; };
+		EDDA780D51CD02F97E88392C /* Archive+WritingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */; };
+		F6EB3C16D803B47D9D2E8BA5 /* Archive+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */; };
+		2F09BA534668FE12A90A955E /* Archive.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5340BA4F19B19302EC6A347 /* Archive.swift */; };
+		C7818BFED9A95C5EF1069EA5 /* Data+Compression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1783A90FC878E8D656330AFD /* Data+Compression.swift */; };
+		D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */; };
+		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
+		B7E427E9960BFF0ECAA43B45 /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
+		EB645FFD7E2F31E32D6E9C9F /* Entry+InfoZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 814A24D8C57AEC800882D641 /* Entry+InfoZIP.swift */; };
+		DBFB37055166C93C8253E561 /* Entry+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */; };
+		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
+		3D311B58DB11F2542812AE29 /* Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC927BE2AC20BBF592338F0B /* Entry.swift */; };
+		86B4C659CD7D512697B5F324 /* FileManager+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */; };
+		E683712604E8409CBC7FFE46 /* FileManager+ZIPDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66649EBF865FFA9347DA6AC9 /* FileManager+ZIPDeprecated.swift */; };
+		37FCA3B16EABFCA2E9AB4817 /* URL+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */; };
+		A5000071 /* ScratchClassLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000051 /* ScratchClassLabel.swift */; };
+		A5000072 /* NotationCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000052 /* NotationCandidate.swift */; };
+		A5000073 /* AudioOnsetDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000053 /* AudioOnsetDetector.swift */; };
+		A5000074 /* NotationCandidateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000054 /* NotationCandidateBuilder.swift */; };
+		A5000075 /* NotationCandidateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000055 /* NotationCandidateDiagnostics.swift */; };
+		A5000076 /* ReviewAudioOnsetPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5000056 /* ReviewAudioOnsetPreview.swift */; };
+		BCFC2E48C8DC97B933BA3EE3 /* TimecodeInputSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */; };
+		4934D6433CE6AA4371B2AD63 /* TimecodeAudioBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */; };
+		4B483DA41620D1907FC95730 /* TimecodeSourceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */; };
+		E703D86CF507D3F590ED4BD7 /* TimecodeSignalDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */; };
+		3B68EB2B270340C8214395BA /* TimecodeInputTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */; };
+		TCB000001TCB001TCB00001 /* TimecodeDirection.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000001TCR001TCR00001 /* TimecodeDirection.swift */; };
+		TCB000002TCB002TCB00001 /* TimecodeDecodedFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000002TCR002TCR00001 /* TimecodeDecodedFrame.swift */; };
+		TCB000003TCB003TCB00001 /* TimecodeMotionSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000003TCR003TCR00001 /* TimecodeMotionSample.swift */; };
+		TCB000004TCB004TCB00001 /* TimecodePhaseDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000004TCR004TCR00001 /* TimecodePhaseDecoder.swift */; };
+		TCB000005TCB005TCB00001 /* TimecodePlatterAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000005TCR005TCR00001 /* TimecodePlatterAdapter.swift */; };
+		TCB000006TCB006TCB00001 /* TimecodeControlPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000008TCR008TCR00001 /* TimecodeControlPipeline.swift */; };
+		TCB000007TCB007TCB00001 /* TimecodeControlMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000007TCR007TCR00001 /* TimecodeControlMode.swift */; };
+		TCB000010TCB010TCB00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000011TCR011TCR00001 /* TimecodeCMSampleBufferAdapter.swift */; };
+		TCB000013TCB013TCB00001 /* TimecodePrototypeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000013TCR013TCR00001 /* TimecodePrototypeRecorder.swift */; };
+		TCB000015TCB015TCB00001 /* TimecodeValidationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000015TCR015TCR00001 /* TimecodeValidationSnapshot.swift */; };
+		TCB000017TCB017TCB00001 /* TimecodeMotionStabilityFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000017TCR017TCR00001 /* TimecodeMotionStabilityFilter.swift */; };
+		TCB000019TCB019TCB00001 /* TimecodePlaybackBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000019TCR019TCR00001 /* TimecodePlaybackBridge.swift */; };
+		TNTGB001TNTGB001TNTGB001 /* TimecodeNotationTrustGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNTGR001TNTGR001TNTGR001 /* TimecodeNotationTrustGate.swift */; };
+		TNTAB001TNTAB001TNTAB001 /* TimecodeNotationTimelineAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNTAR001TNTAR001TNTAR001 /* TimecodeNotationTimelineAccumulator.swift */; };
+		TNEAB001TNEAB001TNEAB001 /* TimecodeNotationEventAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNEAR001TNEAR001TNEAR001 /* TimecodeNotationEventAdapter.swift */; };
+		TNCPB001TNCPB001TNCPB001 /* TimecodeNotationCapturePrecedence.swift in Sources */ = {isa = PBXBuildFile; fileRef = TNCPR001TNCPR001TNCPR001 /* TimecodeNotationCapturePrecedence.swift */; };
+		TCB000021TCB021TCB00001 /* TimecodeFixtureValidationReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000021TCR021TCR00001 /* TimecodeFixtureValidationReport.swift */; };
+		TCB000022TCB022TCB00001 /* TimecodeFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000022TCR022TCR00001 /* TimecodeFixtureLoader.swift */; };
+		TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000024TCR024TCR00001 /* TimecodePrototypeProfile.swift */; };
+		TCB000026TCB026TCB00001 /* TimecodeSignedRateExcursionStabilizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCR000026TCR026TCR00001 /* TimecodeSignedRateExcursionStabilizer.swift */; };
+		TSDEB001TSDEB001TSDEB001 /* TimecodeSignedRateDenseEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSDER001TSDER001TSDER001 /* TimecodeSignedRateDenseEstimator.swift */; };
+		DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
+		SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */; };
+		219D8D60A93840FC9A724C11 /* CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* CoachInstructions */; };
+		51C2E59E2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
+		219D8D61A93840FC9A724C11 /* CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* CoachDemoAudio */; };
+		219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* CoachDemoMotion */; };
+		219D8D63A93840FC9A724C11 /* Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Notation */; };
+		219D8D64A93840FC9A724C11 /* PracticeReelAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000043 /* PracticeReelAudio */; };
+		SSSAHIOS /* ahhh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAHFREF /* ahhh.wav */; };
+		SSSFRIOS /* fresh.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSFRFREF /* fresh.wav */; };
+		SSSAYIOS /* ah_yeah.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSAYFREF /* ah_yeah.wav */; };
+		SSSCIOIOS /* check_it_out.wav in Resources */ = {isa = PBXBuildFile; fileRef = SSSCIOFREF /* check_it_out.wav */; };
+		VPRESB01VPRESB01VPRESB01 /* VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* VirtualPlatter */; };
+		A1000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000012 /* Assets.xcassets */; };
+		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
+
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -774,6 +953,8 @@
 		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
 		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
 		VPRES001VPRES001VPRES001 /* VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
+		A3000001 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
+
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -803,6 +984,12 @@
 			files = (
 			);
 		};
+		A4000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -1061,6 +1248,7 @@
 			children = (
 				F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */,
 				517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
+				A3000001 /* ScratchLab.app */,
 				402318FE35178B49FF365798 /* ScratchLab.app */,
 			);
 			name = Products;
@@ -1496,6 +1684,24 @@
 			productReference = 517A56002FAE1C02009EC734 /* ScratchLabDatasetBuilder */;
 			productType = "com.apple.product-type.tool";
 		};
+		A6000001 /* ScratchLab */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A7000003 /* Build configuration list for PBXNativeTarget "ScratchLab" */;
+			buildPhases = (
+				A6000002 /* Sources */,
+				A4000001 /* Frameworks */,
+				A6000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ScratchLab;
+			productName = ScratchLab;
+			productReference = A3000001 /* ScratchLab.app */;
+			productType = "com.apple.product-type.application";
+		};
+
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1506,6 +1712,9 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+				A6000001 = {
+						CreatedOnToolsVersion = 14.3;
+					};
 					517A55FF2FAE1C02009EC734 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
@@ -1524,6 +1733,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				A6000001 /* ScratchLab */,
 				14AA15152CB136619CDCFA95 /* ScratchLabDesktop */,
 				2010EE0010EE0010EE0010EE /* ScratchLabDesktopTests */,
 				517A55FF2FAE1C02009EC734 /* ScratchLabDatasetBuilder */,
@@ -1558,6 +1768,25 @@
 				SLCORE00000000000000BFR3 /* scratch_timeline_cc6_real_fader_cut_fixture.json in Resources */,
 			);
 		};
+		A6000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+				219D8D60A93840FC9A724C11 /* CoachInstructions in Resources */,
+				51C2E59E2FA1B00000E87B79 /* Coach.usdz in Resources */,
+				219D8D61A93840FC9A724C11 /* CoachDemoAudio in Resources */,
+				219D8D62A93840FC9A724C11 /* CoachDemoMotion in Resources */,
+				219D8D63A93840FC9A724C11 /* Notation in Resources */,
+				219D8D64A93840FC9A724C11 /* PracticeReelAudio in Resources */,
+				SSSAHIOS /* ahhh.wav in Resources */,
+				SSSFRIOS /* fresh.wav in Resources */,
+				SSSAYIOS /* ah_yeah.wav in Resources */,
+				SSSCIOIOS /* check_it_out.wav in Resources */,
+				VPRESB01VPRESB01VPRESB01 /* VirtualPlatter in Resources */,
+				A1000012 /* Assets.xcassets in Resources */,
+				AA100002 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+		};
+
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -1910,6 +2139,177 @@
 				DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */,
 			);
 		};
+		A6000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+				A1000001 /* ScratchLabApp.swift in Sources */,
+				A1000002 /* MainMenuView.swift in Sources */,
+				51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */,
+				A1000003 /* LevelSelectView.swift in Sources */,
+				A1000004 /* PracticeModeView.swift in Sources */,
+				SML0001000SML001SML00001 /* ScratchMotionLane.swift in Sources */,
+				SPC0IOS1SPC0IOS1SPC0IOS1 /* ScratchPhraseChartView.swift in Sources */,
+				A1000025 /* CompanionCameraView.swift in Sources */,
+				A1000029 /* StagingInspectorView.swift in Sources */,
+				A1000030 /* ScratchCoachViews.swift in Sources */,
+				A1000005 /* Scratch.swift in Sources */,
+				MIDREG0IOS0001 /* MIDIControlRole.swift in Sources */,
+				MIDREG0IOS0002 /* MIDIControlBinding.swift in Sources */,
+				MIDREG0IOS0003 /* MIDIControllerProfileV2.swift in Sources */,
+				MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */,
+				MIDREG0IOS0005 /* MIDIVerification.swift in Sources */,
+				MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */,
+				MIDREG0IOS0007 /* MIDILearnedMapping.swift in Sources */,
+				MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */,
+				CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */,
+				CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */,
+				CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */,
+				CTLPRF0IOS0004 /* AlphaThetaProfiles.swift in Sources */,
+				CTLPRF0IOS0005 /* RaneControllerProfiles.swift in Sources */,
+				CTLPRF0IOS0006 /* ReloopProfiles.swift in Sources */,
+				CTLPRF0IOS0007 /* OtherDJProfiles.swift in Sources */,
+				A1000006 /* GameState.swift in Sources */,
+				D1C0A001A1B2C3D4E5F60701 /* CaptureCore.swift in Sources */,
+				SPCM002000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift in Sources */,
+				SGAM002000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift in Sources */,
+				PGCO002000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift in Sources */,
+				PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */,
+				DAC0001000DAC001DAC00002 /* DemoAudioClock.swift in Sources */,
+				SRT0002000SRT001SRT00001 /* SessionReplayTimeline.swift in Sources */,
+				PRT0001000PRT001PRT00002 /* PracticeReelTimeline.swift in Sources */,
+				TML0001000TML001TML00002 /* TimingLane.swift in Sources */,
+				SSG0001000SSG001SSG00002 /* ScratchStrokeGeometry.swift in Sources */,
+				NFS1001000NFS001NFS00002 /* NotationFeedbackState.swift in Sources */,
+				SBPM0001IOS00001 /* ScratchBankPadMapping.swift in Sources */,
+				SBPGM0IOS00002 /* ScratchBankPadGridModel.swift in Sources */,
+				RMKPLS0001IOS /* RaneOneMK2PadCandidateLabeler.swift in Sources */,
+				SBPER0001IOS /* ScratchBankPadEventRouter.swift in Sources */,
+				SPTR0001IOS /* ScratchPlatterTracker.swift in Sources */,
+				MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */,
+				SBPG2IOS00001 /* ScratchBankPadGridView.swift in Sources */,
+				SMR0001000SMR001SMR00002 /* ScratchMotionRenderer.swift in Sources */,
+				NVM0001000NVM001NVM00002 /* ScratchNotationViewportMapper.swift in Sources */,
+				PPT0001000PPT001PPT00002 /* PlatterPositionTimeline.swift in Sources */,
+				NGP1001000NGP001NGP00002 /* NotationPrimitive.swift in Sources */,
+				NGP2001000NGP002NGP00002 /* GrammarParameters.swift in Sources */,
+				NGP3001000NGP003NGP00002 /* NotationPrimitiveDerivation.swift in Sources */,
+				TGN1001000TGN001TGN00002 /* TimingGrid.swift in Sources */,
+				GAN1001000GAN001GAN00002 /* GridAnnotation.swift in Sources */,
+				TWE1001000TWE001TWE00002 /* TimingWindow.swift in Sources */,
+				PHR1001000PHR001PHR00002 /* Phrase.swift in Sources */,
+				ETM1001000ETM001ETM00002 /* ExpectedTiming.swift in Sources */,
+				PTS1001000PTS001PTS00002 /* PhraseTimingSummary.swift in Sources */,
+				APS1001000APS001APS00002 /* AudioPhraseSummary.swift in Sources */,
+				APG1001000APG001APG00002 /* AudioPhraseGridProjection.swift in Sources */,
+				TOM1001000TOM001TOM00002 /* TimingOriginMarker.swift in Sources */,
+				SFV1001000SFV001SFV00002 /* ScratchFamily.swift in Sources */,
+				SFA1001000SFA001SFA00002 /* ScratchFamilyAttachment.swift in Sources */,
+				SFS1001000SFS001SFS00002 /* ScratchFamilyAnnotationSet.swift in Sources */,
+				SFM1001000SFM001SFM00002 /* ScratchFamilySummary.swift in Sources */,
+				CEV1001000CEV001CEV00002 /* CoachingEventVocabulary.swift in Sources */,
+				CES1001000CES001CES00002 /* CoachingEvent.swift in Sources */,
+				DCE1001000DCE001DCE00002 /* DriftCoachingEvaluator.swift in Sources */,
+				PCE1001000PCE001PCE00002 /* PhraseCoachingEvaluator.swift in Sources */,
+				CSM1001000CSM001CSM00002 /* CoachingEventSummary.swift in Sources */,
+				NPM1001000NPM001NPM00002 /* NotationPresentationModel.swift in Sources */,
+				NLG1001000NLG001NLG00002 /* NotationLaneGeometry.swift in Sources */,
+				NPH1001000NPH001NPH00002 /* NotationPlayheadGeometry.swift in Sources */,
+				NGG1001000NGG001NGG00002 /* NotationGridlineGeometry.swift in Sources */,
+				NVW1001000NVW001NVW00002 /* NotationViewportWindow.swift in Sources */,
+				NRM1001000NRM001NRM00002 /* NotationReplayModel.swift in Sources */,
+				SNA1001000SNA001SNA00002 /* ScratchNotationPresentationAdapter.swift in Sources */,
+				SRA1001000SRA001SRA00002 /* SessionReplayPresentationAdapter.swift in Sources */,
+				NLV1001000NLV001NLV00002 /* NotationLaneGeometryView.swift in Sources */,
+				NLP1001000NLP001NLP00002 /* NotationLaneGeometryViewPreview.swift in Sources */,
+				NLH1001000NLH001NLH00002 /* DebugNotationLaneHostView.swift in Sources */,
+				DRN1001000DRN001DRN00002 /* DebugReviewNotationCard.swift in Sources */,
+				C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */,
+				A1000031 /* ScratchMotionAnalysis.swift in Sources */,
+				VPB0IOS1VPB0IOS1VPB0IOS1 /* VirtualPlatter.swift in Sources */,
+				VPB0IOS2VPB0IOS2VPB0IOS2 /* VirtualPlatterPrototypeView.swift in Sources */,
+				A1000018 /* ScratchFormulaAST.swift in Sources */,
+				A1000019 /* ScratchFormulaCatalog.swift in Sources */,
+				A1000020 /* ScratchFormulaParser.swift in Sources */,
+				A1000021 /* ScratchFormulaRenderer.swift in Sources */,
+				A1000007 /* AudioEngine.swift in Sources */,
+				A1000008 /* SampleManager.swift in Sources */,
+				A1000009 /* BackingTrackManager.swift in Sources */,
+				A1000010 /* EquipmentDetector.swift in Sources */,
+				A1000011 /* ProgressManager.swift in Sources */,
+				A1000014 /* ScratchAnalyzer.swift in Sources */,
+				A1000024 /* CompanionCameraBroadcaster.swift in Sources */,
+				C71F1102A1B2C3D4E5F60711 /* ClickTrackEngine.swift in Sources */,
+				C71F1202A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */,
+				C68BC19238996C9C92EB97A3 /* WatchMotionCapture.swift in Sources */,
+				2C64569FCF5593D3CB171D25 /* WatchMotionCaptureStore.swift in Sources */,
+				2C64569FCF5593D3CB171D26 /* StagedCaptureRecovery.swift in Sources */,
+				2C64569FCF5593D3CB171D27 /* StagingInspector.swift in Sources */,
+				AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */,
+				F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */,
+				SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
+				SQA0002000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */,
+				SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
+				6A677B41D9030E13F18D6FF9 /* SessionSharePresenter.swift in Sources */,
+				F3000002A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */,
+				1564CE6A18C3FD1BE1056920 /* Archive+BackingConfiguration.swift in Sources */,
+				923253E866827B1462A8E5DF /* Archive+Deprecated.swift in Sources */,
+				D341DB531D2E27757114247C /* Archive+Helpers.swift in Sources */,
+				8E2BDEAD0BB509A80C9FAB5F /* Archive+MemoryFile.swift in Sources */,
+				B177BD601DFAC77063AACF21 /* Archive+Progress.swift in Sources */,
+				8A689B811423AC79DCD5A667 /* Archive+Reading.swift in Sources */,
+				1F4E7DB75A0F6832D44313AA /* Archive+ReadingDeprecated.swift in Sources */,
+				6C241C848D84BB0B61DF45E3 /* Archive+Writing.swift in Sources */,
+				EDDA780D51CD02F97E88392C /* Archive+WritingDeprecated.swift in Sources */,
+				F6EB3C16D803B47D9D2E8BA5 /* Archive+ZIP64.swift in Sources */,
+				2F09BA534668FE12A90A955E /* Archive.swift in Sources */,
+				C7818BFED9A95C5EF1069EA5 /* Data+Compression.swift in Sources */,
+				D46A4229264CE3962FF820F2 /* Data+CompressionDeprecated.swift in Sources */,
+				0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */,
+				B7E427E9960BFF0ECAA43B45 /* Date+ZIP.swift in Sources */,
+				EB645FFD7E2F31E32D6E9C9F /* Entry+InfoZIP.swift in Sources */,
+				DBFB37055166C93C8253E561 /* Entry+Serialization.swift in Sources */,
+				0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */,
+				3D311B58DB11F2542812AE29 /* Entry.swift in Sources */,
+				86B4C659CD7D512697B5F324 /* FileManager+ZIP.swift in Sources */,
+				E683712604E8409CBC7FFE46 /* FileManager+ZIPDeprecated.swift in Sources */,
+				37FCA3B16EABFCA2E9AB4817 /* URL+ZIP.swift in Sources */,
+				A5000071 /* ScratchClassLabel.swift in Sources */,
+				A5000072 /* NotationCandidate.swift in Sources */,
+				A5000073 /* AudioOnsetDetector.swift in Sources */,
+				A5000074 /* NotationCandidateBuilder.swift in Sources */,
+				A5000075 /* NotationCandidateDiagnostics.swift in Sources */,
+				A5000076 /* ReviewAudioOnsetPreview.swift in Sources */,
+				BCFC2E48C8DC97B933BA3EE3 /* TimecodeInputSample.swift in Sources */,
+				4934D6433CE6AA4371B2AD63 /* TimecodeAudioBuffer.swift in Sources */,
+				4B483DA41620D1907FC95730 /* TimecodeSourceState.swift in Sources */,
+				E703D86CF507D3F590ED4BD7 /* TimecodeSignalDiagnostics.swift in Sources */,
+				3B68EB2B270340C8214395BA /* TimecodeInputTap.swift in Sources */,
+				TCB000001TCB001TCB00001 /* TimecodeDirection.swift in Sources */,
+				TCB000002TCB002TCB00001 /* TimecodeDecodedFrame.swift in Sources */,
+				TCB000003TCB003TCB00001 /* TimecodeMotionSample.swift in Sources */,
+				TCB000004TCB004TCB00001 /* TimecodePhaseDecoder.swift in Sources */,
+				TCB000005TCB005TCB00001 /* TimecodePlatterAdapter.swift in Sources */,
+				TCB000006TCB006TCB00001 /* TimecodeControlPipeline.swift in Sources */,
+				TCB000007TCB007TCB00001 /* TimecodeControlMode.swift in Sources */,
+				TCB000010TCB010TCB00001 /* TimecodeCMSampleBufferAdapter.swift in Sources */,
+				TCB000013TCB013TCB00001 /* TimecodePrototypeRecorder.swift in Sources */,
+				TCB000015TCB015TCB00001 /* TimecodeValidationSnapshot.swift in Sources */,
+				TCB000017TCB017TCB00001 /* TimecodeMotionStabilityFilter.swift in Sources */,
+				TCB000019TCB019TCB00001 /* TimecodePlaybackBridge.swift in Sources */,
+				TNTGB001TNTGB001TNTGB001 /* TimecodeNotationTrustGate.swift in Sources */,
+				TNTAB001TNTAB001TNTAB001 /* TimecodeNotationTimelineAccumulator.swift in Sources */,
+				TNEAB001TNEAB001TNEAB001 /* TimecodeNotationEventAdapter.swift in Sources */,
+				TNCPB001TNCPB001TNCPB001 /* TimecodeNotationCapturePrecedence.swift in Sources */,
+				TCB000021TCB021TCB00001 /* TimecodeFixtureValidationReport.swift in Sources */,
+				TCB000022TCB022TCB00001 /* TimecodeFixtureLoader.swift in Sources */,
+			TCB000023TCB023TCB00001 /* TimecodePrototypeProfile.swift in Sources */,
+				TCB000026TCB026TCB00001 /* TimecodeSignedRateExcursionStabilizer.swift in Sources */,
+				TSDEB001TSDEB001TSDEB001 /* TimecodeSignedRateDenseEstimator.swift in Sources */,
+				DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
+				SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
+			);
+		};
+
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -2195,6 +2595,79 @@
 			};
 			name = Release;
 		};
+		A7000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_USE_OPTIMIZATION_PROFILE = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 18;
+				DEVELOPMENT_TEAM = 2DDKGL33BU;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScratchLab/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ScratchLab;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A7000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_USE_OPTIMIZATION_PROFILE = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 18;
+				DEVELOPMENT_TEAM = 2DDKGL33BU;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ScratchLab/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ScratchLab;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2230,6 +2703,15 @@
 			);
 			defaultConfigurationName = Release;
 		};
+		A7000003 /* Build configuration list for PBXNativeTarget "ScratchLab" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A7000005 /* Debug */,
+				A7000006 /* Release */,
+			);
+			defaultConfigurationName = Release;
+		};
+
 /* End XCConfigurationList section */
 	};
 	rootObject = A8000001 /* Project object */;
