@@ -367,6 +367,66 @@ struct MacAnalyzerView: View {
         }
     }
 
+    /// The four sequential Capture stages (V3.2). The stepper shows the
+    /// current stage prominently, completed stages with a check, and future
+    /// stages dimmed — never an unexplained jump from setup straight to review.
+    private enum CaptureStage: Int, CaseIterable, Identifiable {
+        case setup = 1
+        case readiness = 2
+        case record = 3
+        case review = 4
+
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .setup: return "Set up the session"
+            case .readiness: return "Confirm readiness"
+            case .record: return "Record the take"
+            case .review: return "Review the result"
+            }
+        }
+    }
+
+    /// Unified hardware readiness (V3.2 HardwareStatus). Distinct from the
+    /// per-input tiles — this is the single "can I record right now" verdict
+    /// with the 5-state language the Figma specifies (SETUP REQUIRED ·
+    /// NEEDS ATTENTION · READY · RECORDING; DVS TIMECODE LOST is folded into
+    /// NEEDS ATTENTION via `routineMetadataStatusMessage`).
+    private enum CaptureHardwareStatus {
+        case setupRequired
+        case needsAttention
+        case ready
+        case recording
+
+        var label: String {
+            switch self {
+            case .setupRequired: return "SETUP REQUIRED"
+            case .needsAttention: return "NEEDS ATTENTION"
+            case .ready: return "READY"
+            case .recording: return "RECORDING"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .setupRequired: return "circle.dashed"
+            case .needsAttention: return "exclamationmark.circle.fill"
+            case .ready: return "checkmark.circle.fill"
+            case .recording: return "record.circle.fill"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .setupRequired: return .secondary
+            case .needsAttention: return ScratchLabDesign.Sem.warning
+            case .ready: return ScratchLabDesign.Sem.success
+            case .recording: return ScratchLabDesign.Sem.danger
+            }
+        }
+    }
+
     private enum ReviewCorrection: String, CaseIterable, Identifiable {
         case babyScratch = "baby_scratch"
         case chirp
@@ -614,6 +674,9 @@ struct MacAnalyzerView: View {
     @State private var showPracticeLiveInput = false
     @State private var isShowingAllRoutineSessions = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
+    /// Which Capture stage's card is currently expanded. Auto-advances with
+    /// `currentCaptureStage`, but the user can reopen a completed stage to edit.
+    @State private var openCaptureStage: CaptureStage = .setup
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
     @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
     @State private var reviewStatusMessage = "Confirm before export."
@@ -903,6 +966,7 @@ struct MacAnalyzerView: View {
             await captureEngine.startDeviceDiscoveryAfterViewMount()
         }
         .onAppear {
+            openCaptureStage = currentCaptureStage
             captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
             if liveInputEnabled {
                 startMacLiveInput()
@@ -970,6 +1034,9 @@ struct MacAnalyzerView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
+        }
+        .onChange(of: currentCaptureStage) { _, newStage in
+            openCaptureStage = newStage
         }
         .onChange(of: practiceDurationRaw) { _, _ in
             guard !isPracticeSessionActive else { return }
@@ -1522,18 +1589,26 @@ struct MacAnalyzerView: View {
     }
 
     private var captureSidebar: some View {
-        // Capture reads top-to-bottom as the take workflow: the header names
-        // the next required action, Step 1 (session setup) and Step 2 (input
-        // readiness) scroll above a pinned Step 3/4 record–review hero so the
-        // primary action and blocked-readiness warnings never scroll away.
-        // Session list + workflow summary stay behind a single Sessions &
-        // workflow disclosure.
+        // V3.2 staged capture: the session header + four-stage stepper are
+        // pinned at the top, the stage cards scroll in the middle, and the
+        // record/review hero is pinned at the bottom ("Record is blocked,
+        // never hidden"). Completed stages show a check, the current stage is
+        // emphasized, future stages are dimmed — no unexplained step-1→step-4
+        // jump. Session list + workflow summary stay behind a disclosure.
         VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            capturePageHeaderCard
+            captureStageStepper
+
             ScrollView {
                 VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
-                    capturePageHeaderCard
-                    captureSessionSetupCard
-                    captureInputStatusCard
+                    captureStageSection(.setup) {
+                        captureSessionSetupCard
+                    }
+
+                    captureStageSection(.readiness) {
+                        captureInputStatusCard
+                    }
+
                     captureLatestTakeCard
 
                     DisclosureGroup {
@@ -2353,8 +2428,7 @@ struct MacAnalyzerView: View {
             Button("Review Takes") {
                 workspaceTab = .review
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .scratchLabSecondaryButton()
         }
     }
 
@@ -5060,6 +5134,135 @@ struct MacAnalyzerView: View {
         )
     }
 
+    private var currentCaptureStage: CaptureStage {
+        if captureEngine.isRoutineRecording { return .record }
+        if hasRecordedTake { return .review }
+        if selectedRoutineSession == nil { return .setup }
+        // Metadata gate (session name / scratch type / BPM) is a setup fix;
+        // a missing audio input is a readiness fix.
+        if routineMetadataStatusMessage != nil { return .setup }
+        if routineStartDisabled { return .readiness }
+        return .record
+    }
+
+    private var captureHardwareStatus: CaptureHardwareStatus {
+        if captureEngine.isRoutineRecording { return .recording }
+        if selectedRoutineSession == nil { return .setupRequired }
+        if routineStartDisabled || routineMetadataStatusMessage != nil { return .needsAttention }
+        return .ready
+    }
+
+    private var capturePerformerLabel: String {
+        let name = routineSessionSetup.performerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Untitled" : name
+    }
+
+    private var captureTechniqueLabel: String {
+        routineSessionSetup.scratchType?.title ?? "Auto Detect"
+    }
+
+    private var captureBPMLabel: String {
+        routineSessionSetup.bpmValue.map { "\($0) BPM" } ?? "—"
+    }
+
+    private func captureMetadataChip(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.uppercased())
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Compact four-stage stepper: the current stage is emphasized, completed
+    /// stages show a check, future stages are dimmed. Rendered above the
+    /// scroll so the capture sequence is always legible.
+    private var captureStageStepper: some View {
+        HStack(alignment: .top, spacing: 8) {
+            ForEach(CaptureStage.allCases) { stage in
+                VStack(spacing: 4) {
+                    ZStack {
+                        Circle()
+                            .fill(captureStageBadgeColor(stage))
+                            .frame(width: 22, height: 22)
+                        if stage.rawValue < currentCaptureStage.rawValue {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                        } else {
+                            Text("\(stage.rawValue)")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(stage == currentCaptureStage ? .white : .secondary)
+                        }
+                    }
+                    Text(stage.title)
+                        .font(.system(size: 9, weight: stage == currentCaptureStage ? .semibold : .medium))
+                        .foregroundStyle(stage == currentCaptureStage ? .primary : .secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity)
+                .opacity(stage.rawValue > currentCaptureStage.rawValue ? 0.5 : 1.0)
+            }
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Capture stage \(currentCaptureStage.rawValue) of \(CaptureStage.allCases.count): \(currentCaptureStage.title)")
+    }
+
+    private func captureStageBadgeColor(_ stage: CaptureStage) -> Color {
+        if stage.rawValue < currentCaptureStage.rawValue {
+            return ScratchLabDesign.Sem.success.opacity(0.85)
+        }
+        if stage == currentCaptureStage {
+            return ScratchLabDesign.Sem.accent
+        }
+        return Color.white.opacity(0.08)
+    }
+
+    private func captureStageIsComplete(_ stage: CaptureStage) -> Bool {
+        currentCaptureStage.rawValue > stage.rawValue
+    }
+
+    private func captureStageOpenBinding(_ stage: CaptureStage) -> Binding<Bool> {
+        Binding(
+            get: { openCaptureStage == stage },
+            set: { if $0 { openCaptureStage = stage } }
+        )
+    }
+
+    /// A stage's card as a collapsible section: completed stages show a
+    /// check and collapse, the current stage is open, future stages are dimmed.
+    /// Keeps the whole sequence visible without overwhelming — only the
+    /// active stage's detail is expanded.
+    private func captureStageSection<Content: View>(_ stage: CaptureStage, @ViewBuilder content: @escaping () -> Content) -> some View {
+        DisclosureGroup(isExpanded: captureStageOpenBinding(stage)) {
+            content()
+                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: captureStageIsComplete(stage) ? "checkmark.circle.fill" : "\(stage.rawValue).circle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(
+                        captureStageIsComplete(stage)
+                            ? ScratchLabDesign.Sem.success
+                            : (openCaptureStage == stage ? ScratchLabDesign.Sem.accent : .secondary)
+                    )
+                Text(stage.title)
+                    .font(ScratchLabDesign.Typo.disclosureLabel)
+                    .foregroundStyle(openCaptureStage == stage ? .primary : .secondary)
+                Spacer(minLength: 8)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
     private var capturePageHeaderCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
@@ -5082,6 +5285,17 @@ struct MacAnalyzerView: View {
                 }
             }
 
+            // Session metadata strip — the current take's performer · technique
+            // · BPM · mode, so the session context is visible at a glance.
+            if selectedRoutineSession != nil {
+                HStack(alignment: .top, spacing: 8) {
+                    captureMetadataChip("Performer", capturePerformerLabel)
+                    captureMetadataChip("Technique", captureTechniqueLabel)
+                    captureMetadataChip("BPM", captureBPMLabel)
+                    captureMetadataChip("Mode", selectedCaptureTimingMode.title)
+                }
+            }
+
             Label(captureNextAction.message, systemImage: captureNextAction.systemImage)
                 .font(ScratchLabDesign.Typo.pageStatus)
                 .foregroundStyle(captureNextAction.color)
@@ -5092,8 +5306,6 @@ struct MacAnalyzerView: View {
 
     private var captureSessionSetupCard: some View {
         VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
-            ScratchLabStepHeader(number: 1, title: "Set up the session")
-
             if selectedRoutineSession == nil {
                 Text("Create a session to start recording. Leave the name blank for an Untitled Session.")
                     .font(.system(size: 13, weight: .medium))
@@ -5176,7 +5388,7 @@ struct MacAnalyzerView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : Color(nsColor: .systemGreen))
+                .tint(captureEngine.isRoutineRecording ? ScratchLabDesign.Sem.danger : ScratchLabDesign.Sem.accent)
                 .disabled(routineCountInBeat != nil || routineStartDisabled)
 
                 // After a take exists, Review this take is the dominant
@@ -5225,11 +5437,16 @@ struct MacAnalyzerView: View {
 
     private var captureInputStatusCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                ScratchLabStepHeader(number: 2, title: "Confirm readiness")
+            VStack(alignment: .leading, spacing: 6) {
+                // Unified HardwareStatus — the single "can I record right
+                // now" verdict, distinct from the per-input tiles below.
+                Label(captureHardwareStatus.label, systemImage: captureHardwareStatus.systemImage)
+                    .font(ScratchLabDesign.Typo.pageStatus)
+                    .foregroundStyle(captureHardwareStatus.color)
 
                 Text("Inputs")
-                    .font(.headline)
+                    .font(ScratchLabDesign.Typo.sectionLabel)
+                    .foregroundStyle(.secondary)
             }
 
             LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
@@ -5303,47 +5520,57 @@ struct MacAnalyzerView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .tint(ScratchLabDesign.Sem.accent)
                 .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
             }
 
-            // Slice X.1.1: discoverable calibration entry point. The deck
-            // calibration overlay lives over the live camera preview on the
-            // Practice tab (Advanced -> Camera Deck only has the controls,
-            // not a preview). To make the overlay actually visible AND
-            // editable in one click, we unlock calibration AND enable live
-            // input AND switch to Practice — the user lands on the live
-            // preview with the deck/mixer boxes drawn on top, ready to
-            // drag. A paired Lock button (only shown while unlocked) puts
-            // the user back here with calibration frozen for recording.
-            HStack(alignment: .top, spacing: 10) {
-                if captureEngine.calibrationLocked {
-                    Button {
-                        captureEngine.calibrationLocked = false
-                        liveInputEnabled = true
-                        workspaceTab = .practice
-                    } label: {
-                        Label("Camera deck setup", systemImage: "viewfinder")
-                            .font(.system(size: 12, weight: .semibold))
+            // Camera deck calibration is the draggable region editor — the
+            // deck/mixer boxes dragged on the live preview. It's optional and
+            // progressively disclosed so the standard Capture flow stays
+            // focused on session → readiness → record → review. Unlocking
+            // calibration switches to the live preview with the boxes drawn.
+            DisclosureGroup {
+                HStack(alignment: .top, spacing: 10) {
+                    if captureEngine.calibrationLocked {
+                        Button {
+                            captureEngine.calibrationLocked = false
+                            liveInputEnabled = true
+                            workspaceTab = .practice
+                        } label: {
+                            Label("Camera deck setup", systemImage: "viewfinder")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.isRoutineRecording)
+                    } else {
+                        Button {
+                            captureEngine.calibrationLocked = true
+                        } label: {
+                            Label("Lock calibration", systemImage: "lock.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.isRoutineRecording)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(captureEngine.isRoutineRecording)
-                } else {
-                    Button {
-                        captureEngine.calibrationLocked = true
-                    } label: {
-                        Label("Lock calibration", systemImage: "lock.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(captureEngine.isRoutineRecording)
-                }
 
-                Text("Point the camera at your deck and hand. Drag the deck and mixer boxes on the live preview, then Lock calibration. Record movement requires the deck and hand to be visible to the camera — \"Camera Ready\" alone is not enough.")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("Point the camera at your deck and hand. Drag the deck and mixer boxes on the live preview, then Lock calibration. Record movement requires the deck and hand to be visible to the camera — \"Camera Ready\" alone is not enough.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+            } label: {
+                HStack(spacing: 8) {
+                    Label("Camera deck calibration", systemImage: "viewfinder")
+                        .font(ScratchLabDesign.Typo.disclosureLabel)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(captureEngine.calibrationLocked ? "Locked" : "Unlocked")
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(captureEngine.calibrationLocked ? .secondary : ScratchLabDesign.Sem.warning)
+                }
             }
 
             // Audio routing + MIDI source picker + Learn crossfader / Clear
