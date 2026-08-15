@@ -553,13 +553,13 @@ struct MacAnalyzerView: View {
         var title: String {
             switch self {
             case .overview:       return "Overview"
-            case .audio:          return "Audio"
-            case .cameraDeck:     return "Camera & deck"
+            case .audio:          return "Audio & DVS"
+            case .cameraDeck:     return "Calibration"
             case .midiFader:      return "MIDI & fader"
-            case .monitor:        return "Monitor / Connection"
+            case .monitor:        return "Performer Monitor"
 #if DEBUG
-            case .captureDetails: return "Capture details"
-            case .timecodeInput:  return "Timecode Input"
+            case .captureDetails: return "Diagnostics"
+            case .timecodeInput:  return "DVS / timecode"
 #endif
             }
         }
@@ -568,7 +568,7 @@ struct MacAnalyzerView: View {
             switch self {
             case .overview:       return "rectangle.grid.2x2"
             case .audio:          return "waveform"
-            case .cameraDeck:     return "video"
+            case .cameraDeck:     return "viewfinder"
             case .midiFader:      return "slider.horizontal.3"
             case .monitor:        return "dot.radiowaves.left.and.right"
 #if DEBUG
@@ -1403,8 +1403,20 @@ struct MacAnalyzerView: View {
                     maxWidth: ScratchLabDesign.Sidebar.advancedMax
                 )
 
-            NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
+            advancedMainContent
         }
+    }
+
+    /// The selected Advanced section's content, rendered in the main area —
+    /// not stacked into the sidebar. The sidebar stays a compact navigator;
+    /// the section drives what the detail area shows.
+    private var advancedMainContent: some View {
+        ScrollView {
+            advancedSelectedSectionContent
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(ScratchLabDesign.Stage.outerPadding)
+        }
+        .background(ScratchLabDesign.Surface.canvas)
     }
 
     private var practiceSidebar: some View {
@@ -2283,10 +2295,9 @@ struct MacAnalyzerView: View {
     #endif
 
     private var advancedSidebar: some View {
-        // Header + section picker stay pinned. The right-hand cards are gated
-        // by the selected AdvancedSection so the panel is no longer one
-        // endless technical scroll. All cards remain reachable — pick a
-        // section to bring them into view.
+        // Compact navigator: header + section picker + active session. The
+        // selected section's cards render in the main detail area, not here,
+        // so Advanced never becomes one endless technical scroll in a sidebar.
         VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
             GeometryReader { sidebarGeometry in
                 ScrollView {
@@ -2297,8 +2308,6 @@ struct MacAnalyzerView: View {
                         if let activeSession = routineSessionPresentation.activeSession {
                             activeRoutineSessionCard(activeSession)
                         }
-
-                        advancedSelectedSectionContent
                     }
                     // A vertical ScrollView proposes an unbounded width to
                     // its content. `maxWidth: .infinity` therefore did not
@@ -2336,6 +2345,7 @@ struct MacAnalyzerView: View {
         switch advancedSection {
         case .overview:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
                 advancedToolsCard
                 performanceDiagnosticsCard
                 #if DEBUG
