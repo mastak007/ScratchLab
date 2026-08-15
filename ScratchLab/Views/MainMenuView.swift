@@ -11,25 +11,38 @@ struct MainMenuView: View {
     @EnvironmentObject var companionRelayBroadcaster: CompanionCameraBroadcaster
     @EnvironmentObject var watchMotionCaptureStore: WatchMotionCaptureStore
     @EnvironmentObject var audioEngine: AudioEngine
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showingProfile = false
     @State private var showingSettings = false
     @State private var showingPracticeHub = false
     @State private var showingAdvancedHub = false
-    
+
+    private var layoutMode: ScratchLabAdaptiveLayout.LayoutMode {
+        ScratchLabAdaptiveLayout.layoutMode(
+            horizontalSizeClass: horizontalSizeClass ?? .compact,
+            verticalSizeClass: verticalSizeClass ?? .regular
+        )
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 BackgroundView()
 
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
-                        headerView
-                        homeContent
-                        menuButtons
+                if layoutMode == .regularLandscape {
+                    HStack(spacing: 0) {
+                        AdaptiveSidebarView(
+                            showingPracticeHub: $showingPracticeHub,
+                            showingAdvancedHub: $showingAdvancedHub
+                        )
+                        .frame(width: 240)
+                        Divider().overlay(Color.white.opacity(0.08))
+
+                        homeScrollContent(geometry: geometry)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, geometry.safeAreaInsets.top + 12)
-                    .padding(.bottom, max(geometry.safeAreaInsets.bottom, 16) + 28)
+                } else {
+                    homeScrollContent(geometry: geometry)
                 }
             }
         }
@@ -57,7 +70,22 @@ struct MainMenuView: View {
             AdvancedHubView()
         }
     }
-    
+
+    // The Home body shared by every adaptive mode — a sidebar frames it on
+    // regular landscape (Figma 34:2), and it stands alone in portrait/compact.
+    private func homeScrollContent(geometry: GeometryProxy) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
+                headerView
+                homeContent
+                menuButtons
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, geometry.safeAreaInsets.top + 12)
+            .padding(.bottom, max(geometry.safeAreaInsets.bottom, 16) + 28)
+        }
+    }
+
     // MARK: - Header
     
     private var headerView: some View {
@@ -914,6 +942,50 @@ private struct DemoModeView: View {
 /// Figma's own component description notes no 1:1 SurfaceCard code
 /// component exists yet and screens build the equivalent inline; this is
 /// that inline equivalent, factored out once since Home uses it three times.
+// The regular-landscape navigation sidebar (Figma 34:2). Lists only real
+// destinations — Practice and the Advanced hub — routing through the same
+// state MainMenuView owns, so there is no duplicate navigation state.
+private struct AdaptiveSidebarView: View {
+    @Binding var showingPracticeHub: Bool
+    @Binding var showingAdvancedHub: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("ScratchLab")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            Text("PRACTICE")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            sidebarLink("Practice", systemImage: "waveform") { showingPracticeHub = true }
+            sidebarLink("Advanced / Mac Companion", systemImage: "slider.horizontal.3") { showingAdvancedHub = true }
+
+            Spacer()
+
+            Text("Capture and Review are intentionally absent until implemented.")
+                .font(.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(ScratchLabDesign.Surface.card)
+    }
+
+    private func sidebarLink(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+        .accessibilityLabel(title)
+    }
+}
+
 private struct HomeInfoCard: View {
     let title: String
     let detail: String

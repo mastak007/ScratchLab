@@ -192,16 +192,47 @@ enum ScratchLabDesign {
 /// policy never branches on platform identity, so iPhone and iPad reuse one
 /// content path with no semantic fork.
 enum ScratchLabAdaptiveLayout {
+    /// Deterministic layout mode from size classes — never device-name or
+    /// model checks. The three modes match the Figma iPad adaptive contract
+    /// (34:2 landscape / 34:41 portrait / 34:66 compact).
+    enum LayoutMode: Equatable, Sendable {
+        /// Sidebar + detail split (iPad landscape).
+        case regularLandscape
+        /// Single column, full-width content (iPad portrait).
+        case portrait
+        /// Single column, compact notation (iPhone / iPad split-view).
+        case compact
+    }
+
+    /// Maps size classes to `LayoutMode`. Compact horizontal → `.compact`;
+    /// regular horizontal + compact vertical → `.regularLandscape` (landscape);
+    /// regular + regular → `.portrait`. Pure and stable across boundary widths.
+    static func layoutMode(
+        horizontalSizeClass: UserInterfaceSizeClass,
+        verticalSizeClass: UserInterfaceSizeClass
+    ) -> LayoutMode {
+        if horizontalSizeClass == .compact { return .compact }
+        return verticalSizeClass == .compact ? .regularLandscape : .portrait
+    }
+
     /// ScratchNotationPanel density: Standard on regular width (room for the
     /// full 520×172 panel), Compact on compact width (340×146).
     static func notationPresentation(isRegularWidth: Bool) -> ScratchNotationPanelPresentation {
         isRegularWidth ? .standard : .compact
     }
 
+    static func notationPresentation(for mode: LayoutMode) -> ScratchNotationPanelPresentation {
+        mode == .compact ? .compact : .standard
+    }
+
     /// Whether the navigation sidebar is shown (regular width) or collapsed
     /// into a single column (compact width).
     static func usesNavigationSidebar(isRegularWidth: Bool) -> Bool {
         isRegularWidth
+    }
+
+    static func usesNavigationSidebar(for mode: LayoutMode) -> Bool {
+        mode == .regularLandscape
     }
 }
 

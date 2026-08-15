@@ -6,6 +6,7 @@
 // authors none).
 
 import Foundation
+import SwiftUI
 import Testing
 @testable import ScratchLab
 
@@ -512,5 +513,53 @@ struct PracticeResultTruthfulnessSourceTests {
         #expect(!spans.isEmpty)
         #expect(spans.allSatisfy { $0.state == .open })
         #expect(!spans.contains { $0.state == .closed })
+    }
+}
+
+// MARK: - Adaptive layout policy
+
+@Suite("ScratchLabAdaptiveLayout")
+struct ScratchLabAdaptiveLayoutTests {
+
+    @Test("Compact horizontal resolves to compact mode")
+    func compactHorizontal() {
+        let mode = ScratchLabAdaptiveLayout.layoutMode(
+            horizontalSizeClass: .compact, verticalSizeClass: .regular)
+        #expect(mode == .compact)
+    }
+
+    @Test("Regular horizontal + compact vertical resolves to regular landscape")
+    func regularLandscape() {
+        let mode = ScratchLabAdaptiveLayout.layoutMode(
+            horizontalSizeClass: .regular, verticalSizeClass: .compact)
+        #expect(mode == .regularLandscape)
+    }
+
+    @Test("Regular + regular resolves to portrait")
+    func portrait() {
+        let mode = ScratchLabAdaptiveLayout.layoutMode(
+            horizontalSizeClass: .regular, verticalSizeClass: .regular)
+        #expect(mode == .portrait)
+    }
+
+    @Test("Notation is Compact only in compact mode, Standard otherwise")
+    func notationPresentation() {
+        #expect(ScratchLabAdaptiveLayout.notationPresentation(for: .compact) == .compact)
+        #expect(ScratchLabAdaptiveLayout.notationPresentation(for: .portrait) == .standard)
+        #expect(ScratchLabAdaptiveLayout.notationPresentation(for: .regularLandscape) == .standard)
+    }
+
+    @Test("Sidebar is shown only in regular landscape")
+    func sidebarSelection() {
+        #expect(ScratchLabAdaptiveLayout.usesNavigationSidebar(for: .regularLandscape) == true)
+        #expect(ScratchLabAdaptiveLayout.usesNavigationSidebar(for: .portrait) == false)
+        #expect(ScratchLabAdaptiveLayout.usesNavigationSidebar(for: .compact) == false)
+    }
+
+    @Test("Mapping is deterministic across repeated calls")
+    func deterministicMapping() {
+        let a = ScratchLabAdaptiveLayout.layoutMode(horizontalSizeClass: .regular, verticalSizeClass: .compact)
+        let b = ScratchLabAdaptiveLayout.layoutMode(horizontalSizeClass: .regular, verticalSizeClass: .compact)
+        #expect(a == b)
     }
 }
