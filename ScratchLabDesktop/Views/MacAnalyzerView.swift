@@ -2345,7 +2345,7 @@ struct MacAnalyzerView: View {
         switch advancedSection {
         case .overview:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
-                NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
+                advancedOverviewSummaryCard
                 advancedToolsCard
                 performanceDiagnosticsCard
                 #if DEBUG
@@ -2353,6 +2353,16 @@ struct MacAnalyzerView: View {
                 #endif
                 routineSessionCard
                 workflowCard
+
+                DisclosureGroup {
+                    NotationVisualizerView(demo: babyScratchDemo, capturedSnapshot: capturedNotationSnapshot ?? currentRoutineNotationSnapshot)
+                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+                } label: {
+                    Label("Notation lab", systemImage: "waveform.path")
+                        .font(ScratchLabDesign.Typo.disclosureLabel)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 4)
             }
         case .audio:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
@@ -4825,6 +4835,135 @@ struct MacAnalyzerView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+
+    // MARK: - Advanced Overview summary
+
+    private struct AdvancedOverviewStatusItem {
+        let title: String
+        let value: String
+        let variant: StatusBadgeVariant
+        let systemImage: String
+    }
+
+    /// One authoritative Overview status row, derived from existing real state
+    /// only — no mock readiness, no parallel capability model. Connected ≠
+    /// ready: DVS "DETECTED" means signal present, never "DVS READY" until
+    /// verified; MIDI "CONNECTED" means a source is selected, not mapped.
+    private var advancedOverviewStatusItems: [AdvancedOverviewStatusItem] {
+        var items: [AdvancedOverviewStatusItem] = []
+
+        // Audio
+        if captureEngine.availableAudioDevices.isEmpty {
+            items.append(.init(title: "Audio", value: "SETUP REQUIRED", variant: .neutral, systemImage: "waveform"))
+        } else if !captureEngine.isSelectedAudioInputAvailable {
+            items.append(.init(title: "Audio", value: "NEEDS ATTENTION", variant: .warning, systemImage: "waveform"))
+        } else {
+            items.append(.init(title: "Audio", value: "AUDIO READY", variant: .success, systemImage: "waveform"))
+        }
+
+        // DVS / timecode
+        let dvs = advancedOverviewDVSStatus
+        items.append(.init(title: "DVS / timecode", value: dvs.value, variant: dvs.variant, systemImage: "waveform.badge.magnifyingglass"))
+
+        // MIDI / fader
+        if selectedMixerMIDIDeviceName == nil {
+            items.append(.init(title: "MIDI / fader", value: "SETUP REQUIRED", variant: .neutral, systemImage: "slider.horizontal.3"))
+        } else {
+            items.append(.init(title: "MIDI / fader", value: "CONNECTED", variant: .success, systemImage: "slider.horizontal.3"))
+        }
+
+        // Camera — only surfaced when enabled or relevant.
+        if captureEngine.isCameraActive || liveInputEnabled {
+            items.append(.init(
+                title: "Camera",
+                value: captureEngine.isCameraActive ? "DETECTED" : "UNAVAILABLE",
+                variant: captureEngine.isCameraActive ? .success : .neutral,
+                systemImage: "video"
+            ))
+        }
+
+        // Performer Monitor
+        if performerBroadcaster.connectedPeerNames.isEmpty {
+            items.append(.init(title: "Monitor", value: "SETUP REQUIRED", variant: .neutral, systemImage: "dot.radiowaves.left.and.right"))
+        } else {
+            items.append(.init(title: "Monitor", value: "CONNECTED", variant: .success, systemImage: "dot.radiowaves.left.and.right"))
+        }
+
+        return items
+    }
+
+    private var advancedOverviewDVSStatus: (value: String, variant: StatusBadgeVariant) {
+        switch timecodePipeline.mode {
+        case .disabled:
+            return ("UNAVAILABLE", .neutral)
+        case .diagnosticsOnly, .controlPrototype:
+            switch timecodePipeline.signalHealth {
+            case .noSignal:
+                return ("SETUP REQUIRED", .neutral)
+            case .weak:
+                return ("NEEDS ATTENTION", .warning)
+            case .usable:
+                return ("DETECTED", .success)
+            case .clipped, .channelFault:
+                return ("NEEDS ATTENTION", .warning)
+            }
+        }
+    }
+
+    private var advancedOverviewNextAction: (message: String, systemImage: String, color: Color) {
+        if selectedRoutineSession == nil {
+            return ("Next: create a session to start capturing.", "plus.circle", ScratchLabDesign.Sem.accent)
+        }
+        if captureEngine.availableAudioDevices.isEmpty || !captureEngine.isSelectedAudioInputAvailable {
+            return ("Next: select an available audio input.", "exclamationmark.circle.fill", ScratchLabDesign.Sem.warning)
+        }
+        if selectedMixerMIDIDeviceName == nil {
+            return ("Next: connect a controller to map the crossfader.", "exclamationmark.circle.fill", ScratchLabDesign.Sem.warning)
+        }
+        return ("Ready — configure hardware and diagnostics in the sections below.", "checkmark.circle.fill", ScratchLabDesign.Sem.success)
+    }
+
+    private var advancedOverviewSessionValue: String {
+        guard let session = selectedRoutineSession else { return "No session" }
+        let name = session.config.performerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = name.count >= 3 ? name : "Untitled session"
+        let technique = session.config.scratchType?.title ?? "Auto Detect"
+        let bpm = session.config.bpm.map { "\($0) BPM" } ?? "—"
+        return "\(displayName) · \(technique) · \(bpm)"
+    }
+
+    private var advancedOverviewSummaryCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("System status")
+                .font(ScratchLabDesign.Typo.cardHeading)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], alignment: .leading, spacing: 8) {
+                ForEach(Array(advancedOverviewStatusItems.enumerated()), id: \.offset) { _, item in
+                    StatusBadge(title: item.title, value: item.value, variant: item.variant, systemImage: item.systemImage)
+                }
+            }
+
+            Divider().overlay(Color.primary.opacity(0.08))
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("CURRENT SESSION")
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(advancedOverviewSessionValue)
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Label(advancedOverviewNextAction.message, systemImage: advancedOverviewNextAction.systemImage)
+                .font(ScratchLabDesign.Typo.pageStatus)
+                .foregroundStyle(advancedOverviewNextAction.color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .scratchLabCard()
     }
 
     private var advancedToolsCard: some View {
