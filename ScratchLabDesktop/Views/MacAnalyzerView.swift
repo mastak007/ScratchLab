@@ -3293,7 +3293,7 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewDetectedStyle: ReviewDetectedStyle {
-        let amber = Color(red: 1.0, green: 0.72, blue: 0.10)
+        let amber = ScratchLabDesign.Sem.warning
         let rawLabel = currentRoutineArtifactStatus?.detectedLabel
             ?? captureEngine.lastScratchDetection?.scratchName
         guard let label = rawLabel, !label.isEmpty else {
@@ -6152,7 +6152,7 @@ struct MacAnalyzerView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(
-                                Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
+                                ScratchLabDesign.Sem.warning.opacity(0.20),
                                 in: Capsule()
                             )
                     }
@@ -6984,7 +6984,7 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewCapturedSource: ReviewCapturedSource {
-        let amber = Color(red: 1.0, green: 0.72, blue: 0.10)
+        let amber = ScratchLabDesign.Sem.warning
         guard let snapshot = currentRoutineNotationSnapshot else {
             return ReviewCapturedSource(label: "None", systemImage: "circle.dashed", color: .secondary)
         }
@@ -9559,7 +9559,7 @@ private struct ReviewLiveDiagnosticsOnsetCard: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
-                            Color(red: 1.0, green: 0.72, blue: 0.10).opacity(0.20),
+                            ScratchLabDesign.Sem.warning.opacity(0.20),
                             in: Capsule()
                         )
                 }

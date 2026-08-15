@@ -969,7 +969,7 @@ struct CapturedNotationDisplayView: View {
     private let forwardColor = Color(red: 0.25, green: 0.88, blue: 0.55)
     private let backColor    = Color(red: 1.00, green: 0.55, blue: 0.10)
     private let audioColor   = Color(red: 0.55, green: 0.75, blue: 1.00)
-    private let cutColor     = Color(red: 1.00, green: 0.72, blue: 0.10)
+    private let cutColor     = ScratchLabDesign.Sem.warning
     private let faderColor   = Color(red: 1.00, green: 0.50, blue: 0.20)
     private let gapColor     = Color(white: 0.38)
     private let labelColor   = Color(white: 0.52)
@@ -1071,7 +1071,7 @@ struct CapturedNotationDisplayView: View {
         }()
         let sourceColor: Color = isDetected ? forwardColor
             : (isPartial || hasMovementOnly) ? cutColor
-            : hasAudioOnly ? Color(red: 1.00, green: 0.72, blue: 0.10)
+            : hasAudioOnly ? ScratchLabDesign.Sem.warning
             : labelColor
         let sourceIcon: String = {
             if isDetected         { return "checkmark.seal.fill" }
@@ -1270,7 +1270,7 @@ struct CapturedNotationDisplayView: View {
         let duration = totalDuration
         let scale = CGFloat(laneWidth) / CGFloat(duration)
         let laneH: CGFloat = 88
-        let inferredColor = Color(red: 1.00, green: 0.72, blue: 0.10)
+        let inferredColor = ScratchLabDesign.Sem.warning
 
         return VStack(alignment: .leading, spacing: 0) {
             laneHeader("AUDIO INFERRED", icon: "ear.and.waveform")
