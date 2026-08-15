@@ -6310,12 +6310,33 @@ struct MacAnalyzerView: View {
 
     @ViewBuilder
     private var reviewCompletedTakeStageCards: some View {
-        reviewTargetNotationStageCard
-        reviewCapturedNotationStageCard
+        // Primary learning surface: the stacked TARGET / MY PERFORMANCE
+        // comparison and its coaching come first — the result is never buried
+        // beneath legacy evidence charts.
         reviewTargetVsPerformedStageCard
-        reviewOverlayDiffStageCard
-        reviewAudioOnsetPreviewStageCard
         reviewSummaryFooterCard
+
+        // Technical evidence + diagnostics collapse by default so they don't
+        // dominate the page. The raw captured chart, overlay diff, audio-onset
+        // preview and reference target stay reachable without crowding the
+        // primary comparison.
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 18) {
+                reviewTargetNotationStageCard
+                reviewCapturedNotationStageCard
+                reviewOverlayDiffStageCard
+                reviewAudioOnsetPreviewStageCard
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 8) {
+                Label("Technical evidence & diagnostics", systemImage: "wrench.and.screwdriver")
+                    .font(ScratchLabDesign.Typo.disclosureLabel)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+            }
+        }
+        .padding(.horizontal, 4)
     }
 
     private func reviewStageStatusCard(

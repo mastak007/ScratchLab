@@ -280,7 +280,11 @@ struct ScratchPhraseChartView: View {
         // and non-stroke events are dropped — never fabricated.
         let laneStrokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
         guard !laneStrokes.isEmpty else {
-            drawEmpty(ctx: ctx, size: size, message: "No measured movement")
+            // Distinguish "nothing measured" from "movement measured but its
+            // direction wasn't resolved" — never fabricate a flat line or a
+            // guessed direction.
+            let emptyMessage = events.isEmpty ? "No measured movement" : "DIRECTION UNAVAILABLE"
+            drawEmpty(ctx: ctx, size: size, message: emptyMessage)
             return
         }
 
@@ -372,8 +376,8 @@ struct ScratchPhraseChartView: View {
 
         if performedFaderSpans.isEmpty {
             ctx.draw(
-                Text("Fader not captured")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                Text("FADER DATA NOT CAPTURED")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color(white: 0.52)),
                 at: CGPoint(x: size.width / 2, y: (topY + bottomY) / 2),
                 anchor: .center
