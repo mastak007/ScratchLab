@@ -4639,22 +4639,22 @@ struct MacAnalyzerView: View {
                 alignment: .leading,
                 spacing: 8
             ) {
-                headerStatusPill(
+                StatusBadge(
                     title: "Audio",
                     value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not connected" : "Ready",
-                    color: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .secondary : .green,
+                    variant: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .neutral : .success,
                     systemImage: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "circle.dashed" : "waveform"
                 )
-                headerStatusPill(
+                StatusBadge(
                     title: "Device",
                     value: companionReceiver.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
-                    color: companionReceiver.connectedPeerNames.isEmpty ? .secondary : .green,
+                    variant: companionReceiver.connectedPeerNames.isEmpty ? .neutral : .success,
                     systemImage: companionReceiver.connectedPeerNames.isEmpty ? "circle.dashed" : "checkmark.seal.fill"
                 )
-                headerStatusPill(
+                StatusBadge(
                     title: "Monitor",
                     value: performerBroadcaster.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
-                    color: performerBroadcaster.connectedPeerNames.isEmpty ? .secondary : .green,
+                    variant: performerBroadcaster.connectedPeerNames.isEmpty ? .neutral : .success,
                     systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "circle.dashed" : "dot.radiowaves.left.and.right"
                 )
             }
@@ -4788,40 +4788,40 @@ struct MacAnalyzerView: View {
             let isRecording = captureEngine.isRoutineRecording || captureEngine.cxlIsRecording
             let hasAudioDevice = !captureEngine.selectedAudioDeviceUniqueID.isEmpty
             VStack(alignment: .leading, spacing: 8) {
-                headerStatusPill(
+                StatusBadge(
                     title: "Playback",
                     value: friendlyPlaybackState,
-                    color: babyScratchDemo.playbackState == .playing ? .green : .secondary,
+                    variant: babyScratchDemo.playbackState == .playing ? .success : .neutral,
                     systemImage: babyScratchDemo.playbackState == .playing ? "play.fill" : "play.circle"
                 )
-                headerStatusPill(
+                StatusBadge(
                     title: "Capture",
                     value: isRecording ? "Recording" : "Idle",
-                    color: isRecording ? Color(nsColor: .systemRed) : .secondary,
+                    variant: isRecording ? .danger : .neutral,
                     systemImage: isRecording ? "record.circle.fill" : "pause.circle"
                 )
-                headerStatusPill(
+                StatusBadge(
                     title: "Camera",
                     value: diagnosticsCameraValue,
-                    color: captureEngine.isCameraActive ? .green : .secondary,
+                    variant: captureEngine.isCameraActive ? .success : .neutral,
                     systemImage: captureEngine.isCameraActive ? "video" : "circle.dashed"
                 )
                 // Truthful: green + real name only when the selected input
                 // is actually present. A selected-but-missing device reads
                 // "Unavailable" (amber) instead of falsely showing a name.
                 let audioReady = hasAudioDevice && captureEngine.isSelectedAudioInputAvailable
-                headerStatusPill(
+                StatusBadge(
                     title: "Audio",
                     value: audioReady
                         ? captureEngine.selectedAudioDeviceName
                         : (hasAudioDevice ? "Unavailable" : "No input"),
-                    color: audioReady ? .green : (hasAudioDevice ? .orange : .secondary),
+                    variant: audioReady ? .success : (hasAudioDevice ? .warning : .neutral),
                     systemImage: audioReady ? "waveform" : "circle.dashed"
                 )
-                headerStatusPill(
+                StatusBadge(
                     title: "Signal",
                     value: captureEngine.audioSignalStatusText,
-                    color: captureEngine.audioMeterColor,
+                    variant: .custom(captureEngine.audioMeterColor),
                     systemImage: "waveform.path"
                 )
             }
@@ -7050,30 +7050,30 @@ struct MacAnalyzerView: View {
                 spacing: 8
             ) {
                 if liveInputEnabled {
-                    headerStatusPill(
+                    StatusBadge(
                         title: "Audio",
                         value: captureEngine.practiceAudioStatusText,
-                        color: captureEngine.practiceAudioStatusColor,
+                        variant: .custom(captureEngine.practiceAudioStatusColor),
                         systemImage: "waveform"
                     )
                 } else {
-                    headerStatusPill(
+                    StatusBadge(
                         title: "Demo",
                         value: demoModeController.isReady ? "Replay ready" : "Demo",
-                        color: .green,
+                        variant: .success,
                         systemImage: "play.fill"
                     )
                 }
-                headerStatusPill(
+                StatusBadge(
                     title: "Matches",
                     value: "\(captureEngine.scratchDetectionCount)",
-                    color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green,
+                    variant: captureEngine.scratchDetectionCount == 0 ? .neutral : .success,
                     systemImage: captureEngine.scratchDetectionCount == 0 ? "circle.dashed" : "checkmark.seal.fill"
                 )
-                headerStatusPill(
+                StatusBadge(
                     title: liveInputEnabled ? "Stars" : "Hardware",
                     value: liveInputEnabled ? "\(captureEngine.visibleStarCount)/5" : "Optional",
-                    color: liveInputEnabled && captureEngine.visibleStarCount > 0 ? .green : .secondary,
+                    variant: liveInputEnabled && captureEngine.visibleStarCount > 0 ? .success : .neutral,
                     systemImage: liveInputEnabled ? "star.fill" : "cable.connector"
                 )
             }
@@ -7776,67 +7776,6 @@ struct MacAnalyzerView: View {
                 color: progressManager.isScratchMastered("baby_scratch") ? .green : .secondary
             )
         }
-    }
-
-    private func headerStatusPill(title: String, value: String, color: Color, systemImage: String? = nil) -> some View {
-        // Strip the title prefix from the value so we never render
-        // "Audio · Audio Ready" — the design system requires "TITLE · STATE".
-        // Optional leading SF Symbol gives a non-colour cue for state — vital
-        // for users who can't distinguish red/green by hue alone.
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 4) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(color)
-                        .accessibilityHidden(true)
-                }
-                Text(Self.dedupedStatusValue(title: title, value: value))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(color)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityElement(children: .combine)
-    }
-
-    /// Default SF Symbol mapping for the canonical input/status titles.
-    /// Used by `headerStatusPill` callers that don't pass an explicit symbol.
-    static func defaultStatusSymbol(forTitle title: String) -> String {
-        switch title.lowercased() {
-        case "audio":              return "waveform"
-        case "camera":             return "video"
-        case "device":             return "iphone.gen2"
-        case "monitor":            return "dot.radiowaves.left.and.right"
-        case "mixer midi", "midi", "fader": return "slider.horizontal.3"
-        case "watch":              return "applewatch"
-        case "matches":            return "checkmark.seal"
-        case "stars":              return "star.fill"
-        case "demo":               return "play.fill"
-        case "hardware":           return "cable.connector"
-        default:                   return "circle.dashed"
-        }
-    }
-
-    /// Drop the title token from the value when it appears as a prefix or
-    /// echoes the title verbatim. Shared by every status pill / tile so the
-    /// "Audio · Audio Ready" pattern can never reach the UI.
-    static func dedupedStatusValue(title: String, value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "—" }
-        let lowerTitle = title.lowercased()
-        let lowerValue = trimmed.lowercased()
-        if lowerValue == lowerTitle { return "—" }
-        if lowerValue.hasPrefix(lowerTitle + " ") {
-            return String(trimmed.dropFirst(title.count)).trimmingCharacters(in: .whitespaces)
-        }
-        return trimmed
     }
 
     private var stageModeCard: some View {
@@ -9330,8 +9269,8 @@ struct MacAnalyzerView: View {
     #endif
 
     private func captureInputStatusTile(title: String, value: String, detail: String? = nil, systemImage: String, color: Color) -> some View {
-        // Same TITLE · STATE deduplication rule as headerStatusPill.
-        let cleanedValue = Self.dedupedStatusValue(title: title, value: value)
+        // Same TITLE · STATE deduplication rule as StatusBadge.
+        let cleanedValue = StatusBadge.dedupedStatusValue(title: title, value: value)
         let cleanedDetail: String? = {
             guard let detail else { return nil }
             let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -11417,92 +11356,5 @@ private final class SeratoWindowMover: ObservableObject {
             return nil
         }
         return unsafeBitCast(value, to: AXValue.self)
-    }
-}
-
-// MARK: - Shared button hierarchy
-
-/// Three sizes for the macOS workspace, designed so primary/secondary/tertiary
-/// roles are visually obvious at App-Store screenshot scale. Apply via the
-/// `.scratchLabPrimaryButton()` / `.scratchLabSecondaryButton()` /
-/// `.scratchLabTertiaryButton()` view modifiers below.
-private enum ScratchLabButtonRole {
-    case primary
-    case success
-    case secondary
-    case tertiary
-    case destructive
-}
-
-private struct ScratchLabButtonStyle: ViewModifier {
-    let role: ScratchLabButtonRole
-    let fillsWidth: Bool
-
-    func body(content: Content) -> some View {
-        switch role {
-        case .primary:
-            content
-                .font(.system(size: 14, weight: .semibold))
-                .frame(minHeight: 36)
-                .frame(maxWidth: fillsWidth ? .infinity : nil)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-        case .success:
-            content
-                .font(ScratchLabDesign.Typo.buttonPrimary)
-                .foregroundStyle(Color.black)
-                .frame(minHeight: ScratchLabDesign.Button.primaryHeight)
-                .frame(maxWidth: fillsWidth ? .infinity : nil)
-                .background(
-                    ScratchLabDesign.Sem.success,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .contentShape(Rectangle())
-                .buttonStyle(.plain)
-        case .secondary:
-            content
-                .font(.system(size: 13, weight: .semibold))
-                .frame(minHeight: 30)
-                .frame(maxWidth: fillsWidth ? .infinity : nil)
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-        case .tertiary:
-            content
-                .font(.system(size: 12, weight: .medium))
-                .frame(minHeight: 26)
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .foregroundStyle(.secondary)
-        case .destructive:
-            content
-                .font(.system(size: 12, weight: .medium))
-                .frame(minHeight: 26)
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .foregroundStyle(Color(nsColor: .systemRed))
-        }
-    }
-}
-
-extension View {
-    /// One-per-section dominant action.
-    func scratchLabPrimaryButton(fillsWidth: Bool = false) -> some View {
-        modifier(ScratchLabButtonStyle(role: .primary, fillsWidth: fillsWidth))
-    }
-    /// Filled success action for a ready-to-start workflow.
-    func scratchLabSuccessButton(fillsWidth: Bool = false) -> some View {
-        modifier(ScratchLabButtonStyle(role: .success, fillsWidth: fillsWidth))
-    }
-    /// Bordered medium-weight action.
-    func scratchLabSecondaryButton(fillsWidth: Bool = false) -> some View {
-        modifier(ScratchLabButtonStyle(role: .secondary, fillsWidth: fillsWidth))
-    }
-    /// Borderless subtle utility action.
-    func scratchLabTertiaryButton() -> some View {
-        modifier(ScratchLabButtonStyle(role: .tertiary, fillsWidth: false))
-    }
-    /// Subtle destructive action (Discard, Reset).
-    func scratchLabDestructiveButton() -> some View {
-        modifier(ScratchLabButtonStyle(role: .destructive, fillsWidth: false))
     }
 }

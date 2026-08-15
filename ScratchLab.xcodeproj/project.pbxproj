@@ -537,6 +537,9 @@
 		A1000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000012 /* Assets.xcassets */; };
 		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
 
+		SLDS0001001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLDS0000001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift */; };
+		SLDS0002001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLDS0000001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift */; };
+
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -955,6 +958,8 @@
 		VPRES001VPRES001VPRES001 /* VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
 		A3000001 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
 
+		SLDS0000001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabDesignSystem.swift; sourceTree = "<group>"; };
+
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1217,6 +1222,7 @@
 				SLCORE00000000000000FR40 /* ScratchDetectedNotationLaneAdapter.swift */,
 				SLCORE00000000000000FR50 /* ScratchRawPlatterLaneAdapter.swift */,
 				A2000001 /* ScratchLabApp.swift */,
+				SLDSG0000001SLDSG01SLDS00001 /* DesignSystem */,
 				A5000004 /* Views */,
 				A5000005 /* Models */,
 				A5000009 /* Formula */,
@@ -1626,6 +1632,15 @@
 			path = Resources/ScratchSamples;
 			sourceTree = "<group>";
 		};
+		SLDSG0000001SLDSG01SLDS00001 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				SLDS0000001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1833,6 +1848,7 @@
 				SLCORE00000000000000BF28 /* TravelLaneDebugView.swift in Sources */,
 				SPC0010001SPC001SPC00001 /* ScratchPhraseChartView.swift in Sources */,
 				SLD0010001SLD001SLD00001 /* ScratchLabDesignTokens.swift in Sources */,
+				SLDS0002001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift in Sources */,
 				SNT0001000SNT001SNT00001 /* ScratchNotationTimeline.swift in Sources */,
 				433D3D9F190ABCBD2FDF84E5 /* CaptureCore.swift in Sources */,
 				SPCM001000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift in Sources */,
@@ -2143,6 +2159,7 @@
 			isa = PBXSourcesBuildPhase;
 			files = (
 				A1000001 /* ScratchLabApp.swift in Sources */,
+				SLDS0001001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift in Sources */,
 				A1000002 /* MainMenuView.swift in Sources */,
 				51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */,
 				A1000003 /* LevelSelectView.swift in Sources */,

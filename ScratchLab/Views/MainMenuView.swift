@@ -171,13 +171,13 @@ struct MainMenuView: View {
 
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
-                    StatusBadge(label: "Practice", value: "Live input", color: Color(hex: "22C55E"))
-                    StatusBadge(label: "Audio", value: "Mic or USB", color: Color(hex: "0EA5E9"))
+                    LegacyStatusBadge(label: "Practice", value: "Live input", color: Color(hex: "22C55E"))
+                    LegacyStatusBadge(label: "Audio", value: "Mic or USB", color: Color(hex: "0EA5E9"))
                 }
 
                 HStack(spacing: 8) {
-                    StatusBadge(label: "Camera", value: "Deck video", color: Color(hex: "F59E0B"))
-                    StatusBadge(label: "Sync", value: "Optional", color: Color(hex: "6366F1"))
+                    LegacyStatusBadge(label: "Camera", value: "Deck video", color: Color(hex: "F59E0B"))
+                    LegacyStatusBadge(label: "Sync", value: "Optional", color: Color(hex: "6366F1"))
                 }
             }
 
@@ -195,12 +195,12 @@ struct MainMenuView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
-                    StatusBadge(
+                    LegacyStatusBadge(
                         label: "Relay",
                         value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
                         color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
                     )
-                    StatusBadge(
+                    LegacyStatusBadge(
                         label: "Watch",
                         value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
                         color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
@@ -487,12 +487,12 @@ private struct AdvancedHubView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                StatusBadge(
+                LegacyStatusBadge(
                     label: "Relay",
                     value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Waiting for Mac" : "Mac linked",
                     color: companionRelayBroadcaster.connectedPeerNames.isEmpty ? Color(hex: "334155") : Color(hex: "22C55E")
                 )
-                StatusBadge(
+                LegacyStatusBadge(
                     label: "Watch",
                     value: watchMotionCaptureStore.isWatchReachable ? "Reachable" : "Not reachable",
                     color: watchMotionCaptureStore.isWatchReachable ? Color(hex: "22C55E") : Color(hex: "475569")
@@ -1033,7 +1033,7 @@ struct StatItem: View {
     }
 }
 
-struct StatusBadge: View {
+struct LegacyStatusBadge: View {
     let label: String
     let value: String
     let color: Color
