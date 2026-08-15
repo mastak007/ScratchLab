@@ -70,14 +70,15 @@ enum ScratchMotionRenderer {
         /// reads as a discrete event against a quiet open/closed bar.
         var crossfaderTickColor: Color = Color.white.opacity(0.65)
 
-        /// The solid reference path the learner follows — muted white so the
-        /// performed overlay reads as the stronger signal. Forward and backward
-        /// strokes use subtly different luminance (not hue) so direction is
-        /// readable from geometry first, colour second.
+        /// The solid reference path the learner follows — muted bone/white
+        /// (`targetTrace` #E8E4DC) so the performed overlay reads as the
+        /// stronger signal. Forward and backward strokes use subtly different
+        /// luminance (not hue) so direction is readable from geometry first,
+        /// colour second.
         static let target = Style(
-            color: Color(white: 0.55),
-            opacity: 0.78,
-            backwardColor: Color(white: 0.48)
+            color: ScratchLabDesign.Notation.targetTrace,
+            opacity: 0.72,
+            backwardColor: ScratchLabDesign.Notation.targetTrace.opacity(0.82)
         )
         /// A copy-window ghost target (Demo mode) — dashed, dim, unmarked,
         /// single colour (no direction split).

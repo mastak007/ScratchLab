@@ -611,7 +611,7 @@ struct MacAnalyzerView: View {
     @State private var demoWithBeatStartUptime: TimeInterval? = nil
     // Practice with Beat notation clock anchor (systemUptime when beat started)
     @State private var practiceBeatStartUptime: TimeInterval? = nil
-    @State private var showLiveNotation = true
+    @State private var showPracticeLiveInput = false
     @State private var isShowingAllRoutineSessions = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
@@ -1128,81 +1128,104 @@ struct MacAnalyzerView: View {
 
             VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
                 practiceStageHeader
-                practiceCameraStage
-                practiceNotationStrip
+                practiceTeachingNotation
+                practiceOptionalLiveInput
             }
             .padding(ScratchLabDesign.Stage.outerPadding)
             .background(ScratchLabDesign.Surface.canvas)
         }
     }
 
-    /// Live notation strip below the camera/demo stage.
-    ///
-    /// Uses the beat-quantized teaching source with motion-style
-    /// rendering and a BPM 79 beat grid behind the notation.
-    ///
-    /// Time source selection:
-    ///   Demo with Beat → beat-engine wall-clock from demoWithBeatStartUptime
-    ///   Practice with Beat → wall-clock from practiceBeatStartUptime
-    ///   Listen (scratch only) → demoModeController.demoPlayer.currentPlaybackTime
-    private var practiceNotationStrip: some View {
-        Group {
+    /// Canonical notation as the central teaching surface — the V3.2
+    /// inversion of the old Practice stage, which made a large 16:9
+    /// camera/demo card the dominant element and shrank the notation to a
+    /// bottom strip. The lesson IS the notation now: one target surface,
+    /// labelled "TARGET — copy this", rendered by the same shared
+    /// `ScratchPhraseChartView` / `ScratchMotionRenderer` the iOS lane and
+    /// Review use. When the demo (WATCH/LISTEN) or a scored COPY runs, the
+    /// strip animates with a playhead; otherwise it shows the target phrase.
+    private var practiceTeachingNotation: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("TARGET — copy this")
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
+                    .kerning(0.6)
+
+                Spacer(minLength: 8)
+
+                Label("Baby Scratch", systemImage: "figure.disc.sports")
+                    .font(ScratchLabDesign.Typo.pageStatus)
+                    .foregroundStyle(.secondary)
+            }
+
             if let notation = ScratchNotation.babyScratchFull76BeatQuantized ?? ScratchNotation.babyScratch {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text("Live Notation")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.white)
-
-                        Spacer(minLength: 8)
-
-                        Button {
-                            showLiveNotation.toggle()
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: showLiveNotation ? "eye" : "eye.slash")
-                                    .font(.system(size: 10, weight: .semibold))
-                                Text("Show Live Notation")
-                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            }
-                            .foregroundStyle(showLiveNotation ? Color.white : Color.white.opacity(0.55))
-                        }
-                        .buttonStyle(.borderless)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(
-                            showLiveNotation ? Color.white.opacity(0.15) : Color.white.opacity(0.07),
-                            in: RoundedRectangle(cornerRadius: 4)
-                        )
-                    }
-
-                    if showLiveNotation {
-                        Text("Press Listen to see the Baby Scratch cursor move.")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.68))
-
-                        TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
-                            let now = practiceNotationCurrentTime
-                            // Same shared notation component COPY/RESULT/REVIEW
-                            // use. A 3.2 s live window keeps the playhead at the
-                            // old 45%-from-left anchor once past the lead-in; the
-                            // window left-clamps at phrase start so the playhead
-                            // sweeps from the left edge during the first bar.
-                            ScratchPhraseChartView(
-                                source: .target(notation),
-                                bpm: 79,
-                                targetWindow: (now - 1.44)...(now + 1.76),
-                                playheadTime: now,
-                                showPlayhead: true
-                            )
-                            .frame(height: 140)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .padding(.top, 4)
-                        }
-                    }
+                TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
+                    let now = practiceNotationCurrentTime
+                    ScratchPhraseChartView(
+                        source: .target(notation),
+                        bpm: 79,
+                        targetWindow: (now - 1.44)...(now + 1.76),
+                        playheadTime: now,
+                        showPlayhead: true
+                    )
+                    .frame(height: 320)
+                    .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Card.cornerRadius, style: .continuous))
                 }
+            } else {
+                Text("Target notation isn't available for this technique yet.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .padding(ScratchLabDesign.Card.padding)
+        .background(
+            Color.white.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Card.heroCornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Card.heroCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Camera / live input is optional and progressively disclosed — it is
+    /// NOT part of the standard Practice teaching surface. Collapsed by
+    /// default so the notation stays dominant; expanding it offers the live
+    /// camera path only when the performer opts in.
+    private var practiceOptionalLiveInput: some View {
+        DisclosureGroup(isExpanded: $showPracticeLiveInput) {
+            if liveInputEnabled {
+                liveCameraStage(
+                    title: "Practice Camera",
+                    subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
+                )
+                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Live input runs the Practice camera and hardware path. Notation stays the teaching surface either way.")
+                        .font(ScratchLabDesign.Typo.bodySecondary)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Start live input", action: startMacLiveInput)
+                        .scratchLabPrimaryButton()
+                }
+                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Label("Camera / live input", systemImage: "video")
+                    .font(ScratchLabDesign.Typo.disclosureLabel)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(liveInputEnabled ? "On" : "Off")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(liveInputEnabled ? ScratchLabDesign.Sem.danger : .secondary)
+            }
+        }
+        .padding(.horizontal, 4)
     }
 
     private var practiceNotationShouldAnimate: Bool {
@@ -1288,15 +1311,33 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceSidebar: some View {
-        // Practice is the coaching surface. The first scroll viewport shows
-        // one Current lesson hero and the active run configuration. Beat
-        // Trainer, demo/export utilities, progress, and diagnostics remain
-        // available through progressive disclosure.
+        // Practice is the coaching surface. The Current lesson hero and the
+        // scored attempt (WATCH → COPY → RESULT) stay at the top as the
+        // primary teaching flow; the timed practice run and supporting tools
+        // remain available through progressive disclosure so the dominant
+        // action stays clear.
         ScrollView {
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 practiceHeaderCard
-                practiceRunCard
                 practiceScoredAttemptCard
+
+                DisclosureGroup {
+                    practiceRunCard
+                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+                } label: {
+                    HStack(spacing: 8) {
+                        Label("Practice run", systemImage: "timer")
+                            .font(ScratchLabDesign.Typo.disclosureLabel)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        if isPracticeSessionActive {
+                            Text("Live")
+                                .font(ScratchLabDesign.Typo.statusPill)
+                                .foregroundStyle(ScratchLabDesign.Sem.danger)
+                        }
+                    }
+                }
+                .padding(.horizontal, 4)
 
                 DisclosureGroup {
                     practiceBeatTrainerCard
@@ -1415,7 +1456,7 @@ struct MacAnalyzerView: View {
                         Label(primaryLabel, systemImage: primaryIcon)
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .scratchLabPrimaryButton(fillsWidth: true)
 
                     Button {
                         if isDemoWithBeatMode { startDemoWithBeat() } else { demoModeController.replayDemo() }
@@ -2281,25 +2322,17 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundColor(.white)
 
-                Text("Try the Baby Scratch demo, listen to the coach, and start a simple practice run.")
+                Text("Watch the target, listen, then copy one Baby Scratch cycle.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.68))
             }
 
             Spacer()
 
-            Button(liveInputEnabled ? "Live input on" : "Start live input") {
-                startMacLiveInput()
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(liveInputEnabled)
-
             Button("Open Capture") {
                 workspaceTab = .capture
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .scratchLabSecondaryButton()
         }
     }
 
@@ -2330,66 +2363,6 @@ struct MacAnalyzerView: View {
             title: stageLayout == .desktopDeck ? "Deck Camera" : "Analyzer Camera",
             subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
         )
-    }
-
-    @ViewBuilder
-    private var practiceCameraStage: some View {
-        if liveInputEnabled {
-            liveCameraStage(
-                title: "Practice Camera",
-                subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
-            )
-        } else {
-            macDemoStage
-        }
-    }
-
-    private var macDemoStage: some View {
-        cameraStageCard(
-            title: "Demo Feedback Stage",
-            subtitle: "Bundled Baby Scratch audio · no camera or microphone required"
-        ) {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(nsColor: .windowBackgroundColor),
-                        Color(nsColor: .controlBackgroundColor)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                VStack(spacing: 20) {
-                    ZStack {
-                        Circle()
-                            .stroke(demoModeFeedbackColor.opacity(0.24), lineWidth: 16)
-                            .frame(width: 170, height: 170)
-
-                        Circle()
-                            .trim(from: 0, to: CGFloat(max(0.08, min(1, demoModeController.inputLevel))))
-                            .stroke(demoModeFeedbackColor, style: StrokeStyle(lineWidth: 16, lineCap: .round))
-                            .frame(width: 170, height: 170)
-                            .rotationEffect(.degrees(-90))
-
-                        Image(systemName: "waveform")
-                            .font(.system(size: 42, weight: .bold))
-                            .foregroundStyle(demoModeFeedbackColor)
-                    }
-
-                    VStack(spacing: 6) {
-                        Text(demoModeFeedbackTitle)
-                            .font(.system(size: 38, weight: .semibold))
-                            .foregroundStyle(.white)
-
-                        Text(demoModeController.isReady ? "Coach animation and feedback are playing the bundled reference." : "Tap Listen to play the bundled Baby Scratch reference.")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.72))
-                            .multilineTextAlignment(.center)
-                    }
-                }
-                .padding(24)
-            }
-        }
     }
 
     private func liveCameraStage(title: String, subtitle: String) -> some View {
@@ -2428,17 +2401,6 @@ struct MacAnalyzerView: View {
 
     private var demoModeFeedbackTitle: String {
         demoModeController.motionFeedback?.balance.rawValue ?? ScratchMotionBalance.listening.rawValue
-    }
-
-    private var demoModeFeedbackColor: Color {
-        switch demoModeController.motionFeedback?.balance ?? .listening {
-        case .listening:
-            return Color(nsColor: .systemBlue)
-        case .balanced:
-            return Color(nsColor: .systemGreen)
-        case .unbalanced:
-            return Color(nsColor: .systemRed)
-        }
     }
 
     private var demoModeExportButtonTitle: String {
@@ -7104,7 +7066,7 @@ struct MacAnalyzerView: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .scratchLabSuccessButton(fillsWidth: true)
+                .scratchLabPrimaryButton(fillsWidth: true)
 
                 if isPracticeSessionActive {
                     Button("Cancel") {
@@ -7165,8 +7127,7 @@ struct MacAnalyzerView: View {
                         Label(listenLabel, systemImage: listenIcon)
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                    .scratchLabPrimaryButton(fillsWidth: true)
 
                     Button {
                         if isDemoWithBeatMode {
@@ -7429,7 +7390,7 @@ struct MacAnalyzerView: View {
                     Button("Start Copying") {
                         startPracticeScoredAttempt()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .scratchLabPrimaryButton()
                     .disabled(practiceScoredAttemptStartDisabled)
                 }
             }
@@ -7521,7 +7482,7 @@ struct MacAnalyzerView: View {
                 Button("Retry") { retryPracticeScoredAttempt() }
                     .buttonStyle(.bordered)
                 Button("Next Attempt") { retryPracticeScoredAttempt() }
-                    .buttonStyle(.borderedProminent)
+                    .scratchLabPrimaryButton()
             }
         }
     }

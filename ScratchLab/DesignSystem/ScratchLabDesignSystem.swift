@@ -136,6 +136,11 @@ enum ScratchLabDesign {
     enum Notation {
         static let forward       = Color(red: 0.20, green: 0.88, blue: 0.55)
         static let backward      = Color(red: 1.00, green: 0.55, blue: 0.10)
+        /// V3.2 target-trace bone (#E8E4DC) — the muted reference path the
+        /// learner copies. Warmer than neutral grey so the performed overlay
+        /// (accent) reads as the stronger signal. Shared by Practice/Review
+        /// on every platform.
+        static let targetTrace   = Color(red: 232.0 / 255.0, green: 228.0 / 255.0, blue: 220.0 / 255.0)
         static let audioInferred = Color(red: 1.00, green: 0.72, blue: 0.10)
         static let audioBurst    = Color(red: 0.55, green: 0.75, blue: 1.00)
         static let cut           = Color(red: 1.00, green: 0.72, blue: 0.10)
