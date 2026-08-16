@@ -399,8 +399,17 @@ struct PracticeModeView: View {
     /// result), `demoPlayer.isPlaying` (reference-audio listen), and
     /// `progressManager.isScratchMastered` (lesson completion). One axis, so
     /// the ready overlay and the live/result surfaces can never contradict.
+    ///
+    /// Demo mode is reference playback (the Figma "Listen" state), never a live
+    /// copy attempt — it is mapped to `.listening`/`.paused` rather than folded
+    /// into `.copyActive`, so "Listen" stays reachable from the real
+    /// `demoPlayer.isPlaying` owner and the visible state never reads COPY
+    /// while the learner is only listening.
     private var practicePresentationState: PracticePresentationState {
-        PracticePresentationState.derive(
+        if practiceAssistMode == .demo {
+            return isPaused ? .paused : .listening
+        }
+        return PracticePresentationState.derive(
             isSessionActive: isSessionActive,
             isPaused: isPaused,
             isResult: showingResults,
@@ -634,9 +643,9 @@ struct PracticeModeView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 StatusBadge(
-                    title: "Session",
-                    value: isComboChallengeMode ? "Challenge" : "Live",
-                    variant: .danger,
+                    title: "Practice",
+                    value: practicePresentationState.label,
+                    variant: practicePresentationState.variant,
                     systemImage: "waveform"
                 )
                 StatusBadge(
@@ -2863,85 +2872,147 @@ struct ResultsOverlayView: View {
     let onContinue: () -> Void
     let onExit: () -> Void
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var isRegularLandscape: Bool {
+        ScratchLabAdaptiveLayout.layoutMode(
+            horizontalSizeClass: horizontalSizeClass ?? .compact,
+            verticalSizeClass: verticalSizeClass ?? .regular
+        ) == .regularLandscape
+    }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.9)
                 .ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 16) {
-                    // Result eyebrow — "LOCAL" names the real progression
-                    // outcome: the attempt was recorded on device, not uploaded.
-                    Text("RESULT · LOCAL")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(ScratchLabDesign.Sem.success)
+                if isRegularLandscape {
+                    // iPad landscape (Figma 281:1280): the canonical TARGET /
+                    // MY PERFORMANCE notation dominates the left, and the scored
+                    // summary sits in a fixed side column — a true two-column
+                    // composition rather than a stretched single column.
+                    HStack(alignment: .top, spacing: 24) {
+                        resultNotation
+                            .frame(maxWidth: .infinity, alignment: .top)
 
-                    VStack(spacing: 4) {
-                        Text(resultHeadline)
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-
-                        Text("\(Int(accuracy))%")
-                            .font(.system(size: 56, weight: .semibold))
-                            .foregroundStyle(ScratchLabDesign.Sem.accent)
-                    }
-
-                    Text(sessionTitle ?? scratch.name)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
-
-                    // Canonical TARGET notation + the capability-driven
-                    // performance region (real MY PERFORMANCE only when movement
-                    // evidence exists; otherwise the truthful unavailable card).
-                    if !isCombo {
-                        PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
-                            .padding(.horizontal, 32)
-                    }
-
-                    VStack(spacing: 12) {
-                        resultCard(title: "Timing", body: timingBody, selected: true)
-                        resultCard(title: "Best streak", body: "\(bestStreak)", selected: false)
+                        VStack(alignment: .leading, spacing: 16) {
+                            resultHeader
+                            resultSummaryBody
+                        }
+                        .frame(width: 360, alignment: .top)
                     }
                     .padding(.horizontal, 32)
-
-                    Text("Timing is an on-device audio-onset estimate — it isn't saved, exported, or scored.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-
-                    Text("Practice estimate \(score) · \(attempts) attempts")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
-
-                    if let reviewSummary {
-                        PracticeReviewCard(summary: reviewSummary)
-                            .padding(.horizontal, 32)
+                    .padding(.vertical, 24)
+                } else {
+                    VStack(spacing: 16) {
+                        resultHeader
+                        resultNotation
+                        resultSummaryBody
                     }
-
-                    if let detailNote {
-                        Text(detailNote)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.72))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                    }
-
-                    VStack(spacing: 12) {
-                        Button(action: onContinue) {
-                            Text(continueButtonTitle)
-                        }
-                        .scratchLabPrimaryButton(fillsWidth: true)
-
-                        Button(action: onExit) {
-                            Text("Done")
-                        }
-                        .scratchLabSecondaryButton(fillsWidth: true)
-                    }
-                    .padding(.horizontal, 32)
+                    .padding(.vertical, 24)
                 }
-                .padding(.vertical, 24)
             }
+        }
+    }
+
+    // Result eyebrow — "LOCAL" names the real progression outcome: the attempt
+    // was recorded on device, not uploaded. Headline + accuracy stay centred in
+    // the single-column layout and lead the side column on iPad landscape.
+    private var resultHeader: some View {
+        VStack(spacing: 16) {
+            Text("RESULT · LOCAL")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(ScratchLabDesign.Sem.success)
+
+            VStack(spacing: 4) {
+                Text(resultHeadline)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white)
+
+                Text("\(Int(accuracy))%")
+                    .font(.system(size: 56, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+            }
+
+            Text(sessionTitle ?? scratch.name)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+
+    /// Canonical TARGET notation + the capability-driven performance region
+    /// (real MY PERFORMANCE only when movement evidence exists; otherwise the
+    /// truthful unavailable card).
+    @ViewBuilder
+    private var resultNotation: some View {
+        if !isCombo {
+            PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
+                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+        }
+    }
+
+    private var resultMetrics: some View {
+        VStack(spacing: 12) {
+            resultCard(title: "Timing", body: timingBody, selected: true)
+            resultCard(title: "Best streak", body: "\(bestStreak)", selected: false)
+        }
+        .padding(.horizontal, isRegularLandscape ? 0 : 32)
+    }
+
+    private var resultDisclaimers: some View {
+        VStack(spacing: 16) {
+            Text("Timing is an on-device audio-onset estimate — it isn't saved, exported, or scored.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+
+            Text("Practice estimate \(score) · \(attempts) attempts")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
+    @ViewBuilder
+    private var resultReview: some View {
+        if let reviewSummary {
+            PracticeReviewCard(summary: reviewSummary)
+                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+        }
+        if let detailNote {
+            Text(detailNote)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.72))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+        }
+    }
+
+    private var resultActions: some View {
+        VStack(spacing: 12) {
+            Button(action: onContinue) {
+                Text(continueButtonTitle)
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+
+            Button(action: onExit) {
+                Text("Done")
+            }
+            .scratchLabSecondaryButton(fillsWidth: true)
+        }
+        .padding(.horizontal, isRegularLandscape ? 0 : 32)
+    }
+
+    /// The scored-summary column that trails the notation in the iPad landscape
+    /// composition.
+    private var resultSummaryBody: some View {
+        VStack(spacing: 16) {
+            resultMetrics
+            resultDisclaimers
+            resultReview
+            resultActions
         }
     }
 
