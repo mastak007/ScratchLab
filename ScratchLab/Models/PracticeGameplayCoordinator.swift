@@ -164,3 +164,96 @@ final class PracticeGameplayCoordinator: ObservableObject {
         state = .ready
     }
 }
+
+// MARK: - Derived Practice presentation state
+
+/// One derived Practice presentation state — the single semantic axis that
+/// drives every Practice surface (header, lesson card, progress indicator,
+/// transport, notation mode, coaching card, achievement card, primary and
+/// secondary actions, accessibility state).
+///
+/// It is DERIVED, never stored: `derive(...)` maps the existing
+/// `PracticeGameplayState` plus the real playback/attempt/progression flags
+/// into this enum. No surface keeps its own copy of Practice state, so the
+/// header can never say READY while notation renders a live comparison.
+enum PracticePresentationState: Equatable, Sendable {
+    case ready          // WATCH/READY — target shown, "Listen" is the next action
+    case listening      // LISTEN — reference audio playing, target-only notation
+    case copyActive     // COPY — live attempt, TARGET + MY PERFORMANCE (live)
+    case paused         // PAUSED — copy frozen, attempt preserved
+    case result         // RESULT — scored attempt, target + performed comparison
+    case review         // REVIEW — comparison first, feedback secondary
+    case lessonComplete // green only from a real ProgressManager completion
+
+    /// The Figma `ScratchNotationPanel` mode this state selects.
+    var notationMode: ScratchNotationPanelMode {
+        switch self {
+        case .ready, .listening: return .targetReference
+        case .copyActive, .paused: return .liveComparison
+        case .result, .review, .lessonComplete: return .reviewComparison
+        }
+    }
+
+    /// Whether a live/captured performance lane is visible.
+    var showsPerformance: Bool {
+        switch self {
+        case .copyActive, .paused, .result, .review: return true
+        case .ready, .listening, .lessonComplete: return false
+        }
+    }
+
+    /// Uppercase presentation label — the non-colour state description shown
+    /// in headers and accessibility values.
+    var label: String {
+        switch self {
+        case .ready: return "READY"
+        case .listening: return "LISTENING"
+        case .copyActive: return "COPY ACTIVE"
+        case .paused: return "PAUSED"
+        case .result: return "RESULT"
+        case .review: return "REVIEW"
+        case .lessonComplete: return "LESSON COMPLETE"
+        }
+    }
+
+    /// Semantic status colour. Green is reserved for `.lessonComplete`; ready
+    /// is neutral bone; live copy is cyan; pause is amber.
+    var variant: StatusBadgeVariant {
+        switch self {
+        case .ready: return .ready
+        case .listening: return .info
+        case .copyActive: return .accent
+        case .paused: return .warning
+        case .result: return .ready
+        case .review: return .info
+        case .lessonComplete: return .success
+        }
+    }
+
+    /// Canonical WATCH → LISTEN → COPY → RESULT → REVIEW progression.
+    static let flowOrder: [PracticePresentationState] = [.ready, .listening, .copyActive, .result, .review]
+
+    /// Pure derivation over existing truth. Precedence: lesson-complete wins
+    /// over everything (green only from a real completion condition), then
+    /// review, then the attempt's pause/listen state. `isPaused` and
+    /// `isListening` are the existing playback flags, not new per-surface
+    /// booleans.
+    static func derive(
+        gameplay: PracticeGameplayState,
+        isListening: Bool = false,
+        isPaused: Bool = false,
+        isReviewing: Bool = false,
+        isLessonComplete: Bool = false
+    ) -> PracticePresentationState {
+        if isLessonComplete { return .lessonComplete }
+        if isReviewing { return .review }
+        switch gameplay {
+        case .copying:
+            return isPaused ? .paused : .copyActive
+        case .result:
+            return .result
+        case .watching, .ready, .idle:
+            return isListening ? .listening : .ready
+        }
+    }
+}

@@ -1324,6 +1324,24 @@ struct MacAnalyzerView: View {
         )
     }
 
+    /// The single derived Practice presentation state driving the whole
+    /// Practice surface (header, notation mode, transport, actions). Inputs
+    /// come from real owners only:
+    /// - gameplay: `practiceCoordinator.state`
+    /// - listening: `demoModeController.demoPlayer.isPlaying`
+    /// - lessonComplete: `progressManager.isScratchMastered("baby_scratch")`
+    ///
+    /// Pause and review have NO real owner in macOS Practice yet — there is no
+    /// copy-pause in `PracticeGameplayCoordinator` and review is a separate
+    /// workspace — so those states are not exposed as functional here.
+    private var practicePresentationState: PracticePresentationState {
+        PracticePresentationState.derive(
+            gameplay: practiceCoordinator.state,
+            isListening: demoModeController.demoPlayer.isPlaying,
+            isLessonComplete: progressManager.isScratchMastered("baby_scratch")
+        )
+    }
+
     private var captureWorkspace: some View {
         HSplitView {
             captureSidebar
@@ -2453,6 +2471,8 @@ struct MacAnalyzerView: View {
             }
 
             Spacer()
+
+            StatusBadge(title: "Practice", value: practicePresentationState.label, variant: practicePresentationState.variant)
 
             Button("Open Capture") {
                 workspaceTab = .capture

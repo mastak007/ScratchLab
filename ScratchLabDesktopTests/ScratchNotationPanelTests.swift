@@ -342,3 +342,93 @@ final class ScratchLabDesignTokensTests: XCTestCase {
         XCTAssertEqual(ScratchNotationPanelMode.reviewComparison.performanceLabel, "MY PERFORMANCE — CAPTURED")
     }
 }
+
+// MARK: - Phase 2 Practice presentation-state derivation
+//
+// The single derived Practice state (ready/listening/copyActive/paused/result/
+// review/lessonComplete) over the existing `PracticeGameplayState` + real
+// playback flags. Pins the "no contradictory surfaces" contract.
+
+final class PracticePresentationStateTests: XCTestCase {
+
+    private func copyingState() -> PracticeGameplayState {
+        guard let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: "baby_scratch"),
+              let window = GameplayAttemptWindow(cycleIndex: 0, cycleDurationBeats: pattern.durationBeats) else {
+            fatalError("baby_scratch canonical pattern must materialize for the test")
+        }
+        let session = PracticeAttemptSession(
+            pattern: pattern, bpm: 90, countInBeats: 4,
+            window: window, startedAt: Date(timeIntervalSince1970: 0)
+        )
+        return .copying(session)
+    }
+
+    func testIdleWatchingReadyDeriveToReady() {
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: .idle), .ready)
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: .watching), .ready)
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: .ready), .ready)
+    }
+
+    func testListeningDerivesToListening() {
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: .ready, isListening: true), .listening)
+    }
+
+    func testCopyingDerivesToCopyActive() {
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: copyingState()), .copyActive)
+    }
+
+    func testPausedDerivesToPausedAndPreservesTheAttempt() {
+        // Paused is derived from an open copy window + the pause flag — it is
+        // NOT a new attempt and NOT a result.
+        let derived = PracticePresentationState.derive(gameplay: copyingState(), isPaused: true)
+        XCTAssertEqual(derived, .paused)
+        XCTAssertNotEqual(derived, .result, "paused must never read as a completed result")
+    }
+
+    func testResultRequiresAScoredAttempt() {
+        // The only path to `.result` is a real `.result` gameplay state.
+        XCTAssertNotEqual(PracticePresentationState.derive(gameplay: .idle), .result)
+        XCTAssertNotEqual(PracticePresentationState.derive(gameplay: .ready), .result)
+        XCTAssertNotEqual(PracticePresentationState.derive(gameplay: copyingState()), .result)
+    }
+
+    func testReviewingDerivesToReviewOverAnOpenAttempt() {
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: copyingState(), isReviewing: true), .review)
+    }
+
+    func testLessonCompleteWinsOverEverything() {
+        // Green completion must only come from a real completion condition and
+        // must dominate the attempt/playback flags.
+        XCTAssertEqual(
+            PracticePresentationState.derive(gameplay: copyingState(), isListening: true, isPaused: true, isReviewing: true, isLessonComplete: true),
+            .lessonComplete
+        )
+    }
+
+    func testNotationModeMapping() {
+        XCTAssertEqual(PracticePresentationState.ready.notationMode, .targetReference)
+        XCTAssertEqual(PracticePresentationState.listening.notationMode, .targetReference)
+        XCTAssertEqual(PracticePresentationState.copyActive.notationMode, .liveComparison)
+        XCTAssertEqual(PracticePresentationState.paused.notationMode, .liveComparison)
+        XCTAssertEqual(PracticePresentationState.result.notationMode, .reviewComparison)
+        XCTAssertEqual(PracticePresentationState.review.notationMode, .reviewComparison)
+        XCTAssertEqual(PracticePresentationState.lessonComplete.notationMode, .reviewComparison)
+    }
+
+    func testShowsPerformanceOnlyForLiveOrCapturedStates() {
+        XCTAssertFalse(PracticePresentationState.ready.showsPerformance)
+        XCTAssertFalse(PracticePresentationState.listening.showsPerformance)
+        XCTAssertTrue(PracticePresentationState.copyActive.showsPerformance)
+        XCTAssertTrue(PracticePresentationState.paused.showsPerformance)
+        XCTAssertTrue(PracticePresentationState.result.showsPerformance)
+        XCTAssertTrue(PracticePresentationState.review.showsPerformance)
+        XCTAssertFalse(PracticePresentationState.lessonComplete.showsPerformance)
+    }
+
+    func testFlowOrderIsWatchListenCopyResultReview() {
+        XCTAssertEqual(
+            PracticePresentationState.flowOrder,
+            [.ready, .listening, .copyActive, .result, .review]
+        )
+    }
+}
