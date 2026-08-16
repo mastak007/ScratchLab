@@ -77,8 +77,19 @@ enum ScratchMotionRenderer {
         /// colour second.
         static let target = Style(
             color: ScratchLabDesign.Notation.targetTrace,
+            lineWidth: ScratchLabDesign.Notation.targetStroke,
             opacity: 0.72,
             backwardColor: ScratchLabDesign.Notation.targetTrace.opacity(0.82)
+        )
+        /// The learner's performed path — strong cyan (`performanceTrace`
+        /// #0EA5E9) so it reads clearly over the muted bone target. Forward and
+        /// backward share one hue so direction stays geometric (slope +
+        /// chevrons), never a colour split.
+        static let performance = Style(
+            color: ScratchLabDesign.Notation.performanceTrace,
+            lineWidth: ScratchLabDesign.Notation.performanceStroke,
+            opacity: 0.95,
+            backwardColor: ScratchLabDesign.Notation.performanceTrace
         )
         /// A copy-window ghost target (Demo mode) — dashed, dim, unmarked,
         /// single colour (no direction split).

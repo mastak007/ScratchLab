@@ -2,18 +2,18 @@ import SwiftUI
 
 // The canonical cross-platform ScratchNotationPanel — the shared TARGET / MY
 // PERFORMANCE notation card approved in Figma (component `ScratchNotationPanel`,
-// node 25:46, four variants: Lane × {Target, Performance}, Presentation ×
-// {Standard, Compact}).
+// node 148:123; three modes Target / Live / Review; presentation Standard /
+// Compact).
 //
-// This view owns presentation ONLY — the label, the card chrome, and which
-// `ScratchNotationPanelPresentation` size is shown. It contributes no notation
-// geometry or drawing of its own: the lane itself is `ScratchPhraseChartView`,
-// the existing renderer both platforms already compile against
-// (`ScratchStrokeGeometry` → `ScratchMotionRenderer`, turnaround anchors,
-// direction cues, binary OPEN/CLOSED fader rails, playhead). Because macOS,
-// iPhone, and iPad all draw through that one implementation, a panel means the
-// same thing everywhere by construction — there is no per-platform notation
-// renderer to keep in sync.
+// This view owns presentation ONLY — the mode header, the lane label, the card
+// chrome, and which `ScratchNotationPanelPresentation` size is shown. It
+// contributes no notation geometry or drawing of its own: the lane itself is
+// `ScratchPhraseChartView`, the single renderer both platforms already compile
+// against (`ScratchStrokeGeometry` → `ScratchMotionRenderer`, turnaround
+// anchors, direction cues, binary OPEN/CLOSED fader rails, playhead). Because
+// macOS, iPhone, and iPad all draw through that one implementation, a panel
+// means the same thing everywhere by construction — there is no per-platform
+// notation renderer to keep in sync.
 
 /// Which side of the Target/Performance comparison a panel instance shows.
 /// Governs the label text and accent color only; the actual data drawn is
@@ -27,6 +27,31 @@ enum ScratchNotationPanelLane: Equatable, Sendable {
 enum ScratchNotationPanelPresentation: Equatable, Sendable {
     case standard
     case compact
+}
+
+/// Panel mode — the Figma variant axis. Target = a single reference lane;
+/// Live = target + live performance; Review = target + captured performance.
+/// Governs the composed header and the performance lane's label.
+enum ScratchNotationPanelMode: Equatable, Sendable {
+    case targetReference
+    case liveComparison
+    case reviewComparison
+
+    var headerTitle: String {
+        switch self {
+        case .targetReference: return "TARGET REFERENCE"
+        case .liveComparison:  return "LIVE COMPARISON"
+        case .reviewComparison: return "REVIEW COMPARISON"
+        }
+    }
+
+    /// The performance lane's label. `.target` lanes are mode-independent.
+    var performanceLabel: String {
+        switch self {
+        case .liveComparison: return "MY PERFORMANCE — LIVE"
+        case .targetReference, .reviewComparison: return "MY PERFORMANCE — CAPTURED"
+        }
+    }
 }
 
 struct ScratchNotationPanel: View {
@@ -51,20 +76,34 @@ struct ScratchNotationPanel: View {
     /// Shared playhead time, in the same seconds domain as `domain`. `nil`
     /// hides the playhead — this view never derives its own clock/time state.
     var playheadTime: TimeInterval? = nil
+    /// Mode used to resolve the performance lane's label; `.target` lanes are
+    /// mode-independent ("TARGET — COPY THIS").
+    var mode: ScratchNotationPanelMode = .reviewComparison
 
     private var isCompact: Bool { presentation == .compact }
 
     private var laneTitle: String {
         switch lane {
-        case .target:      return "TARGET"
-        case .performance: return "MY PERFORMANCE"
+        case .target:      return "TARGET — COPY THIS"
+        case .performance: return mode.performanceLabel
         }
     }
 
+    /// Lane label colour follows the Figma trace identity: muted bone for the
+    /// target, strong cyan for the performance. Never a status colour.
     private var laneColor: Color {
         switch lane {
-        case .target:      return ScratchLabDesign.Sem.accent
-        case .performance: return ScratchLabDesign.Sem.success
+        case .target:      return ScratchLabDesign.Notation.targetTrace
+        case .performance: return ScratchLabDesign.Notation.performanceTrace
+        }
+    }
+
+    /// Distinct lane canvases — target (`#101013`) and performance (`#0E131B`)
+    /// never blend into one surface.
+    private var laneBackground: Color {
+        switch lane {
+        case .target:      return ScratchLabDesign.Notation.targetCanvas
+        case .performance: return ScratchLabDesign.Notation.performanceCanvas
         }
     }
 
@@ -72,17 +111,9 @@ struct ScratchNotationPanel: View {
     // draws no OPEN/CLOSED text. `ScratchPhraseChartView`'s fader-lane rail
     // labels sit at fixed fractions of the canvas height (topY/bottomY at
     // 0.745H/0.964H for a 30% fader-lane-fraction); the OPEN/CLOSED text
-    // (measured line height 9pt at the chart's fixed 7.5pt font) needs
-    // 0.219H ≥ 20pt of separation to avoid colliding, i.e. H ≥ ~91.3pt.
-    // Measured by rendering H = 72...100 in 4pt steps: labels visibly
-    // overlap through H=88, are just legible at H=92, and are cleanly
-    // separated from H=96 on. 96pt is the smallest measured height with a
-    // comfortable margin — this is a presentation-only choice inside this
-    // wrapper; `ScratchPhraseChartView`'s own layout is unmodified and every
-    // other (non-compact) consumer is unaffected. See the Phase 2 Compact
-    // geometry reconciliation report: the true fix is a Figma spec
-    // correction (72×126 compact contract → recommend a taller inner lane),
-    // not a code workaround.
+    // needs ~20pt of separation to avoid colliding. 96pt is the smallest
+    // measured height with a comfortable margin — a presentation-only choice
+    // inside this wrapper; `ScratchPhraseChartView`'s own layout is unmodified.
     private var canvasHeight: CGFloat { isCompact ? 96 : 118 }
 
     private var cornerRadius: CGFloat {
@@ -109,7 +140,8 @@ struct ScratchNotationPanel: View {
                 showPlayhead: playheadTime != nil,
                 comparisonOverlay: comparisonOverlay,
                 performedFaderSpans: performedFaderSpans,
-                performedFrame: performedFrame
+                performedFrame: performedFrame,
+                backgroundColor: laneBackground
             )
             .frame(height: canvasHeight)
             .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Card.compactCornerRadius, style: .continuous))
@@ -139,5 +171,63 @@ struct ScratchNotationPanel: View {
         case .target:      return (domain, nil)
         case .performance: return (nil, domain)
         }
+    }
+}
+
+// MARK: - Composed comparison panel
+
+/// The Figma `ScratchNotationPanel` in its Target / Live / Review composition:
+/// a mode header plus one (Target) or two (Live/Review) stacked lanes sharing
+/// one time domain. This is a pure presentation wrapper over `ScratchNotationPanel`
+/// — it derives no state and owns no clock; callers supply the target notation,
+/// optional performed evidence, and shared playhead time.
+struct ScratchNotationComparisonPanel: View {
+    let mode: ScratchNotationPanelMode
+    let presentation: ScratchNotationPanelPresentation
+    let target: ScratchNotation
+    /// Measured performed strokes for the `.performance` lane. `nil` renders
+    /// the target lane only (`.targetReference`).
+    let performed: [CaptureCore.DetectedNotationRecordMovementEvent]?
+    var bpm: Double = 90
+    var domain: ClosedRange<TimeInterval>? = nil
+    var performedFaderSpans: [LaneFaderSpan] = []
+    var performedFrame: ClosedRange<CGFloat>? = nil
+    var comparisonOverlay: ScratchComparisonOverlay? = nil
+    var playheadTime: TimeInterval? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            Text(mode.headerTitle)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+
+            ScratchNotationPanel(
+                lane: .target,
+                presentation: presentation,
+                source: .target(target),
+                bpm: bpm,
+                domain: domain,
+                comparisonOverlay: comparisonOverlay,
+                playheadTime: playheadTime,
+                mode: mode
+            )
+
+            if let performed {
+                ScratchNotationPanel(
+                    lane: .performance,
+                    presentation: presentation,
+                    source: .performedPlatter(performed),
+                    bpm: bpm,
+                    domain: domain,
+                    performedFaderSpans: performedFaderSpans,
+                    performedFrame: performedFrame,
+                    playheadTime: playheadTime,
+                    mode: mode
+                )
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 }

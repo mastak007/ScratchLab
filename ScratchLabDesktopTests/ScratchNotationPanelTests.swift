@@ -186,3 +186,159 @@ final class ScratchNotationPanelTests: XCTestCase {
         XCTAssertEqual(original, beforeCopy, "reading canonical notation for presentation must never mutate it")
     }
 }
+
+// MARK: - Phase 1 design-token / semantic-state mapping
+//
+// Pins the V3.2 semantic mapping rules (node 148:123 / 140:18 / 144:23 /
+// 252:303 / 253:293 / 174:23) against the pure state enums — no rendered
+// pixel, no SwiftUI colour comparison. These are the "component state"
+// contracts from the Phase 1 spec.
+
+final class ScratchLabDesignTokensTests: XCTestCase {
+
+    // MARK: StatusBadge state → semantic variant
+
+    func testStatusBadgeReadyIsBoneNeverGreen() {
+        XCTAssertEqual(StatusBadgeState.ready.variant, .ready,
+                       "READY is neutral bone; green is reserved for completion")
+        XCTAssertNotEqual(StatusBadgeState.ready.variant, .success)
+    }
+
+    func testStatusBadgeCompletedIsGreen() {
+        XCTAssertEqual(StatusBadgeState.completed.variant, .success)
+        XCTAssertEqual(StatusBadgeState.completed.label, "COMPLETE")
+    }
+
+    func testStatusBadgeRecordingAndFailureAreRed() {
+        XCTAssertEqual(StatusBadgeState.recording.variant, .danger)
+        XCTAssertEqual(StatusBadgeState.failure.variant, .danger)
+    }
+
+    func testStatusBadgeAttentionAmberDetectedCyan() {
+        XCTAssertEqual(StatusBadgeState.attention.variant, .warning)
+        XCTAssertEqual(StatusBadgeState.detected.variant, .info)
+    }
+
+    // MARK: Input readiness — detected ≠ ready
+
+    func testInputDetectedIsNotReady() {
+        XCTAssertNotEqual(InputReadinessState.detected, InputReadinessState.ready,
+                          "a connected/detected input is never READY by that fact alone")
+    }
+
+    func testInputReadinessStateLabels() {
+        XCTAssertEqual(InputReadinessState.setupRequired.label, "SETUP REQUIRED")
+        XCTAssertEqual(InputReadinessState.lost.label, "LOST")
+    }
+
+    // MARK: Hardware identity is independent of readiness state
+
+    func testControllerMappingStateNeverHardcodesHardwareIdentity() {
+        let forbidden = ["RANE", "DJM", "PIONEER", "S11", "S9", "S7", "MKII"]
+        for state in ControllerMappingState.allCases {
+            let upper = state.label.uppercased()
+            for name in forbidden {
+                XCTAssertFalse(upper.contains(name),
+                               "\(state.label) must not bake a hardware name into a state variant")
+            }
+        }
+    }
+
+    // MARK: DVS — carrier detected is NOT ready
+
+    func testDVSCarrierDetectedIsNotReady() {
+        XCTAssertFalse(DVSSignalState.carrierDetected.isReady)
+        XCTAssertFalse(DVSSignalState.noSignal.isReady)
+        XCTAssertFalse(DVSSignalState.weak.isReady)
+        XCTAssertFalse(DVSSignalState.lost.isReady)
+    }
+
+    func testDVSOnlyUsableIsReady() {
+        XCTAssertTrue(DVSSignalState.usable.isReady)
+        XCTAssertEqual(DVSSignalState.allCases.filter(\.isReady), [.usable],
+                       "only USABLE satisfies 'DVS ready' — carrier/weak are never ready")
+    }
+
+    // MARK: Controller — crossfader mapping required is NOT DVS+MIDI ready
+
+    func testControllerPartialStatesAreNotReady() {
+        XCTAssertFalse(ControllerMappingState.crossfaderMappingRequired.isReady)
+        XCTAssertFalse(ControllerMappingState.controllerDetected.isReady)
+        XCTAssertFalse(ControllerMappingState.platterReady.isReady)
+        XCTAssertFalse(ControllerMappingState.midiLearned.isReady,
+                       "MIDI learned ≠ DVS + MIDI ready")
+    }
+
+    func testControllerOnlyDVSPlusMIDIReadyIsReady() {
+        XCTAssertTrue(ControllerMappingState.dvsPlusMidiReady.isReady)
+        XCTAssertEqual(ControllerMappingState.allCases.filter(\.isReady), [.dvsPlusMidiReady])
+    }
+
+    /// Pins the exact badge→colour mapping the Figma `ControllerMappingCard`
+    /// (node 253:293) encodes via its `StatusBadge` reuse.
+    func testControllerMappingBadgeVariantsMatchFigma() {
+        XCTAssertEqual(ControllerMappingState.noController.variant, .neutral)
+        XCTAssertEqual(ControllerMappingState.controllerDetected.variant, .info, "Detected = cyan")
+        XCTAssertEqual(ControllerMappingState.platterReady.variant, .ready, "Platter Ready = bone READY, not green/cyan")
+        XCTAssertEqual(ControllerMappingState.crossfaderMappingRequired.variant, .warning, "Crossfader Mapping Required = amber")
+        XCTAssertEqual(ControllerMappingState.midiLearned.variant, .ready, "MIDI Learned = bone READY")
+        XCTAssertEqual(ControllerMappingState.mappingConflict.variant, .danger, "Mapping Conflict = red")
+        XCTAssertEqual(ControllerMappingState.dvsPlusMidiReady.variant, .success, "DVS + MIDI Ready = green COMPLETE")
+    }
+
+    /// Pins the badge→colour mapping the Figma `Review and Export Card`
+    /// (node 255:219) encodes via its `StatusBadge` reuse.
+    func testReviewExportBadgeVariantsMatchFigma() {
+        XCTAssertEqual(ReviewExportState.awaitingConfirmation.variant, .warning, "Awaiting Confirmation = amber")
+        XCTAssertEqual(ReviewExportState.confirmed.variant, .success, "Confirmed = green COMPLETE")
+        XCTAssertEqual(ReviewExportState.preparingExport.variant, .info, "Preparing Export = cyan")
+        XCTAssertEqual(ReviewExportState.exported.variant, .success, "Exported = green COMPLETE")
+        XCTAssertEqual(ReviewExportState.exportFailed.variant, .danger, "Export Failed = red")
+    }
+
+    // MARK: Camera optional is non-blocking
+
+    func testCameraDisclosureIsNeverBlocking() {
+        for state in CameraDisclosureState.allCases {
+            XCTAssertFalse(state.isBlocking, "camera must never block Practice/Capture/Review/Export")
+        }
+    }
+
+    // MARK: Achievement derives from progress, never a new model
+
+    func testAchievementStatesMapToSemanticVariants() {
+        XCTAssertEqual(AchievementState.complete.variant, .success)
+        XCTAssertEqual(AchievementState.empty.variant, .neutral)
+        XCTAssertEqual(AchievementState.bestResult.variant, .warning)
+    }
+
+    // MARK: Hardware verification tier labels
+
+    func testHardwareVerificationTierLabels() {
+        XCTAssertEqual(HardwareVerificationTier.testedNotYetVerified.label, "TESTED — NOT YET VERIFIED")
+        XCTAssertEqual(HardwareVerificationTier.knownOptionUnverified.label, "KNOWN OPTION — UNVERIFIED")
+        XCTAssertEqual(HardwareVerificationTier.verifyInEngineering.label, "VERIFY IN ENGINEERING")
+    }
+
+    // MARK: Notation trace styles — Figma stroke weights + distinct roles
+
+    func testTargetAndPerformanceTraceStrokeWeightsMatchFigma() {
+        XCTAssertEqual(ScratchMotionRenderer.Style.target.lineWidth,
+                       ScratchLabDesign.Notation.targetStroke, accuracy: 0.0001)
+        XCTAssertEqual(ScratchMotionRenderer.Style.performance.lineWidth,
+                       ScratchLabDesign.Notation.performanceStroke, accuracy: 0.0001)
+        XCTAssertNotEqual(ScratchLabDesign.Notation.targetStroke,
+                          ScratchLabDesign.Notation.performanceStroke,
+                          "target (1.6) and performance (2.0) trace weights must stay distinct")
+    }
+
+    // MARK: Notation panel mode headers + performance labels
+
+    func testNotationPanelModeHeadersAndPerformanceLabels() {
+        XCTAssertEqual(ScratchNotationPanelMode.targetReference.headerTitle, "TARGET REFERENCE")
+        XCTAssertEqual(ScratchNotationPanelMode.liveComparison.headerTitle, "LIVE COMPARISON")
+        XCTAssertEqual(ScratchNotationPanelMode.reviewComparison.headerTitle, "REVIEW COMPARISON")
+        XCTAssertEqual(ScratchNotationPanelMode.liveComparison.performanceLabel, "MY PERFORMANCE — LIVE")
+        XCTAssertEqual(ScratchNotationPanelMode.reviewComparison.performanceLabel, "MY PERFORMANCE — CAPTURED")
+    }
+}

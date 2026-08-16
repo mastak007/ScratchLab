@@ -68,23 +68,23 @@ struct ScratchPhraseChartView: View {
     /// The performed side's platter-path style — the accent-blue trace that
     /// reads stronger than the muted target. Forward and backward share one
     /// hue so direction stays geometric (slope + chevrons), not colour.
-    private static let performedStyle = ScratchMotionRenderer.Style(
-        color: Color(red: 0.30, green: 0.70, blue: 1.00),
-        lineWidth: 2.8,
-        opacity: 0.95,
-        backwardColor: Color(red: 0.30, green: 0.70, blue: 1.00)
-    )
+    private static let performedStyle = ScratchMotionRenderer.Style.performance
 
-    // Background and grid palette — shared across both target/captured paths.
-    private let bgColor    = Color(white: 0.10)
-    private let gridMajor  = Color(white: 0.22)
-    private let gridMinor  = Color(white: 0.14)
+    // Lane background + grid palette — shared across target/captured paths,
+    // resolved through the token layer so the two lane canvases stay distinct.
+    /// Lane background override. `nil` renders the target canvas (`#101013`)
+    /// so pre-existing call sites keep their behaviour; the performance lane
+    /// passes `Notation.performanceCanvas` (`#0E131B`).
+    var backgroundColor: Color? = nil
+    private var bgColor: Color { backgroundColor ?? ScratchLabDesign.Notation.targetCanvas }
+    private let gridMajor  = ScratchLabDesign.Notation.gridBeat
+    private let gridMinor  = ScratchLabDesign.Notation.gridSubdivision
     // Captured-path stroke palette (kept; the captured path still draws its
     // own single-diagonal record-events because they aren't authored strokes).
-    private let forwardCol = Color(red: 0.20, green: 0.88, blue: 0.55)
-    private let backCol    = Color(red: 1.00, green: 0.55, blue: 0.10)
-    private let dotCol     = Color(white: 0.82)
-    private let laneDividerCol = Color(white: 0.28)
+    private let forwardCol = ScratchLabDesign.Notation.forward
+    private let backCol    = ScratchLabDesign.Notation.backward
+    private let dotCol     = ScratchLabDesign.Notation.dot
+    private let laneDividerCol = ScratchLabDesign.Notation.lineNeutral
 
     // Fraction of the chart vertically reserved for the fader sub-lane.
     // The strokes region gets the remaining (1 - faderLaneFraction).
@@ -397,9 +397,9 @@ struct ScratchPhraseChartView: View {
             guard x2 > x1 else { continue }
 
             let activeY = span.state == .open ? topY : bottomY
-            let activeColor: Color = span.state == .open
-                ? Color(red: 0.20, green: 0.88, blue: 0.55)
-                : Color(red: 1.00, green: 0.25, blue: 0.25)
+            // Active rail is the performed trace colour (cyan) — position +
+            // transition encode OPEN/CLOSED, not a status colour.
+            let activeColor: Color = ScratchLabDesign.Notation.performanceTrace
 
             var rail = Path()
             rail.move(to: CGPoint(x: x1, y: activeY))
@@ -667,9 +667,10 @@ struct ScratchPhraseChartView: View {
             guard x2 > x1 else { continue }
 
             let activeY = span.state == .open ? topY : bottomY
-            let activeColor: Color = span.state == .open
-                ? Color(red: 0.20, green: 0.88, blue: 0.55)
-                : Color(red: 1.00, green: 0.25, blue: 0.25)
+            // Active rail is the target trace colour (bone). OPEN/CLOSED is
+            // encoded by rail position + the vertical transition — never by a
+            // green/red status colour (Figma: fader state is structural).
+            let activeColor: Color = ScratchLabDesign.Notation.targetTrace
 
             var rail = Path()
             rail.move(to: CGPoint(x: x1, y: activeY))
