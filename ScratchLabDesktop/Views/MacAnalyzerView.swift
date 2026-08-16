@@ -2356,6 +2356,11 @@ struct MacAnalyzerView: View {
             }
         case .audio:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                DVSSignalHealthCard(
+                    state: dvsSignalState,
+                    detail: timecodePipeline.mode == .disabled
+                        ? "DVS / timecode input is disabled — enable it in DVS / timecode." : nil
+                )
                 audioCard
                     .disabled(captureEngine.isRoutineRecording)
                 seratoScreenCard
@@ -2375,10 +2380,23 @@ struct MacAnalyzerView: View {
             }
         case .midiFader:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                ControllerMappingCard(
+                    state: controllerMappingState,
+                    controllerName: selectedMixerMIDIDeviceName,
+                    detail: captureEngine.crossfaderCCMapping == nil
+                        ? "MIDI detected does not mean it is ready — map the crossfader before capture."
+                        : "Crossfader mapped."
+                )
                 midiMonitorCard
             }
         case .monitor:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                PerformerMonitorConnectionCard(
+                    state: monitorConnectionState,
+                    detail: performerBroadcaster.connectedPeerNames.isEmpty
+                        ? "Advertising for a read-only mobile device…"
+                        : "\(performerBroadcaster.connectedPeerNames.count) device(s) connected — read-only."
+                )
                 companionCard
                     .disabled(captureEngine.isRoutineRecording)
             }
@@ -4887,24 +4905,24 @@ struct MacAnalyzerView: View {
     private var advancedOverviewStatusItems: [AdvancedOverviewStatusItem] {
         var items: [AdvancedOverviewStatusItem] = []
 
-        // Audio
+        // Audio — READY is bone, never green; green is reserved for completion.
         if captureEngine.availableAudioDevices.isEmpty {
             items.append(.init(title: "Audio", value: "SETUP REQUIRED", variant: .neutral, systemImage: "waveform"))
         } else if !captureEngine.isSelectedAudioInputAvailable {
             items.append(.init(title: "Audio", value: "NEEDS ATTENTION", variant: .warning, systemImage: "waveform"))
         } else {
-            items.append(.init(title: "Audio", value: "AUDIO READY", variant: .success, systemImage: "waveform"))
+            items.append(.init(title: "Audio", value: "READY", variant: .ready, systemImage: "waveform"))
         }
 
         // DVS / timecode
         let dvs = advancedOverviewDVSStatus
         items.append(.init(title: "DVS / timecode", value: dvs.value, variant: dvs.variant, systemImage: "waveform.badge.magnifyingglass"))
 
-        // MIDI / fader
+        // MIDI / fader — connected ≠ ready (crossfader may still be unmapped).
         if selectedMixerMIDIDeviceName == nil {
             items.append(.init(title: "MIDI / fader", value: "SETUP REQUIRED", variant: .neutral, systemImage: "slider.horizontal.3"))
         } else {
-            items.append(.init(title: "MIDI / fader", value: "CONNECTED", variant: .success, systemImage: "slider.horizontal.3"))
+            items.append(.init(title: "MIDI / fader", value: "DETECTED", variant: .info, systemImage: "slider.horizontal.3"))
         }
 
         // Camera — only surfaced when enabled or relevant.
@@ -4912,16 +4930,16 @@ struct MacAnalyzerView: View {
             items.append(.init(
                 title: "Camera",
                 value: captureEngine.isCameraActive ? "DETECTED" : "UNAVAILABLE",
-                variant: captureEngine.isCameraActive ? .success : .neutral,
+                variant: captureEngine.isCameraActive ? .info : .neutral,
                 systemImage: "video"
             ))
         }
 
-        // Performer Monitor
+        // Performer Monitor — connected is cyan, not green.
         if performerBroadcaster.connectedPeerNames.isEmpty {
             items.append(.init(title: "Monitor", value: "SETUP REQUIRED", variant: .neutral, systemImage: "dot.radiowaves.left.and.right"))
         } else {
-            items.append(.init(title: "Monitor", value: "CONNECTED", variant: .success, systemImage: "dot.radiowaves.left.and.right"))
+            items.append(.init(title: "Monitor", value: "CONNECTED", variant: .info, systemImage: "dot.radiowaves.left.and.right"))
         }
 
         return items
@@ -4938,11 +4956,35 @@ struct MacAnalyzerView: View {
             case .weak:
                 return ("NEEDS ATTENTION", .warning)
             case .usable:
-                return ("DETECTED", .success)
+                return ("READY", .ready)
             case .clipped, .channelFault:
                 return ("NEEDS ATTENTION", .warning)
             }
         }
+    }
+
+    /// Maps the real timecode signal health onto the reusable semantic state.
+    private var dvsSignalState: DVSSignalState {
+        switch timecodePipeline.signalHealth {
+        case .noSignal: return .noSignal
+        case .weak: return .weak
+        case .usable: return .usable
+        case .clipped: return .clipped
+        case .channelFault: return .channelFault
+        }
+    }
+
+    /// Controller mapping state — connected ≠ mapped; mapped ≠ DVS+MIDI ready.
+    private var controllerMappingState: ControllerMappingState {
+        if selectedMixerMIDIDeviceName == nil { return .noController }
+        if captureEngine.crossfaderCCMapping == nil { return .crossfaderMappingRequired }
+        if timecodePipeline.signalHealth == .usable { return .dvsPlusMidiReady }
+        return .midiLearned
+    }
+
+    /// Performer Monitor state — the Mac is the controlling/source device.
+    private var monitorConnectionState: PerformerMonitorConnectionState {
+        performerBroadcaster.connectedPeerNames.isEmpty ? .searching : .connected
     }
 
     private var advancedOverviewNextAction: (message: String, systemImage: String, color: Color) {
@@ -4955,7 +4997,7 @@ struct MacAnalyzerView: View {
         if selectedMixerMIDIDeviceName == nil {
             return ("Next: connect a controller to map the crossfader.", "exclamationmark.circle.fill", ScratchLabDesign.Sem.warning)
         }
-        return ("Ready — configure hardware and diagnostics in the sections below.", "checkmark.circle.fill", ScratchLabDesign.Sem.success)
+        return ("Ready — configure hardware and diagnostics in the sections below.", "checkmark.circle.fill", ScratchLabDesign.Sem.accent)
     }
 
     private var advancedOverviewSessionValue: String {
