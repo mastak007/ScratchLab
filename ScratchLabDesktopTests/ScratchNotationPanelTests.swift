@@ -431,4 +431,60 @@ final class PracticePresentationStateTests: XCTestCase {
             [.ready, .listening, .copyActive, .result, .review]
         )
     }
+
+    // MARK: iOS boolean derivation
+
+    func testIOSDerivationReadyAndListening() {
+        XCTAssertEqual(PracticePresentationState.derive(isSessionActive: false, isPaused: false, isResult: false), .ready)
+        XCTAssertEqual(PracticePresentationState.derive(isSessionActive: false, isPaused: false, isResult: false, isListening: true), .listening)
+    }
+
+    func testIOSDerivationCopyActiveAndPaused() {
+        XCTAssertEqual(PracticePresentationState.derive(isSessionActive: true, isPaused: false, isResult: false), .copyActive)
+        XCTAssertEqual(PracticePresentationState.derive(isSessionActive: true, isPaused: true, isResult: false), .paused)
+    }
+
+    func testIOSDerivationResultWinsOverActive() {
+        XCTAssertEqual(PracticePresentationState.derive(isSessionActive: true, isPaused: false, isResult: true), .result)
+    }
+
+    func testIOSDerivationLessonCompleteWins() {
+        XCTAssertEqual(
+            PracticePresentationState.derive(isSessionActive: true, isPaused: true, isResult: true, isLessonComplete: true),
+            .lessonComplete
+        )
+    }
+
+    // MARK: label / variant (non-colour + green-only-on-complete)
+
+    func testLabelIsNonColourStateDescription() {
+        XCTAssertEqual(PracticePresentationState.ready.label, "READY")
+        XCTAssertEqual(PracticePresentationState.copyActive.label, "COPY ACTIVE")
+        XCTAssertEqual(PracticePresentationState.lessonComplete.label, "LESSON COMPLETE")
+    }
+
+    func testGreenIsReservedForLessonComplete() {
+        XCTAssertEqual(PracticePresentationState.lessonComplete.variant, .success)
+        for state in PracticePresentationState.flowOrder {
+            XCTAssertNotEqual(state.variant, .success,
+                              "\(state) must never render green — green is lesson-complete only")
+        }
+    }
+
+    // MARK: Accessibility
+
+    func testInteractiveButtonsMeetMinimum44ptTarget() {
+        XCTAssertGreaterThanOrEqual(ScratchLabDesign.Button.primaryHeight, 44,
+                                    "primary action must meet the 44pt touch target")
+        XCTAssertGreaterThanOrEqual(ScratchLabDesign.Button.secondaryHeight, 44)
+        XCTAssertGreaterThanOrEqual(ScratchLabDesign.Button.destructiveHeight, 44)
+    }
+
+    func testPracticeStateLabelsAreNeverBlankOrColourOnly() {
+        let all: [PracticePresentationState] = [.ready, .listening, .copyActive, .paused, .result, .review, .lessonComplete]
+        for state in all {
+            XCTAssertFalse(state.label.isEmpty, "\(state) must have a non-blank, non-colour label")
+            XCTAssertEqual(state.label, state.label.uppercased(), "state labels are uppercase voice text")
+        }
+    }
 }

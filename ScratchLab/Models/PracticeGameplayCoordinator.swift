@@ -256,4 +256,21 @@ enum PracticePresentationState: Equatable, Sendable {
             return isListening ? .listening : .ready
         }
     }
+
+    /// iOS-style derivation over the real Practice booleans (no coordinator):
+    /// `isSessionActive`/`isPaused`/`isResult` are the attempt/pause/result
+    /// state; `isListening` is the reference-audio playback state;
+    /// `isLessonComplete` is the real progress completion.
+    static func derive(
+        isSessionActive: Bool,
+        isPaused: Bool,
+        isResult: Bool,
+        isListening: Bool = false,
+        isLessonComplete: Bool = false
+    ) -> PracticePresentationState {
+        if isLessonComplete { return .lessonComplete }
+        if isResult { return .result }
+        if isSessionActive { return isPaused ? .paused : .copyActive }
+        return isListening ? .listening : .ready
+    }
 }

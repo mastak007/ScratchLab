@@ -393,6 +393,21 @@ struct PracticeModeView: View {
         self.usesBackingTrack = usesBackingTrack
         self.usesSimplifiedReady = usesSimplifiedReady
     }
+
+    /// Single derived Practice presentation state over the real iOS Practice
+    /// state: `isSessionActive`/`isPaused`/`showingResults` (attempt/pause/
+    /// result), `demoPlayer.isPlaying` (reference-audio listen), and
+    /// `progressManager.isScratchMastered` (lesson completion). One axis, so
+    /// the ready overlay and the live/result surfaces can never contradict.
+    private var practicePresentationState: PracticePresentationState {
+        PracticePresentationState.derive(
+            isSessionActive: isSessionActive,
+            isPaused: isPaused,
+            isResult: showingResults,
+            isListening: demoPlayer.isPlaying,
+            isLessonComplete: progressManager.isScratchMastered(activeScratch.id)
+        )
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -1974,9 +1989,17 @@ private struct PracticeReadyOverlay: View {
     let onWatch: () -> Void
     let onBack: () -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var presentation: ScratchNotationPanelPresentation {
         ScratchLabAdaptiveLayout.notationPresentation(isRegularWidth: horizontalSizeClass == .regular)
+    }
+
+    private var layoutMode: ScratchLabAdaptiveLayout.LayoutMode {
+        ScratchLabAdaptiveLayout.layoutMode(
+            horizontalSizeClass: horizontalSizeClass ?? .compact,
+            verticalSizeClass: verticalSizeClass ?? .regular
+        )
     }
 
     var body: some View {
@@ -1999,63 +2022,102 @@ private struct PracticeReadyOverlay: View {
                         Spacer()
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("PRACTICE · \(scratch.name.uppercased())")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(ScratchLabDesign.Sem.accent)
-                        Text("Copy the target")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
+                    AdaptiveWorkspaceHeader(
+                        title: "Practice",
+                        status: .ready,
+                        detail: "\(scratch.name) · Copy the target"
+                    )
 
-                    if let targetNotation {
-                        ScratchNotationPanel(
-                            lane: .target,
-                            presentation: presentation,
-                            source: .target(targetNotation),
-                            bpm: bpm
-                        )
-                    }
+                    LessonProgressIndicator(
+                        stages: [.watch, .listen, .copy, .result, .review],
+                        current: .watch
+                    )
 
-                    HStack(spacing: 8) {
-                        statusPill(label: micStatusTitle, color: micStatusColor)
-                        statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
-                    }
+                    if layoutMode == .regularLandscape {
+                        // iPad landscape: dominant notation left, controls right.
+                        HStack(alignment: .top, spacing: 16) {
+                            if let targetNotation {
+                                ScratchNotationPanel(
+                                    lane: .target,
+                                    presentation: presentation,
+                                    source: .target(targetNotation),
+                                    bpm: bpm,
+                                    mode: .targetReference
+                                )
+                                .frame(maxWidth: .infinity, alignment: .top)
+                            }
 
-                    // Open practice card — the fixed production assist mode.
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Open practice")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                        Text("Static target reference. Mic listens; freestyle freely.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.6))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    }
+                            VStack(alignment: .leading, spacing: 16) {
+                                HStack(spacing: 8) {
+                                    statusPill(label: micStatusTitle, color: micStatusColor)
+                                    statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
+                                }
 
-                    VStack(spacing: 12) {
-                        Button(action: onStart) {
-                            Text("Start session")
+                                openPracticeCard
+
+                                readyActions
+                            }
+                            .frame(width: 320, alignment: .top)
                         }
-                        .scratchLabPrimaryButton(fillsWidth: true)
-
-                        Button(action: onWatch) {
-                            Text("Watch")
+                    } else {
+                        // Portrait / compact: single column (unchanged).
+                        if let targetNotation {
+                            ScratchNotationPanel(
+                                lane: .target,
+                                presentation: presentation,
+                                source: .target(targetNotation),
+                                bpm: bpm,
+                                mode: .targetReference
+                            )
                         }
-                        .scratchLabSecondaryButton(fillsWidth: true)
+
+                        HStack(spacing: 8) {
+                            statusPill(label: micStatusTitle, color: micStatusColor)
+                            statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
+                        }
+
+                        openPracticeCard
+
+                        readyActions
                     }
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, topSafeAreaInset + 12)
                 .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
             }
+        }
+    }
+
+    private var readyActions: some View {
+        VStack(spacing: 12) {
+            Button(action: onStart) {
+                Text("Start session")
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+
+            Button(action: onWatch) {
+                Text("Watch")
+            }
+            .scratchLabSecondaryButton(fillsWidth: true)
+        }
+    }
+
+    private var openPracticeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Open practice")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("Static target reference. Mic listens; freestyle freely.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
         }
     }
 

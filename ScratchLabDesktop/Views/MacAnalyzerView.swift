@@ -612,6 +612,7 @@ struct MacAnalyzerView: View {
     @AppStorage("scratchlab.mac.lastPerformerName") private var lastPerformerName = ""
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @EnvironmentObject private var captureEngine: MacCaptureEngine
     @EnvironmentObject private var companionReceiver: CompanionCameraReceiver
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
@@ -1210,37 +1211,37 @@ struct MacAnalyzerView: View {
     /// inversion of the old Practice stage, which made a large 16:9
     /// camera/demo card the dominant element and shrank the notation to a
     /// bottom strip. The lesson IS the notation now: one target surface,
-    /// labelled "TARGET — copy this", rendered by the same shared
+    /// rendered by the shared `ScratchNotationPanel` (which wraps the same
     /// `ScratchPhraseChartView` / `ScratchMotionRenderer` the iOS lane and
-    /// Review use. When the demo (WATCH/LISTEN) or a scored COPY runs, the
-    /// strip animates with a playhead; otherwise it shows the target phrase.
+    /// Review use). When the demo (WATCH/LISTEN) or a scored COPY runs, the
+    /// panel animates with a playhead; otherwise it shows the target phrase.
     private var practiceTeachingNotation: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("TARGET — copy this")
-                    .font(ScratchLabDesign.Typo.metricLabel)
-                    .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
-                    .kerning(0.6)
-
-                Spacer(minLength: 8)
-
                 Label("Baby Scratch", systemImage: "figure.disc.sports")
                     .font(ScratchLabDesign.Typo.pageStatus)
                     .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Text(practicePresentationState.label)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(practicePresentationState.variant.color)
             }
 
             if let notation = ScratchNotation.babyScratchFull76BeatQuantized ?? ScratchNotation.babyScratch {
                 TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
                     let now = practiceNotationCurrentTime
-                    ScratchPhraseChartView(
+                    ScratchNotationPanel(
+                        lane: .target,
+                        presentation: .standard,
                         source: .target(notation),
                         bpm: 79,
-                        targetWindow: (now - 1.44)...(now + 1.76),
+                        domain: (now - 1.44)...(now + 1.76),
                         playheadTime: now,
-                        showPlayhead: true
+                        mode: practicePresentationState.notationMode,
+                        canvasHeightOverride: 320
                     )
-                    .frame(height: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Card.cornerRadius, style: .continuous))
                 }
             } else {
                 Text("Target notation isn't available for this technique yet.")
@@ -1248,15 +1249,6 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .padding(ScratchLabDesign.Card.padding)
-        .background(
-            Color.white.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Card.heroCornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: ScratchLabDesign.Card.heroCornerRadius, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1299,7 +1291,8 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceNotationShouldAnimate: Bool {
-        demoModeController.demoPlayer.isPlaying
+        guard !accessibilityReduceMotion else { return false }
+        return demoModeController.demoPlayer.isPlaying
             || (isDemoWithBeatMode && demoWithBeatStartUptime != nil)
             || (practiceBeatStore.isPlaying && practiceBeatStartUptime != nil)
     }

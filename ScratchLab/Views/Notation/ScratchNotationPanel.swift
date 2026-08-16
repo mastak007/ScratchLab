@@ -114,7 +114,11 @@ struct ScratchNotationPanel: View {
     // needs ~20pt of separation to avoid colliding. 96pt is the smallest
     // measured height with a comfortable margin — a presentation-only choice
     // inside this wrapper; `ScratchPhraseChartView`'s own layout is unmodified.
-    private var canvasHeight: CGFloat { isCompact ? 96 : 118 }
+    /// Optional container-driven lane height — e.g. the macOS dominant teaching
+    /// surface asks for a taller lane than the Standard/Compact card defaults.
+    /// `nil` falls back to the Standard/Compact heights.
+    var canvasHeightOverride: CGFloat? = nil
+    private var canvasHeight: CGFloat { canvasHeightOverride ?? (isCompact ? 96 : 118) }
 
     private var cornerRadius: CGFloat {
         isCompact ? ScratchLabDesign.Card.compactCornerRadius : ScratchLabDesign.Card.cornerRadius
@@ -122,6 +126,18 @@ struct ScratchNotationPanel: View {
 
     private var cardPadding: CGFloat {
         isCompact ? ScratchLabDesign.Card.compactPadding : ScratchLabDesign.Card.padding
+    }
+
+    /// Descriptive, non-colour accessibility summary of what this lane shows —
+    /// VoiceOver reads the lane identity plus what the source contains, never a
+    /// colour.
+    private var accessibilitySummary: String {
+        switch source {
+        case .target: return "\(laneTitle) — target reference notation"
+        case .performedPlatter: return "\(laneTitle) — measured performance"
+        case .captured: return "\(laneTitle) — captured evidence"
+        case .empty(let message): return "Notation unavailable — \(message)"
+        }
     }
 
     var body: some View {
@@ -156,7 +172,8 @@ struct ScratchNotationPanel: View {
                 .stroke(ScratchLabDesign.Surface.divider, lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("\(laneTitle) notation"))
+        .accessibilityLabel(Text(accessibilitySummary))
+        .accessibilityHint(Text("Canonical scratch notation: platter lane above the fader lane, with one playhead"))
     }
 
     /// Pure routing of the shared comparison `domain` into `ScratchPhraseChartView`'s
