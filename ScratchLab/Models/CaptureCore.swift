@@ -6575,3 +6575,124 @@ enum CaptureCore {
         }
     }
 }
+
+// MARK: - Capture readiness presentation model
+//
+// One semantic capture-readiness state, DERIVED from the real capture engine +
+// session setup — never a manually-set UI boolean. Distinct from the per-input
+// tiles: this is the single "can I record right now" verdict, plus the
+// recording/finalizing/complete/failed lifecycle that follows.
+//
+// Enforces the hardware contract: connected ≠ ready, carrier detected ≠ DVS
+// ready, DVS ready ≠ capture ready, MIDI detected ≠ crossfader mapped.
+
+enum CaptureReadiness: Equatable, Sendable {
+    case setupRequired
+    case hardwareDetected
+    case needsAttention
+    case ready
+    case recording
+    case finalizing
+    case complete
+    case failed
+    case timecodeLost
+    case permissionRequired
+
+    var label: String {
+        switch self {
+        case .setupRequired: return "SETUP REQUIRED"
+        case .hardwareDetected: return "HARDWARE DETECTED"
+        case .needsAttention: return "NEEDS ATTENTION"
+        case .ready: return "READY"
+        case .recording: return "RECORDING"
+        case .finalizing: return "FINALIZING"
+        case .complete: return "COMPLETE"
+        case .failed: return "FAILED"
+        case .timecodeLost: return "TIMECODE LOST"
+        case .permissionRequired: return "PERMISSION REQUIRED"
+        }
+    }
+
+    /// Semantic status colour — green only for `.complete`; red for recording/
+    /// failure/interruption; amber for attention/permission; bone for ready.
+    var variant: StatusBadgeVariant {
+        switch self {
+        case .setupRequired: return .neutral
+        case .hardwareDetected: return .info
+        case .needsAttention: return .warning
+        case .ready: return .ready
+        case .recording: return .danger
+        case .finalizing: return .info
+        case .complete: return .success
+        case .failed: return .danger
+        case .timecodeLost: return .danger
+        case .permissionRequired: return .warning
+        }
+    }
+
+    var isBlockingReady: Bool { self != .ready && self != .complete && self != .recording && self != .finalizing }
+
+    /// Non-colour SF Symbol cue for the state — vital for users who can't
+    /// distinguish red/green.
+    var systemImage: String {
+        switch self {
+        case .setupRequired: return "circle.dashed"
+        case .hardwareDetected: return "cable.connector"
+        case .needsAttention: return "exclamationmark.circle.fill"
+        case .ready: return "checkmark.circle.fill"
+        case .recording: return "record.circle.fill"
+        case .finalizing: return "hourglass"
+        case .complete: return "checkmark.circle.fill"
+        case .failed: return "xmark.circle.fill"
+        case .timecodeLost: return "waveform.badge.exclamationmark"
+        case .permissionRequired: return "lock.fill"
+        }
+    }
+}
+
+/// Pure inputs for `CaptureReadiness.derive` — all primitives, so the mapping
+/// is testable without any engine / `@MainActor` dependency. A view maps its
+/// real engine state into this struct once, then reads the derived state.
+struct CaptureReadinessInput: Equatable, Sendable {
+    var hasSession: Bool = false
+    var isMetadataComplete: Bool = false
+    var isAudioAvailable: Bool = false
+    var hasDetectedHardware: Bool = false
+    var isRecording: Bool = false
+    var isFinalizing: Bool = false
+    var isComplete: Bool = false
+    var didFail: Bool = false
+    var isRecordingIncomplete: Bool = false
+    var isTimecodeLost: Bool = false
+    var hasAudioPermission: Bool = true
+    var isDVSMode: Bool = false
+    var isDVSReady: Bool = false
+    var isMIDIRequired: Bool = false
+    var isMIDIReady: Bool = false
+    var isCrossfaderMapped: Bool = true
+}
+
+extension CaptureReadiness {
+    /// Pure derivation. Lifecycle states dominate, then blocking interruptions,
+    /// then setup/readiness gates in precedence order. `.hardwareDetected`
+    /// (device present but not yet usable) is distinct from `.needsAttention`
+    /// (something missing/wrong) and from `.ready`.
+    static func derive(_ input: CaptureReadinessInput) -> CaptureReadiness {
+        if input.isRecording { return .recording }
+        if input.isFinalizing { return .finalizing }
+        if input.isComplete { return .complete }
+        if input.didFail { return .failed }
+        if input.isRecordingIncomplete { return .needsAttention }
+        if input.isTimecodeLost { return .timecodeLost }
+        if !input.hasAudioPermission { return .permissionRequired }
+        if !input.hasSession { return .setupRequired }
+        if !input.isMetadataComplete { return .setupRequired }
+        if input.isDVSMode && !input.isDVSReady { return .needsAttention }
+        if input.isMIDIRequired && !input.isMIDIReady { return .needsAttention }
+        if input.isMIDIRequired && !input.isCrossfaderMapped { return .needsAttention }
+        if !input.isAudioAvailable {
+            return input.hasDetectedHardware ? .hardwareDetected : .needsAttention
+        }
+        return .ready
+    }
+}

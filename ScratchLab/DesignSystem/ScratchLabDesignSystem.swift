@@ -891,6 +891,10 @@ enum HardwareVerificationTier: String, CaseIterable, Sendable {
 /// the engine's own usable-signal conditions.
 enum InputReadinessState: String, CaseIterable, Sendable {
     case setupRequired
+    /// Optional / not-applicable input — grey, non-blocking, no readiness
+    /// implication (distinct from `.setupRequired`, which implies the input
+    /// MUST be configured before recording).
+    case neutral
     case detected
     case ready
     case needsAttention
@@ -899,6 +903,7 @@ enum InputReadinessState: String, CaseIterable, Sendable {
     var label: String {
         switch self {
         case .setupRequired: return "SETUP REQUIRED"
+        case .neutral: return "—"
         case .detected: return "DETECTED"
         case .ready: return "READY"
         case .needsAttention: return "NEEDS ATTENTION"
@@ -909,10 +914,20 @@ enum InputReadinessState: String, CaseIterable, Sendable {
     var variant: StatusBadgeVariant {
         switch self {
         case .setupRequired: return .neutral
+        case .neutral: return .neutral
         case .detected: return .info
         case .ready: return .ready
         case .needsAttention: return .warning
         case .lost: return .danger
+        }
+    }
+
+    /// Whether this state blocks recording (only `.setupRequired`,
+    /// `.needsAttention` and `.lost` are blocking; `.neutral` is not).
+    var isBlocking: Bool {
+        switch self {
+        case .setupRequired, .needsAttention, .lost: return true
+        case .neutral, .detected, .ready: return false
         }
     }
 }

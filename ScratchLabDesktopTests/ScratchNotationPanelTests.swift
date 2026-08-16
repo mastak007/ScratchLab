@@ -231,6 +231,14 @@ final class ScratchLabDesignTokensTests: XCTestCase {
         XCTAssertEqual(InputReadinessState.lost.label, "LOST")
     }
 
+    func testInputNeutralStateIsNonBlocking() {
+        XCTAssertEqual(InputReadinessState.neutral.label, "—")
+        XCTAssertFalse(InputReadinessState.neutral.isBlocking,
+                       "optional/not-applicable inputs must not block readiness")
+        XCTAssertTrue(InputReadinessState.setupRequired.isBlocking)
+        XCTAssertTrue(InputReadinessState.needsAttention.isBlocking)
+    }
+
     // MARK: Hardware identity is independent of readiness state
 
     func testControllerMappingStateNeverHardcodesHardwareIdentity() {
@@ -485,6 +493,95 @@ final class PracticePresentationStateTests: XCTestCase {
         for state in all {
             XCTAssertFalse(state.label.isEmpty, "\(state) must have a non-blank, non-colour label")
             XCTAssertEqual(state.label, state.label.uppercased(), "state labels are uppercase voice text")
+        }
+    }
+}
+
+// MARK: - Phase 3 Capture readiness derivation
+
+final class CaptureReadinessTests: XCTestCase {
+
+    func testReadyRequiresFullSetup() {
+        let input = CaptureReadinessInput(
+            hasSession: true, isMetadataComplete: true, isAudioAvailable: true
+        )
+        XCTAssertEqual(CaptureReadiness.derive(input), .ready)
+    }
+
+    func testNoSessionIsSetupRequired() {
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput()), .setupRequired)
+    }
+
+    func testIncompleteMetadataIsSetupRequired() {
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: false)), .setupRequired)
+    }
+
+    func testLifecycleStatesDominate() {
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(isRecording: true)), .recording)
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(isFinalizing: true)), .finalizing)
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(isComplete: true)), .complete)
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(didFail: true)), .failed)
+    }
+
+    func testBlockingInterruptions() {
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isTimecodeLost: true)), .timecodeLost)
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, hasAudioPermission: false)), .permissionRequired)
+    }
+
+    func testIncompleteRecordingIsNeedsAttention() {
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isRecordingIncomplete: true)), .needsAttention)
+    }
+
+    func testHardwareDetectedIsNotReady() {
+        // A connected device with no usable audio is DETECTED, not READY.
+        let input = CaptureReadinessInput(
+            hasSession: true, isMetadataComplete: true,
+            isAudioAvailable: false, hasDetectedHardware: true
+        )
+        XCTAssertEqual(CaptureReadiness.derive(input), .hardwareDetected)
+        XCTAssertNotEqual(CaptureReadiness.derive(input), .ready)
+    }
+
+    func testDVSNotReadyIsNeedsAttention() {
+        let input = CaptureReadinessInput(
+            hasSession: true, isMetadataComplete: true, isAudioAvailable: true,
+            isDVSMode: true, isDVSReady: false
+        )
+        XCTAssertEqual(CaptureReadiness.derive(input), .needsAttention)
+    }
+
+    func testDVSReadyIsNotCaptureReadyWhenAudioMissing() {
+        let input = CaptureReadinessInput(
+            hasSession: true, isMetadataComplete: true,
+            isAudioAvailable: false, isDVSMode: true, isDVSReady: true
+        )
+        let derived = CaptureReadiness.derive(input)
+        XCTAssertNotEqual(derived, .ready, "DVS ready must not read as capture ready")
+        XCTAssertEqual(derived, .needsAttention)
+    }
+
+    func testMIDIDetectedButCrossfaderUnmappedIsNotReady() {
+        let input = CaptureReadinessInput(
+            hasSession: true, isMetadataComplete: true, isAudioAvailable: true,
+            isMIDIRequired: true, isMIDIReady: true, isCrossfaderMapped: false
+        )
+        XCTAssertEqual(CaptureReadiness.derive(input), .needsAttention,
+                       "MIDI detected + unmapped crossfader is not ready")
+    }
+
+    func testGreenIsReservedForComplete() {
+        XCTAssertEqual(CaptureReadiness.complete.variant, .success)
+        let nonComplete: [CaptureReadiness] = [.setupRequired, .hardwareDetected, .needsAttention, .ready, .recording, .finalizing, .failed, .timecodeLost, .permissionRequired]
+        for state in nonComplete {
+            XCTAssertNotEqual(state.variant, .success, "\(state) must never render green")
+        }
+    }
+
+    func testLabelsAreNonBlankAndUppercase() {
+        let all: [CaptureReadiness] = [.setupRequired, .hardwareDetected, .needsAttention, .ready, .recording, .finalizing, .complete, .failed, .timecodeLost, .permissionRequired]
+        for state in all {
+            XCTAssertFalse(state.label.isEmpty)
+            XCTAssertEqual(state.label, state.label.uppercased())
         }
     }
 }

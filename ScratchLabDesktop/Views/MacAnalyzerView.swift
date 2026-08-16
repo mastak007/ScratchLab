@@ -388,45 +388,6 @@ struct MacAnalyzerView: View {
         }
     }
 
-    /// Unified hardware readiness (V3.2 HardwareStatus). Distinct from the
-    /// per-input tiles — this is the single "can I record right now" verdict
-    /// with the 5-state language the Figma specifies (SETUP REQUIRED ·
-    /// NEEDS ATTENTION · READY · RECORDING; DVS TIMECODE LOST is folded into
-    /// NEEDS ATTENTION via `routineMetadataStatusMessage`).
-    private enum CaptureHardwareStatus {
-        case setupRequired
-        case needsAttention
-        case ready
-        case recording
-
-        var label: String {
-            switch self {
-            case .setupRequired: return "SETUP REQUIRED"
-            case .needsAttention: return "NEEDS ATTENTION"
-            case .ready: return "READY"
-            case .recording: return "RECORDING"
-            }
-        }
-
-        var systemImage: String {
-            switch self {
-            case .setupRequired: return "circle.dashed"
-            case .needsAttention: return "exclamationmark.circle.fill"
-            case .ready: return "checkmark.circle.fill"
-            case .recording: return "record.circle.fill"
-            }
-        }
-
-        var color: Color {
-            switch self {
-            case .setupRequired: return .secondary
-            case .needsAttention: return ScratchLabDesign.Sem.warning
-            case .ready: return ScratchLabDesign.Sem.success
-            case .recording: return ScratchLabDesign.Sem.danger
-            }
-        }
-    }
-
     private enum ReviewCorrection: String, CaseIterable, Identifiable {
         case babyScratch = "baby_scratch"
         case chirp
@@ -1390,6 +1351,15 @@ struct MacAnalyzerView: View {
         }
         .padding(.horizontal, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: showCaptureCamera) { _, opened in
+            // The optional preview must initialise only when the user opens it
+            // (and permission allows it). `start()` is idempotent — it requests
+            // permission and starts the session the `MacCameraPreviewView` layer
+            // is already attached to, so the feed appears without a stale/black
+            // frame. Without this the disclosure rendered a black preview because
+            // nothing ever started the session on the Capture tab.
+            if opened { captureEngine.start() }
+        }
     }
 
     private var reviewWorkspace: some View {
@@ -1660,6 +1630,15 @@ struct MacAnalyzerView: View {
 
                     captureStageSection(.readiness) {
                         captureInputStatusCard
+                    }
+
+                    if isLastRecordingIncomplete {
+                        RecoveryCard(
+                            issue: .recordingIncomplete,
+                            message: "The last take ended before it could be saved. Retry to capture a clean take.",
+                            actionTitle: "Retry take",
+                            action: { handleMainCaptureAction() }
+                        )
                     }
 
                     captureLatestTakeCard
@@ -3127,6 +3106,15 @@ struct MacAnalyzerView: View {
         switch captureEngine.handMotionState {
         case .searching:   return .secondary
         case .steady, .movingRight, .movingLeft: return .green
+        }
+    }
+
+    /// Hand tracking is a diagnostic, not a readiness gate — "no hand visible"
+    /// is `.neutral` (non-blocking), a tracked hand is `.detected`.
+    private var captureHandMotionReadiness: InputReadinessState {
+        switch captureEngine.handMotionState {
+        case .searching: return .neutral
+        case .steady, .movingRight, .movingLeft: return .detected
         }
     }
 
@@ -5290,53 +5278,86 @@ struct MacAnalyzerView: View {
     }
 
     private var captureNextAction: CaptureNextAction {
-        if captureEngine.isRoutineRecording {
+        // One derived state → one header status. `captureReadiness` is the
+        // single authority, so the header can never contradict the readiness
+        // card or the record button. READY is cyan (the record action), never
+        // green; green is reserved for `.complete`.
+        switch captureReadiness {
+        case .recording:
             return CaptureNextAction(
                 message: "Recording — press Stop to finish the take.",
                 systemImage: "record.circle.fill",
-                color: Color(nsColor: .systemRed)
+                color: ScratchLabDesign.Sem.danger
             )
-        }
-        if selectedRoutineSession == nil {
+        case .finalizing:
             return CaptureNextAction(
-                message: "Next: create a session to unlock recording.",
-                systemImage: "plus.circle",
-                color: .secondary
+                message: "Finalizing take…",
+                systemImage: "hourglass",
+                color: ScratchLabDesign.Sem.info
             )
-        }
-        if isLastRecordingIncomplete {
-            return CaptureNextAction(
-                message: "Recording didn't complete — retry the take.",
-                systemImage: "exclamationmark.circle.fill",
-                color: ScratchLabDesign.Sem.warning
-            )
-        }
-        if let routineMetadataStatusMessage {
-            return CaptureNextAction(
-                message: routineMetadataStatusMessage,
-                systemImage: "exclamationmark.circle.fill",
-                color: ScratchLabDesign.Sem.warning
-            )
-        }
-        if routineStartDisabled {
-            return CaptureNextAction(
-                message: "Next: select an available audio input before recording.",
-                systemImage: "exclamationmark.circle.fill",
-                color: ScratchLabDesign.Sem.warning
-            )
-        }
-        if hasRecordedTake {
+        case .complete:
             return CaptureNextAction(
                 message: "Take captured — review, save, or record another below.",
                 systemImage: "checkmark.seal.fill",
                 color: ScratchLabDesign.Sem.success
             )
+        case .failed:
+            return CaptureNextAction(
+                message: "Recording failed — retry the take.",
+                systemImage: "xmark.circle.fill",
+                color: ScratchLabDesign.Sem.danger
+            )
+        case .timecodeLost:
+            return CaptureNextAction(
+                message: "Timecode lost — re-establish the DVS signal before recording.",
+                systemImage: "waveform.badge.exclamationmark",
+                color: ScratchLabDesign.Sem.danger
+            )
+        case .permissionRequired:
+            return CaptureNextAction(
+                message: "Grant camera/microphone access to record.",
+                systemImage: "lock.fill",
+                color: ScratchLabDesign.Sem.warning
+            )
+        case .setupRequired:
+            if let routineMetadataStatusMessage {
+                return CaptureNextAction(
+                    message: routineMetadataStatusMessage,
+                    systemImage: "exclamationmark.circle.fill",
+                    color: ScratchLabDesign.Sem.warning
+                )
+            }
+            return CaptureNextAction(
+                message: "Next: create a session to unlock recording.",
+                systemImage: "plus.circle",
+                color: .secondary
+            )
+        case .hardwareDetected:
+            return CaptureNextAction(
+                message: "Hardware detected — configure the selected inputs before recording.",
+                systemImage: "cable.connector",
+                color: ScratchLabDesign.Sem.info
+            )
+        case .needsAttention:
+            if isLastRecordingIncomplete {
+                return CaptureNextAction(
+                    message: "Recording didn't complete — retry the take.",
+                    systemImage: "exclamationmark.circle.fill",
+                    color: ScratchLabDesign.Sem.warning
+                )
+            }
+            return CaptureNextAction(
+                message: "Next: resolve the highlighted inputs before recording.",
+                systemImage: "exclamationmark.circle.fill",
+                color: ScratchLabDesign.Sem.warning
+            )
+        case .ready:
+            return CaptureNextAction(
+                message: "Ready — press Record to capture a take.",
+                systemImage: "checkmark.circle.fill",
+                color: ScratchLabDesign.Sem.accent
+            )
         }
-        return CaptureNextAction(
-            message: "Ready — press Record to capture a take.",
-            systemImage: "checkmark.circle.fill",
-            color: ScratchLabDesign.Sem.success
-        )
     }
 
     /// True when the most recent take finished without a valid recording —
@@ -5362,12 +5383,44 @@ struct MacAnalyzerView: View {
         return .record
     }
 
-    private var captureHardwareStatus: CaptureHardwareStatus {
-        if captureEngine.isRoutineRecording { return .recording }
-        if selectedRoutineSession == nil { return .setupRequired }
-        if isLastRecordingIncomplete { return .needsAttention }
-        if routineStartDisabled || routineMetadataStatusMessage != nil { return .needsAttention }
-        return .ready
+    /// The single derived capture-readiness state, mapped from the real engine
+    /// + session state into the reusable `CaptureReadiness` model. Distinct
+    /// from the per-input tiles — this is the one "can I record right now"
+    /// verdict plus the recording/complete lifecycle.
+    private var captureReadiness: CaptureReadiness {
+        CaptureReadiness.derive(CaptureReadinessInput(
+            hasSession: selectedRoutineSession != nil,
+            isMetadataComplete: routineMetadataStatusMessage == nil,
+            isAudioAvailable: captureEngine.isSelectedAudioInputAvailable,
+            hasDetectedHardware: !captureEngine.availableAudioDevices.isEmpty
+                || !captureEngine.availableMIDISources.isEmpty,
+            isRecording: captureEngine.isRoutineRecording,
+            // Finalizing / failed / timecode-lost have no single authoritative
+            // owner yet — VERIFY IN ENGINEERING (Phase 3).
+            isFinalizing: false,
+            isComplete: hasRecordedTake,
+            didFail: false,
+            isRecordingIncomplete: isLastRecordingIncomplete,
+            isTimecodeLost: false,
+            hasAudioPermission: Self.audioCapturePermissionGranted,
+            // DVS is enabled when the timecode input mode is active (safe
+            // default `.disabled` → DVS readiness is not required); ready only
+            // when the real signal health is `.usable`.
+            isDVSMode: timecodePipeline.mode != .disabled,
+            isDVSReady: timecodePipeline.signalHealth == .usable,
+            // MIDI/controller input is optional today — no "required" owner.
+            isMIDIRequired: false,
+            isMIDIReady: !captureEngine.availableMIDISources.isEmpty,
+            isCrossfaderMapped: captureEngine.crossfaderCCMapping != nil
+        ))
+    }
+
+    /// Audio capture permission is usable unless explicitly denied/restricted.
+    /// `.notDetermined` is non-blocking — the engine prompts on `start()`, so
+    /// readiness must not read `permissionRequired` before the user was asked.
+    private static var audioCapturePermissionGranted: Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        return status != .denied && status != .restricted
     }
 
     private var capturePerformerLabel: String {
@@ -5680,74 +5733,40 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 6) {
                 // Unified HardwareStatus — the single "can I record right
                 // now" verdict, distinct from the per-input tiles below.
-                Label(captureHardwareStatus.label, systemImage: captureHardwareStatus.systemImage)
+                Label(captureReadiness.label, systemImage: captureReadiness.systemImage)
                     .font(ScratchLabDesign.Typo.pageStatus)
-                    .foregroundStyle(captureHardwareStatus.color)
+                    .foregroundStyle(captureReadiness.variant.color)
 
                 Text("Inputs")
                     .font(ScratchLabDesign.Typo.sectionLabel)
                     .foregroundStyle(.secondary)
             }
 
-            LazyVGrid(columns: Self.practiceBeatModeColumns, spacing: 10) {
-#if DEBUG
-                // DEBUG: live-signal-aware coloring so the operator can
-                // confirm whether audio is actually arriving through the
-                // selected input device.  Production builds keep the
-                // device-connection-only check (Audio Ready / green).
-                // Detail line (selectedAudioDeviceStatusLine) already
-                // carries the signal-status text regardless of build.
-                captureInputStatusTile(
+            VStack(alignment: .leading, spacing: 4) {
+                InputReadinessRow(
                     title: "Audio",
-                    value: selectedAudioDevice == nil
-                        ? captureEngine.audioReadinessText
-                        : captureEngine.audioSignalStatusText,
-                    detail: captureEngine.selectedAudioDeviceStatusLine,
-                    systemImage: selectedAudioDevice == nil ? "circle.dashed" : "waveform",
-                    color: selectedAudioDevice == nil
-                        ? .secondary
-                        : captureEngine.audioMeterColor
+                    state: captureEngine.isSelectedAudioInputAvailable ? .ready : .setupRequired,
+                    detail: captureEngine.selectedAudioDeviceStatusLine
                 )
-#else
-                captureInputStatusTile(
-                    title: "Audio",
-                    value: captureEngine.audioReadinessText,
-                    detail: captureEngine.selectedAudioDeviceStatusLine,
-                    systemImage: selectedAudioDevice == nil ? "circle.dashed" : "waveform",
-                    color: selectedAudioDevice == nil ? .secondary : .green
-                )
-#endif
-                captureInputStatusTile(
+                InputReadinessRow(
                     title: "Camera",
-                    value: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "Missing" : "Camera Ready",
-                    detail: captureEngine.selectedVideoDeviceName,
-                    systemImage: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? "circle.dashed" : "video",
-                    color: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .secondary : .green
+                    state: captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .setupRequired : .ready,
+                    detail: captureEngine.selectedVideoDeviceName
                 )
-                // Slice X.1: dedicated Hand chip so the user knows whether the
-                // Vision pipeline is actually tracking a hand. "Camera Ready"
-                // alone means a device is selected; it does NOT mean motion
-                // is reaching the notation builder.
-                captureInputStatusTile(
+                InputReadinessRow(
                     title: "Hand",
-                    value: captureHandMotionStatusValue,
-                    detail: captureHandMotionStatusDetail,
-                    systemImage: captureHandMotionStatusSystemImage,
-                    color: captureHandMotionStatusColor
+                    state: captureHandMotionReadiness,
+                    detail: captureHandMotionStatusDetail
                 )
-                captureInputStatusTile(
+                InputReadinessRow(
                     title: "Mixer MIDI",
-                    value: mixerStatusValue,
-                    detail: mixerStatusDetail,
-                    systemImage: "slider.horizontal.3",
-                    color: mixerStatusColor
+                    state: selectedMixerMIDIDeviceName != nil ? .detected : .neutral,
+                    detail: mixerStatusDetail
                 )
-                captureInputStatusTile(
+                InputReadinessRow(
                     title: "Watch",
-                    value: watchStatusValue,
-                    detail: watchStatusDetail,
-                    systemImage: "applewatch",
-                    color: relayedWatchCaptureStore.importedSessions.isEmpty ? .secondary : .green
+                    state: relayedWatchCaptureStore.importedSessions.isEmpty ? .neutral : .ready,
+                    detail: watchStatusDetail
                 )
             }
 
@@ -9716,49 +9735,6 @@ struct MacAnalyzerView: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
     #endif
-
-    private func captureInputStatusTile(title: String, value: String, detail: String? = nil, systemImage: String, color: Color) -> some View {
-        // Same TITLE · STATE deduplication rule as StatusBadge.
-        let cleanedValue = StatusBadge.dedupedStatusValue(title: title, value: value)
-        let cleanedDetail: String? = {
-            guard let detail else { return nil }
-            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Drop the detail line entirely if it is the same as the value
-            // (after dedup) — the row was reading like "Audio Ready / Audio
-            // Ready — Virtual audio device — No signal".
-            return trimmed.isEmpty || trimmed.localizedCaseInsensitiveContains(cleanedValue) ? nil : trimmed
-        }()
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(color)
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                Text(cleanedValue)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(color)
-
-                if let cleanedDetail, !cleanedDetail.isEmpty {
-                    Text(cleanedDetail)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
 
     private var miniNotationTimeline: some View {
         let notation = currentRoutineNotationPreview
