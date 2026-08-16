@@ -6586,6 +6586,89 @@ enum CaptureCore {
 // Enforces the hardware contract: connected ≠ ready, carrier detected ≠ DVS
 // ready, DVS ready ≠ capture ready, MIDI detected ≠ crossfader mapped.
 
+/// The five hardware lanes that feed Capture readiness. Kept SEPARATE from the
+/// single presentation state so each lane's rich source state survives into the
+/// UI and the READY gate reads one place.
+enum CaptureLane: String, CaseIterable, Sendable {
+    case audio
+    case dvsTimecode
+    case platter
+    case crossfaderMIDI
+    case camera
+
+    var label: String {
+        switch self {
+        case .audio: return "Audio"
+        case .dvsTimecode: return "DVS / timecode"
+        case .platter: return "Platter"
+        case .crossfaderMIDI: return "Crossfader / MIDI"
+        case .camera: return "Camera"
+        }
+    }
+}
+
+/// One lane's readiness contribution: whether it gates READY (`isRequired`)
+/// and whether it is truly usable (`isUsable`). A lane is *blocking* when it
+/// is required but not usable.
+struct CaptureLaneReadiness: Equatable, Sendable {
+    var isRequired: Bool
+    var isUsable: Bool
+
+    /// Optional / off lane — never gates READY.
+    static let notRequired = CaptureLaneReadiness(isRequired: false, isUsable: false)
+
+    var isBlocking: Bool { isRequired && !isUsable }
+
+    /// DVS lane — only `DVSSignalState.usable` is usable. Carrier-detected,
+    /// weak, clipped, channel-fault, no-signal and lost are all NOT usable.
+    static func dvs(_ signal: DVSSignalState, required: Bool) -> CaptureLaneReadiness {
+        CaptureLaneReadiness(isRequired: required, isUsable: signal.isReady)
+    }
+
+    /// Controller lane — only `ControllerMappingState.dvsPlusMidiReady` (the
+    /// true combined-ready state) is usable. `midiLearned` / `platterReady` /
+    /// `controllerDetected` are NOT combined-ready.
+    static func controller(_ mapping: ControllerMappingState, required: Bool) -> CaptureLaneReadiness {
+        CaptureLaneReadiness(isRequired: required, isUsable: mapping.isReady)
+    }
+
+    /// Generic input lane (audio / platter / camera) — only `.ready` is usable.
+    static func input(_ state: InputReadinessState, required: Bool) -> CaptureLaneReadiness {
+        CaptureLaneReadiness(isRequired: required, isUsable: state == .ready)
+    }
+
+    /// Audio lane straight from the engine's availability signal. Audio is a
+    /// blocking lane whenever a session is active.
+    static func audio(isAvailable: Bool) -> CaptureLaneReadiness {
+        CaptureLaneReadiness(isRequired: true, isUsable: isAvailable)
+    }
+}
+
+/// The five Capture lanes. Defaults match the current product: only Audio is
+/// blocking; DVS/timecode blocks only while timecode input mode is active;
+/// Platter and Crossfader/MIDI are optional today; Camera never blocks.
+struct CaptureLanes: Equatable, Sendable {
+    var audio = CaptureLaneReadiness.audio(isAvailable: false)
+    var dvsTimecode = CaptureLaneReadiness.notRequired
+    var platter = CaptureLaneReadiness.notRequired
+    var crossfaderMIDI = CaptureLaneReadiness.notRequired
+    var camera = CaptureLaneReadiness.notRequired
+
+    /// Lanes that currently gate READY (required and not yet usable).
+    var blockingLanes: [CaptureLane] {
+        var result: [CaptureLane] = []
+        if audio.isBlocking { result.append(.audio) }
+        if dvsTimecode.isBlocking { result.append(.dvsTimecode) }
+        if platter.isBlocking { result.append(.platter) }
+        if crossfaderMIDI.isBlocking { result.append(.crossfaderMIDI) }
+        if camera.isBlocking { result.append(.camera) }
+        return result
+    }
+
+    /// READY is reachable only when every blocking lane is truly usable.
+    var isReady: Bool { blockingLanes.isEmpty }
+}
+
 enum CaptureReadiness: Equatable, Sendable {
     case setupRequired
     case hardwareDetected
@@ -6594,6 +6677,7 @@ enum CaptureReadiness: Equatable, Sendable {
     case recording
     case finalizing
     case complete
+    case incomplete
     case failed
     case timecodeLost
     case permissionRequired
@@ -6607,6 +6691,7 @@ enum CaptureReadiness: Equatable, Sendable {
         case .recording: return "RECORDING"
         case .finalizing: return "FINALIZING"
         case .complete: return "COMPLETE"
+        case .incomplete: return "INCOMPLETE"
         case .failed: return "FAILED"
         case .timecodeLost: return "TIMECODE LOST"
         case .permissionRequired: return "PERMISSION REQUIRED"
@@ -6614,7 +6699,8 @@ enum CaptureReadiness: Equatable, Sendable {
     }
 
     /// Semantic status colour — green only for `.complete`; red for recording/
-    /// failure/interruption; amber for attention/permission; bone for ready.
+    /// failure/interruption; amber for attention/incomplete/permission; bone
+    /// for ready.
     var variant: StatusBadgeVariant {
         switch self {
         case .setupRequired: return .neutral
@@ -6624,6 +6710,7 @@ enum CaptureReadiness: Equatable, Sendable {
         case .recording: return .danger
         case .finalizing: return .info
         case .complete: return .success
+        case .incomplete: return .warning
         case .failed: return .danger
         case .timecodeLost: return .danger
         case .permissionRequired: return .warning
@@ -6643,6 +6730,7 @@ enum CaptureReadiness: Equatable, Sendable {
         case .recording: return "record.circle.fill"
         case .finalizing: return "hourglass"
         case .complete: return "checkmark.circle.fill"
+        case .incomplete: return "exclamationmark.circle.fill"
         case .failed: return "xmark.circle.fill"
         case .timecodeLost: return "waveform.badge.exclamationmark"
         case .permissionRequired: return "lock.fill"
@@ -6652,48 +6740,47 @@ enum CaptureReadiness: Equatable, Sendable {
 
 /// Pure inputs for `CaptureReadiness.derive` — all primitives, so the mapping
 /// is testable without any engine / `@MainActor` dependency. A view maps its
-/// real engine state into this struct once, then reads the derived state.
+/// real engine + session state into this struct once, then reads the derived
+/// state.
 struct CaptureReadinessInput: Equatable, Sendable {
     var hasSession: Bool = false
     var isMetadataComplete: Bool = false
-    var isAudioAvailable: Bool = false
+    var hasAudioPermission: Bool = true
+    /// Any capture hardware seen at all (audio device or MIDI source) — used
+    /// to distinguish "hardware present, not yet usable" from "nothing here".
     var hasDetectedHardware: Bool = false
+    var lanes: CaptureLanes = .init()
     var isRecording: Bool = false
     var isFinalizing: Bool = false
-    var isComplete: Bool = false
+    var didComplete: Bool = false
     var didFail: Bool = false
-    var isRecordingIncomplete: Bool = false
+    var didEndIncomplete: Bool = false
     var isTimecodeLost: Bool = false
-    var hasAudioPermission: Bool = true
-    var isDVSMode: Bool = false
-    var isDVSReady: Bool = false
-    var isMIDIRequired: Bool = false
-    var isMIDIReady: Bool = false
-    var isCrossfaderMapped: Bool = true
 }
 
 extension CaptureReadiness {
     /// Pure derivation. Lifecycle states dominate, then blocking interruptions,
-    /// then setup/readiness gates in precedence order. `.hardwareDetected`
-    /// (device present but not yet usable) is distinct from `.needsAttention`
-    /// (something missing/wrong) and from `.ready`.
+    /// then setup/readiness gates. `.incomplete` (a take ended without a clean
+    /// save) and `.failed` (a hard failure) are distinct from `.needsAttention`
+    /// (a blocking lane is not usable *before* recording).
     static func derive(_ input: CaptureReadinessInput) -> CaptureReadiness {
         if input.isRecording { return .recording }
         if input.isFinalizing { return .finalizing }
-        if input.isComplete { return .complete }
+        if input.didComplete { return .complete }
         if input.didFail { return .failed }
-        if input.isRecordingIncomplete { return .needsAttention }
+        if input.didEndIncomplete { return .incomplete }
         if input.isTimecodeLost { return .timecodeLost }
         if !input.hasAudioPermission { return .permissionRequired }
         if !input.hasSession { return .setupRequired }
         if !input.isMetadataComplete { return .setupRequired }
-        if input.isDVSMode && !input.isDVSReady { return .needsAttention }
-        if input.isMIDIRequired && !input.isMIDIReady { return .needsAttention }
-        if input.isMIDIRequired && !input.isCrossfaderMapped { return .needsAttention }
-        if !input.isAudioAvailable {
-            return input.hasDetectedHardware ? .hardwareDetected : .needsAttention
+        if input.lanes.isReady { return .ready }
+        // A blocking lane is not usable. Audio-not-usable with hardware present
+        // is "hardware detected" (cyan info); every other blocking lane is
+        // "needs attention" (resolve the input).
+        if input.lanes.audio.isBlocking && input.hasDetectedHardware {
+            return .hardwareDetected
         }
-        return .ready
+        return .needsAttention
     }
 }
 

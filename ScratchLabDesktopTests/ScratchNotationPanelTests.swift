@@ -501,12 +501,99 @@ final class PracticePresentationStateTests: XCTestCase {
 
 final class CaptureReadinessTests: XCTestCase {
 
-    func testReadyRequiresFullSetup() {
-        let input = CaptureReadinessInput(
-            hasSession: true, isMetadataComplete: true, isAudioAvailable: true
+    // MARK: - Lane semantics (contradictions & boundary cases)
+
+    func testDVSCarrierDetectedIsNotUsable() {
+        // carrierDetected is NOT DVS-ready; only `.usable` is.
+        XCTAssertFalse(CaptureLaneReadiness.dvs(.carrierDetected, required: true).isUsable)
+        XCTAssertTrue(CaptureLaneReadiness.dvs(.usable, required: true).isUsable)
+
+        var carrierLanes = CaptureLanes()
+        carrierLanes.audio = .audio(isAvailable: true)
+        carrierLanes.dvsTimecode = .dvs(.carrierDetected, required: true)
+        XCTAssertFalse(carrierLanes.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: carrierLanes)),
+            .needsAttention
         )
-        XCTAssertEqual(CaptureReadiness.derive(input), .ready)
+
+        var usableLanes = CaptureLanes()
+        usableLanes.audio = .audio(isAvailable: true)
+        usableLanes.dvsTimecode = .dvs(.usable, required: true)
+        XCTAssertTrue(usableLanes.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: usableLanes)),
+            .ready
+        )
     }
+
+    func testMIDILearnedIsNotCombinedReady() {
+        // midiLearned / platterReady are NOT combined-ready; only dvsPlusMidiReady is.
+        XCTAssertFalse(CaptureLaneReadiness.controller(.midiLearned, required: true).isUsable)
+        XCTAssertFalse(CaptureLaneReadiness.controller(.platterReady, required: true).isUsable)
+        XCTAssertTrue(CaptureLaneReadiness.controller(.dvsPlusMidiReady, required: true).isUsable)
+
+        var learnedLanes = CaptureLanes()
+        learnedLanes.audio = .audio(isAvailable: true)
+        learnedLanes.crossfaderMIDI = .controller(.midiLearned, required: true)
+        XCTAssertFalse(learnedLanes.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: learnedLanes)),
+            .needsAttention
+        )
+
+        var combinedLanes = CaptureLanes()
+        combinedLanes.audio = .audio(isAvailable: true)
+        combinedLanes.crossfaderMIDI = .controller(.dvsPlusMidiReady, required: true)
+        XCTAssertTrue(combinedLanes.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: combinedLanes)),
+            .ready
+        )
+    }
+
+    func testCameraNeverBlocksReadiness() {
+        // Camera is optional: even "setup required" camera must not gate READY.
+        var lanes = CaptureLanes()
+        lanes.audio = .audio(isAvailable: true)
+        lanes.camera = .input(.setupRequired, required: false)
+        XCTAssertTrue(lanes.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: lanes)),
+            .ready
+        )
+        // An optional lane is never blocking.
+        XCTAssertFalse(CaptureLaneReadiness.notRequired.isBlocking)
+    }
+
+    func testReadyRequiresEveryBlockingLaneUsable() {
+        // Audio is the default blocking lane: unavailable audio → not ready.
+        var missingAudio = CaptureLanes()
+        missingAudio.audio = .audio(isAvailable: false)
+        XCTAssertFalse(missingAudio.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: missingAudio)),
+            .needsAttention
+        )
+
+        // A required-but-not-usable DVS lane blocks even when audio is fine.
+        var dvsMissing = CaptureLanes()
+        dvsMissing.audio = .audio(isAvailable: true)
+        dvsMissing.dvsTimecode = .dvs(.noSignal, required: true)
+        XCTAssertFalse(dvsMissing.isReady)
+    }
+
+    func testDVSReadyDoesNotReadCaptureReadyWhenAudioMissing() {
+        var lanes = CaptureLanes()
+        lanes.audio = .audio(isAvailable: false)
+        lanes.dvsTimecode = .dvs(.usable, required: true)
+        let derived = CaptureReadiness.derive(
+            CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: lanes)
+        )
+        XCTAssertNotEqual(derived, .ready, "DVS ready must not read as capture ready")
+    }
+
+    // MARK: - Presentation-state derivation
 
     func testNoSessionIsSetupRequired() {
         XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput()), .setupRequired)
@@ -516,11 +603,19 @@ final class CaptureReadinessTests: XCTestCase {
         XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: false)), .setupRequired)
     }
 
+    func testReadyRequiresFullSetup() {
+        var lanes = CaptureLanes()
+        lanes.audio = .audio(isAvailable: true)
+        let input = CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: lanes)
+        XCTAssertEqual(CaptureReadiness.derive(input), .ready)
+    }
+
     func testLifecycleStatesDominate() {
         XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(isRecording: true)), .recording)
         XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(isFinalizing: true)), .finalizing)
-        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(isComplete: true)), .complete)
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(didComplete: true)), .complete)
         XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(didFail: true)), .failed)
+        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(didEndIncomplete: true)), .incomplete)
     }
 
     func testBlockingInterruptions() {
@@ -528,57 +623,36 @@ final class CaptureReadinessTests: XCTestCase {
         XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, hasAudioPermission: false)), .permissionRequired)
     }
 
-    func testIncompleteRecordingIsNeedsAttention() {
-        XCTAssertEqual(CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isRecordingIncomplete: true)), .needsAttention)
+    func testIncompleteIsDistinctFromNeedsAttention() {
+        // A post-recording incomplete take is `.incomplete`, NOT `.needsAttention`
+        // (which is the pre-recording "resolve a blocking lane" state).
+        let incomplete = CaptureReadiness.derive(CaptureReadinessInput(hasSession: true, isMetadataComplete: true, didEndIncomplete: true))
+        XCTAssertEqual(incomplete, .incomplete)
+        XCTAssertNotEqual(incomplete, .needsAttention)
     }
 
     func testHardwareDetectedIsNotReady() {
         // A connected device with no usable audio is DETECTED, not READY.
+        var lanes = CaptureLanes()
+        lanes.audio = .audio(isAvailable: false)
         let input = CaptureReadinessInput(
             hasSession: true, isMetadataComplete: true,
-            isAudioAvailable: false, hasDetectedHardware: true
+            hasDetectedHardware: true, lanes: lanes
         )
         XCTAssertEqual(CaptureReadiness.derive(input), .hardwareDetected)
         XCTAssertNotEqual(CaptureReadiness.derive(input), .ready)
     }
 
-    func testDVSNotReadyIsNeedsAttention() {
-        let input = CaptureReadinessInput(
-            hasSession: true, isMetadataComplete: true, isAudioAvailable: true,
-            isDVSMode: true, isDVSReady: false
-        )
-        XCTAssertEqual(CaptureReadiness.derive(input), .needsAttention)
-    }
-
-    func testDVSReadyIsNotCaptureReadyWhenAudioMissing() {
-        let input = CaptureReadinessInput(
-            hasSession: true, isMetadataComplete: true,
-            isAudioAvailable: false, isDVSMode: true, isDVSReady: true
-        )
-        let derived = CaptureReadiness.derive(input)
-        XCTAssertNotEqual(derived, .ready, "DVS ready must not read as capture ready")
-        XCTAssertEqual(derived, .needsAttention)
-    }
-
-    func testMIDIDetectedButCrossfaderUnmappedIsNotReady() {
-        let input = CaptureReadinessInput(
-            hasSession: true, isMetadataComplete: true, isAudioAvailable: true,
-            isMIDIRequired: true, isMIDIReady: true, isCrossfaderMapped: false
-        )
-        XCTAssertEqual(CaptureReadiness.derive(input), .needsAttention,
-                       "MIDI detected + unmapped crossfader is not ready")
-    }
-
     func testGreenIsReservedForComplete() {
         XCTAssertEqual(CaptureReadiness.complete.variant, .success)
-        let nonComplete: [CaptureReadiness] = [.setupRequired, .hardwareDetected, .needsAttention, .ready, .recording, .finalizing, .failed, .timecodeLost, .permissionRequired]
+        let nonComplete: [CaptureReadiness] = [.setupRequired, .hardwareDetected, .needsAttention, .ready, .recording, .finalizing, .incomplete, .failed, .timecodeLost, .permissionRequired]
         for state in nonComplete {
             XCTAssertNotEqual(state.variant, .success, "\(state) must never render green")
         }
     }
 
     func testLabelsAreNonBlankAndUppercase() {
-        let all: [CaptureReadiness] = [.setupRequired, .hardwareDetected, .needsAttention, .ready, .recording, .finalizing, .complete, .failed, .timecodeLost, .permissionRequired]
+        let all: [CaptureReadiness] = [.setupRequired, .hardwareDetected, .needsAttention, .ready, .recording, .finalizing, .complete, .incomplete, .failed, .timecodeLost, .permissionRequired]
         for state in all {
             XCTAssertFalse(state.label.isEmpty)
             XCTAssertEqual(state.label, state.label.uppercased())

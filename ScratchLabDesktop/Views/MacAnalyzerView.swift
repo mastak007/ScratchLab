@@ -374,7 +374,9 @@ struct MacAnalyzerView: View {
         case setup = 1
         case readiness = 2
         case record = 3
-        case review = 4
+        case finalizing = 4
+        case issue = 5
+        case complete = 6
 
         var id: Int { rawValue }
 
@@ -383,7 +385,9 @@ struct MacAnalyzerView: View {
             case .setup: return "Set up the session"
             case .readiness: return "Confirm readiness"
             case .record: return "Record the take"
-            case .review: return "Review the result"
+            case .finalizing: return "Finalizing"
+            case .issue: return "Issue — retry"
+            case .complete: return "Take captured"
             }
         }
     }
@@ -1321,8 +1325,9 @@ struct MacAnalyzerView: View {
 
     /// Camera is an optional visual guide, not the dominant Capture surface.
     /// It stays collapsed unless the user explicitly opens it; recording does
-    /// not depend on it. The draggable rig overlay appears only inside the
-    /// expanded preview and only when calibration is unlocked.
+    /// not depend on it, and the collapsed disclosure never resizes the core
+    /// workflow. The standard preview is the clean live feed only — no
+    /// scrim/hand/deck/mixer overlays (calibration lives in Advanced).
     private var captureCameraSection: some View {
         DisclosureGroup(isExpanded: $showCaptureCamera) {
             Group {
@@ -2501,17 +2506,10 @@ struct MacAnalyzerView: View {
 
     private func liveCameraStage(title: String, subtitle: String) -> some View {
         cameraStageCard(title: title, subtitle: subtitle) {
-            ZStack(alignment: .topLeading) {
-                MacCameraPreviewView(session: captureEngine.captureSession)
-                    .overlay(Color.black.opacity(0.08))
-
-                if captureEngine.showRigGuides {
-                    DeckGamificationOverlay(detector: captureEngine)
-                }
-
-                previewPill
-                    .padding(24)
-            }
+            // Standard camera preview: the live feed only. No scrim, no
+            // deck/mixer drag boxes, no hand-region pill, no coaching overlay
+            // — those calibration overlays live in Advanced only.
+            MacCameraPreviewView(session: captureEngine.captureSession)
         }
     }
 
@@ -5413,14 +5411,13 @@ struct MacAnalyzerView: View {
                 systemImage: "cable.connector",
                 color: ScratchLabDesign.Sem.info
             )
+        case .incomplete:
+            return CaptureNextAction(
+                message: "Recording didn't complete — retry the take.",
+                systemImage: "exclamationmark.circle.fill",
+                color: ScratchLabDesign.Sem.warning
+            )
         case .needsAttention:
-            if isLastRecordingIncomplete {
-                return CaptureNextAction(
-                    message: "Recording didn't complete — retry the take.",
-                    systemImage: "exclamationmark.circle.fill",
-                    color: ScratchLabDesign.Sem.warning
-                )
-            }
             return CaptureNextAction(
                 message: "Next: resolve the highlighted inputs before recording.",
                 systemImage: "exclamationmark.circle.fill",
@@ -5447,15 +5444,19 @@ struct MacAnalyzerView: View {
     }
 
     private var currentCaptureStage: CaptureStage {
-        if captureEngine.isRoutineRecording { return .record }
-        if hasRecordedTake { return .review }
-        if isLastRecordingIncomplete { return .record }  // retry the take
-        if selectedRoutineSession == nil { return .setup }
-        // Metadata gate (session name / scratch type / BPM) is a setup fix;
-        // a missing audio input is a readiness fix.
-        if routineMetadataStatusMessage != nil { return .setup }
-        if routineStartDisabled { return .readiness }
-        return .record
+        // The single derived `captureReadiness` state is the authority — the
+        // stepper highlight, the expanded stage, and the record card all read
+        // this, so they can never disagree about where the flow is.
+        switch captureReadiness {
+        case .recording: return .record
+        case .finalizing: return .finalizing
+        case .incomplete, .failed: return .issue
+        case .complete: return .complete
+        case .setupRequired: return .setup
+        case .needsAttention, .hardwareDetected, .timecodeLost, .permissionRequired:
+            return .readiness
+        case .ready: return .record
+        }
     }
 
     /// The single derived capture-readiness state, mapped from the real engine
@@ -5463,30 +5464,37 @@ struct MacAnalyzerView: View {
     /// from the per-input tiles — this is the one "can I record right now"
     /// verdict plus the recording/complete lifecycle.
     private var captureReadiness: CaptureReadiness {
-        CaptureReadiness.derive(CaptureReadinessInput(
+        let artifactReadiness = currentRoutineArtifactStatus?.readiness
+        var didFail = false
+        if case .failed = artifactReadiness { didFail = true }
+        return CaptureReadiness.derive(CaptureReadinessInput(
             hasSession: selectedRoutineSession != nil,
             isMetadataComplete: routineMetadataStatusMessage == nil,
-            isAudioAvailable: captureEngine.isSelectedAudioInputAvailable,
+            hasAudioPermission: Self.audioCapturePermissionGranted,
             hasDetectedHardware: !captureEngine.availableAudioDevices.isEmpty
                 || !captureEngine.availableMIDISources.isEmpty,
+            lanes: CaptureLanes(
+                audio: .audio(isAvailable: captureEngine.isSelectedAudioInputAvailable),
+                // DVS is a blocking lane only while timecode input mode is
+                // active (default `.disabled`); ready only when the real
+                // signal health is `.usable` (carrier-detected is NOT usable).
+                dvsTimecode: .dvs(dvsSignalState, required: timecodePipeline.mode != .disabled),
+                // Platter has no dedicated readiness owner yet — optional today.
+                platter: .notRequired,
+                // MIDI/controller input is optional today — no "required" owner.
+                crossfaderMIDI: .controller(controllerMappingState, required: false),
+                // Camera is optional and never gates READY.
+                camera: .input(captureEngine.selectedVideoDeviceUniqueID.isEmpty ? .setupRequired : .ready, required: false)
+            ),
             isRecording: captureEngine.isRoutineRecording,
-            // Finalizing / failed / timecode-lost have no single authoritative
-            // owner yet — VERIFY IN ENGINEERING (Phase 3).
-            isFinalizing: false,
-            isComplete: hasRecordedTake,
-            didFail: false,
-            isRecordingIncomplete: isLastRecordingIncomplete,
-            isTimecodeLost: false,
-            hasAudioPermission: Self.audioCapturePermissionGranted,
-            // DVS is enabled when the timecode input mode is active (safe
-            // default `.disabled` → DVS readiness is not required); ready only
-            // when the real signal health is `.usable`.
-            isDVSMode: timecodePipeline.mode != .disabled,
-            isDVSReady: timecodePipeline.signalHealth == .usable,
-            // MIDI/controller input is optional today — no "required" owner.
-            isMIDIRequired: false,
-            isMIDIReady: !captureEngine.availableMIDISources.isEmpty,
-            isCrossfaderMapped: captureEngine.crossfaderCCMapping != nil
+            // Finalizing / failed are owned by the take-artifact readiness.
+            // Only timecode-loss still has no single owner (SignalHealth has no
+            // "lost" case) — left false and reported.
+            isFinalizing: artifactReadiness == .finalizing,
+            didComplete: hasRecordedTake,
+            didFail: didFail,
+            didEndIncomplete: isLastRecordingIncomplete,
+            isTimecodeLost: false
         ))
     }
 
@@ -5721,8 +5729,8 @@ struct MacAnalyzerView: View {
         if selectedRoutineSession != nil {
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
                 ScratchLabStepHeader(
-                    number: hasRecordedTake ? 4 : 3,
-                    title: hasRecordedTake ? "Review the result" : "Record the take"
+                    number: currentCaptureStage.rawValue,
+                    title: currentCaptureStage.title
                 )
 
                 Label(
@@ -5863,49 +5871,8 @@ struct MacAnalyzerView: View {
             // progressively disclosed so the standard Capture flow stays
             // focused on session → readiness → record → review. Unlocking
             // calibration switches to the live preview with the boxes drawn.
-            DisclosureGroup {
-                HStack(alignment: .top, spacing: 10) {
-                    if captureEngine.calibrationLocked {
-                        Button {
-                            captureEngine.calibrationLocked = false
-                            liveInputEnabled = true
-                            workspaceTab = .practice
-                        } label: {
-                            Label("Camera deck setup", systemImage: "viewfinder")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(captureEngine.isRoutineRecording)
-                    } else {
-                        Button {
-                            captureEngine.calibrationLocked = true
-                        } label: {
-                            Label("Lock calibration", systemImage: "lock.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(captureEngine.isRoutineRecording)
-                    }
-
-                    Text("Point the camera at your deck and hand. Drag the deck and mixer boxes on the live preview, then Lock calibration. Record movement requires the deck and hand to be visible to the camera — \"Camera Ready\" alone is not enough.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
-            } label: {
-                HStack(spacing: 8) {
-                    Label("Camera deck calibration", systemImage: "viewfinder")
-                        .font(ScratchLabDesign.Typo.disclosureLabel)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Text(captureEngine.calibrationLocked ? "Locked" : "Unlocked")
-                        .font(ScratchLabDesign.Typo.statusPill)
-                        .foregroundStyle(captureEngine.calibrationLocked ? .secondary : ScratchLabDesign.Sem.warning)
-                }
-            }
+            // Calibration (deck/mixer drag boxes) lives in Advanced only — the
+            // standard Capture flow never exposes it.
 
             // Audio routing + MIDI source picker + Learn crossfader / Clear
             // mapping live behind a single "Input details" disclosure so the
@@ -9691,23 +9658,6 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var previewPill: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(captureEngine.handMotionState.color)
-                .frame(width: 10, height: 10)
-
-            Text(captureEngine.babyScratchGuidanceCue)
-                .font(.system(size: 13, weight: .bold))
-
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .frame(maxWidth: 260)
     }
 
     private var practiceWorkflowCard: some View {
