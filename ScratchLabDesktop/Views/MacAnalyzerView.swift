@@ -2589,7 +2589,7 @@ struct MacAnalyzerView: View {
     }
 
     private var mixerStatusColor: Color {
-        selectedMixerMIDIDeviceName != nil ? .green : .secondary
+        selectedMixerMIDIDeviceName != nil ? ScratchLabDesign.Sem.info : .secondary
     }
 
     private var mixerStatusDetail: String {
@@ -4824,7 +4824,7 @@ struct MacAnalyzerView: View {
 
             Label(performerBroadcaster.connectionStatus, systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right")
                 .font(ScratchLabDesign.Typo.pageStatus)
-                .foregroundColor(performerBroadcaster.connectedPeerNames.isEmpty ? Color.secondary : Color.green)
+                .foregroundColor(performerBroadcaster.connectedPeerNames.isEmpty ? Color.secondary : ScratchLabDesign.Sem.info)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -7494,7 +7494,7 @@ struct MacAnalyzerView: View {
             reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: reviewDetectedStyle.systemImage, color: reviewDetectedStyle.color)
             reviewFooterMetric(title: "Signal confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
             reviewFooterMetric(title: "Source", value: capturedSource.label, systemImage: capturedSource.systemImage, color: capturedSource.color)
-            reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? .green : .secondary)
+            reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? ScratchLabDesign.Sem.accent : .secondary)
         }
         .scratchLabCard(.stage)
     }
@@ -11336,7 +11336,7 @@ struct MacPerformerMonitorView: View {
 
             Text(performerBroadcaster.connectionStatus)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(performerBroadcaster.connectedPeerNames.isEmpty ? .white.opacity(0.6) : .green)
+                .foregroundStyle(performerBroadcaster.connectedPeerNames.isEmpty ? .white.opacity(0.6) : ScratchLabDesign.Sem.info)
         }
     }
 
