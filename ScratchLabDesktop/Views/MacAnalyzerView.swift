@@ -648,6 +648,7 @@ struct MacAnalyzerView: View {
     @State private var showCaptureCamera = false
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
     @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
+    @State private var reviewDecisionStatusByTakeID: [String: CaptureCore.CaptureReviewDecision.Status] = [:]
     @State private var reviewStatusMessage = "Confirm before export."
     @State private var reviewMetadataByTakeID: [String: CaptureCore.CaptureReviewMetadata] = [:]
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
@@ -3828,7 +3829,7 @@ struct MacAnalyzerView: View {
             isRecording: captureEngine.isRoutineRecording,
             isFinalizing: isFinalizing,
             hasIssue: hasIssue,
-            isConfirmed: reviewDecisionByTakeID[reviewTakeID] != nil,
+            decisionStatus: reviewDecisionStatusByTakeID[reviewTakeID],
             isExporting: sessionExportCoordinator.isPreparing,
             isExported: {
                 switch sessionExportCoordinator.state {
@@ -4281,6 +4282,7 @@ struct MacAnalyzerView: View {
             )
             try updatedSidecar.encodedData().write(to: sidecarURL, options: .atomic)
             reviewDecisionByTakeID[reviewTakeID] = decision
+            reviewDecisionStatusByTakeID[reviewTakeID] = status
             return true
         } catch {
             reviewStatusMessage = "Could not save review for \(reviewTakeID): \(error.localizedDescription)"
@@ -7442,6 +7444,41 @@ struct MacAnalyzerView: View {
         return (built, diag)
     }
 
+    /// Label-decision presentation for the Review summary — reflects the user's
+    /// accept/correct/unknown decision, never the classifier confidence. Kept
+    /// in lock-step with `reviewPresentationState` (corrected ≠ confirmed) so
+    /// the summary can never contradict the header badge.
+    private var reviewLabelDecision: (value: String, systemImage: String, color: Color) {
+        switch reviewDecisionStatusByTakeID[reviewTakeID] {
+        case .accepted:
+            return ("Confirmed", "checkmark.seal.fill", ScratchLabDesign.Sem.success)
+        case .corrected:
+            return ("Corrected", "pencil.circle.fill", ScratchLabDesign.Sem.accent)
+        case .unknown:
+            return ("Unknown", "questionmark.circle", .secondary)
+        case .none:
+            return ("Pending", "circle.dashed", .secondary)
+        }
+    }
+
+    /// Export-status presentation for the Review summary — derives from the real
+    /// `SessionExportCoordinator.state`, so it can never claim "Ready" while an
+    /// export is in flight, succeeded, or failed.
+    private var reviewExportMetric: (value: String, systemImage: String, color: Color) {
+        switch sessionExportCoordinator.state {
+        case .validating, .preparingArchive:
+            return ("Exporting", "arrow.triangle.2.circlepath", ScratchLabDesign.Sem.info)
+        case .readyToShare, .presentingShareSheet, .shareCompleted:
+            return ("Exported", "checkmark.seal.fill", ScratchLabDesign.Sem.success)
+        case .failed:
+            return ("Export failed", "exclamationmark.triangle.fill", ScratchLabDesign.Sem.danger)
+        case .idle, .cancelled:
+            let ready = currentRoutineArtifactStatus?.readiness == .ready
+            return (ready ? "Ready" : "Pending", "square.and.arrow.up",
+                    ready ? ScratchLabDesign.Sem.accent : .secondary)
+        }
+    }
+
     private var reviewSummaryFooterCard: some View {
         let scratchType = routineSessionSetup.scratchType ?? .babyScratch
         let detectedLabel: String = {
@@ -7455,13 +7492,15 @@ struct MacAnalyzerView: View {
         }()
         let confidence: String = reviewConfidenceLabel
         let capturedSource = reviewCapturedSource
-        let exportReady: Bool = currentRoutineArtifactStatus?.readiness == .ready
+        let labelDecision = reviewLabelDecision
+        let exportMetric = reviewExportMetric
         return HStack(alignment: .top, spacing: 12) {
             reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: .white)
             reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: reviewDetectedStyle.systemImage, color: reviewDetectedStyle.color)
             reviewFooterMetric(title: "Signal confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
+            reviewFooterMetric(title: "Label", value: labelDecision.value, systemImage: labelDecision.systemImage, color: labelDecision.color)
             reviewFooterMetric(title: "Source", value: capturedSource.label, systemImage: capturedSource.systemImage, color: capturedSource.color)
-            reviewFooterMetric(title: "Export", value: exportReady ? "Ready" : "Pending", systemImage: "square.and.arrow.up", color: exportReady ? ScratchLabDesign.Sem.accent : .secondary)
+            reviewFooterMetric(title: "Export", value: exportMetric.value, systemImage: exportMetric.systemImage, color: exportMetric.color)
         }
         .scratchLabCard(.stage)
     }

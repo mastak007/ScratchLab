@@ -6797,6 +6797,7 @@ enum ReviewPresentationState: Equatable, Sendable {
     case finalizing
     case issue
     case ready
+    case corrected
     case confirmed
     case exporting
     case exported
@@ -6809,6 +6810,7 @@ enum ReviewPresentationState: Equatable, Sendable {
         case .finalizing: return "FINALIZING"
         case .issue: return "ISSUE"
         case .ready: return "READY"
+        case .corrected: return "CORRECTED"
         case .confirmed: return "CONFIRMED"
         case .exporting: return "EXPORTING"
         case .exported: return "EXPORTED"
@@ -6817,7 +6819,9 @@ enum ReviewPresentationState: Equatable, Sendable {
     }
 
     /// Semantic colour — green only for `.confirmed` / `.exported`; red for
-    /// recording/failure; amber for issue; bone for ready.
+    /// recording/failure; amber for issue; bone for ready. `.corrected` is
+    /// cyan (informational): a label correction is a recorded human action,
+    /// never presented as a green confirmation.
     var variant: StatusBadgeVariant {
         switch self {
         case .noTake: return .neutral
@@ -6825,6 +6829,7 @@ enum ReviewPresentationState: Equatable, Sendable {
         case .finalizing: return .info
         case .issue: return .warning
         case .ready: return .ready
+        case .corrected: return .info
         case .confirmed: return .success
         case .exporting: return .info
         case .exported: return .success
@@ -6839,7 +6844,12 @@ struct ReviewPresentationInput: Equatable, Sendable {
     var isRecording: Bool = false
     var isFinalizing: Bool = false
     var hasIssue: Bool = false
-    var isConfirmed: Bool = false
+    /// The persisted label decision for the take. Only `.accepted` maps to
+    /// `.confirmed` and only `.corrected` maps to `.corrected`; `nil` and
+    /// `.unknown` fall through to `.ready`. Detection confidence is NOT part
+    /// of this input — confidence stays informational and never triggers a
+    /// confirmation.
+    var decisionStatus: CaptureCore.CaptureReviewDecision.Status? = nil
     var isExporting: Bool = false
     var isExported: Bool = false
     var didExportFail: Bool = false
@@ -6847,7 +6857,8 @@ struct ReviewPresentationInput: Equatable, Sendable {
 
 extension ReviewPresentationState {
     /// Pure derivation. Take lifecycle states dominate, then no-take, then the
-    /// export lifecycle, then confirmation over ready.
+    /// export lifecycle, then the label decision (confirmed/corrected) over
+    /// ready.
     static func derive(_ input: ReviewPresentationInput) -> ReviewPresentationState {
         if input.isRecording { return .recording }
         if input.isFinalizing { return .finalizing }
@@ -6856,7 +6867,8 @@ extension ReviewPresentationState {
         if input.isExporting { return .exporting }
         if input.didExportFail { return .exportFailed }
         if input.isExported { return .exported }
-        if input.isConfirmed { return .confirmed }
+        if input.decisionStatus == .accepted { return .confirmed }
+        if input.decisionStatus == .corrected { return .corrected }
         return .ready
     }
 }

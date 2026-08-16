@@ -162,4 +162,17 @@ final class ScratchPhraseChartComparisonDomainTests: XCTestCase {
         let x = ScratchPhraseChartComparisonDomain.normalizedX(time: 1.2, domain: domain, width: width)
         XCTAssertEqual(x, 40.0, accuracy: 1e-9)
     }
+
+    func testPerformedEventPastTargetEndOverflowsWithoutRescaling() {
+        // A performed stroke whose time exceeds the target's duration must NOT
+        // rescale the shared domain — it maps to an x past the right edge
+        // (clipped by the renderer), and the target's duration stays
+        // authoritative. This is the "duration mismatch" contract: a longer
+        // performed take never stretches the TARGET's time axis.
+        let domain = ScratchPhraseChartComparisonDomain.commonDomain(targetDuration: 3.0)
+        let width = 300.0
+        let overflow = ScratchPhraseChartComparisonDomain.normalizedX(time: 4.0, domain: domain, width: width)
+        XCTAssertGreaterThan(overflow, width, "an over-long performed stroke must overflow, not rescale the target domain")
+        XCTAssertEqual(domain.upperBound, 3.0, accuracy: 1e-9)
+    }
 }

@@ -348,6 +348,18 @@ final class ScratchLabDesignTokensTests: XCTestCase {
         XCTAssertEqual(ScratchNotationPanelMode.reviewComparison.headerTitle, "REVIEW COMPARISON")
         XCTAssertEqual(ScratchNotationPanelMode.liveComparison.performanceLabel, "MY PERFORMANCE — LIVE")
         XCTAssertEqual(ScratchNotationPanelMode.reviewComparison.performanceLabel, "MY PERFORMANCE — CAPTURED")
+        XCTAssertEqual(ScratchNotationPanelMode.targetReference.performanceLabel, "MY PERFORMANCE — CAPTURED",
+                       "the target-only mode still labels a hypothetical performance lane as CAPTURED, never LIVE")
+    }
+
+    func testTargetAndPerformanceTraceIdentityIsDistinct() {
+        XCTAssertNotEqual(ScratchMotionRenderer.Style.target, ScratchMotionRenderer.Style.performance,
+                          "target and performed traces must be distinct visual identities")
+    }
+
+    func testEmptyDetectedEventsYieldNoNotationPreview() {
+        XCTAssertNil(ScratchNotation.detectedPreview(scratchID: "baby_scratch", events: []),
+                     "empty captured evidence must never fabricate a performed trace")
     }
 }
 
@@ -676,19 +688,51 @@ final class ReviewPresentationStateTests: XCTestCase {
 
     func testReadyThenConfirmed() {
         XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true)), .ready)
-        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true)), .confirmed)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .accepted)), .confirmed)
+    }
+
+    func testCorrectedIsDistinctFromConfirmed() {
+        let corrected = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .corrected))
+        let confirmed = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .accepted))
+        XCTAssertEqual(corrected, .corrected)
+        XCTAssertEqual(confirmed, .confirmed)
+        XCTAssertNotEqual(corrected, confirmed, "a label correction must never read as a confirmation")
+    }
+
+    func testUnknownDecisionDoesNotReadAsConfirmedOrCorrected() {
+        let unknown = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .unknown))
+        XCTAssertEqual(unknown, .ready, "leaving a label unknown is neither a confirmation nor a correction")
+    }
+
+    func testCorrectionConfirmationTransitionIsOrdered() {
+        let ready = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true))
+        let corrected = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .corrected))
+        let confirmed = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .accepted))
+        XCTAssertEqual([ready, corrected, confirmed], [.ready, .corrected, .confirmed])
+        XCTAssertNotEqual(corrected.variant, .success, "corrected is informational, never green")
     }
 
     func testExportLifecycleStates() {
-        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true, isExporting: true)), .exporting)
-        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true, didExportFail: true)), .exportFailed)
-        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true, isExported: true)), .exported)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .accepted, isExporting: true)), .exporting)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .accepted, didExportFail: true)), .exportFailed)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, decisionStatus: .accepted, isExported: true)), .exported)
+    }
+
+    func testExportGatingFailureOverridesSuccess() {
+        let both = ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isExported: true, didExportFail: true))
+        XCTAssertEqual(both, .exportFailed, "a failed export must never read as success")
+    }
+
+    func testExportStatesRequireATake() {
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(isExported: true)), .noTake, "no take must never read as exported")
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(didExportFail: true)), .noTake)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(isExporting: true)), .noTake)
     }
 
     func testGreenIsReservedForConfirmedAndExported() {
         XCTAssertEqual(ReviewPresentationState.confirmed.variant, .success)
         XCTAssertEqual(ReviewPresentationState.exported.variant, .success)
-        let nonGreen: [ReviewPresentationState] = [.noTake, .recording, .finalizing, .issue, .ready, .exporting, .exportFailed]
+        let nonGreen: [ReviewPresentationState] = [.noTake, .recording, .finalizing, .issue, .ready, .corrected, .exporting, .exportFailed]
         for state in nonGreen {
             XCTAssertNotEqual(state.variant, .success, "\(state) must never render green")
         }
@@ -699,10 +743,11 @@ final class ReviewPresentationStateTests: XCTestCase {
         XCTAssertEqual(noTake, .noTake)
         XCTAssertNotEqual(noTake, .ready)
         XCTAssertNotEqual(noTake, .confirmed, "no take must never fabricate captured/confirmed evidence")
+        XCTAssertNotEqual(noTake, .corrected, "no take must never fabricate a correction")
     }
 
     func testLabelsAreNonBlankAndUppercase() {
-        let all: [ReviewPresentationState] = [.noTake, .recording, .finalizing, .issue, .ready, .confirmed, .exporting, .exported, .exportFailed]
+        let all: [ReviewPresentationState] = [.noTake, .recording, .finalizing, .issue, .ready, .corrected, .confirmed, .exporting, .exported, .exportFailed]
         for state in all {
             XCTAssertFalse(state.label.isEmpty)
             XCTAssertEqual(state.label, state.label.uppercased())
