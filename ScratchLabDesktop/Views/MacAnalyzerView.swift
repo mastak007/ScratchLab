@@ -3794,6 +3794,39 @@ struct MacAnalyzerView: View {
         }
     }
 
+    /// The single derived review state, mapped from the real take/decision/export
+    /// owners into the reusable `ReviewPresentationState`. Green appears only
+    /// after real confirmation or a real export artifact; `.noTake` never
+    /// fabricates captured evidence.
+    private var reviewPresentationState: ReviewPresentationState {
+        var isFinalizing = false
+        var hasIssue = false
+        switch reviewStagePresentation {
+        case .finalizing: isFinalizing = true
+        case .issue: hasIssue = true
+        case .empty, .recording, .ready: break
+        }
+
+        return ReviewPresentationState.derive(ReviewPresentationInput(
+            hasTake: hasRecordedTake,
+            isRecording: captureEngine.isRoutineRecording,
+            isFinalizing: isFinalizing,
+            hasIssue: hasIssue,
+            isConfirmed: reviewDecisionByTakeID[reviewTakeID] != nil,
+            isExporting: sessionExportCoordinator.isPreparing,
+            isExported: {
+                switch sessionExportCoordinator.state {
+                case .readyToShare, .presentingShareSheet, .shareCompleted: return true
+                default: return false
+                }
+            }(),
+            didExportFail: {
+                if case .failed = sessionExportCoordinator.state { return true }
+                return false
+            }()
+        ))
+    }
+
     private var reviewHeaderStatusStyle: ReviewHeaderStatusStyle {
         if reviewStatusMessage.hasPrefix("Could not") {
             return ReviewHeaderStatusStyle(systemImage: "exclamationmark.triangle.fill", color: .red)
@@ -6064,6 +6097,9 @@ struct MacAnalyzerView: View {
             Label(reviewStatusMessage, systemImage: reviewHeaderStatusStyle.systemImage)
                 .font(ScratchLabDesign.Typo.pageStatus)
                 .foregroundStyle(reviewHeaderStatusStyle.color)
+
+            // Single derived review state — green only after confirmation/export.
+            StatusBadge(title: "Review", value: reviewPresentationState.label, variant: reviewPresentationState.variant)
         }
         .scratchLabCard(.pageHeader)
     }

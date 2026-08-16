@@ -102,6 +102,70 @@ final class SessionReviewMetadataTests: XCTestCase {
         XCTAssertNil(decoded.reviewMetadata)
     }
 
+    // MARK: - Label decision (confirmation / correction) round-trip
+
+    func testReviewDecisionStatusRawValuesAreStable() {
+        XCTAssertEqual(CaptureCore.CaptureReviewDecision.Status.accepted.rawValue, "accepted")
+        XCTAssertEqual(CaptureCore.CaptureReviewDecision.Status.corrected.rawValue, "corrected")
+        XCTAssertEqual(CaptureCore.CaptureReviewDecision.Status.unknown.rawValue, "unknown")
+    }
+
+    func testLabelConfirmationRoundTripsThroughSidecarJSON() throws {
+        let now = Self.referenceDate
+        let sidecar = makeSidecar(at: now)
+        let updated = sidecar.reviewed(
+            status: .accepted,
+            label: "babyScratch",
+            detectedLabel: "baby_scratch",
+            confidence: 0.92,
+            reviewedAt: now.addingTimeInterval(60)
+        )
+
+        let encoded = try updated.encodedData()
+        let decoded = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: encoded)
+
+        let decision = try XCTUnwrap(decoded.reviewDecision)
+        XCTAssertEqual(decision.status, .accepted, "label confirmation must persist as .accepted")
+        XCTAssertEqual(decision.label, "babyScratch")
+        XCTAssertEqual(decision.detectedLabel, "baby_scratch")
+        XCTAssertEqual(decision.confidence ?? -1, 0.92, accuracy: 1e-9)
+        XCTAssertEqual(decision.reviewedAt, now.addingTimeInterval(60))
+    }
+
+    func testLabelCorrectionRoundTripsThroughSidecarJSON() throws {
+        let now = Self.referenceDate
+        let sidecar = makeSidecar(at: now)
+        let updated = sidecar.reviewed(
+            status: .corrected,
+            label: "chirp",
+            detectedLabel: "baby_scratch",
+            confidence: 0.55,
+            reviewedAt: now.addingTimeInterval(30)
+        )
+
+        let encoded = try updated.encodedData()
+        let decoded = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: encoded)
+
+        let decision = try XCTUnwrap(decoded.reviewDecision)
+        XCTAssertEqual(decision.status, .corrected, "label correction must persist as .corrected")
+        XCTAssertEqual(decision.label, "chirp", "correction changes only the review label, never the raw evidence")
+        XCTAssertEqual(decision.detectedLabel, "baby_scratch", "the detected label is preserved alongside the correction")
+    }
+
+    func testReviewDecisionAuditEventRecorded() throws {
+        let now = Self.referenceDate
+        let sidecar = makeSidecar(at: now)
+        let updated = sidecar.reviewed(
+            status: .accepted,
+            label: "babyScratch",
+            detectedLabel: "baby_scratch",
+            confidence: 0.9,
+            reviewedAt: now
+        )
+        let lastEvent = try XCTUnwrap(updated.auditTrail.last)
+        XCTAssertEqual(lastEvent.category, "label_reviewed")
+    }
+
     // MARK: - Validator
 
     func testValidatorFlagsClippedAudio() {

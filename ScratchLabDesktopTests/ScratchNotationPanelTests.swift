@@ -585,3 +585,53 @@ final class CaptureReadinessTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Phase 4 Review presentation-state derivation
+
+final class ReviewPresentationStateTests: XCTestCase {
+
+    func testNoTakeWhenNoCapturedTake() {
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput()), .noTake)
+    }
+
+    func testTakeLifecycleStatesDominate() {
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isRecording: true)), .recording)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isFinalizing: true)), .finalizing)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, hasIssue: true)), .issue)
+    }
+
+    func testReadyThenConfirmed() {
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true)), .ready)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true)), .confirmed)
+    }
+
+    func testExportLifecycleStates() {
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true, isExporting: true)), .exporting)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true, didExportFail: true)), .exportFailed)
+        XCTAssertEqual(ReviewPresentationState.derive(ReviewPresentationInput(hasTake: true, isConfirmed: true, isExported: true)), .exported)
+    }
+
+    func testGreenIsReservedForConfirmedAndExported() {
+        XCTAssertEqual(ReviewPresentationState.confirmed.variant, .success)
+        XCTAssertEqual(ReviewPresentationState.exported.variant, .success)
+        let nonGreen: [ReviewPresentationState] = [.noTake, .recording, .finalizing, .issue, .ready, .exporting, .exportFailed]
+        for state in nonGreen {
+            XCTAssertNotEqual(state.variant, .success, "\(state) must never render green")
+        }
+    }
+
+    func testNoTakeNeverReadsAsReadyOrConfirmed() {
+        let noTake = ReviewPresentationState.derive(ReviewPresentationInput())
+        XCTAssertEqual(noTake, .noTake)
+        XCTAssertNotEqual(noTake, .ready)
+        XCTAssertNotEqual(noTake, .confirmed, "no take must never fabricate captured/confirmed evidence")
+    }
+
+    func testLabelsAreNonBlankAndUppercase() {
+        let all: [ReviewPresentationState] = [.noTake, .recording, .finalizing, .issue, .ready, .confirmed, .exporting, .exported, .exportFailed]
+        for state in all {
+            XCTAssertFalse(state.label.isEmpty)
+            XCTAssertEqual(state.label, state.label.uppercased())
+        }
+    }
+}

@@ -6696,3 +6696,80 @@ extension CaptureReadiness {
         return .ready
     }
 }
+
+// MARK: - Review presentation model
+//
+// One semantic review state, DERIVED from the real session/take/export model —
+// never a manually-set UI boolean. Green (`.confirmed` / `.exported`) appears
+// only after real confirmation / a real export artifact; `.noTake` never
+// fabricates captured evidence; `.issue` carries no valid-take claim.
+
+enum ReviewPresentationState: Equatable, Sendable {
+    case noTake
+    case recording
+    case finalizing
+    case issue
+    case ready
+    case confirmed
+    case exporting
+    case exported
+    case exportFailed
+
+    var label: String {
+        switch self {
+        case .noTake: return "NO TAKE"
+        case .recording: return "RECORDING"
+        case .finalizing: return "FINALIZING"
+        case .issue: return "ISSUE"
+        case .ready: return "READY"
+        case .confirmed: return "CONFIRMED"
+        case .exporting: return "EXPORTING"
+        case .exported: return "EXPORTED"
+        case .exportFailed: return "EXPORT FAILED"
+        }
+    }
+
+    /// Semantic colour — green only for `.confirmed` / `.exported`; red for
+    /// recording/failure; amber for issue; bone for ready.
+    var variant: StatusBadgeVariant {
+        switch self {
+        case .noTake: return .neutral
+        case .recording: return .danger
+        case .finalizing: return .info
+        case .issue: return .warning
+        case .ready: return .ready
+        case .confirmed: return .success
+        case .exporting: return .info
+        case .exported: return .success
+        case .exportFailed: return .danger
+        }
+    }
+}
+
+/// Pure inputs for `ReviewPresentationState.derive` — all primitives.
+struct ReviewPresentationInput: Equatable, Sendable {
+    var hasTake: Bool = false
+    var isRecording: Bool = false
+    var isFinalizing: Bool = false
+    var hasIssue: Bool = false
+    var isConfirmed: Bool = false
+    var isExporting: Bool = false
+    var isExported: Bool = false
+    var didExportFail: Bool = false
+}
+
+extension ReviewPresentationState {
+    /// Pure derivation. Take lifecycle states dominate, then no-take, then the
+    /// export lifecycle, then confirmation over ready.
+    static func derive(_ input: ReviewPresentationInput) -> ReviewPresentationState {
+        if input.isRecording { return .recording }
+        if input.isFinalizing { return .finalizing }
+        if input.hasIssue { return .issue }
+        if !input.hasTake { return .noTake }
+        if input.isExporting { return .exporting }
+        if input.didExportFail { return .exportFailed }
+        if input.isExported { return .exported }
+        if input.isConfirmed { return .confirmed }
+        return .ready
+    }
+}
