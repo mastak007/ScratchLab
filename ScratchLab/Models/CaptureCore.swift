@@ -6872,3 +6872,249 @@ extension ReviewPresentationState {
         return .ready
     }
 }
+
+// MARK: - Advanced Overview presentation model
+//
+// One authoritative summary of the Advanced workspace's five input lanes
+// (Audio, DVS/timecode, MIDI/controller, optional Camera, Performer Monitor)
+// plus the next required action. Every value is DERIVED from real owner state
+// (capture engine, timecode pipeline, performer monitor broadcaster) — never a
+// parallel capability model, never a manually-set UI boolean.
+//
+// Enforces the same hardware contract as `CaptureReadiness`: connected ≠
+// ready, carrier-detected ≠ DVS ready, MIDI-detected ≠ crossfader-mapped,
+// camera optional ≠ blocking.
+
+/// The five input lanes that feed the Advanced Overview summary.
+enum AdvancedOverviewLane: String, CaseIterable, Sendable {
+    case audio
+    case dvsTimecode
+    case midiController
+    case camera
+    case performerMonitor
+
+    var title: String {
+        switch self {
+        case .audio: return "Audio"
+        case .dvsTimecode: return "DVS / timecode"
+        case .midiController: return "MIDI / fader"
+        case .camera: return "Camera"
+        case .performerMonitor: return "Monitor"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .audio: return "waveform"
+        case .dvsTimecode: return "waveform.badge.magnifyingglass"
+        case .midiController: return "slider.horizontal.3"
+        case .camera: return "video"
+        case .performerMonitor: return "dot.radiowaves.left.and.right"
+        }
+    }
+}
+
+/// One semantic status for a summary lane or the next action. The six states
+/// are deliberately distinct: "detected/connected" (present, not ready — cyan)
+/// never collapses into "ready" (bone), and "needs attention" (amber, a fixable
+/// problem) is not "setup required" (neutral, not configured yet). Hardware
+/// identity and verification tier are NOT part of this axis — they surface
+/// separately (controller name in MIDI & fader; registry tier is unwired).
+enum AdvancedOverviewStatus: String, CaseIterable, Sendable {
+    case setupRequired
+    case needsAttention
+    case detected
+    case ready
+    case recording
+    case unavailable
+
+    var label: String {
+        switch self {
+        case .setupRequired: return "SETUP REQUIRED"
+        case .needsAttention: return "NEEDS ATTENTION"
+        case .detected: return "DETECTED"
+        case .ready: return "READY"
+        case .recording: return "RECORDING"
+        case .unavailable: return "UNAVAILABLE"
+        }
+    }
+
+    var variant: StatusBadgeVariant {
+        switch self {
+        case .setupRequired: return .neutral
+        case .needsAttention: return .warning
+        case .detected: return .info
+        case .ready: return .ready
+        case .recording: return .danger
+        case .unavailable: return .neutral
+        }
+    }
+}
+
+/// A single summary row: one lane and its derived readiness status.
+struct AdvancedOverviewItem: Equatable, Sendable {
+    let lane: AdvancedOverviewLane
+    let status: AdvancedOverviewStatus
+}
+
+/// The single next required action, derived from the same lane statuses so the
+/// header action can never contradict the summary badges.
+enum AdvancedOverviewNextAction: Equatable, Sendable {
+    case recording
+    case createSession
+    case fixAudio
+    case connectController
+    case mapCrossfader
+    case ready
+
+    var message: String {
+        switch self {
+        case .recording:
+            return "Recording — press Stop to finish the take."
+        case .createSession:
+            return "Next: create a session to start capturing."
+        case .fixAudio:
+            return "Next: select an available audio input."
+        case .connectController:
+            return "Next: connect a controller to map the crossfader."
+        case .mapCrossfader:
+            return "Next: map the crossfader before capture."
+        case .ready:
+            return "Ready — configure hardware and diagnostics in the sections below."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .recording: return "record.circle.fill"
+        case .createSession: return "plus.circle"
+        case .fixAudio: return "exclamationmark.circle.fill"
+        case .connectController: return "exclamationmark.circle.fill"
+        case .mapCrossfader: return "exclamationmark.circle.fill"
+        case .ready: return "checkmark.circle.fill"
+        }
+    }
+
+    var variant: StatusBadgeVariant {
+        switch self {
+        case .recording: return .danger
+        case .createSession: return .accent
+        case .fixAudio: return .warning
+        case .connectController: return .warning
+        case .mapCrossfader: return .warning
+        case .ready: return .accent
+        }
+    }
+}
+
+/// Pure inputs for `AdvancedOverviewSummary.derive` — all primitives plus one
+/// shared signal-health enum, so the mapping is testable with no engine or
+/// `@MainActor` dependency.
+struct AdvancedOverviewInput: Equatable, Sendable {
+    var hasSession: Bool = false
+    var isRecording: Bool = false
+
+    var hasAnyAudioDevice: Bool = false
+    var isSelectedAudioAvailable: Bool = false
+
+    var isDVSEnabled: Bool = false
+    var dvsSignalHealth: SignalHealth = .noSignal
+
+    var hasMIDIController: Bool = false
+    var isCrossfaderMapped: Bool = false
+
+    var isCameraActive: Bool = false
+    var isLiveInputEnabled: Bool = false
+
+    var isPerformerMonitorConnected: Bool = false
+}
+
+/// The derived Advanced Overview summary: the lane rows plus the single next
+/// action. `derive` is the single authority the Overview view maps into.
+struct AdvancedOverviewSummary: Equatable, Sendable {
+    let items: [AdvancedOverviewItem]
+    let nextAction: AdvancedOverviewNextAction
+
+    static func derive(_ input: AdvancedOverviewInput) -> AdvancedOverviewSummary {
+        var items: [AdvancedOverviewItem] = []
+
+        // Audio — READY only when the selected input is actually present.
+        let audioStatus: AdvancedOverviewStatus
+        if !input.hasAnyAudioDevice {
+            audioStatus = .setupRequired
+        } else if !input.isSelectedAudioAvailable {
+            audioStatus = .needsAttention
+        } else {
+            audioStatus = .ready
+        }
+        items.append(AdvancedOverviewItem(lane: .audio, status: audioStatus))
+
+        // DVS / timecode — only a healthy, usable signal is READY. A disabled
+        // timecode path is UNAVAILABLE (not "setup required", never "ready").
+        // No-signal, weak, clipped and channel-fault are all NOT ready. (The
+        // design system's `DVSSignalState.carrierDetected` has no `SignalHealth`
+        // counterpart here, but it too is NOT ready — only `.usable` is.)
+        let dvsStatus: AdvancedOverviewStatus
+        if !input.isDVSEnabled {
+            dvsStatus = .unavailable
+        } else {
+            switch input.dvsSignalHealth {
+            case .usable: dvsStatus = .ready
+            case .noSignal: dvsStatus = .setupRequired
+            case .weak, .clipped, .channelFault: dvsStatus = .needsAttention
+            }
+        }
+        items.append(AdvancedOverviewItem(lane: .dvsTimecode, status: dvsStatus))
+        let isDVSUsable = (dvsStatus == .ready)
+
+        // MIDI / controller — connected ≠ mapped; mapped ≠ DVS+MIDI ready.
+        // This mirrors `ControllerMappingState.isReady`, where only
+        // `dvsPlusMidiReady` (crossfader mapped AND DVS usable) is truly ready
+        // and `midiLearned` (mapped, no usable DVS) is informational, not ready.
+        let midiStatus: AdvancedOverviewStatus
+        if !input.hasMIDIController {
+            midiStatus = .setupRequired
+        } else if !input.isCrossfaderMapped {
+            midiStatus = .needsAttention
+        } else if isDVSUsable {
+            midiStatus = .ready
+        } else {
+            midiStatus = .detected
+        }
+        items.append(AdvancedOverviewItem(lane: .midiController, status: midiStatus))
+
+        // Camera — optional, non-blocking, surfaced only when enabled/active.
+        if input.isCameraActive || input.isLiveInputEnabled {
+            items.append(AdvancedOverviewItem(
+                lane: .camera,
+                status: input.isCameraActive ? .detected : .unavailable
+            ))
+        }
+
+        // Performer Monitor — connected is informational, never green-ready.
+        items.append(AdvancedOverviewItem(
+            lane: .performerMonitor,
+            status: input.isPerformerMonitorConnected ? .detected : .setupRequired
+        ))
+
+        // Next action — recording dominates, then setup, then blocking lanes.
+        // DVS, camera and monitor are deliberately non-blocking for the
+        // Overview next action (they are optional/prototype surfaces).
+        let nextAction: AdvancedOverviewNextAction
+        if input.isRecording {
+            nextAction = .recording
+        } else if !input.hasSession {
+            nextAction = .createSession
+        } else if audioStatus != .ready {
+            nextAction = .fixAudio
+        } else if !input.hasMIDIController {
+            nextAction = .connectController
+        } else if !input.isCrossfaderMapped {
+            nextAction = .mapCrossfader
+        } else {
+            nextAction = .ready
+        }
+
+        return AdvancedOverviewSummary(items: items, nextAction: nextAction)
+    }
+}

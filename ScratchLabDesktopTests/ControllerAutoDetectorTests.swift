@@ -178,4 +178,47 @@ final class ControllerAutoDetectorTests: XCTestCase {
         }
         XCTAssertFalse(result.profile.canFeedScoringAfterVerification)
     }
+
+    // MARK: - Verification tier presentation
+
+    func testRaneONEMKIIIsTestedNotYetVerified() {
+        let result = ControllerAutoDetector.resolve(endpointName: "RANE ONE MKII", in: catalog)
+        XCTAssertEqual(result?.profile.mappingStatus, .partial)
+        XCTAssertEqual(result?.profile.verificationTier, .testedNotYetVerified)
+        XCTAssertEqual(result?.publicStatusLine, "Verification required")
+    }
+
+    func testDJMmixersAreKnownOptionUnverified() {
+        for name in ["DJM-S9", "DJM-S11", "DJM-S7"] {
+            let result = ControllerAutoDetector.resolve(endpointName: name, in: catalog)
+            XCTAssertEqual(result?.profile.mappingStatus, .detectionOnly, "\(name) must stay detection-only")
+            XCTAssertEqual(result?.profile.verificationTier, .knownOptionUnverified, "\(name) must stay a known-but-unverified option")
+            XCTAssertEqual(result?.publicStatusLine, "Controller detected. No verified scratch-motion profile yet.")
+        }
+    }
+
+    func testCompleteProfileStillRequiresVerificationUntilLiveVerified() {
+        let result = ControllerAutoDetector.resolve(endpointName: "DDJ-FLX10", in: catalog)
+        XCTAssertEqual(result?.profile.mappingStatus, .complete)
+        XCTAssertEqual(result?.profile.verificationTier, .testedNotYetVerified,
+                       "a sourced complete profile still needs live verification before it is VERIFIED")
+    }
+
+    func testUnknownEndpointResolvesToGenericUnverifiedProfile() {
+        let result = ControllerAutoDetector.resolve(endpointName: "Generic USB MIDI Device", in: catalog)
+        XCTAssertNil(result, "an unrecognised name has no catalog profile")
+        let generic = ControllerAutoDetector.genericSession(endpointName: "Generic USB MIDI Device")
+        XCTAssertEqual(generic.profile.mappingStatus, .detectionOnly)
+        XCTAssertEqual(generic.profile.verificationTier, .knownOptionUnverified)
+        XCTAssertEqual(generic.publicStatusLine, "Controller detected. No verified scratch-motion profile yet.")
+    }
+
+    // MARK: - Device-absent transition
+
+    func testDeviceAbsentMeansNoDetection() {
+        // The view calls resolve only when a MIDI source name is non-nil; a
+        // nil name maps to nil detection, which the UI renders as "no controller".
+        let result = ControllerAutoDetector.resolve(endpointName: "", in: catalog)
+        XCTAssertNil(result, "an empty/absent endpoint must never fabricate a detected profile")
+    }
 }

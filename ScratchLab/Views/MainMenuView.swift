@@ -1229,6 +1229,14 @@ private final class IPadPerformerMonitorReceiver: NSObject, ObservableObject {
     @Published private(set) var latestFrameImage: UIImage?
     @Published private(set) var latestFramePacket: PerformerMonitorFramePacket?
 
+    /// This device is a read-only monitor client — the Mac is the controlling
+    /// device. A connected peer is `.controlledByMac`, never `.connected`.
+    var state: PerformerMonitorConnectionState {
+        connectedPeerNames.isEmpty
+            ? PerformerMonitorConnectionState.disconnectedState(fromStatus: connectionStatus)
+            : .controlledByMac
+    }
+
     private let serviceType = "_scrmonfeed._tcp"
     private let defaultManualPort = NWEndpoint.Port(rawValue: 58585)!
     private let browserQueue = DispatchQueue(label: "scratchlab.ipad.performer.browser")
@@ -1513,6 +1521,8 @@ private struct IPadPerformerMonitorView: View {
 
     // Figma Performer Monitor header (35:210 / 35:220): eyebrow + status badge
     // + headline. The real connection state drives the badge and headline.
+    // This device is read-only and controlled by the Mac, so a connected peer
+    // is labelled CONTROLLED BY MAC (never a fabricated transport capability).
     private var performerHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -1522,12 +1532,12 @@ private struct IPadPerformerMonitorView: View {
                 Spacer()
                 StatusBadge(
                     title: "Status",
-                    value: receiver.connectedPeerNames.isEmpty ? "Waiting" : "Connected",
-                    variant: receiver.connectedPeerNames.isEmpty ? .neutral : .success,
+                    value: receiver.connectedPeerNames.isEmpty ? "Waiting" : PerformerMonitorConnectionState.controlledByMac.label,
+                    variant: receiver.connectedPeerNames.isEmpty ? .neutral : .ready,
                     systemImage: receiver.connectedPeerNames.isEmpty ? "ipad.landscape" : "dot.radiowaves.left.and.right"
                 )
             }
-            Text(receiver.connectedPeerNames.isEmpty ? "Waiting for nearby ScratchLab" : "Deck view")
+            Text(receiver.connectedPeerNames.isEmpty ? "Waiting for nearby ScratchLab" : "Read-only — controlled by Mac")
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(.white)
         }

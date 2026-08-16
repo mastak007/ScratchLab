@@ -639,6 +639,7 @@ struct MacAnalyzerView: View {
     @State private var practiceBeatStartUptime: TimeInterval? = nil
     @State private var showPracticeLiveInput = false
     @State private var isShowingAllRoutineSessions = false
+    @State private var isRevealingManualConnectAddress = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
     /// Manual override for the expanded Capture stage; `nil` means "follow the
     /// current stage automatically". Auto-advance clears this so the active
@@ -2365,7 +2366,8 @@ struct MacAnalyzerView: View {
                 DVSSignalHealthCard(
                     state: dvsSignalState,
                     detail: timecodePipeline.mode == .disabled
-                        ? "DVS / timecode input is disabled — enable it in DVS / timecode." : nil
+                        ? "DVS / timecode input is disabled — enable it in DVS / timecode."
+                        : "Signal-health thresholds are prototype defaults — \(HardwareVerificationTier.verifyInEngineering.label)."
                 )
                 audioCard
                     .disabled(captureEngine.isRoutineRecording)
@@ -2386,12 +2388,11 @@ struct MacAnalyzerView: View {
             }
         case .midiFader:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
-                ControllerMappingCard(
-                    state: controllerMappingState,
-                    controllerName: selectedMixerMIDIDeviceName,
-                    detail: captureEngine.crossfaderCCMapping == nil
-                        ? "MIDI detected does not mean it is ready — map the crossfader before capture."
-                        : "Crossfader mapped."
+                HardwareProfileCard(
+                    name: detectedControllerName,
+                    classification: controllerDetection?.profile.publicDisplayFamily ?? "No MIDI source selected",
+                    tier: controllerDetection?.profile.verificationTier ?? .knownOptionUnverified,
+                    readiness: controllerMappingState.inputReadiness
                 )
                 midiMonitorCard
             }
@@ -2400,7 +2401,7 @@ struct MacAnalyzerView: View {
                 PerformerMonitorConnectionCard(
                     state: monitorConnectionState,
                     detail: performerBroadcaster.connectedPeerNames.isEmpty
-                        ? "Advertising for a read-only mobile device…"
+                        ? performerBroadcaster.connectionStatus
                         : "\(performerBroadcaster.connectedPeerNames.count) device(s) connected — read-only."
                 )
                 companionCard
@@ -4778,31 +4779,6 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 105), spacing: 8)],
-                alignment: .leading,
-                spacing: 8
-            ) {
-                StatusBadge(
-                    title: "Audio",
-                    value: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "Not connected" : "Ready",
-                    variant: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? .neutral : .success,
-                    systemImage: captureEngine.selectedAudioDeviceUniqueID.isEmpty ? "circle.dashed" : "waveform"
-                )
-                StatusBadge(
-                    title: "Device",
-                    value: companionReceiver.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
-                    variant: companionReceiver.connectedPeerNames.isEmpty ? .neutral : .success,
-                    systemImage: companionReceiver.connectedPeerNames.isEmpty ? "circle.dashed" : "checkmark.seal.fill"
-                )
-                StatusBadge(
-                    title: "Monitor",
-                    value: performerBroadcaster.connectedPeerNames.isEmpty ? "Searching…" : "Connected",
-                    variant: performerBroadcaster.connectedPeerNames.isEmpty ? .neutral : .success,
-                    systemImage: performerBroadcaster.connectedPeerNames.isEmpty ? "circle.dashed" : "dot.radiowaves.left.and.right"
-                )
-            }
-
             Label(captureEngine.statusMessage, systemImage: captureEngine.statusIcon)
                 .font(ScratchLabDesign.Typo.pageStatus)
                 .foregroundStyle(captureEngine.statusColor)
@@ -4834,9 +4810,21 @@ struct MacAnalyzerView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
 
-                    Text(performerBroadcaster.manualConnectAddress)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    // The local address is private — never shown in the default
+                    // hierarchy or a screenshot; it is revealed only on an
+                    // explicit tap.
+                    if isRevealingManualConnectAddress {
+                        Text(performerBroadcaster.manualConnectAddress)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    } else {
+                        Button("Reveal connection address") {
+                            isRevealingManualConnectAddress = true
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }
                 }
                 .padding(.top, 4)
             }
@@ -4891,76 +4879,24 @@ struct MacAnalyzerView: View {
 
     // MARK: - Advanced Overview summary
 
-    private struct AdvancedOverviewStatusItem {
-        let title: String
-        let value: String
-        let variant: StatusBadgeVariant
-        let systemImage: String
-    }
-
-    /// One authoritative Overview status row, derived from existing real state
-    /// only — no mock readiness, no parallel capability model. Connected ≠
-    /// ready: DVS "DETECTED" means signal present, never "DVS READY" until
-    /// verified; MIDI "CONNECTED" means a source is selected, not mapped.
-    private var advancedOverviewStatusItems: [AdvancedOverviewStatusItem] {
-        var items: [AdvancedOverviewStatusItem] = []
-
-        // Audio — READY is bone, never green; green is reserved for completion.
-        if captureEngine.availableAudioDevices.isEmpty {
-            items.append(.init(title: "Audio", value: "SETUP REQUIRED", variant: .neutral, systemImage: "waveform"))
-        } else if !captureEngine.isSelectedAudioInputAvailable {
-            items.append(.init(title: "Audio", value: "NEEDS ATTENTION", variant: .warning, systemImage: "waveform"))
-        } else {
-            items.append(.init(title: "Audio", value: "READY", variant: .ready, systemImage: "waveform"))
-        }
-
-        // DVS / timecode
-        let dvs = advancedOverviewDVSStatus
-        items.append(.init(title: "DVS / timecode", value: dvs.value, variant: dvs.variant, systemImage: "waveform.badge.magnifyingglass"))
-
-        // MIDI / fader — connected ≠ ready (crossfader may still be unmapped).
-        if selectedMixerMIDIDeviceName == nil {
-            items.append(.init(title: "MIDI / fader", value: "SETUP REQUIRED", variant: .neutral, systemImage: "slider.horizontal.3"))
-        } else {
-            items.append(.init(title: "MIDI / fader", value: "DETECTED", variant: .info, systemImage: "slider.horizontal.3"))
-        }
-
-        // Camera — only surfaced when enabled or relevant.
-        if captureEngine.isCameraActive || liveInputEnabled {
-            items.append(.init(
-                title: "Camera",
-                value: captureEngine.isCameraActive ? "DETECTED" : "UNAVAILABLE",
-                variant: captureEngine.isCameraActive ? .info : .neutral,
-                systemImage: "video"
-            ))
-        }
-
-        // Performer Monitor — connected is cyan, not green.
-        if performerBroadcaster.connectedPeerNames.isEmpty {
-            items.append(.init(title: "Monitor", value: "SETUP REQUIRED", variant: .neutral, systemImage: "dot.radiowaves.left.and.right"))
-        } else {
-            items.append(.init(title: "Monitor", value: "CONNECTED", variant: .info, systemImage: "dot.radiowaves.left.and.right"))
-        }
-
-        return items
-    }
-
-    private var advancedOverviewDVSStatus: (value: String, variant: StatusBadgeVariant) {
-        switch timecodePipeline.mode {
-        case .disabled:
-            return ("UNAVAILABLE", .neutral)
-        case .diagnosticsOnly, .controlPrototype:
-            switch timecodePipeline.signalHealth {
-            case .noSignal:
-                return ("SETUP REQUIRED", .neutral)
-            case .weak:
-                return ("NEEDS ATTENTION", .warning)
-            case .usable:
-                return ("READY", .ready)
-            case .clipped, .channelFault:
-                return ("NEEDS ATTENTION", .warning)
-            }
-        }
+    /// The single authoritative Advanced Overview summary — derived purely from
+    /// real owner state by `AdvancedOverviewSummary.derive`, so the header
+    /// action and the lane badges can never contradict each other. There is no
+    /// separate header capability model; this is the only one.
+    private var advancedOverviewSummary: AdvancedOverviewSummary {
+        AdvancedOverviewSummary.derive(AdvancedOverviewInput(
+            hasSession: selectedRoutineSession != nil,
+            isRecording: captureEngine.isRoutineRecording || captureEngine.cxlIsRecording,
+            hasAnyAudioDevice: !captureEngine.availableAudioDevices.isEmpty,
+            isSelectedAudioAvailable: captureEngine.isSelectedAudioInputAvailable,
+            isDVSEnabled: timecodePipeline.mode != .disabled,
+            dvsSignalHealth: timecodePipeline.signalHealth,
+            hasMIDIController: selectedMixerMIDIDeviceName != nil,
+            isCrossfaderMapped: captureEngine.crossfaderCCMapping != nil,
+            isCameraActive: captureEngine.isCameraActive,
+            isLiveInputEnabled: liveInputEnabled,
+            isPerformerMonitorConnected: !performerBroadcaster.connectedPeerNames.isEmpty
+        ))
     }
 
     /// Maps the real timecode signal health onto the reusable semantic state.
@@ -4982,22 +4918,34 @@ struct MacAnalyzerView: View {
         return .midiLearned
     }
 
-    /// Performer Monitor state — the Mac is the controlling/source device.
-    private var monitorConnectionState: PerformerMonitorConnectionState {
-        performerBroadcaster.connectedPeerNames.isEmpty ? .searching : .connected
+    /// Resolves the selected MIDI source against the profile catalog so the
+    /// hardware identity + verification tier come from real detection — never a
+    /// guessed or hardcoded name. Returns nil only when no MIDI source is
+    /// selected; an unrecognised endpoint falls back to the generic profile.
+    private var controllerDetection: ControllerDetectionResult? {
+        guard let name = selectedMixerMIDIDeviceName else { return nil }
+        return ControllerAutoDetector.resolve(endpointName: name, in: .shared)
+            ?? ControllerAutoDetector.genericSession(endpointName: name)
     }
 
-    private var advancedOverviewNextAction: (message: String, systemImage: String, color: Color) {
-        if selectedRoutineSession == nil {
-            return ("Next: create a session to start capturing.", "plus.circle", ScratchLabDesign.Sem.accent)
+    /// The display identity for the detected controller: a known profile shows
+    /// its model name (e.g. "ONE MKII", "DJM-S11"), an unknown endpoint falls
+    /// back to the OS-reported name, and no source shows the empty state.
+    private var detectedControllerName: String {
+        if let detection = controllerDetection {
+            if !detection.profile.internalModel.isEmpty {
+                return detection.profile.internalModel
+            }
+            return selectedMixerMIDIDeviceName ?? "Controller"
         }
-        if captureEngine.availableAudioDevices.isEmpty || !captureEngine.isSelectedAudioInputAvailable {
-            return ("Next: select an available audio input.", "exclamationmark.circle.fill", ScratchLabDesign.Sem.warning)
-        }
-        if selectedMixerMIDIDeviceName == nil {
-            return ("Next: connect a controller to map the crossfader.", "exclamationmark.circle.fill", ScratchLabDesign.Sem.warning)
-        }
-        return ("Ready — configure hardware and diagnostics in the sections below.", "checkmark.circle.fill", ScratchLabDesign.Sem.accent)
+        return "No controller connected"
+    }
+
+    /// Performer Monitor state — the Mac is the controlling/source device, so
+    /// this is never `.controlledByMac`. Truthful state comes from the real
+    /// broadcaster (searching / connected / connectionFailed / unavailable).
+    private var monitorConnectionState: PerformerMonitorConnectionState {
+        performerBroadcaster.state
     }
 
     private var advancedOverviewSessionValue: String {
@@ -5010,13 +4958,19 @@ struct MacAnalyzerView: View {
     }
 
     private var advancedOverviewSummaryCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let summary = advancedOverviewSummary
+        return VStack(alignment: .leading, spacing: 14) {
             Text("System status")
                 .font(ScratchLabDesign.Typo.cardHeading)
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(Array(advancedOverviewStatusItems.enumerated()), id: \.offset) { _, item in
-                    StatusBadge(title: item.title, value: item.value, variant: item.variant, systemImage: item.systemImage)
+                ForEach(Array(summary.items.enumerated()), id: \.offset) { _, item in
+                    StatusBadge(
+                        title: item.lane.title,
+                        value: overviewStatusValue(item),
+                        variant: item.status.variant,
+                        systemImage: item.lane.systemImage
+                    )
                 }
             }
 
@@ -5034,12 +4988,22 @@ struct MacAnalyzerView: View {
                     .truncationMode(.tail)
             }
 
-            Label(advancedOverviewNextAction.message, systemImage: advancedOverviewNextAction.systemImage)
+            Label(summary.nextAction.message, systemImage: summary.nextAction.systemImage)
                 .font(ScratchLabDesign.Typo.pageStatus)
-                .foregroundStyle(advancedOverviewNextAction.color)
+                .foregroundStyle(summary.nextAction.variant.color)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .scratchLabCard()
+    }
+
+    /// The display value for a summary lane. The shared semantic state is
+    /// `.detected` (cyan info), but Performer Monitor is a network *connection*,
+    /// so "connected" reads more naturally than "detected" for that lane.
+    private func overviewStatusValue(_ item: AdvancedOverviewItem) -> String {
+        if item.lane == .performerMonitor && item.status == .detected {
+            return "CONNECTED"
+        }
+        return item.status.label
     }
 
     private var advancedToolsCard: some View {
@@ -10919,6 +10883,16 @@ final class PerformerMonitorBroadcaster: NSObject, ObservableObject, NetServiceD
     @Published var connectedPeerNames: [String] = []
     @Published var connectionStatus = "Searching for Performer Monitor on a nearby device"
     @Published private(set) var manualConnectAddress = ""
+
+    /// The truthful semantic connection state, derived from the real observable
+    /// transport state. The Mac is the controlling/source device, so a connected
+    /// peer is `.connected` here — never `.controlledByMac` (that label is for
+    /// the read-only mobile clients).
+    var state: PerformerMonitorConnectionState {
+        connectedPeerNames.isEmpty
+            ? PerformerMonitorConnectionState.disconnectedState(fromStatus: connectionStatus)
+            : .connected
+    }
 
     private let serviceType = "_scrmonfeed._tcp"
     private let netServiceType = "_scrmonfeed._tcp."

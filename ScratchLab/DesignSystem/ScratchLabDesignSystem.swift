@@ -1200,6 +1200,22 @@ enum ControllerMappingState: String, CaseIterable, Sendable {
     }
 }
 
+extension ControllerMappingState {
+    /// The coarse readiness axis for a hardware profile card. Only
+    /// `dvsPlusMidiReady` (the true combined-ready state) is READY; partial and
+    /// detection states are DETECTED, and the fixable crossfader/conflict states
+    /// are NEEDS ATTENTION. `midiLearned`/`platterReady` are DETECTED here (not
+    /// READY) because they are still short of the DVS+MIDI combined-ready gate.
+    var inputReadiness: InputReadinessState {
+        switch self {
+        case .noController: return .setupRequired
+        case .controllerDetected, .platterReady, .midiLearned: return .detected
+        case .crossfaderMappingRequired, .mappingConflict: return .needsAttention
+        case .dvsPlusMidiReady: return .ready
+        }
+    }
+}
+
 struct ControllerMappingCard: View {
     let state: ControllerMappingState
     /// Hardware identity is separate from the mapping state — never baked into
@@ -1498,6 +1514,29 @@ enum PerformerMonitorConnectionState: String, CaseIterable, Sendable {
         case .connectionFailed: return .danger
         case .unavailable: return .neutral
         }
+    }
+}
+
+extension PerformerMonitorConnectionState {
+    /// Pure: maps a connection-owner status string (when no peer is connected)
+    /// to its truthful semantic state, without touching the transport layer.
+    ///
+    /// - "unable to start …" is the unavailable case (the listener/advertiser
+    ///   could not be started at all).
+    /// - "paused" / "lost" / "unable to send" are connection failures that need
+    ///   the user's attention.
+    /// - anything else is still searching/connecting.
+    ///
+    /// The caller decides whether a *connected* peer maps to `.connected`
+    /// (controlling Mac) or `.controlledByMac` (read-only client) — this helper
+    /// only classifies the disconnected side.
+    static func disconnectedState(fromStatus status: String) -> PerformerMonitorConnectionState {
+        let lower = status.lowercased()
+        if lower.contains("unable to start") { return .unavailable }
+        if lower.contains("paused") || lower.contains("lost") || lower.contains("unable to send") {
+            return .connectionFailed
+        }
+        return .searching
     }
 }
 

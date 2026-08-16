@@ -268,3 +268,26 @@ struct ControllerProfile: Identifiable, Equatable {
         lhs.id == rhs.id
     }
 }
+
+extension ControllerProfile {
+    /// The presentation verification tier, derived from mapping status and
+    /// whether live verification is still required. Identity and readiness are
+    /// separate axes — this only describes how much the profile is trusted.
+    ///
+    /// - `.verified` — a live-verified local profile (or a sourced profile that
+    ///   no longer requires verification).
+    /// - `.testedNotYetVerified` — a sourced `.complete`/`.partial` profile
+    ///   that still requires a live verification session.
+    /// - `.knownOptionUnverified` — a `.detectionOnly`/`.unsupported` stub with
+    ///   no sourced bindings.
+    var verificationTier: HardwareVerificationTier {
+        switch mappingStatus {
+        case .liveVerifiedLocalOnly:
+            return .verified
+        case .complete, .partial:
+            return verificationRequired ? .testedNotYetVerified : .verified
+        case .detectionOnly, .unsupported:
+            return .knownOptionUnverified
+        }
+    }
+}

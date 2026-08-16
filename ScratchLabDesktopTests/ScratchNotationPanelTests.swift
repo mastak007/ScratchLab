@@ -328,6 +328,20 @@ final class ScratchLabDesignTokensTests: XCTestCase {
         XCTAssertEqual(HardwareVerificationTier.verifyInEngineering.label, "VERIFY IN ENGINEERING")
     }
 
+    // MARK: Controller mapping → readiness axis (hardware profile card)
+
+    func testControllerMappingInputReadiness() {
+        XCTAssertEqual(ControllerMappingState.noController.inputReadiness, .setupRequired)
+        XCTAssertEqual(ControllerMappingState.controllerDetected.inputReadiness, .detected)
+        XCTAssertEqual(ControllerMappingState.platterReady.inputReadiness, .detected,
+                       "platter-ready is still short of the DVS+MIDI combined-ready gate")
+        XCTAssertEqual(ControllerMappingState.crossfaderMappingRequired.inputReadiness, .needsAttention)
+        XCTAssertEqual(ControllerMappingState.midiLearned.inputReadiness, .detected,
+                       "MIDI learned is not DVS+MIDI ready")
+        XCTAssertEqual(ControllerMappingState.mappingConflict.inputReadiness, .needsAttention)
+        XCTAssertEqual(ControllerMappingState.dvsPlusMidiReady.inputReadiness, .ready)
+    }
+
     // MARK: Notation trace styles — Figma stroke weights + distinct roles
 
     func testTargetAndPerformanceTraceStrokeWeightsMatchFigma() {
@@ -752,5 +766,243 @@ final class ReviewPresentationStateTests: XCTestCase {
             XCTAssertFalse(state.label.isEmpty)
             XCTAssertEqual(state.label, state.label.uppercased())
         }
+    }
+}
+
+// MARK: - Advanced Overview summary derivation
+
+final class AdvancedOverviewSummaryTests: XCTestCase {
+
+    // MARK: Helpers
+
+    private func lane(_ lane: AdvancedOverviewLane, in input: AdvancedOverviewInput) -> AdvancedOverviewStatus {
+        guard let item = AdvancedOverviewSummary.derive(input).items.first(where: { $0.lane == lane }) else {
+            XCTFail("Missing \(lane) lane in derived summary")
+            return .unavailable
+        }
+        return item.status
+    }
+
+    private func nextAction(_ input: AdvancedOverviewInput) -> AdvancedOverviewNextAction {
+        AdvancedOverviewSummary.derive(input).nextAction
+    }
+
+    // MARK: Audio — READY only when the selected input is actually present
+
+    func testAudioNoDeviceIsSetupRequired() {
+        XCTAssertEqual(lane(.audio, in: AdvancedOverviewInput(hasAnyAudioDevice: false)), .setupRequired)
+    }
+
+    func testAudioSelectedDeviceMissingIsNeedsAttention() {
+        XCTAssertEqual(lane(.audio, in: AdvancedOverviewInput(hasAnyAudioDevice: true, isSelectedAudioAvailable: false)), .needsAttention)
+    }
+
+    func testAudioAvailableIsReady() {
+        XCTAssertEqual(lane(.audio, in: AdvancedOverviewInput(hasAnyAudioDevice: true, isSelectedAudioAvailable: true)), .ready)
+    }
+
+    // MARK: DVS — only a usable signal is READY; carrier/weak/clipped never are
+
+    func testDVSDisabledIsUnavailableNotSetupRequired() {
+        XCTAssertEqual(lane(.dvsTimecode, in: AdvancedOverviewInput(isDVSEnabled: false, dvsSignalHealth: .usable)), .unavailable)
+    }
+
+    func testDVSNoSignalIsSetupRequired() {
+        XCTAssertEqual(lane(.dvsTimecode, in: AdvancedOverviewInput(isDVSEnabled: true, dvsSignalHealth: .noSignal)), .setupRequired)
+    }
+
+    func testDVSNonUsableHealthIsNeverReady() {
+        // Guarded over ALL non-usable cases so a future carrier-detected state
+        // can never slip in and read as READY.
+        for health in SignalHealth.allCases where health != .usable {
+            let status = lane(.dvsTimecode, in: AdvancedOverviewInput(isDVSEnabled: true, dvsSignalHealth: health))
+            XCTAssertNotEqual(status, .ready, "\(health) must never read as READY — only .usable is ready")
+        }
+    }
+
+    func testDVSOnlyUsableHealthIsReady() {
+        XCTAssertEqual(lane(.dvsTimecode, in: AdvancedOverviewInput(isDVSEnabled: true, dvsSignalHealth: .usable)), .ready)
+    }
+
+    // MARK: MIDI — connected ≠ mapped; mapped ≠ DVS+MIDI ready
+
+    func testMIDINoControllerIsSetupRequired() {
+        XCTAssertEqual(lane(.midiController, in: AdvancedOverviewInput(hasMIDIController: false)), .setupRequired)
+    }
+
+    func testMIDIUnmappedCrossfaderIsNeedsAttention() {
+        XCTAssertEqual(lane(.midiController, in: AdvancedOverviewInput(hasMIDIController: true, isCrossfaderMapped: false)), .needsAttention)
+    }
+
+    func testMIDIMappedWithoutDVSIsDetectedNotReady() {
+        let status = lane(.midiController, in: AdvancedOverviewInput(
+            isDVSEnabled: true, dvsSignalHealth: .noSignal, hasMIDIController: true, isCrossfaderMapped: true))
+        XCTAssertEqual(status, .detected)
+    }
+
+    func testMIDIDVSPlusMIDIReadyIsReady() {
+        let status = lane(.midiController, in: AdvancedOverviewInput(
+            isDVSEnabled: true, dvsSignalHealth: .usable, hasMIDIController: true, isCrossfaderMapped: true))
+        XCTAssertEqual(status, .ready)
+    }
+
+    // MARK: Camera — optional, non-blocking
+
+    func testCameraHiddenWhenNotEnabledOrActive() {
+        let items = AdvancedOverviewSummary.derive(AdvancedOverviewInput(isCameraActive: false, isLiveInputEnabled: false)).items
+        XCTAssertFalse(items.contains { $0.lane == .camera }, "optional camera must be omitted when inactive")
+    }
+
+    func testCameraActiveIsDetected() {
+        XCTAssertEqual(lane(.camera, in: AdvancedOverviewInput(isCameraActive: true)), .detected)
+    }
+
+    func testCameraEnabledButInactiveIsUnavailable() {
+        XCTAssertEqual(lane(.camera, in: AdvancedOverviewInput(isCameraActive: false, isLiveInputEnabled: true)), .unavailable)
+    }
+
+    func testCameraDoesNotChangeNextAction() {
+        let base = AdvancedOverviewInput(hasSession: true, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: true, isCrossfaderMapped: true)
+        let withCamera = AdvancedOverviewInput(hasSession: true, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: true, isCrossfaderMapped: true, isCameraActive: true)
+        XCTAssertEqual(nextAction(base), nextAction(withCamera), "camera must never gate the next action")
+    }
+
+    // MARK: Performer Monitor — connected is informational, not ready
+
+    func testMonitorDisconnectedIsSetupRequired() {
+        XCTAssertEqual(lane(.performerMonitor, in: AdvancedOverviewInput(isPerformerMonitorConnected: false)), .setupRequired)
+    }
+
+    func testMonitorConnectedIsDetectedNotReady() {
+        XCTAssertEqual(lane(.performerMonitor, in: AdvancedOverviewInput(isPerformerMonitorConnected: true)), .detected)
+    }
+
+    // MARK: Next action — recording dominates, then setup, then blocking lanes
+
+    func testRecordingDominatesNextAction() {
+        let input = AdvancedOverviewInput(hasSession: true, isRecording: true, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: true, isCrossfaderMapped: true)
+        XCTAssertEqual(nextAction(input), .recording)
+    }
+
+    func testNoSessionIsCreateSession() {
+        let input = AdvancedOverviewInput(hasSession: false, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: true, isCrossfaderMapped: true)
+        XCTAssertEqual(nextAction(input), .createSession)
+    }
+
+    func testAudioBlockedIsFixAudio() {
+        XCTAssertEqual(nextAction(AdvancedOverviewInput(hasSession: true, hasAnyAudioDevice: false)), .fixAudio)
+    }
+
+    func testNoControllerIsConnectController() {
+        let input = AdvancedOverviewInput(hasSession: true, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: false)
+        XCTAssertEqual(nextAction(input), .connectController)
+    }
+
+    func testUnmappedCrossfaderIsMapCrossfader() {
+        let input = AdvancedOverviewInput(hasSession: true, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: true, isCrossfaderMapped: false)
+        XCTAssertEqual(nextAction(input), .mapCrossfader)
+    }
+
+    func testAllNonBlockingLanesReadyIsReady() {
+        let input = AdvancedOverviewInput(hasSession: true, hasAnyAudioDevice: true, isSelectedAudioAvailable: true, hasMIDIController: true, isCrossfaderMapped: true)
+        XCTAssertEqual(nextAction(input), .ready)
+    }
+
+    // MARK: Status vocabulary stays distinct
+
+    func testStatusLabelsAreDistinctAndUppercase() {
+        let statuses: [AdvancedOverviewStatus] = [.setupRequired, .needsAttention, .detected, .ready, .recording, .unavailable]
+        var seen = Set<String>()
+        for status in statuses {
+            XCTAssertFalse(status.label.isEmpty)
+            XCTAssertEqual(status.label, status.label.uppercased())
+            seen.insert(status.label)
+        }
+        XCTAssertEqual(seen.count, statuses.count, "six summary states must have distinct labels")
+    }
+
+    func testStatusVariantsMatchSemanticContract() {
+        XCTAssertEqual(AdvancedOverviewStatus.setupRequired.variant, .neutral)
+        XCTAssertEqual(AdvancedOverviewStatus.needsAttention.variant, .warning)
+        XCTAssertEqual(AdvancedOverviewStatus.detected.variant, .info)
+        XCTAssertEqual(AdvancedOverviewStatus.ready.variant, .ready)
+        XCTAssertEqual(AdvancedOverviewStatus.recording.variant, .danger)
+        XCTAssertEqual(AdvancedOverviewStatus.unavailable.variant, .neutral)
+    }
+
+    // MARK: Hardware identity is not part of a readiness badge
+
+    func testOverviewStatusLabelsNeverBakeHardwareIdentity() {
+        let forbidden = ["RANE", "DJM", "PIONEER", "S11", "S9", "S7", "MKII", "USB MIDI"]
+        for status in AdvancedOverviewStatus.allCases {
+            let upper = status.label.uppercased()
+            for name in forbidden {
+                XCTAssertFalse(upper.contains(name), "\(status.label) must not bake a hardware name into a summary status")
+            }
+        }
+    }
+}
+
+// MARK: - Performer Monitor connection-state derivation
+
+final class PerformerMonitorStateTests: XCTestCase {
+
+    // MARK: Disconnected states (truthful — no transport required)
+
+    func testSearchingAndConnectingAreSearching() {
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Searching for Performer Monitor on a nearby device"), .searching)
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Connecting to Karl's Mac"), .searching)
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Enter the connection name shown in ScratchLab"), .searching)
+    }
+
+    func testPausedAndLostAreConnectionFailed() {
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Device connection paused. Check network."), .connectionFailed)
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Connection to device paused. Check connection."), .connectionFailed)
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Connection to device lost."), .connectionFailed)
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Unable to send to device. Check connection."), .connectionFailed)
+    }
+
+    func testUnableToStartIsUnavailable() {
+        XCTAssertEqual(PerformerMonitorConnectionState.disconnectedState(fromStatus: "Unable to start device sharing. Check network."), .unavailable)
+    }
+
+    // MARK: Connected peers map to the role-appropriate state
+
+    func testConnectedPeersMapToControlledByMacOnClients() {
+        // The mobile client is read-only: a connected peer means CONTROLLED BY MAC.
+        let clientState: PerformerMonitorConnectionState = {
+            let peers: [String] = ["Karl's Mac"]
+            return peers.isEmpty ? .searching : .controlledByMac
+        }()
+        XCTAssertEqual(clientState, .controlledByMac)
+        XCTAssertEqual(clientState.label, "CONTROLLED BY MAC")
+    }
+
+    func testConnectedPeersMapToConnectedOnControllingMac() {
+        // The Mac is the controller: a connected peer means CONNECTED.
+        let macState: PerformerMonitorConnectionState = {
+            let peers: [String] = ["iPhone"]
+            return peers.isEmpty ? .searching : .connected
+        }()
+        XCTAssertEqual(macState, .connected)
+        XCTAssertEqual(macState.label, "CONNECTED")
+    }
+
+    // MARK: Labels stay truthful and role-distinct
+
+    func testConnectionStateLabels() {
+        XCTAssertEqual(PerformerMonitorConnectionState.searching.label, "SEARCHING")
+        XCTAssertEqual(PerformerMonitorConnectionState.connected.label, "CONNECTED")
+        XCTAssertEqual(PerformerMonitorConnectionState.controlledByMac.label, "CONTROLLED BY MAC")
+        XCTAssertEqual(PerformerMonitorConnectionState.connectionFailed.label, "CONNECTION FAILED")
+        XCTAssertEqual(PerformerMonitorConnectionState.unavailable.label, "UNAVAILABLE")
+    }
+
+    func testConnectionStateVariantsAreSemantic() {
+        XCTAssertEqual(PerformerMonitorConnectionState.searching.variant, .info)
+        XCTAssertEqual(PerformerMonitorConnectionState.connected.variant, .ready)
+        XCTAssertEqual(PerformerMonitorConnectionState.controlledByMac.variant, .ready, "controlled is bone READY, never green")
+        XCTAssertEqual(PerformerMonitorConnectionState.connectionFailed.variant, .danger)
+        XCTAssertEqual(PerformerMonitorConnectionState.unavailable.variant, .neutral)
     }
 }
