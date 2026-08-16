@@ -619,6 +619,20 @@ struct RegistryDrivenComparisonSurfaceTests {
         #expect(mac.contains("comparison stays off rather than guessing one"))
     }
 
+    @Test("Review reference target card resolves through the registry, not the legacy excerpt")
+    func reviewReferenceTargetCardUsesRegistry() throws {
+        let mac = try source("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        // The reference "Target notation" card must key off the canonical
+        // registry (the same source the comparison card uses), never the
+        // legacy bundled `ScratchNotation.babyScratch` ~5 s excerpt.
+        #expect(mac.contains("reviewTargetReferenceNotation(for:"))
+        #expect(mac.contains(
+            "ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue)"))
+        // The legacy hardcoded source line is gone.
+        #expect(!mac.contains(
+            "(scratchType == .babyScratch) ? ScratchNotation.babyScratch : nil"))
+    }
+
     @Test("Review comparison derives windows and tolerances, no magic beats")
     func reviewCardDerivesWindows() throws {
         let mac = try source("ScratchLabDesktop/Views/MacAnalyzerView.swift")

@@ -2365,7 +2365,7 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 DVSSignalHealthCard(
                     state: dvsSignalState,
-                    detail: timecodePipeline.mode == .disabled
+                    detail: dvsTimecodeMode == .disabled
                         ? "DVS / timecode input is disabled — enable it in DVS / timecode."
                         : "Signal-health thresholds are prototype defaults — \(HardwareVerificationTier.verifyInEngineering.label)."
                 )
@@ -4486,6 +4486,19 @@ struct MacAnalyzerView: View {
         reviewStateSelection = metadata.reviewState
         reviewNotesDraft = metadata.reviewNotes ?? ""
         reviewerNameDraft = metadata.reviewedBy ?? ""
+
+        // Reload the persisted label decision too, so the header badge and
+        // summary agree with the sidecar after relaunch. Previously only
+        // `reviewMetadata` was reloaded, leaving a confirmed/corrected take
+        // shown as Pending while export + artifact status still read the
+        // persisted `reviewDecision`. The status is always valid; the label is
+        // restored only when it still maps to a known `ReviewCorrection`.
+        if let decision = sidecar.reviewDecision {
+            reviewDecisionStatusByTakeID[reviewTakeID] = decision.status
+            if let correction = ReviewCorrection(rawValue: decision.label) {
+                reviewDecisionByTakeID[reviewTakeID] = correction
+            }
+        }
     }
 
     private func startMacLiveInput() {
@@ -4877,6 +4890,27 @@ struct MacAnalyzerView: View {
         .controlSize(.small)
     }
 
+    /// DVS/timecode input mode, Release-safe. The live timecode control
+    /// pipeline (`timecodePipeline`) is `#if DEBUG`-only; in Release the input
+    /// mode is always `.disabled` — DVS/timecode is legitimately off (the live
+    /// tap is gated by `ENABLE_TIMECODE_LIVE_TAP`, Debug-only).
+    private var dvsTimecodeMode: TimecodeControlMode {
+        #if DEBUG
+        return timecodePipeline.mode
+        #else
+        return .disabled
+        #endif
+    }
+
+    /// DVS/timecode signal health, Release-safe (see `dvsTimecodeMode`).
+    private var dvsTimecodeSignalHealth: SignalHealth {
+        #if DEBUG
+        return timecodePipeline.signalHealth
+        #else
+        return .noSignal
+        #endif
+    }
+
     // MARK: - Advanced Overview summary
 
     /// The single authoritative Advanced Overview summary — derived purely from
@@ -4889,8 +4923,8 @@ struct MacAnalyzerView: View {
             isRecording: captureEngine.isRoutineRecording || captureEngine.cxlIsRecording,
             hasAnyAudioDevice: !captureEngine.availableAudioDevices.isEmpty,
             isSelectedAudioAvailable: captureEngine.isSelectedAudioInputAvailable,
-            isDVSEnabled: timecodePipeline.mode != .disabled,
-            dvsSignalHealth: timecodePipeline.signalHealth,
+            isDVSEnabled: dvsTimecodeMode != .disabled,
+            dvsSignalHealth: dvsTimecodeSignalHealth,
             hasMIDIController: selectedMixerMIDIDeviceName != nil,
             isCrossfaderMapped: captureEngine.crossfaderCCMapping != nil,
             isCameraActive: captureEngine.isCameraActive,
@@ -4901,7 +4935,7 @@ struct MacAnalyzerView: View {
 
     /// Maps the real timecode signal health onto the reusable semantic state.
     private var dvsSignalState: DVSSignalState {
-        switch timecodePipeline.signalHealth {
+        switch dvsTimecodeSignalHealth {
         case .noSignal: return .noSignal
         case .weak: return .weak
         case .usable: return .usable
@@ -4914,7 +4948,7 @@ struct MacAnalyzerView: View {
     private var controllerMappingState: ControllerMappingState {
         if selectedMixerMIDIDeviceName == nil { return .noController }
         if captureEngine.crossfaderCCMapping == nil { return .crossfaderMappingRequired }
-        if timecodePipeline.signalHealth == .usable { return .dvsPlusMidiReady }
+        if dvsTimecodeSignalHealth == .usable { return .dvsPlusMidiReady }
         return .midiLearned
     }
 
@@ -5444,7 +5478,7 @@ struct MacAnalyzerView: View {
                 // DVS is a blocking lane only while timecode input mode is
                 // active (default `.disabled`); ready only when the real
                 // signal health is `.usable` (carrier-detected is NOT usable).
-                dvsTimecode: .dvs(dvsSignalState, required: timecodePipeline.mode != .disabled),
+                dvsTimecode: .dvs(dvsSignalState, required: dvsTimecodeMode != .disabled),
                 // Platter has no dedicated readiness owner yet — optional today.
                 platter: .notRequired,
                 // MIDI/controller input is optional today — no "required" owner.
@@ -5735,7 +5769,8 @@ struct MacAnalyzerView: View {
 
                 // After a take exists, Review this take is the dominant
                 // next step. Save take / Record another demote to bordered
-                // utilities; Discard sits trailing as the destructive action.
+                // utilities (no destructive "Discard" — takes are preserved,
+                // never deleted from this surface).
                 // Action row uses the shared button-hierarchy modifiers so
                 // sizing stays consistent with the rest of the app.
                 if hasRecordedTake {
@@ -5760,14 +5795,6 @@ struct MacAnalyzerView: View {
                                 prepareRetake()
                             }
                             .scratchLabSecondaryButton()
-                            .disabled(captureEngine.isRoutineRecording)
-
-                            Spacer(minLength: 0)
-
-                            Button("Discard") {
-                                prepareRetake()
-                            }
-                            .scratchLabDestructiveButton()
                             .disabled(captureEngine.isRoutineRecording)
                         }
                     }
@@ -6762,9 +6789,36 @@ struct MacAnalyzerView: View {
         }
     }
 
+    /// Canonical reference target for the selected scratch type, materialized
+    /// from the SAME `canonicalBeatPattern` source the target-vs-performed
+    /// comparison consumes, tiled to a fixed readable phrase length. Replaces
+    /// the legacy bundled `ScratchNotation.babyScratch` (~5 s demo excerpt,
+    /// pre-canonical "baby" ID) so the "Target notation" reference card and
+    /// the comparison card can never disagree about what the target is.
+    /// Non-canonical techniques return nil → the card's graceful "unavailable"
+    /// copy, never a guessed pattern.
+    private func reviewTargetReferenceNotation(for scratchType: CaptureSessionScratchType) -> ScratchNotation? {
+        guard let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue) else {
+            return nil
+        }
+        guard let target = TargetScratchPhrase.phrase(
+            repeating: pattern,
+            cycles: Self.reviewReferenceTargetCycles
+        ) else {
+            return nil
+        }
+        return target.materializedNotation(
+            bpm: Double(routineSessionSetup.bpmValue ?? 90),
+            scratchID: pattern.scratchID,
+            timingBasis: pattern.timingBasis,
+            beatsPerBar: pattern.beatsPerBar,
+            version: pattern.version
+        )
+    }
+
     private var reviewTargetNotationStageCard: some View {
         let scratchType = routineSessionSetup.scratchType ?? .babyScratch
-        let notation: ScratchNotation? = (scratchType == .babyScratch) ? ScratchNotation.babyScratch : nil
+        let notation: ScratchNotation? = reviewTargetReferenceNotation(for: scratchType)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Target notation")
@@ -6852,6 +6906,11 @@ struct MacAnalyzerView: View {
     /// defensive bound for very long takes; 64 one-beat cycles is ~42 s at
     /// 90 BPM, beyond any Review take this surface handles.
     private static let reviewComparisonMaxCycles = 64
+    /// Fixed cycle count for the Review "Target notation" reference card when
+    /// there is no take yet (the comparison card tiles from evidence length
+    /// instead). 8 one-beat cycles ≈ 5.3 s at 90 BPM, matching the visual
+    /// density of the legacy ~5 s excerpt this replaces.
+    private static let reviewReferenceTargetCycles = 8
 
     /// One deterministic gameplay attempt — the first canonical target cycle
     /// only — built from the same capture evidence `reviewPerformanceComparison`
@@ -7307,8 +7366,7 @@ struct MacAnalyzerView: View {
     @ViewBuilder
     private var reviewOverlayDiffStageCard: some View {
         let scratchType = routineSessionSetup.scratchType ?? .babyScratch
-        let targetNotation: ScratchNotation? =
-            (scratchType == .babyScratch) ? ScratchNotation.babyScratch : nil
+        let targetNotation: ScratchNotation? = reviewTargetReferenceNotation(for: scratchType)
         let capturedSnapshot = currentRoutineNotationSnapshot
         let hasCaptured = capturedSnapshot?.hasDetectedEvents ?? false
 

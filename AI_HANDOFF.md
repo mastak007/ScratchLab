@@ -1,5 +1,1164 @@
 # AI Handoff
 
+## 2026-08-17 — V3.2 beta candidate COMMITTED `7efbb70` (NOT pushed) — AWAITING APPROVAL
+
+Final beta-candidate preparation. Committed one clean commit `7efbb70`
+(`V3.2: prepare App Store Connect beta candidate`) on `feature/v3.2-swiftui-20260815`.
+**NOT pushed, NOT uploaded.**
+
+### Commit hashes
+- **`7efbb70` V3.2: prepare App Store Connect beta candidate** (this slice — 3 files, +200/−18)
+- `ae2462b` V3.2: implement production Advanced workspace
+- `797e087` V3.2: implement production Review workspace
+- `d5043b0` V3.2: implement production Capture workspace
+- `184b8d1` V3.2: implement cross-platform Practice workspace
+- `0b85674` V3.2: reconcile cross-platform semantic colours
+(Branch is `feature/v3.2-swiftui-20260815`, ahead 19 of origin.)
+
+### What `7efbb70` contains
+1. **B1** — Review target cards unified onto canonical registry (`reviewTargetReferenceNotation(for:)` +
+   `reviewReferenceTargetCycles`; `reviewTargetNotationStageCard` + `reviewOverlayDiffStageCard`).
+2. **B2** — `loadReviewMetadataForCurrentTake` now reloads `sidecar.reviewDecision` (relaunch persistence).
+3. **B3** — removed the no-op destructive "Discard" button from `captureRecordCard`.
+4. **Release compile fix** — `timecodePipeline` is `#if DEBUG`-gated; added Release-safe
+   `dvsTimecodeMode`/`dvsTimecodeSignalHealth` (`.disabled`/`.noSignal` in Release) and re-pointed the six
+   Release consumers (`advancedOverviewSummary`, `dvsSignalState`, `controllerMappingState`,
+   `captureReadiness`, Overview timecode status). **This fixed the macOS Release archive failure.**
+5. Regression tests: `RegistryDrivenComparisonSurfaceTests.reviewReferenceTargetCardUsesRegistry` (B1);
+   `CrossWorkspaceFixRegressionTests` (B2/B3); `PrivacyAndPermissionRegressionTests` (quality audit).
+
+### Archive results (both now SUCCEED — development signing)
+- **iOS** `/tmp/ScratchLabiOS.xcarchive` — `ARCHIVE SUCCEEDED`, "Apple Development: Karl Watson" + iOS Team
+  Provisioning Profile.
+- **macOS** `/tmp/ScratchLabMac.xcarchive` — `ARCHIVE SUCCEEDED` (after the timecodePipeline fix), same dev signing.
+
+### Verification this slice
+iOS Release build ✓ · macOS Release archive ✓ · build-for-testing ✓ · `git diff --check` clean.
+Focused suites: CrossWorkspaceFixRegressionTests 2/2, PrivacyAndPermissionRegressionTests 3/3,
+SessionReviewMetadataTests 17/17, ReviewPresentationStateTests 12/12, RegistryDrivenComparisonSurfaceTests 5/5.
+
+### EXACT remaining blockers (before TestFlight upload)
+1. **Apple Distribution signing** — only two "Apple Development" identities present locally; no
+   "Apple Distribution" cert. `xcodebuild -exportArchive` (method `app-store-connect`) needs it. Resolve in
+   Xcode → Settings → Accounts (managed cert), or it is created at export time if the Apple ID permits.
+2. **Pre-existing dirty files NOT in this commit** (preserved per instruction; review + commit before a real
+   submission): `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab.xcscheme`, and the AppIcon/Logo assets
+   (iOS + watch + `ScratchLabDesktop/AppIcon.icns`). The archives above were built from the working tree
+   (they include the dirty icons), but `7efbb70` does NOT carry them — checking out cleanly reverts icons.
+3. **Hardware/manual verification** — see matrix below (all pending).
+
+### Hardware test matrix (all pending)
+1. Practice: open → listen/copy → result (WATCH/COPY/RESULT) on macOS + iPhone/iPad.
+2. Capture: configure session → record → stop/save (has-take states, finalizing/issue/complete).
+3. Review: open → correct/confirm label → export ZIP (confirmation/correction/export states).
+4. Advanced: diagnose hardware (DVS/MIDI/camera) → return to another workspace without losing session state.
+5. Camera/mic permission grant AND denial → Settings recovery (both platforms).
+6. DVS/MIDI hardware (RANE ONE MKII CC6 platter; DDJ-GRV6 crossfader) → readiness states.
+7. Companion camera + Performer Monitor over local network (Bonjour).
+8. 1440×900 / 1280×800 layout eyeball; VoiceOver + Dynamic Type pass on primary flows.
+
+### Rollback notes
+- Un-push the commit (safe): `git reset --soft HEAD~1` (keeps changes staged) or `git reset --mixed HEAD~1`
+  (keeps working tree, unstages). Since it is NOT pushed, `git revert 7efbb70` also works but leaves a revert commit.
+- The commit only touches 3 source/test files; the dirty `project.pbxproj`/`xcscheme`/icons are untouched, so
+  a reset does not disturb them.
+
+### Commands Karl should run before upload
+1. Push (auto-classifier may block; use the user-shell `!` form): `! git push origin feature/v3.2-swiftui-20260815`
+2. Review + commit the pre-existing dirty assets (`project.pbxproj`, `xcscheme`, app icons) if intended.
+3. Export a distribution archive (requires Apple Distribution cert):
+   `xcodebuild -exportArchive -archivePath <xcarchive> -exportOptionsPlist <plist with method=app-store-connect>`
+4. Upload via **Xcode Organizer "Distribute App"** (or the **Transporter** app). Do NOT use
+   `xcrun altool --upload-app` — Apple deprecated altool's upload path and it misreports under Xcode 26.
+   (`xcrun notarytool` is for Developer ID notarization outside the App Store — not this flow.)
+
+**Stop:** Awaiting Approve Beta Upload.
+
+---
+
+---
+
+## 2026-08-17 — ASC/TestFlight preflight (no upload) — AWAITING APPROVAL
+
+Read-only ASC/TestFlight preflight. No upload/push/signing change. Result: **NO-GO for macOS** — the
+macOS target does not compile in Release; iOS archives cleanly.
+
+**Config (inspected):** `MARKETING_VERSION 1.0.1`, `CURRENT_PROJECT_VERSION 18`, bundle id
+`com.machelpnz.scratchlab` (shared macOS/iOS), team `2DDKGL33BU`, `CODE_SIGN_STYLE=Automatic`.
+Deployment targets: macOS 15.0, iOS 26.x. macOS entitlements complete (sandbox + camera + audio-input +
+network client/server + user-selected file). iOS: no entitlements (none needed). Debug flags correct
+(`ENABLE_TIMECODE_LIVE_TAP` Debug-only; `-O` Release; `ENABLE_TESTABILITY` Debug-only). Both schemes
+archive with `Release`. Export compliance `ITSAppUsesNonExemptEncryption=false`. Privacy manifest +
+permission strings verified (prior audit). App icons present (modified, uncommitted).
+
+**Build results:**
+- **iOS Release build ✓** and **iOS Release archive ✓** (`ARCHIVE SUCCEEDED`, dev signing
+  "Apple Development: Karl Watson" + iOS Team Provisioning Profile). `/tmp/ScratchLabiOS.xcarchive`.
+- **macOS Release archive ✗** — 16 compile errors, single root cause: `timecodePipeline` is `#if DEBUG`
+  (`MacAnalyzerView.swift:670-709`, def at `:693`) but referenced by UNGUARDED Release code. PRE-EXISTING
+  (my B1/B2/B3 + quality-audit changes touch 0 of these lines). Scope of the blocker (Release consumers):
+  `advancedOverviewSummary` (`:4905-4906`), `dvsSignalState` (`:4917`), `controllerMappingState` (`:4930`),
+  `captureReadiness` (`:5460`), and the Overview card timecode status (`:2368`). Fix direction: Release
+  fallbacks (DVS mode `.disabled`, health `.noSignal`) for those six sites — since `ENABLE_TIMECODE_LIVE_TAP`
+  is Debug-only, DVS/timecode is legitimately OFF in Release.
+
+**Signing note (not a code blocker):** only two "Apple Development" identities present locally; no
+"Apple Distribution" cert. iOS archive signs for Development; TestFlight/App Store export would require
+"Apple Distribution" signing (account-managed, created at export time if the Apple ID permits).
+
+**Focused tests:** `PrivacyAndPermissionRegressionTests` 3/3, `CrossWorkspaceFixRegressionTests` 2/2,
+`RegistryDrivenComparisonSurfaceTests` 5/5, `SessionReviewMetadataTests` 17/17, `ReviewPresentationStateTests`
+12/12 (all green; run via `xcrun xctest` dylib-symlink recipe).
+
+**Go/no-go:** NO-GO — macOS Release compile blocker (above) is the only hard blocker. Manual hardware
+tests still pending (real take → Review/export; camera/mic grant+denial; DVS/MIDI; companion/performer
+monitor; 1440×900/1280×800; VoiceOver/Dynamic Type).
+
+**Stop:** Awaiting Approve ASC Beta Candidate.
+
+---
+
+---
+
+## 2026-08-17 — V3.2 quality audit (a11y/perf/privacy/permission) — AWAITING APPROVAL
+
+Read-only quality audit across the implemented scope (macOS Practice/Capture/Review/Advanced + iOS/iPad
+Practice/Advanced). **No beta blockers found — privacy/permission posture is solid.** No production code changed
+this slice; added a regression suite to lock in the verified invariants. NOT committed.
+
+**Verified solid (with evidence):**
+- **Usage descriptions** present + truthful on both targets (`NSCameraUsageDescription`/`NSMicrophoneUsageDescription`/
+  `NSLocalNetworkUsageDescription` in `ScratchLab/Info.plist` + `ScratchLabDesktop/Info.plist`).
+- **Privacy manifests** (`ScratchLab/PrivacyInfo.xcprivacy` + `ScratchLabDesktop/…`): `NSPrivacyTracking=false`,
+  `NSPrivacyCollectedDataTypes` empty, required-reason API categories present (UserDefaults CA92.1,
+  FileTimestamp 0A2A.1, SystemBootTime 35F9.1).
+- **No third-party analytics/services.** `SessionUploadManager` cloud upload is Release-disabled
+  (`SessionUploadConfiguration.current()` → `#if !DEBUG` returns `apiBaseURL: nil`); only reachable via
+  DEBUG env `SCRATCHLAB_UPLOAD_API_BASE_URL`. Consistent with "session results stay on device."
+- **Permission denial/recovery** present: `AVCaptureDevice.authorizationStatus` denied/restricted branches +
+  settings deep-link (`UIApplication.openSettingsURLString` iOS; `NSWorkspace`/`x-apple.systempreferences` macOS).
+- **Local network**: pre-prompt rationale (`localNetworkRationaleAccepted`) + `NSBonjourServices`
+  (`_scrcamfeed._tcp`, `_scrmonfeed._tcp`) declared.
+- **Reduce Motion** honored on the animation-heavy surfaces (`ScratchMotionLane`, macOS Practice playhead).
+- **VoiceOver**: ~112 accessibility labels/hints, no unlabeled icon-only buttons.
+- **Capture pipeline threaded** off-main (`sessionQueue`/`videoQueue`/`audioQueue`/`finalizationQueue` in
+  `MacCaptureEngine`).
+
+**Regression tests added (`PrivacyAndPermissionRegressionTests`, 3/3 green, in ScratchNotationPanelTests.swift):**
+usage descriptions on both platforms; privacy manifests (no tracking/collection + required reasons);
+cloud upload Release-disabled. Builds: macOS build-for-testing ✓, `git diff --check` clean.
+
+**Follow-ups (deferred, NOT beta-blocking):**
+1. **Dynamic Type** — design system uses fixed `.system(size:)` throughout; supporting it is a typography
+   redesign that would break Figma pixel-parity (out of scope).
+2. **`print` diagnostics in Release** — a handful log file paths/device names (user's own machine data);
+   convert to `Logger` with `.private` or gate `#if DEBUG` in a hygiene slice.
+3. **`reviewPerformanceComparison` + `resolvedOverlayAndDiagnostics` recompute on every Review body eval**
+   (no Release cache) — moderate, low-frequency (only on take-load/session/tab change).
+4. **`rescanRoutineCaptures` sync disk I/O on main thread** (launch/session switch).
+5. **`.controlSize(.small)` sub-44pt controls** in Advanced/diagnostic surfaces.
+6. **Splash logo animation** ignores Reduce Motion (one-shot 1.5 s).
+
+**Stop:** Awaiting Approve Quality Audit.
+
+---
+
+---
+
+## 2026-08-17 — V3.2 cross-workspace fixes (B1/B2/B3 beta blockers) — AWAITING APPROVAL
+
+Implemented the three beta blockers from the approved Cross-Workspace Fix List. NOT committed (per rule).
+No redesign, no engine/export/schema change, no pbxproj edit. Production owners preserved.
+
+**B1 — duplicated target-notation source of truth (FIXED).** Added `reviewTargetReferenceNotation(for:)`
++ `reviewReferenceTargetCycles = 8`; both Review target cards now resolve through the canonical registry
+(`canonicalBeatPattern` → `TargetScratchPhrase` → `materializedNotation`): `reviewTargetNotationStageCard`
+(`MacAnalyzerView.swift:6790`) and `reviewOverlayDiffStageCard` (`:7348`). The legacy `ScratchNotation.babyScratch`
+(~5 s excerpt, pre-canonical "baby" ID) is gone from BOTH Review target cards; `reviewTargetVsPerformedStageCard`
+was already canonical. **Deferred:** macOS Practice still uses `babyScratchFull76BeatQuantized ?? babyScratch`
+(`:1199`) vs iOS/iPad `canonicalBeatPattern` — a cross-platform *teaching-model* decision, not a same-screen
+contradiction; changing it would redesign the approved Practice surface.
+
+**B2 — Review label decision not restored after relaunch (FIXED).** `loadReviewMetadataForCurrentTake` (`:4475`)
+now also reloads `sidecar.reviewDecision` into `reviewDecisionStatusByTakeID` (always) +
+`reviewDecisionByTakeID` (when the label maps to a `ReviewCorrection`). Header badge + summary now agree with the
+persisted sidecar after relaunch, matching export/artifact-status.
+
+**B3 — "Discard" no-op destructive button (FIXED).** Removed the `Button("Discard")` that called `prepareRetake()`
+(identical to "Record another", no discard, no confirm). `captureRecordCard` action row is now "Save take" +
+"Record another"; comment updated to note takes are preserved, never deleted from this surface. (`prepareRetake`
+still used by the accurately-labeled "Retake"/"Record another" buttons.)
+
+**Regression tests (3 new, all green):**
+- `RegistryDrivenComparisonSurfaceTests.reviewReferenceTargetCardUsesRegistry` (B1, Swift Testing) — 5/5 suite.
+- `CrossWorkspaceFixRegressionTests` (B2/B3, XCTest, appended to ScratchNotationPanelTests.swift) — 2/2.
+Adjacent suites re-verified: `SessionReviewMetadataTests` 17/17, `ReviewPresentationStateTests` 12/12.
+
+**Gates:** iOS build ✓, macOS build ✓, macOS build-for-testing ✓, `git diff --check` clean.
+
+**Deliberately deferred (follow-ups, NOT in this fix list):** "Save take" no-op (F1), stale
+`capturedNotationSnapshot` in Advanced Overview (F2), macOS Practice hardcoded to Baby Scratch (F3), and the
+Practice cross-platform target model (part of B1). Hardware-verification items unchanged.
+
+**Stop:** Awaiting Approve Integration Fixes.
+
+---
+
+---
+
+## 2026-08-17 — V3.2 cross-workspace audit (READ-ONLY, no fixes) — AWAITING APPROVAL
+
+Read-only cross-workspace audit of Practice → Capture → Review → Advanced on every implemented
+platform (macOS all four; iOS/iPad Practice + Advanced only — mobile Capture/Review still FUTURE).
+No code/Figma/Code Connect changed. Nothing staged/committed/pushed.
+
+**Findings ranked (awaiting "Approve Cross-Workspace Fix List" before any fix):**
+
+- **BETA BLOCKER — duplicated target-notation source of truth.** Baby scratch has 5 distinct
+  `ScratchNotation` sources (`CaptureCore.swift`): `babyScratch` (2670, ~5s excerpt, legacy "baby"),
+  `babyScratchDemo` (2689), `babyScratchFull76` (2700), `babyScratchFull76BeatQuantized` (2723),
+  `babyScratchCycle` (3010, canonical, via `canonicalBeatPattern` 3034). Consumers disagree:
+  macOS Practice → `babyScratchFull76BeatQuantized ?? babyScratch` (`MacAnalyzerView.swift:1199`,
+  BPM 79); macOS Review "Target notation" card → `babyScratch` (`:6767`); macOS Review
+  "Target vs performed" card → `babyScratchCycle` (`:6894`); iOS/iPad Practice → `babyScratchCycle`
+  (`PracticeModeView.swift:174-177`). Same workspace + same technique show different targets.
+- **BETA BLOCKER — Review label decision not restored after relaunch.** `loadReviewMetadataForCurrentTake`
+  (`MacAnalyzerView.swift:4475`) reloads only `sidecar.reviewMetadata`, NOT `sidecar.reviewDecision`.
+  In-memory `reviewDecisionByTakeID`/`reviewDecisionStatusByTakeID` (`:651-652`) start empty and are
+  only set by `persistReviewDecision` (`:4285`). After relaunch `reviewPresentationState` (`:3833`) and
+  `reviewLabelDecision` (`:7416`) show READY/Pending while export (`SessionExportCoordinator.swift:2255`)
+  + artifact status (`MacCaptureEngine.swift:6006`) still read the persisted decision.
+- **BETA BLOCKER — "Discard" is a no-op destructive button.** `captureRecordCard` "Discard" (`:5767`)
+  and "Record another" (`:5759`) both call `prepareRetake()` (`:4186`) which only reports
+  "Retake selected… previous take remains stored" + `workspaceTab = .capture`. No discard, no confirm,
+  no delete-take path exists.
+- **FOLLOW-UP — "Save take" is a no-op.** `markLastTakeSaved()` (`:4168`) emits only a status string;
+  take already persisted on stop.
+- **FOLLOW-UP — stale `capturedNotationSnapshot` in Advanced Overview.** Set once by Review "View
+  captured notation" (`:6180`), never cleared; `NotationVisualizerView(capturedSnapshot:
+  capturedNotationSnapshot ?? currentRoutineNotationSnapshot)` (`:2355`) shows a prior take's notation
+  after recording a new one until relaunch.
+- **FOLLOW-UP — macOS Practice target hardcoded to Baby Scratch** (`:1188`, `:1199`, `:1301`), ignores
+  `routineSessionSetup.scratchType`. Consistent with "only baby_scratch is safe-to-author", stated.
+- **FOLLOW-UP / structural — mobile Capture/Review absent.** `CapturePlaceholderView`/`ReviewPlaceholderView`
+  (`MainMenuView.swift:275,317`) `private`+unreferenced; mobile flow = Practice + Advanced hub only.
+
+**Passed (no finding):** navigation graph via TabView + explicit buttons; back nav (macOS tabs,
+mobile `dismiss()`/nav-back); session continuity (`synchronizeSelectedRoutineSession` + `preferredSessionID`
+filter correctly re-scopes take; fresh session clears `hasRecordedTake`); single shared `MacCaptureEngine`
+(no duplicated hardware state); window restoration via `@AppStorage("scratchlab.mac.workspaceTab")` +
+`advancedSection` + `WorkspaceTab.resolved(from:)` legacy-value mapping; no URL deep links (only
+`MacWorkspaceRouting.showRoutineCapture()` Command+N).
+
+**HARDWARE VERIFICATION (deferred):** has-take states (recording/finalizing/issue/ready/confirmed/
+exporting/exported/failed) + 1440×900/1280×800 rendering need a real recorded take + camera/controller;
+DVS/MIDI/audio transitions across workspace switch need hardware.
+
+**Stop:** Awaiting Approve Cross-Workspace Fix List.
+
+---
+
+---
+
+## 2026-08-16 — V3.2 final Review audit — COMMITTED `797e087` (not pushed)
+
+Final Review audit clean, committed `797e087` (`V3.2: implement production Review workspace`, 4 files,
++122/−13) on `feature/v3.2-swiftui-20260815`. NOT pushed. Only the 4 intentional Review files staged;
+pre-existing dirty `project.pbxproj`/`xcscheme` + handoff preserved uncommitted.
+
+Audit confirmations:
+- **Mutation safety**: Review reads captured notation; correction/confirmation writes only the sidecar
+  JSON (`reviewed`/`withReviewMetadata` copy + set `reviewDecision`/`reviewMetadata`, never
+  `detectedNotation`); media (audio/video) untouched; export creates an archive without mutating source.
+- **Cross-platform notation**: `ScratchPhraseChartView` single definition, dual-target (macOS + iOS
+  pbxproj build-files); `ScratchNotationPanel`/`ScratchNotationComparisonPanel` shared — no fork.
+- **A11y/robustness**: accessibilityLabel/Hint/traits on the notation panel; catch-based error recovery
+  (sets `reviewStatusMessage`); atomic sidecar writes; export button gated (disabled without a take /
+  while recording / while exporting).
+
+Gates: macOS build ✓, iOS build ✓, build-for-testing ✓, `git diff --check` clean.
+Tests: ReviewPresentationStateTests 12/12, SessionReviewMetadataTests 17/17, ScratchNotationPanelTests
+9/9, ScratchPhraseChartComparisonDomainTests 5/5, ScratchLabDesignTokensTests 21/21,
+SessionExportRoundTripTests 1/1, ScratchLabNotationAndExportTests 27/29 (2 PRE-EXISTING source-string
+failures reading deleted files `AIBattleModeView.swift`/`FormulaPlaygroundView.swift`, not Review).
+
+Separated evidence:
+- **Automated** (done): builds, tests, mutation-safety, cross-platform, a11y, error recovery.
+- **Hardware/manual** (deferred): the has-take states (recording/finalizing/issue/correction/
+  confirmation/playback/exporting/success/failure) need a real recorded take + camera/controller;
+  visual 1440×900/1280×800 + screenshots BLOCKED (Screen Recording TCC permission absent this session).
+
+**Approved by Karl 2026-08-16.** Review implementation accepted — committed `797e087`, not pushed.
+
+---
+
+---
+
+## 2026-08-16 — V3.2 mobile Review capability gate — BACKEND GAP (no code)
+
+Read-only gate for mobile (iPhone/iPadOS) Review. **Verdict: NOT supported — the primary mobile
+Review backend paths do NOT exist.** No decorative UI implemented (would be a fake workflow). The
+honest "coming soon" state is already in place and correct.
+
+Per-owner gate (verified against code):
+- **Saved-take** ❌ — `RoutineSessionStore` (`CaptureCore.swift:5202`) is shared but has NO iOS
+  consumer; no primary iOS take recorder (`MacCaptureEngine` is macOS-only; iOS has only
+  `CompanionCameraBroadcaster` companion/secondary).
+- **Playback** ❌ — no iOS take-playback owner (`SessionExportReplayTake` is export-schema data, not
+  a playback engine).
+- **Correction** ❌ — `CaptureReviewDecision` model shared (`CaptureCore.swift:5660`) but the action
+  (`correctReviewLabel`/`persistReviewDecision`) is macOS-only in `MacAnalyzerView`.
+- **Confirmation** ❌ — `acceptReviewLabel`/`reviewDecisionByTakeID` macOS-only.
+- **Export wired to Review** ❌ — `SessionExportCoordinator` shared (used in `MainMenuView.swift:576`,
+  `CompanionCameraView.swift:9`) but no mobile Review screen to wire it to.
+
+Mobile Review screen: `ReviewPlaceholderView` (`MainMenuView.swift:317`) is the only mobile Review
+view — `private` + unreferenced, honest copy ("On-device Review is coming. Full take review currently
+runs on the ScratchLab Mac app."). No mobile `reviewWorkspace`/`reviewStage`; no Review navigation
+route (Home card list retired per Figma-approved Home; footnote "Capture and Review are intentionally
+absent until implemented"). Shared `ScratchNotationComparisonPanel` CAN render TARGET+PERFORMANCE but
+no mobile screen feeds it captured evidence.
+
+**Honest state already in place** — Review is absent from production mobile Home (Figma-approved), the
+honest placeholder is retained, no fake workflow exists. No code change warranted; adding decorative
+mobile Review UI would fake a completed workflow (same verdict as the mobile Capture gate).
+
+**Exact backend gap before mobile Review can be real:** (1) primary mobile take recorder, (2) mobile
+`saved-take` store consumer, (3) mobile take playback, (4) mobile correction/confirmation actions +
+persistence, (5) a mobile Review screen to wire `SessionExportCoordinator` + `ScratchNotationComparisonPanel`.
+
+**Validation:** N/A — no mobile Review implemented. Size/Dynamic Type/VoiceOver/hit-target/safe-area
+validation applies only to the "supported" branch.
+
+**Approved by Karl 2026-08-16.** Mobile Review gate accepted (backend gap, no code).
+
+---
+
+---
+
+## 2026-08-16 — V3.2 macOS Review presentation — AWAITING APPROVAL
+
+Implemented macOS Review from the approved anchors. The hierarchy was already correct (`64b5a58`):
+`reviewCompletedTakeStageCards` leads with `reviewTargetVsPerformedStageCard` (comparison + coaching)
+→ `reviewSummaryFooterCard` (summary) → "Technical evidence & diagnostics" disclosure (target /
+captured / overlay-diff / audio-onset). No hierarchy change needed.
+
+**`MacAnalyzerView.swift` — surfaced the label decision + truthful export status in the summary:**
+- `reviewLabelDecision` — maps `reviewDecisionStatusByTakeID[reviewTakeID]` to Confirmed (green) /
+  Corrected (cyan) / Unknown / Pending. Mirrors `reviewPresentationState` so the summary cannot
+  contradict the header badge (corrected ≠ confirmed).
+- `reviewExportMetric` — maps `sessionExportCoordinator.state` to Exporting (cyan) / Exported (green) /
+  Export failed (red) / Ready / Pending. Previously the footer hardcoded "Ready" from artifact
+  readiness even mid-export.
+- `reviewSummaryFooterCard` gained a "Label" metric (6 metrics: Target / Detected / Signal confidence /
+  Label / Source / Export).
+
+Uses existing owners only (`reviewDecisionStatusByTakeID`, `sessionExportCoordinator.state`, existing
+`acceptReviewLabel`/`correctReviewLabel`/`shareLastRoutineSession`). No new services. Audio/video files
+untouched (label correction persists to the sidecar JSON only).
+
+**Verification:** macOS build ✓, build-for-testing ✓, `git diff --check` clean. Focused suites green:
+ReviewPresentationStateTests 12/12, SessionReviewMetadataTests 17/17, ScratchNotationPanelTests 9/9,
+ScratchPhraseChartComparisonDomainTests 5/5, ScratchLabDesignTokensTests 21/21.
+
+**Visual validation at 1440×900 / 1280×800 — DEFERRED (environment-blocked).** The app launches
+without crash (process running), but the session lacks Screen Recording TCC permission, so the main
+window could not be captured (CGWindowList returns redacted/absent window data; full-screen screenshots
+show the terminal, not the app). The has-take summary-footer change additionally needs a real recorded
+take (HARDWARE REQUIRED — no take persists in the current session) before its pixels can be eyeballed.
+Notation markers / rails / joins / overlays are unchanged by this slice (no renderer edit).
+
+**Approved by Karl 2026-08-16.** macOS Review presentation accepted — nothing committed.
+
+---
+
+---
+
+## 2026-08-16 — V3.2 Review state model (pure adapter + tests) — AWAITING APPROVAL
+
+Implemented ONLY the pure Review presentation adapter + notation-comparison tests. No screen
+re-layout, no detection/capture/export algorithm change, nothing committed.
+
+**`CaptureCore.swift` — `ReviewPresentationState` now has a distinct `.corrected`:**
+- Added `.corrected` (label "CORRECTED", variant `.info`/cyan — informational, never green).
+- `ReviewPresentationInput.isConfirmed: Bool` → `decisionStatus: CaptureCore.CaptureReviewDecision.Status?`.
+- `derive` maps `.accepted`→`.confirmed`, `.corrected`→`.corrected`, `.unknown`/`nil`→`.ready`.
+  Confidence is NOT part of the input — detection confidence stays informational, never a
+  confirmation trigger.
+
+**`MacAnalyzerView.swift` — adapter wiring only (no layout):**
+- Added `reviewDecisionStatusByTakeID: [String: CaptureReviewDecision.Status]`, set in
+  `persistReviewDecision`, read in `reviewPresentationState` (`decisionStatus:`).
+- Fixes audit gap #2: "Correct label" now shows CORRECTED (not CONFIRMED); "Leave unknown" now
+  shows READY (not CONFIRMED).
+
+**Tests (all green via `xcrun xctest`):**
+- `ReviewPresentationStateTests` 12/12 (+5: corrected-distinct, unknown-not-confirmed,
+  correction/confirmation order, export failure-overrides-success, export-requires-take).
+- `ScratchLabDesignTokensTests` 21/21 (+2: trace identity distinct, empty events → no preview).
+- `ScratchPhraseChartComparisonDomainTests` 5/5 (+1: performed-past-target-end overflow, no rescale).
+- `ScratchNotationPanelTests` 9/9 (unchanged). Lane-label test extended
+  (`.targetReference.performanceLabel == "MY PERFORMANCE — CAPTURED"`).
+
+**Gates:** macOS build ✓, iOS build ✓, build-for-testing ✓, `git diff --check` clean.
+
+**Stop:** Awaiting Approve Review State Model.
+
+---
+
+## 2026-08-16 — V3.2 Review ownership map (READ-ONLY audit) — APPROVED
+
+Read-only Review ownership audit (no code/Figma/Code Connect edits). Mapped the 10 requested
+Review states (empty · recording/finalizing · processing · issue · ready · label-correction ·
+confirmed · exporting · export-success · export-failure) plus the 8 data concepts to real owners.
+
+**State owners (macOS `MacAnalyzerView.reviewStage` `:6465` is the only real Review surface):**
+- empty → `currentRoutineArtifactStatus == nil && !hasRecordedTake` (`:3780-3784`) → `.empty`/`.noTake`.
+- recording → `captureEngine.isRoutineRecording` (`:3776`); finalizing → `currentRoutineArtifactStatus.readiness
+  == .finalizing` OR `hasRecordedTake && status == nil` (`:3780-3784,3793`).
+- issue → `TakeArtifactReadiness.missingAudio/.missingVideo/.failed` (`:3795-3810`).
+- ready → `TakeArtifactReadiness.ready` (`:3789`).
+- confirmed → `reviewDecisionByTakeID[reviewTakeID] != nil` (any persisted decision; see gap 2) (`:3831`).
+- exporting → `sessionExportCoordinator.isPreparing` (`:3832`); export-success → `.state ∈
+  {.readyToShare,.presentingShareSheet,.shareCompleted}` (`:3833-3838`); export-failure →
+  `.state == .failed` (`:3839-3842`).
+`derive` precedence (`CaptureCore.swift:6851`): recording → finalizing → issue → no-take →
+exporting → exportFailed → exported → confirmed → ready. Green only confirmed/exported (`:6821`).
+
+**Data-concept owners (separate from state):** target notation = `canonicalBeatPattern(forScratchID:)`
+(`CaptureCore.swift:3034`) → `materializedNotation`; captured performance =
+`currentRoutineNotationSnapshot.recordMovementEvents` (`MacAnalyzerView.swift:3457-3459,6935`);
+playback position = `playheadTime` (comparison card is STATIC, no animated playhead);
+detected label = `currentRoutineArtifactStatus?.detectedLabel ?? lastScratchDetection?.scratchName`;
+confidence = `labelConfidence ?? lastScratchDetection?.confidence`; correction =
+`correctReviewLabel()`→`persistReviewDecision(.corrected)` + `CaptureReviewMetadata.labelOverride`;
+confirmation = `acceptReviewLabel()`→`.accepted` + `approveSession()`→`SessionReviewState.approved`;
+export URL/service = `SessionExportResult.archiveURL` + `SessionExportCoordinator.state`.
+
+**Review consumes saved Capture output (NOT synthetic) — CONFIRMED.** Captured performance is
+`detectedNotation`/`lastRoutineDetectedNotation` snapshot, hard-requires non-empty
+`recordMovementEvents`; target is the canonical registry pattern materialized at session BPM.
+
+**iPhone/iPad Review frames — NONE backed by real paths.** `ReviewPlaceholderView` (`MainMenuView.swift:317`)
+private + unreferenced; no mobile reviewWorkspace; the only mobile `.review` is a camera state
+(`CompanionCameraView.swift:350`). `ScratchNotationComparisonPanel` is shared but no mobile screen
+feeds it captured evidence. Mobile Review = FUTURE.
+
+**Shared time domain (TARGET + MY PERFORMANCE) — CONFIRMED.** `reviewTargetVsPerformedStageCard`
+(`:7054`) draws both charts from one `domain = ScratchPhraseChartComparisonDomain.commonDomain`
+(`ScratchPhraseChartView.swift:967`), `performedFrame` = target `rawRange`; deterministic `normalizedX`.
+
+**Gaps (flagged, not faked):**
+1. `processing` = spec/Figma word with NO code equivalent — split between `.finalizing` (take) and
+   `SessionExportState.preparingArchive` (export). Needs a decision which it means.
+2. `label-correction` has NO distinct badge — `isConfirmed` folds accepted AND corrected into
+   `.confirmed` (`:3831`); correction is indistinguishable from confirmation in the header.
+3. Two target sources: `reviewTargetNotationStageCard` uses bundled `ScratchNotation.babyScratch`
+   demo (`CaptureCore.swift:2670`), while `reviewTargetVsPerformedStageCard` uses canonical
+   `babyScratchCycle` (`CaptureCore.swift:3010`).
+
+**Approved by Karl 2026-08-16.** Read-only audit accepted — no code/Figma/Code Connect
+changed. The three flagged gaps remain OPEN decisions (not resolved by this approval) and must be
+pinned before any Review implementation slice: (1) `processing` has no code state; (2)
+`label-correction` has no distinct badge; (3) two target sources (bundled demo vs canonical cycle).
+**Stop:** awaiting the next phase/spec (Review implementation or gap decisions). Do NOT start Advanced.
+
+---
+
+## 2026-08-16 — V3.2 Capture implementation COMMITTED `d5043b0`
+
+Final Capture audit clean, committed `d5043b0` (`V3.2: implement production Capture workspace`,
+3 files, +283/−172) on `feature/v3.2-swiftui-20260815`. NOT pushed.
+
+Audit confirmations: no engine/export file changed (only `CaptureCore.swift` + `MacAnalyzerView.swift`
++ `ScratchNotationPanelTests.swift`); no fake hardware claims; standard camera preview is clean
+(no pill/scrim/`DeckGamificationOverlay` — those remain only in Advanced `deckMonitorContent`);
+`git diff --check` clean; only the 3 source files staged (handoff + pre-existing dirty
+`project.pbxproj`/`xcscheme` preserved uncommitted).
+
+Gates: iOS build ✓, macOS build ✓, build-for-testing ✓. Tests: `CaptureReadinessTests` 14/14,
+`VisionCaptureGateTests` 18/18, sibling suites green; `CameraNotationOverlayTests` 14 failures =
+pre-existing bundled-resource env ("Baby Scratch notation must load from bundle").
+
+Runtime (code-only evidence, no capture hardware this session): app launches clean; OCR of Capture
+tab confirms 6-stage stepper + metadata strip + setup message + "Camera / visual guide" disclosure
+rendering the clean "Deck Camera" preview. HARDWARE-ONLY checks (record/finalizing/failed/
+complete + camera permission grant) deferred — need a real take + camera.
+
+Deferred mobile states (unchanged): mobile Capture/Review remain FUTURE (no primary recording/
+DVS/MIDI/review engine — see backend-gap entry below).
+
+**Stop:** Awaiting Approve Implementation Capture.
+
+---
+
+## 2026-08-16 — V3.2 mobile Capture capability gate — BACKEND GAP (no code)
+
+Read-only capability gate for mobile Capture. **Verdict: the primary mobile Capture backend
+paths do NOT exist.** No decorative UI implemented (would be a fake workflow). Documented
+designed-but-deferred Figma frames below.
+
+Per-capability owners (evidence):
+- **Recording** ❌ — `MacCaptureEngine` (`ScratchLabDesktop/Services/MacCaptureEngine.swift`,
+  macOS-only) is the only take recorder. iOS has `CompanionCameraBroadcaster`
+  (`ScratchLab/Services/CompanionCameraBroadcaster.swift`, `import UIKit`+MultipeerConnectivity)
+  = companion/secondary angle only (`storageKind: .companion`, relays frames to Mac over
+  MultipeerConnectivity). `AudioEngine` (`ScratchLab/Audio/AudioEngine.swift`) is Practice
+  scratch-motion analysis (mic → motion), not a take recorder. No primary iOS take engine.
+- **DVS/timecode** ❌ — `TimecodeControlPipeline` (`ScratchLab/Models/TimecodeControlPipeline.swift`,
+  shared) is fed live audio only by `MacCaptureEngine` (macOS); iOS uses it only in offline
+  `SeratoControlVinylAnalyzer`. No live iOS audio→timecode path.
+- **MIDI/controller** ❌ — CoreMIDI input (`MIDIClientCreate`/`MIDIInputPortCreateWithBlock`) is
+  macOS-only in `MacCaptureEngine.swift:8907`. `MIDIHardwareRegistry`/`ControllerProfileCatalog`
+  (`ScratchLab/Models/ControllerInput/**`) are data-only shared models; no iOS MIDI input engine.
+- **Session persistence** 🟡 — shared models exist (`CaptureSessionConfig`/`SessionSetupViewModel`
+  with `LocalRecordingSurface.iosCompanion`/`macRoutine`, `SessionExportCoordinator` in
+  `CaptureCore.swift`/`SessionExportCoordinator.swift`), but `RoutineSessionStore` has NO iOS
+  consumer (used only in `MacAnalyzerView.swift`/`ScratchLabDesktopApp.swift`); iOS persistence is
+  companion-camera sidecar only.
+- **Review handoff** ❌ — macOS `MacAnalyzerView` reviewWorkspace only; iOS `ReviewPlaceholderView`
+  (`MainMenuView.swift:317`) is unreferenced (Review = FUTURE).
+
+Designed-but-deferred Figma frames: iPhone Capture 6 (`269-156`/`269-204`/`269-289`/`269-364`/
+`269-433`/`269-504`); iPadOS Capture 9 (`284-1364`/`284-1408`/`284-1451`/`284-1551`/`284-1625`/
+`284-1690`/`284-1742`/`284-1811`/`284-1856`). Do NOT implement until a primary mobile engine exists.
+
+**Stop:** Awaiting Approve Mobile Capture.
+
+---
+
+## 2026-08-16 — V3.2 macOS Capture implementation — AWAITING APPROVAL
+
+Implemented macOS Capture only, driven by the approved `CaptureReadiness` adapter. No engine/
+file/export changes, no pbxproj, no Figma/Code Connect, nothing committed. `MacAnalyzerView.swift` only.
+
+**Staged flow (6 stages, single authority):**
+- `CaptureStage` 4→6 cases: setup(1)/readiness(2)/record(3)/finalizing(4)/issue(5)/complete(6).
+- `currentCaptureStage` now derives purely from `captureReadiness` (recording→record, finalizing→
+  finalizing, incomplete/failed→issue, complete→complete, setupRequired→setup, blocking-lane/
+  permission/timecode→readiness, ready→record). The stepper highlight, expanded stage, and record
+  card header all read `currentCaptureStage`, so the active stage can never disagree with the
+  expanded stage. `captureRecordCard` step header now uses `currentCaptureStage.rawValue/.title`.
+
+**Camera / visual guide:**
+- Standard preview is now the clean live feed only (`MacCameraPreviewView`): removed the
+  `previewPill` (hand dot + coaching cue), the `Color.black.opacity(0.08)` scrim, and
+  `DeckGamificationOverlay` (deck/mixer drag boxes). `previewPill` definition deleted (0 refs).
+- `DeckGamificationOverlay` remains only in Advanced (calibration). Removed the "Camera deck
+  calibration" disclosure from the Capture readiness card (calibration is Advanced-only).
+- Camera stays an optional collapsed disclosure (`showCaptureCamera` defaults false; `.onChange`
+  starts `captureEngine.start()` on open; closing does not stop the shared engine). Collapsed
+  disclosure does not resize the sidebar (core workflow).
+- Lifecycle traced (no engine change needed): `start()` → permission → `configureCaptureSession`
+  → `startRunning()`; `refreshDevices()` auto-selects video device; single shared `captureSession`
+  bound to the preview. Real preview kept — no black placeholder.
+
+**Validation:** macOS build ✓, app launches clean (PID 40292), OCR of Capture tab confirms 6-stage
+stepper + metadata strip + setup message + "Camera / visual guide" disclosure rendering "Deck
+Camera" with truthful device subtitle. `CaptureReadinessTests` 14/14, `VisionCaptureGateTests`
+18/18. `CameraNotationOverlayTests` 14 failures are PRE-EXISTING bundled-resource env failures
+("Baby Scratch notation must load from bundle" — Bundle.main = xctest runner), unrelated.
+1440×900/1280×800 exact sizing + hardware states (record/finalizing/complete) are HARDWARE/
+interactive REQUIRED — not exercised this session.
+
+**Stop:** Awaiting Approve macOS Capture.
+
+---
+
+## 2026-08-16 — V3.2 Capture state model (pure adapter + tests) — AWAITING APPROVAL
+
+Implemented ONLY the pure Capture presentation/readiness adapter + its tests. No
+re-layout, no capture-engine behaviour change, no pbxproj, no Figma/Code Connect.
+
+**`ScratchLab/Models/CaptureCore.swift`** — the adapter is now lane-aware:
+- `CaptureLane` (audio/dvsTimecode/platter/crossfaderMIDI/camera) + `CaptureLaneReadiness`
+  (isRequired/isUsable, `isBlocking`) + `CaptureLanes` (5 lanes, `blockingLanes`, `isReady`).
+- Mapping helpers reuse the existing rich enums: `.dvs(DVSSignalState, required:)` (only
+  `.usable` is usable → carrierDetected≠ready), `.controller(ControllerMappingState, required:)`
+  (only `.dvsPlusMidiReady` is usable → midiLearned/platterReady≠combined-ready),
+  `.input(InputReadinessState, required:)`, `.audio(isAvailable:)`.
+- `CaptureReadiness` gained `.incomplete` (post-recording take that ended without a clean
+  save) — distinct from `.needsAttention` (pre-recording blocking lane) and `.failed`.
+- `CaptureReadinessInput` refactored from a flat boolean bag to `lanes: CaptureLanes` +
+  lifecycle primitives (`didComplete/didFail/didEndIncomplete/isFinalizing/isTimecodeLost`).
+- `derive` precedence: recording → finalizing → complete → failed → incomplete → timecodeLost
+  → permission → setup → lanes. READY only when `lanes.isReady` (every blocking lane usable).
+
+**`MacAnalyzerView.swift`** (minimum compile wiring only): `captureReadiness` now builds
+`CaptureLanes` from real owners (audio→`isSelectedAudioInputAvailable`; dvs→`dvsSignalState`
+required when `timecodePipeline.mode != .disabled`; platter→notRequired; crossfaderMIDI→
+`controllerMappingState` required:false; camera→optional). `isFinalizing`/`didFail` wired
+from `currentRoutineArtifactStatus?.readiness` (`.finalizing` / `if case .failed`).
+`captureNextAction` gained the `.incomplete` case (moved the "didn't complete" message out
+of `.needsAttention`). No other UI changed.
+
+**Tests** (`ScratchNotationPanelTests.swift`, `CaptureReadinessTests` 14/14): carrierDetected
+vs usable; midiLearned/platterReady vs dvsPlusMidiReady; camera never blocks; READY requires
+every blocking lane usable; DVS-ready-but-audio-missing contradiction; incomplete≠needsAttention;
+hardware-detected≠ready; green reserved for complete; non-blank labels.
+
+**Gates:** macOS build ✓, iOS build ✓, build-for-testing ✓, `CaptureReadinessTests` 14/14,
+`ScratchNotationPanelTests` 9/9, `ScratchLabDesignTokensTests` 19/19, `PracticePresentationStateTests`
+18/18, `ReviewPresentationStateTests` 7/7. `git diff --check` clean. Nothing committed.
+
+**Missing backend owners (reported, not invented):** `isTimecodeLost` still hardcoded `false`
+(`SignalHealth` has noSignal/weak/usable/clipped/channelFault — no "lost", no "carrierDetected");
+`CaptureLane.platter` has no dedicated readiness owner (`.notRequired`); `DVSSignalState.carrierDetected`
+/`.lost` and `ControllerMappingState.platterReady`/`.controllerDetected`/`.mappingConflict` are
+presentation states with no current engine bridge.
+
+**Stop:** Awaiting Approve Capture State Model.
+
+---
+
+## 2026-08-16 — V3.2 Capture ownership map (READ-ONLY audit) — AWAITING APPROVAL
+
+Read-only Capture ownership audit (no code/Figma edits). Mapped 11 approved Capture
+presentation states (session metadata · selected hardware profile · audio input ·
+DVS/timecode carrier+usability · platter motion · crossfader/MIDI mapping · recording ·
+finalizing · incomplete take · saved take · camera availability) across macOS/iPhone/iPadOS.
+
+**macOS owners (captureWorkspace = `MacAnalyzerView.swift:1299`):**
+- session metadata — `CaptureSessionConfig`/`SessionSetupViewModel(.macRoutine)` (`CaptureCore.swift`),
+  `routineSessionStore.selectedSession`; UI = `capturePageHeaderCard` metadata strip (`:5651`) + `captureSessionSetupCard` (`:5666`).
+- audio input — `MacCaptureEngine.availableAudioDevices`/`selectedAudioDeviceUniqueID`/`isSelectedAudioInputAvailable`
+  (`MacCaptureEngine.swift:2159,2763,2971`); UI = Audio `InputReadinessRow` (`:5821`) + source picker (`:5922`).
+- crossfader/MIDI mapping — `crossfaderCCMapping`/`midiLearnState`/`selectedMIDIInputSourceID` (`:2163-2165`); UI = Mixer MIDI tile (`:5837`) + `midiLearnRow`.
+- recording — `isRoutineRecording` (`:2879`); UI = `captureRecordCard` (`:5720`).
+- incomplete take — `isLastRecordingIncomplete` (`:5443`) ← `routineRecordingStatus`/`lastRoutineRecordingURL` (`:2885-2886`); UI = `RecoveryCard`.
+- saved/complete — `hasRecordedTake` = `lastRoutineRecordingURL != nil` (`:3303`); `markLastTakeSaved` (`:4168`) reports only.
+- camera availability — `availableVideoDevices`/`selectedVideoDeviceUniqueID`/`isCameraActive` (`:2160,2781,2878`); UI = `captureCameraSection` (`:1326`) + Camera tile (`:5826`). Optional, never readiness-blocking.
+
+**MISSING macOS owners (flagged, not faked):**
+- `finalizing` + `didFail` — `CaptureReadiness` has the states but `captureReadiness` hardcodes `isFinalizing:false`/`didFail:false` (`:5475,5477`). Real owner exists: `TakeArtifactStatusSnapshot.readiness` (`currentRoutineArtifactStatus`, cases `.recording/.finalizing/.ready/.missingAudio/.missingVideo/.failed`).
+- `timecodeLost` — hardcoded `false` (`:5479`); `SignalHealth` (noSignal/weak/usable/clipped/channelFault) has NO "lost" case. Needs a signal-loss owner.
+- selected hardware profile — model owners exist (`ControllerProfileCatalog`/`MIDIHardwareRegistry`, `MIDIVerification` tier) but NO Capture UI; `HardwareProfileCard` deferred.
+- DVS carrier/usability — owned by `TimecodeControlPipeline` (mode/signalHealth) but NOT surfaced in Capture; `DVSSignalHealthCard` is Advanced (DEBUG-scoped); `isDVSMode` defaults off so DVS is invisible in standard Capture.
+- platter motion — engine tracks (CC6 `ScratchPlatterTracker`, `lastDrainedPlatterPositionTimeline`) but no Capture tile; timeline is DEBUG-only.
+
+**Contradictions vs rules:**
+- "saved take" ≠ `.complete`: `.complete` = recorded (a URL exists), not saved; `markLastTakeSaved` mutates no readiness state.
+- Standard camera preview violates "no hand-region pills / scrims / coaching overlays": `previewPill` (hand dot + `babyScratchGuidanceCue`) + `.overlay(Color.black.opacity(0.08))` render unconditionally (`:2506,2512`). Drag boxes correctly gated behind `showRigGuides == !calibrationLocked` (`:2508`).
+- MIDI identity ≈ readiness: `isMIDIReady = !availableMIDISources.isEmpty` (identity folded into readiness); verification tier not represented in readiness.
+
+**iPhone/iPadOS:** ALL 11 states = FUTURE (Figma Implementation Map "Capture · mobile" FUTURE; `CapturePlaceholderView` unreferenced). Underlying-only: camera `CompanionCameraBroadcaster`, audio `AudioEngine`. No Capture presentation owner to map — reported honestly.
+
+**Recommended slices + test plan:** see inline response + `next_prompt.md`.
+
+**Stop:** Awaiting Approve Capture Ownership Map.
+
+---
+
+## 2026-08-16 — V3.2 Phase 6 (Cross-platform reconciliation) COMMITTED `0b85674`
+
+Phase 6 committed as `0b85674` (`V3.2: reconcile cross-platform semantic colours`,
+1 file, +4/−4): fixed the last "connected/ready = green" semantic bugs in macOS
+(mixer status, Performer Monitor ×2, Review "Export Ready" → cyan). Audited obsolete
+UI — `HandMotionOverlay` (0 refs, dead), `CapturePlaceholderView`/`ReviewPlaceholderView`
+(FUTURE placeholders), Watch (retired) — IDENTIFIED but NOT removed (removal needs a
+pbxproj edit). All builds green; 82 focused tests green (NotationPanel 9, DesignTokens
+19, Practice 18, CaptureReadiness 12, Review 7, SessionReviewMetadata 17).
+
+**Next: Phase 7 (Final audit)** — do NOT start until Karl provides the Phase 7 spec.
+Final audit: clean build, build-for-testing, unit/integration/UI tests, notation/
+capture/export/persistence tests, platform builds, compiler + runtime warning review,
+and the full "no crash / no state-update / no false-Ready / no false-DVS / no
+fabricated-review / no fake-export" checklist. Runtime + hardware validation is
+HARDWARE REQUIRED. Remaining Phase 6 items carried forward: dead-code removal
+(needs pbxproj approval), Dynamic Type / Reduced Motion / focus-order sweep.
+
+---
+
+## 2026-08-16 — V3.2 Phase 5 (Advanced) COMMITTED `facb46a`
+
+Phase 5 committed as `facb46a` (`V3.2: implement adaptive Advanced workspace`, 1
+file, +51/−9): fixed the Advanced Overview semantic-colour bug (ready=bone,
+detected/connected=cyan, green only for completion) and wired the reusable
+`DVSSignalHealthCard`/`ControllerMappingCard`/`PerformerMonitorConnectionCard`
+into their sections with signal→state helpers (`dvsSignalState`,
+`controllerMappingState`, `monitorConnectionState`). Builds ✓, app launches clean
+(PID 29287). The Advanced workspace structure was already built in `9ee02a0`/`68188e4`.
+
+**Next: Phase 6 (Cross-platform reconciliation)** — do NOT start until Karl
+provides the Phase 6 spec. Reconciliation scope: reconcile macOS/iPhone/iPad,
+remove obsolete UI only after proving unused, validate navigation/adaptive
+layout/state consistency/camera/semantic colours/Dynamic Type/accessibility.
+Remaining Phase 5 items carried forward: `HardwareProfileCard` (needs a
+device→profile mapping decision), `TimecodeSystemSelector`/`ChannelPairSelector`
+(DEBUG-scoped DVS selectors).
+
+---
+
+## 2026-08-16 — V3.2 Phase 4 (Review) COMMITTED `4568ad0`
+
+Phase 4 committed as `4568ad0` (`V3.2: implement adaptive Review workspace`, 4
+files, +227): `ReviewPresentationState` (9 states) + `ReviewPresentationInput` +
+pure `derive` in `CaptureCore.swift`; macOS `reviewPresentationState` + header
+`StatusBadge`; `ReviewPresentationStateTests` 7/7; label-confirmation/correction
+persistence tests in `SessionReviewMetadataTests` (now 17/17). Builds ✓, app
+launches clean. Label correction/confirmation/export were already implemented in
+the prior macOS V3.2 Review work (`64b5a58`).
+
+**Next: Phase 5 (Advanced)** — do NOT start until Karl provides the Phase 5 spec.
+Advanced scope: Overview / Audio & DVS / Calibration / MIDI & Controller /
+Performer Monitor / Diagnostics; independent Overview derivation. macOS
+`advancedWorkspace` + `AdvancedSection` already exist (commits `9ee02a0`,
+`68188e4`); the reusable `HardwareProfileCard`/`DVSSignalHealthCard`/
+`ControllerMappingCard`/`PerformerMonitorConnectionCard`/`TimecodeSystemSelector`/
+`ChannelPairSelector` from Phase 1 are ready to wire.
+
+---
+
+## 2026-08-16 — V3.2 Phase 4 (Review) — core state model done, uncommitted
+
+Phase 4 core (uncommitted): `ReviewPresentationState` (9 states: noTake/recording/
+finalizing/issue/ready/confirmed/exporting/exported/exportFailed) +
+`ReviewPresentationInput` + pure `derive` added to `CaptureCore.swift` (green only
+for confirmed/exported). macOS `reviewPresentationState` computed property in
+`MacAnalyzerView` maps the real owners (`reviewStagePresentation`, `captureEngine`,
+`reviewDecisionByTakeID`, `sessionExportCoordinator.state`) and the `reviewHeaderCard`
+now shows a `StatusBadge` from it. `ReviewPresentationStateTests` 7/7. Builds ✓
+(iOS + macOS + build-for-testing), app launches clean (PID 28666).
+
+**Phase 4 REMAINING (do NOT start Advanced):**
+1. Label correction/confirmation/export were already implemented in the prior macOS
+   V3.2 Review work (commit `64b5a58`) and are wired to real evidence — verify their
+   state maps onto `reviewPresentationState` (`.confirmed`/`.exporting`/`.exported`/
+   `.exportFailed`) end-to-end with a real take.
+2. Persistence tests (label correction/confirmation round-trip via
+   `CaptureReviewDecision`/`CaptureReviewMetadata`).
+3. Runtime validation with a real recorded take (HARDWARE REQUIRED).
+
+---
+
+## 2026-08-16 — V3.2 Phase 3 (Capture) COMMITTED `ffbd686`
+
+Phase 3 committed as `ffbd686` (`V3.2: implement adaptive Capture workspace`, 4
+files, +378/−169): `CaptureReadiness` model + derive + tests, macOS `captureReadiness`
+wiring (ready→bone fix), camera optional-preview regression fix, DVS/MIDI/permission
+signal wiring, `captureNextAction` unified onto `captureReadiness`, `RecoveryCard`
+wiring, `InputReadinessState.neutral` + `InputReadinessRow` tile swap. Builds ✓,
+`CaptureReadinessTests` 12/12, `ScratchLabDesignTokensTests` 19/19, app launches clean.
+
+**Next: Phase 4 (Review)** — do NOT start until Karl provides the Phase 4 spec.
+Review scope: no-take/ready/confirmation/correction/export, real captured evidence,
+export schema, label correction (preserve raw evidence). macOS `reviewWorkspace` +
+`ReviewStagePresentation` + `SessionExportCoordinator` are the owners; the prior
+macOS V3.2 Review work (commit `64b5a58`) already exists.
+
+---
+
+## 2026-08-16 — V3.2 Phase 3 (Capture) — core readiness model done, uncommitted
+
+Phase 3 core landed (uncommitted, mirroring Phase 2's state-model-first approach):
+- `ScratchLab/Models/CaptureCore.swift` — new `CaptureReadiness` (10 states:
+  setupRequired/hardwareDetected/needsAttention/ready/recording/finalizing/
+  complete/failed/timecodeLost/permissionRequired) + `CaptureReadinessInput`
+  (pure primitives) + `CaptureReadiness.derive` + `label`/`variant`/`systemImage`/
+  `isBlockingReady`. Green only for `.complete`; ready = bone. Enforces
+  connected≠ready, carrier≠DVS-ready, DVS-ready≠capture-ready, MIDI≠mapped.
+- `MacAnalyzerView` — `captureReadiness` computed property mapping real signals
+  (`selectedRoutineSession`, `routineMetadataStatusMessage`,
+  `captureEngine.isSelectedAudioInputAvailable`, `isRoutineRecording`,
+  `hasRecordedTake`, `isLastRecordingIncomplete`, `crossfaderCCMapping`).
+  Replaced the private 4-state `CaptureHardwareStatus` (which BUGGILY mapped
+  READY→green) with `CaptureReadiness`; readiness card now shows the derived
+  label + systemImage + `variant.color`. Removed the dead enum.
+- `ScratchNotationPanelTests.swift` — `CaptureReadinessTests` 12/12.
+Builds ✓ (iOS + macOS + build-for-testing), macOS app launches clean.
+
+**Phase 3 camera optional-preview regression FIXED (uncommitted):** the Capture
+tab's `captureCameraSection` disclosure showed `MacCameraPreviewView` but nothing
+ever started the session on the Capture tab (`captureEngine.start()` only ran on
+app-appear if `liveInputEnabled`, or from Practice's "Start live input"). Added
+`.onChange(of: showCaptureCamera)` → `captureEngine.start()` (idempotent) when the
+disclosure opens. Build ✓, app launches clean (PID 26762). **Hardware note:** the
+actual feed display still needs a physical camera + permission grant — the code
+path is fixed but not hardware-verified. "Stop when closed" is a separate lifecycle
+concern: the engine is shared with recording, so it must stay active on the Capture
+tab even when the camera preview is collapsed.
+
+**Phase 3 DVS/MIDI/permission signal wiring (done, uncommitted):**
+`captureReadiness` now wires real signals — `isDVSMode: timecodePipeline.mode !=
+.disabled` (safe default `.disabled`), `isDVSReady: timecodePipeline.signalHealth ==
+.usable`, `isMIDIReady: !captureEngine.availableMIDISources.isEmpty`,
+`hasAudioPermission: AVCaptureDevice.authorizationStatus(.audio) != denied/restricted`
+(`audioCapturePermissionGranted` static helper), `isCrossfaderMapped` already wired.
+Still defaulted (VERIFY IN ENGINEERING): `isFinalizing`/`didFail`/`isTimecodeLost`
+(no single owner; `SignalHealth` has no "lost" state) and `isMIDIRequired` (MIDI is
+optional). Build ✓.
+
+**Phase 3 workspace re-layout (done, uncommitted):** unified `captureNextAction`
+onto `captureReadiness` (header status now derives from the single state; fixed
+the "Ready→green" bug → ready is cyan accent; the record button was already
+correct cyan-idle/red-recording). Wired `RecoveryCard` for the incomplete-recording
+state into the readiness section (`Retry take` → `handleMainCaptureAction`).
+Build ✓, app launches clean.
+
+**Phase 3 REMAINING (do NOT start Review/Advanced):**
+1. Runtime/hardware validation (RANE ONE MKII, DVS, USB-C — HARDWARE REQUIRED).
+
+The reusable-component wiring is now COMPLETE: added `InputReadinessState.neutral`
+(non-blocking, "—", grey) and swapped the capture input `LazyVGrid` of the ad-hoc
+`captureInputStatusTile` (raw colors, "ready=green" bug) for a `VStack` of
+`InputReadinessRow` (semantic states). Audio/Camera → `.setupRequired`/`.ready`;
+Hand → `.neutral`/`.detected` (diagnostic); Mixer/Watch → `.neutral`/`.detected`/
+`.ready` (optional). Removed the dead `captureInputStatusTile`. `ScratchLabDesignTokensTests`
+now 19/19. Build ✓, app launches clean (PID 28113).
+
+---
+
+## 2026-08-16 — V3.2 Phase 2 (Practice) APPROVED & committed
+
+Phase 2 is complete and approved. Two commits (split because the state model was
+committed at an earlier checkpoint): `9877222` (state model + macOS header) and
+`57e85e5` (iPhone/iPad/macOS surfaces + accessibility), both
+`V3.2: implement adaptive Practice workspace`. Full report:
+`~/Downloads/scratchlab_v32_phase1_components.md` (Phase 1) — the Phase 2 report
+was presented inline and approved via `Approve Implementation Practice`.
+
+**Next: Phase 3 (Capture)** — do NOT start until Karl provides the Phase 3 spec.
+Capture scope (from the original plan): session setup + readiness, real
+audio/DVS/MIDI/platter/crossfader state wiring, camera optional-preview fix,
+truthful recording/finalizing/complete/failure, `CaptureReadiness` presentation
+adapter. macOS `CaptureStage` + `MacCaptureEngine` are the owners; mobile Capture
+remains FUTURE unless separately un-blocked.
+
+---
+
+## 2026-08-16 — V3.2 Phase 2 (Practice) — core state model done, surface wiring pending
+
+**Phase 1 COMMITTED** as `544623d` (`V3.2: implement shared design components and
+notation styling`), 5 files. **StatusBadge semantic verification** passed against
+Figma node `144:23`: READY=bone, COMPLETE=green, Recording/Failure=red,
+Attention=amber, Detected=cyan. One fix was made before commit: `ControllerMappingState
+.platterReady` corrected from cyan → bone (Figma `253:293` shows "Platter Ready"
+with the neutral READY badge). Added 2 badge-mapping tests pinning the exact
+`ControllerMappingCard`/`ReviewExportCard` badge→colour mapping.
+
+**Phase 2 (Practice) — core only, NOT committed (awaiting review).** Added the
+single derived `PracticePresentationState` (ready/listening/copyActive/paused/
+result/review/lessonComplete) + `derive(gameplay:isListening:isPaused:isReviewing:
+isLessonComplete:)` + `notationMode` mapping + `showsPerformance` + `flowOrder`, in
+`ScratchLab/Models/PracticeGameplayCoordinator.swift`. `PracticePresentationStateTests`
+10/10 in `ScratchLabDesktopTests/ScratchNotationPanelTests.swift`.
+
+- Notation mode mapping: ready/listening → `.targetReference`; copyActive/paused →
+  `.liveComparison`; result/review/lessonComplete → `.reviewComparison`.
+- `derive` precedence: lessonComplete > review > (copying: paused?→paused:copyActive)
+  > (idle/watching/ready: listening?→listening:ready).
+- Builds ✓ (iOS + macOS + build-for-testing). Design-token tests still 18/18.
+
+**Phase 2 macOS wiring (done, uncommitted):** added `PracticePresentationState.label`
++ `.variant` (green only for `.lessonComplete`); added `practicePresentationState`
+computed property in `MacAnalyzerView` deriving from real owners
+(`practiceCoordinator.state` → gameplay, `demoModeController.demoPlayer.isPlaying`
+→ listening, `progressManager.isScratchMastered("baby_scratch")` → lessonComplete);
+`practiceStageHeader` now shows a `StatusBadge` with the derived label/variant.
+Screenshot `/tmp/scratchlab_phase2_practice.png` shows "Practice / READY" (bone).
+`PracticePresentationStateTests` 10/10, builds ✓.
+
+**Phase 2 iPhone (done, uncommitted):** the iOS Practice surfaces were ALREADY
+Figma-aligned from the prior V3.2 Phase 4 work (`PracticeReadyOverlay`,
+`ResultsOverlayView`, `PauseOverlayView` — reconciled to anchors `33:18`/`35:99`
+in earlier sessions). Added the missing "one derived state" layer:
+`PracticePresentationState.derive(isSessionActive:isPaused:isResult:isListening:
+isLessonComplete:)` (iOS boolean overload) + `PracticeModeView.practicePresentationState`
+computed property deriving from `isSessionActive`/`isPaused`/`showingResults`/
+`demoPlayer.isPlaying`/`progressManager.isScratchMastered(activeScratch.id)`.
+`PracticePresentationStateTests` now 16/16. iOS build ✓, macOS build ✓.
+The derived property is the single-state foundation; it is not yet wired into a
+visible iOS indicator (the per-surface overlays are already correct).
+
+**Phase 2 iPad (done, uncommitted):** `PracticeReadyOverlay` is now genuinely
+adaptive — `AdaptiveWorkspaceHeader` + `LessonProgressIndicator` (WATCH/LISTEN/COPY/
+RESULT/REVIEW) + a landscape two-column split (dominant `ScratchNotationPanel`
+left, controls right via `layoutMode == .regularLandscape`), portrait/compact
+keep the single column. iPad app builds for `generic/platform=iOS` + iPad
+simulator, launches clean (screenshot `/tmp/scratchlab_ipad_home.png`). iPad sim
+`B6972ED1…` is left booted for a manual tap-through. Practice tests 16/16.
+
+**Phase 2 macOS notation swap + accessibility (done, uncommitted):**
+`practiceTeachingNotation` now renders the shared `ScratchNotationPanel` (`.target`,
+`mode: practicePresentationState.notationMode`, `canvasHeightOverride: 320`,
+`domain` + `playheadTime` from the existing playback timeline) inside the existing
+`TimelineView`; `ScratchNotationPanel` gained `canvasHeightOverride` and a
+descriptive `accessibilitySummary` + hint. macOS playhead animation respects
+`@Environment(\.accessibilityReduceMotion)`. `PracticePresentationStateTests`
+now 18/18 (added 44pt-target + non-blank-label tests). Screenshot
+`/tmp/scratchlab_phase2_notation_swap.png`.
+
+**Phase 2 REMAINING (do NOT start other workspaces):** runtime screenshots of the
+Practice Ready/live/result states on iPhone + iPad (needs a manual tap into
+Practice — the simulators can't be UI-driven from this session; the iPad sim
+`B6972ED1…` is left booted). **Missing owners (reported, NOT faked):** macOS has
+no copy-pause (`.paused`) and no in-Practice review (`.review`) — review lives in
+the separate Review workspace; iOS HAS a real pause owner (`isPaused` +
+`pauseSession()`/`resumeSession()`).
+
+---
+
+## 2026-08-16 — V3.2 Phase 1 (tokens + shared components + notation) DONE — uncommitted
+
+Phase 1 of the Figma→SwiftUI implementation is complete but **not committed**
+(awaiting `Approve Implementation Components`). Full report:
+`~/Downloads/scratchlab_v32_phase1_components.md`.
+
+**Starting commit:** `68188e4`. **No pbxproj / scheme edits** — the project uses
+explicit file refs (only `ScratchLabDatasetBuilder` is a synchronized folder), so
+no new `.swift` files were created; all shared components went into the
+dual-target `ScratchLab/DesignSystem/ScratchLabDesignSystem.swift`.
+
+**Changed files (5):**
+- `ScratchLab/DesignSystem/ScratchLabDesignSystem.swift` — locked Figma tokens
+  (bg `#05070B/#0B1018/#101826/#151E2B`, accent `#0EA5E9`, success `#22C55E`,
+  warning `#F59E0B`, danger `#F44336`, text/border/notation tokens, typography
+  roles) + 22 reusable domain cards (`InputReadinessRow`, `HardwareProfileCard`,
+  `RecoveryCard`, `DVSSignalHealthCard`, `ControllerMappingCard`,
+  `CameraDisclosureRow`, `LessonProgressIndicator`, `AchievementProgressIndicator`,
+  `SessionSummaryCard`, `PerformerMonitorConnectionCard`, `TakeListItem`,
+  `EmptyStateCard`, `PracticeTransport`, `CoachingFeedbackCard`, `ReviewExportCard`,
+  `MetadataField`, `ChannelPairSelector`, `TimecodeSystemSelector`,
+  `AdaptiveWorkspaceHeader`, …) with pure semantic state enums. Button reconciled
+  (dark-on-cyan primary, filled-red destructive, surface secondary, disabled).
+- `ScratchLab/Models/ScratchMotionRenderer.swift` — `Style.target` 1.6pt + new
+  `Style.performance` (cyan `#0EA5E9`, 2pt).
+- `ScratchLab/Views/Notation/ScratchNotationPanel.swift` — Figma Target/Live/Review
+  modes, `TARGET — COPY THIS` / `MY PERFORMANCE — LIVE/CAPTURED` labels, distinct
+  target `#101013` / performance `#0E131B` canvases, `ScratchNotationComparisonPanel`.
+- `ScratchLabDesktop/Views/ScratchPhraseChartView.swift` — renderer colours → tokens,
+  distinct lane backgrounds, fader active rails trace-coloured (bone/cyan), grid
+  tokens.
+- `ScratchLabDesktopTests/ScratchNotationPanelTests.swift` — +`ScratchLabDesignTokensTests`
+  (16 tests).
+
+**Key semantic rule landed:** READY is bone (`#E8E4DC`), never green — added
+`StatusBadgeVariant.ready` + `Sem.textStatusReady`. DVS `carrierDetected`/`weak`
+are NOT `isReady`; only `usable` is. Controller `midiLearned`/`platterReady` are
+NOT `dvsPlusMidiReady`.
+
+**Verification:** iOS build ✓, macOS build ✓, build-for-testing ✓.
+`ScratchLabDesignTokensTests` 16/16, `ScratchNotationPanelTests` 9/9. Full bundle:
+2833 XCTest / 50 skipped / 225 pre-existing env failures (3 unexpected, none in a
+changed area) + swift-testing 347 / 2 issues. macOS app launches, notation renders
+(screenshot `/tmp/scratchlab_phase1_practice.png`).
+
+**Still deferred (do NOT start):** mobile navigation shell, mobile Capture/Review,
+`CaptureReadiness`, Review-state expansion, camera-engine repair, export, Advanced
+workspace.
+
+---
+
+## 2026-08-16 — V3.2 macOS Advanced design LANDED (commit `9ee02a0`)
+
+Advanced restructured so the selected section drives the main detail area
+instead of stacking everything into one scrolling sidebar.
+
+- `advancedWorkspace` → `advancedMainContent` renders `advancedSelectedSectionContent`
+  in the main area; the sidebar is now a compact navigator (header + section
+  picker + active session). `NotationVisualizerView` moved into the Overview
+  section (was the always-on detail area).
+- Section titles renamed (enum cases unchanged → persisted `advancedSection`
+  selection preserved): Audio → "Audio & DVS", Camera & deck → "Calibration",
+  Monitor / Connection → "Performer Monitor", [DEBUG] Capture details →
+  "Diagnostics", Timecode Input → "DVS / timecode". Calibration icon → viewfinder.
+
+File: `MacAnalyzerView.swift` only (23+/13-). OCR-verified the MIDI & fader
+section renders in the main detail area with a compact sidebar.
+
+### DVSControlVinylPanel "generic-class diagnostic"
+
+Investigated: `DVSControlVinylPanel` is a plain `struct: View` (not a generic
+class), in the active `ScratchLabDesktop` target, and the real `xcodebuild build`
+shows **no** generic/`DVSControlVinylPanel` diagnostic. The reported diagnostic
+is **stale** — a SourceKit index false positive (same class as the "Cannot find
+type" noise observed all session). Nothing to fix.
+
+### Verification
+
+`xcodebuild build` ✓, `build-for-testing` ✓, `ScratchNotationPanelTests` 9/9,
+`SessionReviewMetadataTests` 13/13. No state-update warning, no crash.
+Screenshots: `/tmp/scratchlab_advanced.png` (MIDI & fader),
+`/tmp/scratchlab_advanced_overview.png` (Overview capture was misrouted to the
+Practice tab by a stale window — re-eyeball Overview before accepting).
+
+### Remaining for final cross-workspace audit (separate pass)
+
+- One authoritative Overview summary card (audio/DVS/MIDI/camera/monitor/next
+  action) — the header badges cover audio/device/monitor today.
+- Cramped/clipped mode/status labels now have full width in the main area; eyeball
+  DVS / timecode (DEBUG `ENABLE_TIMECODE_LIVE_TAP`) panels.
+
+Do NOT begin the final audit until Advanced is visually reviewed and accepted.
+
+---
+
+## 2026-08-16 — V3.2 macOS Review design LANDED (commit `64b5a58`)
+
+Review was already largely complete (synchronized `reviewTargetVsPerformedStageCard`,
+`reviewStagePresentation` state machine, canonical `ScratchPhraseChartView`
+stacked comparison). This slice closed the two real gaps:
+
+- **Hierarchy**: `reviewCompletedTakeStageCards` now shows the stacked
+  TARGET / MY PERFORMANCE comparison + coaching first, then the result
+  summary; the raw captured chart, overlay diff, audio-onset preview and
+  reference target collapse behind a "Technical evidence & diagnostics"
+  disclosure (was a flat list where evidence dominated).
+- **Missing-evidence labels**: `ScratchPhraseChartView` now labels empty
+  performed fader data "FADER DATA NOT CAPTURED" (was "Fader not captured")
+  and a performed chart whose strokes all lacked direction "DIRECTION
+  UNAVAILABLE" (was a silent flat "No measured movement").
+
+Files: `MacAnalyzerView.swift` (29+/…), `ScratchPhraseChartView.swift` (10+/…).
+
+### Verification
+
+- `xcodebuild build` ✓, `build-for-testing` ✓.
+- `ScratchNotationPanelTests` 9/9, `NotationFeedbackStateTests` 23/23,
+  `NotationFeedbackComparisonTests` 14/14 (run individually — batching with a
+  swift-testing class runs 0).
+- OCR-verified the no-take state (target reference + "Open Capture" + empty
+  take-detail, consistent). The has-take stacked-comparison state needs a real
+  take (none exists in the user's persisted session) — Karl to record one and
+  eyeball. Screenshot: `/tmp/scratchlab_review.png`.
+
+### Next
+
+Advanced. Do NOT begin Advanced until Review is visually reviewed and accepted.
+
+---
+
+## 2026-08-16 — V3.2 macOS Capture REDESIGN (commit `c1604b4`, supersedes `2a53c56`)
+
+Karl rejected `2a53c56` (semantic tweaks only). Redone as a genuine staged
+redesign, amended into `c1604b4` (MacAnalyzerView.swift, 280+/53-):
+
+- **Four-stage stepper** (setup → readiness → record → review): current stage
+  emphasized, completed stages checkmarked + collapsed, future dimmed.
+  Completed stages auto-collapse via `captureStageSection` (DisclosureGroups
+  bound to `openCaptureStage`, synced from `currentCaptureStage` on appear +
+  `.onChange`).
+- **Session metadata strip** (performer · technique · BPM · mode) in the page
+  header.
+- **Unified HardwareStatus** (SETUP REQUIRED / NEEDS ATTENTION / READY /
+  RECORDING) as the readiness-card headline. `currentCaptureStage` routes
+  metadata gate → `.setup`, audio-missing → `.readiness`.
+- Record/Stop cyan-idle / red-recording; "Use Serato Audio" cyan; "Review
+  Takes" secondary; deck/mixer calibration in a collapsed disclosure.
+
+### Verification (OCR, not just code inspection)
+
+Image preview returns "Unsupported Image" this session, so screenshots were
+verified with a local **Vision OCR** script (`/tmp/ocr.swift`) that dumps
+recognized text + position. Confirmed on the launched build: metadata strip,
+4-stage stepper, only the current stage expanded (setup expanded when
+"Choose a scratch type"), record hero pinned. Build ✓, build-for-testing ✓,
+`ScratchNotationPanelTests` 9/9. No state-update warning.
+
+Screenshots: `/tmp/scratchlab_capture_final.png`,
+`/tmp/scratchlab_capture_window.png`, `/tmp/scratchlab_capture_clean.png`.
+Karl to eyeball the pixel rendering (OCR proves structure, not pixels).
+
+### Next
+
+Review, then Advanced. Do NOT begin Review until Capture is visually reviewed
+and accepted. Note: a stale `ScratchLab` process (PID 2445,
+`-NSDocumentRevisionsDebugMode YES`, Xcode-launched) is still running and
+shows a second window (Advanced tab) — kill it if it confuses window screenshots.
+
+---
+
+## 2026-08-16 — V3.2 macOS Capture design LANDED (commit `2a53c56`)
+
+Same option-2 fallback contract as Practice (Figma `AgrnQXwRvkAKlORTQ2U25z`
+is iPhone+iPad only; no macOS frames). Capture semantics + progressive
+disclosure corrected:
+
+- **Record/Stop button** is now cyan (`Sem.accent`) when idle and red
+  (`Sem.danger`) while recording — was green, which is reserved for
+  readiness/success. `captureNextAction` already used correct semantics.
+- **Draggable camera-region editor** (deck/mixer calibration) moved out of
+  the standard readiness card into a collapsed `DisclosureGroup` with a
+  Locked/Unlocked label. `showRigGuides == !calibrationLocked` (default
+  locked), so the overlay itself was already opt-in.
+- "Use Serato Audio" → cyan accent; "Review Takes" → secondary.
+
+Files: `ScratchLabDesktop/Views/MacAnalyzerView.swift` only (48+/39-).
+
+### Verification
+
+- `xcodebuild build` → BUILD SUCCEEDED; `build-for-testing` → TEST BUILD
+  SUCCEEDED.
+- `xcrun xctest -XCTest ScratchLabDesktopTests.ScratchNotationPanelTests`
+  → 9/9. (`CaptureReliabilityPhase1CoreTests` / `LiveInputSuspensionTests`
+  ran 0 via `-XCTest` — same pre-existing selector caveat.)
+- App launched on Capture + Practice tabs, no crash, **no "Modifying state
+  during view update" warning** on either path.
+- Screenshots: `/tmp/scratchlab_capture_after.png`,
+  `/tmp/scratchlab_practice_regress.png` (Practice regression). Image preview
+  still returns "Unsupported Image" in this session — Karl to eyeball.
+- Restored `scratchlab.mac.workspaceTab` to `review` (Karl's prior value).
+
+### Next
+
+Review, then Advanced. Do NOT begin Review until Capture is visually
+reviewed and accepted.
+
+---
+
+## 2026-08-16 — V3.2 macOS Practice design LANDED (commit `df6c564`)
+
+Option-2 fallback contract authorised by Karl: use the DS 0.1.1 Foundations +
+canonical notation + iPad V3.2 product frames in Figma `AgrnQXwRvkAKlORTQ2U25z`
+as the visual reference for native macOS — there are **no macOS frames** in
+that file (it is iPhone + iPad only; the "V3.2 implementation board" node
+`38:23` is still "processing — not duplicated"). Do NOT claim pixel-parity
+with nonexistent macOS frames.
+
+### Practice (this slice)
+
+- `MacAnalyzerView.practiceWorkspace` now shows **canonical notation as the
+  central teaching surface**: a single `practiceTeachingNotation` card labelled
+  "TARGET — copy this" (shared `ScratchPhraseChartView`, target window +
+  playhead, animates during WATCH/LISTEN), with the camera/live-input path
+  collapsed into `practiceOptionalLiveInput` (a `DisclosureGroup`).
+- Deleted `practiceCameraStage` / `macDemoStage` / `demoModeFeedbackColor` —
+  the large camera + demo-feedback-circle stage is gone from standard Practice.
+- Cyan primary hierarchy: "Start practice" was `scratchLabSuccessButton`
+  (green) — now `scratchLabPrimaryButton`; "Listen", "Start Copying", "Next
+  Attempt" all converted from bare `.borderedProminent` (gold) to
+  `.scratchLabPrimaryButton`. `practiceStageHeader` lost the "Start live
+  input" primary; "Open Capture" is now secondary.
+- Sidebar: scored attempt (WATCH → COPY → RESULT) sits directly under the
+  Current-lesson hero; the timed `practiceRunCard` moved into a "Practice run"
+  disclosure.
+- Added shared `ScratchLabDesign.Notation.targetTrace` (#E8E4DC bone) and
+  aligned `ScratchMotionRenderer.Style.target` to it (cross-platform token —
+  no fork).
+
+### Verification (macOS)
+
+- `xcodebuild build -scheme ScratchLabDesktop` → BUILD SUCCEEDED.
+- `build-for-testing` → TEST BUILD SUCCEEDED.
+- `xcrun xctest -XCTest ScratchLabDesktopTests.ScratchNotationPanelTests`
+  (dylib-symlink recipe) → 9/9 passed.
+- App launched from the fresh build (no crash). **No "Modifying state during
+  view update" warning fires on the Practice path** — the warning is tied to
+  the Advanced → MIDI & fader bindings (already deferred via
+  `DispatchQueue.main.async`), not Practice.
+- Before/after screenshots: `/tmp/scratchlab_practice_before.png`,
+  `/tmp/scratchlab_practice_after.png` (same 3024×1964 retina; differ by mean
+  channel Δ≈8.7). I could not visually inspect them in this session (image
+  preview returned "Unsupported Image") — Karl to eyeball.
+
+### Next
+
+Capture, Review, Advanced still pending (one workspace at a time, same
+fallback contract). Do NOT begin Capture until Practice is visually reviewed
+and accepted. Commit message pattern: `V3.2 macOS: implement native <Workspace> design`.
+
+---
+
 ## 2026-08-15 — V3.2 legacy Practice removal + "MOVE TO ADVANCED" reroute (uncommitted)
 
 Follow-up to Phase 4, on `feature/v3.2-swiftui-20260815`. Removed the legacy

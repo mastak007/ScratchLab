@@ -9699,7 +9699,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             (channel == 6 && noteNumber == 20)
         if isTemporaryAhhhFallback, routedSampleID == nil, !productionMatched {
             print("[RanePad] TEMP diagnostic direct load · sampleID=dvs_ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
-            scratchPlaybackController.load(sampleID: "dvs_ahhh")
+            scratchPlaybackController.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false)
         }
         if let label = Self.compactScratchBankNotePadLabel(
             channel: channel, noteNumber: noteNumber, velocity: velocity,
@@ -9719,7 +9719,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if rawValue > 120, tempDirectAhhhTriggerArmed {
             tempDirectAhhhTriggerArmed = false
             print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger fired · source=cc8 raw=\(rawValue)")
-            scratchPlaybackController.load(sampleID: "dvs_ahhh")
+            scratchPlaybackController.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false)
         } else if rawValue < 20, !tempDirectAhhhTriggerArmed {
             tempDirectAhhhTriggerArmed = true
             print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger reset · source=cc8 raw=\(rawValue)")

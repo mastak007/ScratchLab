@@ -1006,3 +1006,113 @@ final class PerformerMonitorStateTests: XCTestCase {
         XCTAssertEqual(PerformerMonitorConnectionState.unavailable.variant, .neutral)
     }
 }
+
+/// Beta-blocker regressions for the 2026-08-17 cross-workspace fix list.
+/// These defects live in `MacAnalyzerView` (a SwiftUI view that needs a full
+/// engine/environment to instantiate), so they are pinned as source-string
+/// regressions against the live production source — the same pattern as the
+/// `RegistryDrivenComparisonSurfaceTests` suite — rather than behavioral tests.
+final class CrossWorkspaceFixRegressionTests: XCTestCase {
+
+    private func macAnalyzerSource() throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // ScratchLabDesktopTests/
+            .deletingLastPathComponent()   // repo root
+        return try String(
+            contentsOf: root.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+    }
+
+    /// B2 — after relaunch the Review header must restore the persisted label
+    /// decision (status + label), not just `reviewMetadata`. Pins that the
+    /// reload path actually reads `sidecar.reviewDecision`.
+    func testReviewReloadReadsPersistedLabelDecision() throws {
+        let source = try macAnalyzerSource()
+        XCTAssertTrue(
+            source.contains("sidecar.reviewDecision"),
+            "loadReviewMetadataForCurrentTake must read sidecar.reviewDecision to restore the label decision"
+        )
+        XCTAssertTrue(
+            source.contains("reviewDecisionStatusByTakeID[reviewTakeID] = decision.status"),
+            "the persisted decision status must be restored into the header-badge source"
+        )
+        XCTAssertTrue(
+            source.contains("reviewDecisionByTakeID[reviewTakeID] = correction"),
+            "the persisted decision label must be restored into the summary source"
+        )
+    }
+
+    /// B3 — the Capture action row must not offer a destructive "Discard" that
+    /// is actually a no-op (`prepareRetake`). The single real action is
+    /// "Record another", accurately labeled.
+    func testCaptureActionRowHasNoDiscardNoOp() throws {
+        let source = try macAnalyzerSource()
+        XCTAssertFalse(
+            source.contains("Button(\"Discard\")"),
+            "the misleading no-op Discard button must stay removed"
+        )
+        XCTAssertTrue(
+            source.contains("Button(\"Record another\")"),
+            "the accurate 'Record another' action must remain"
+        )
+    }
+}
+
+/// Privacy / permission / App-Store-safety regression guards for the
+/// 2026-08-17 quality audit. These pin invariants that, if regressed, cause a
+/// hard crash (missing usage description), App Store rejection (missing
+/// required-reason API categories, tracking, undeclared data collection), or
+/// unintended data exfiltration (cloud upload enabled outside DEBUG).
+final class PrivacyAndPermissionRegressionTests: XCTestCase {
+
+    private func repoFile(_ relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // ScratchLabDesktopTests/
+            .deletingLastPathComponent()   // repo root
+        return try String(
+            contentsOf: root.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
+    }
+
+    /// Camera/mic/local-network usage descriptions must stay present — a
+    /// missing `NSCameraUsageDescription`/`NSMicrophoneUsageDescription`
+    /// crashes the process the moment the permission prompt would appear.
+    func testUsageDescriptionsPresentOnBothPlatforms() throws {
+        for path in ["ScratchLab/Info.plist", "ScratchLabDesktop/Info.plist"] {
+            let plist = try repoFile(path)
+            XCTAssertTrue(plist.contains("NSCameraUsageDescription"), "\(path) missing NSCameraUsageDescription")
+            XCTAssertTrue(plist.contains("NSMicrophoneUsageDescription"), "\(path) missing NSMicrophoneUsageDescription")
+            XCTAssertTrue(plist.contains("NSLocalNetworkUsageDescription"), "\(path) missing NSLocalNetworkUsageDescription")
+        }
+    }
+
+    /// Privacy manifests must declare no tracking and no collected data types,
+    /// and carry the required-reason API categories (mandatory for App Store
+    /// submission since 2024).
+    func testPrivacyManifestsDeclareNoTrackingOrCollection() throws {
+        for path in ["ScratchLab/PrivacyInfo.xcprivacy", "ScratchLabDesktop/PrivacyInfo.xcprivacy"] {
+            let manifest = try repoFile(path)
+            XCTAssertTrue(manifest.contains("<key>NSPrivacyTracking</key>"), "\(path) missing tracking declaration")
+            XCTAssertTrue(manifest.contains("<false/>"), "\(path) does not declare tracking false")
+            XCTAssertTrue(manifest.contains("NSPrivacyCollectedDataTypes"), "\(path) missing collected-data-types declaration")
+            XCTAssertFalse(manifest.contains("NSPrivacyCollectedDataTypeType"),
+                           "\(path) must not declare any collected data type")
+            XCTAssertTrue(manifest.contains("NSPrivacyAccessedAPICategoryUserDefaults"), "\(path) missing UserDefaults reason")
+            XCTAssertTrue(manifest.contains("NSPrivacyAccessedAPICategoryFileTimestamp"), "\(path) missing FileTimestamp reason")
+            XCTAssertTrue(manifest.contains("NSPrivacyAccessedAPICategorySystemBootTime"), "\(path) missing SystemBootTime reason")
+        }
+    }
+
+    /// Cloud session upload must remain Release-disabled (`apiBaseURL` nil
+    /// outside DEBUG) so captured sessions stay on-device unless the user
+    /// explicitly exports them.
+    func testCloudUploadDisabledOutsideDebug() throws {
+        let source = try repoFile("ScratchLab/Services/SessionUploadManager.swift")
+        XCTAssertTrue(source.contains("#if !DEBUG"),
+                      "SessionUploadConfiguration.current() must gate its Release branch with #if !DEBUG")
+        XCTAssertTrue(source.contains("apiBaseURL: nil"),
+                      "the Release branch must return apiBaseURL: nil (upload unavailable)")
+    }
+}
