@@ -96,3 +96,7 @@ scratchpad/
 
 # Local dev utility — not referenced by app, tests, or build scripts.
 scripts/reset_scratchlab_local_state.sh
+
+# Generated Meshy 3D assets (regenerable via the batch scripts)
+CharacterAssets/
+MeshyAssets/

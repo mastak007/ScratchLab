@@ -1,0 +1,34 @@
+[
+  {
+    "slug": "rangikurupatua",
+    "name": "Rangikurupatua",
+    "is_humanoid": true,
+    "height_meters": 1.83,
+    "preview_prompt": "A stocky, solid-built Maori man in his late 40s, 20-year army veteran, close-cropped salt-and-pepper hair, calm controlled expression, weathered face, wearing practical olive-drab field jacket and cargo trousers, worn boots, dog tags around his neck, standing in a relaxed a-pose. No tattoos or facial markings.",
+    "texture_prompt": "olive drab and tan field gear, weathered fabric, subtle sun-worn skin tone, no facial tattoos or moko"
+  },
+  {
+    "slug": "kwame",
+    "name": "Kwame Osei",
+    "is_humanoid": true,
+    "height_meters": 1.78,
+    "preview_prompt": "A broad-shouldered Ghanaian man in his mid-30s, former combat medic turned field engineer, warm steady expression, dreadlocks tied back, wearing a practical utility vest over a fitted shirt with rolled sleeves, tool belt, sturdy boots, standing in a relaxed a-pose.",
+    "texture_prompt": "warm brown skin tone, olive drab and tan utility vest with a rust-orange accent, worn leather tool belt"
+  },
+  {
+    "slug": "elin",
+    "name": "Elin Kask",
+    "is_humanoid": true,
+    "height_meters": 1.65,
+    "preview_prompt": "A lean, wiry Estonian woman in her late 20s, recon and comms specialist, sharp watchful eyes, closely-cropped or tied-back light hair, wearing a fitted tactical jacket with a small comms headset, fingerless gloves, standing in a relaxed a-pose.",
+    "texture_prompt": "fair skin tone, olive drab and tan tactical jacket with a pale-blue accent, dark fingerless gloves"
+  },
+  {
+    "slug": "rango",
+    "name": "Rango",
+    "is_humanoid": false,
+    "height_meters": 0.35,
+    "preview_prompt": "A plump, round-bodied cartoon kiwi bird, the mascot of a small squad, oversized expressive round eyes, tiny vestigial wings, a short thick stubby beak (much shorter and chunkier than a real kiwi's long beak, toy-proportioned), stubby strong legs, rust-brown feathers with a cream belly, wearing a small worn olive-drab bandana around its neck matching a set of tiny dog tags, standing in a cute alert pose.",
+    "texture_prompt": "rust-brown and cream feather color blocking, simplified chunky feather clumps not individual feather strands, olive drab bandana accent"
+  }
+]
