@@ -358,8 +358,23 @@ def build_rig_payload(char: dict, refine_task_id: str) -> dict:
 # Per-character state
 # --------------------------------------------------------------------------- #
 
+def _resolve_slug_dir(cfg, slug: str) -> Path:
+    """Return cfg.output/slug, refusing to escape the output root via symlinks.
+
+    Resolves the output root and the target (following any existing symlink
+    components) and requires the target to stay inside the root, so a symlinked
+    slug directory can't redirect model/texture/state writes elsewhere.
+    """
+    target = cfg.output.joinpath(slug)
+    root_real = cfg.output.resolve()
+    target_real = target.resolve()
+    if not target_real.is_relative_to(root_real):
+        raise RuntimeError(f"refusing to write outside output root (symlink?): {target}")
+    return target
+
+
 def load_state(cfg, slug: str) -> dict:
-    p = cfg.output / slug / "state.json"
+    p = _resolve_slug_dir(cfg, slug) / "state.json"
     if not p.exists():
         return {}
     try:
@@ -370,7 +385,7 @@ def load_state(cfg, slug: str) -> dict:
 
 
 def save_state(cfg, slug: str, state: dict) -> None:
-    p = cfg.output / slug / "state.json"
+    p = _resolve_slug_dir(cfg, slug) / "state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     state.setdefault("slug", slug)
     tmp = p.with_suffix(".json.tmp")
@@ -398,7 +413,7 @@ def write_meta(char: dict, state: dict, cfg) -> None:
                        for s in ("preview", "refine", "rig")),
         "generated_at": utc_now_iso(),
     }
-    p = cfg.output / slug / "meta.json"
+    p = _resolve_slug_dir(cfg, slug) / "meta.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
@@ -463,9 +478,9 @@ def _stage_already_done(state, stage, cfg, slug):
     if rec.get("status") != "SUCCEEDED":
         return False
     if stage == "refine":
-        return (cfg.output / slug / "_source" / "model.glb").exists()
+        return (_resolve_slug_dir(cfg, slug) / "_source" / "model.glb").exists()
     if stage == "rig":
-        return (cfg.output / slug / "_source" / "rigged" / "rigged_character.glb").exists()
+        return (_resolve_slug_dir(cfg, slug) / "_source" / "rigged" / "rigged_character.glb").exists()
     return True  # preview has no downloads
 
 
@@ -550,7 +565,7 @@ def run_refine(client: MeshyClient, char: dict, cfg) -> dict:
 
 def download_refine_outputs(char: dict, data: dict, cfg) -> None:
     slug = char["slug"]
-    asset_dir = cfg.output / slug
+    asset_dir = _resolve_slug_dir(cfg, slug)
     source_dir = asset_dir / "_source"
 
     model_urls = data.get("model_urls") or {}
@@ -639,7 +654,7 @@ def run_rig(client: MeshyClient, char: dict, cfg) -> dict:
 
 def download_rig_outputs(char: dict, data: dict, cfg) -> None:
     slug = char["slug"]
-    rig_dir = cfg.output / slug / "_source" / "rigged"
+    rig_dir = _resolve_slug_dir(cfg, slug) / "_source" / "rigged"
     # The rigging task object nests its outputs under a "result" object.
     result = data.get("result") or {}
 
