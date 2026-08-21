@@ -823,7 +823,7 @@ final class ScratchSamplePlaybackController {
         let ptr = channels[0]
 
         // Boundary samples.
-        let first = ptr[0]
+        _ = ptr[0]
         let last = ptr[lastIdx]
 
         // Max internal |Δ|.
@@ -1133,12 +1133,11 @@ final class ScratchSamplePlaybackController {
         ring.initialize(repeating: 0, count: outputCaptureRingFrames)
         outputCaptureRing = ring
         outputCaptureWriteFrames = 0
-        do {
-            try engine.mainMixerNode.installTap(
-                onBus: 0,
-                bufferSize: 1024,
-                format: tapFormat
-            ) { [weak self] buffer, _ in
+        engine.mainMixerNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: tapFormat
+        ) { [weak self] buffer, _ in
                 guard let self else { return }
 #if DEBUG
                 self.outputCaptureTapInvocations += 1
@@ -1167,15 +1166,9 @@ final class ScratchSamplePlaybackController {
                 }
                 self.outputCaptureWriteFrames += frames  // single aligned store; single writer while armed
             }
-            outputCaptureArmed = true
-            outputCaptureOwnership = envGated ? .automatic : .manual
-            return nil
-        } catch {
-            print("[ScratchSamplePlaybackController] output capture tap install failed: \(error)")
-            ring.deallocate()
-            outputCaptureRing = nil
-            return error
-        }
+        outputCaptureArmed = true
+        outputCaptureOwnership = envGated ? .automatic : .manual
+        return nil
     }
 
     /// Finishes capture. The mixer tap is removed FIRST (after removal no
@@ -3291,6 +3284,40 @@ final class ScratchSamplePlaybackController {
                 lastScheduledDirection: lastScheduledDirection,
                 forwardScheduleCount: forwardScheduleCount,
                 backwardScheduleCount: backwardScheduleCount
+            )
+        }
+    }
+
+    /// Lightweight read-position snapshot for a live UI track. Distinct from
+    /// `DVSPlaybackDiagnostics` (scheduling/rate oriented) — this is the raw
+    /// read-head position, polled by the UI at ~25 Hz for smooth tracking.
+    struct PlaybackPositionSnapshot: Equatable {
+        let loadedSampleID: String?
+        let currentSampleFrame: Int
+        let totalFrames: Int
+        let dvsLoopFrames: Double
+
+        /// Normalised read position in `[0, 1]` across the effective loop span
+        /// (`max(dvsLoopFrames, totalFrames)`, matching `continuousLoopFrames`).
+        var normalizedPosition: Double {
+            let span = max(dvsLoopFrames, Double(totalFrames))
+            guard span > 0 else { return 0 }
+            let clamped = min(max(Double(currentSampleFrame), 0), span)
+            return clamped / span
+        }
+    }
+
+    /// Reads the read-position fields together on `audioQueue` (internally
+    /// consistent, no torn reads across a concurrent `positionDidChangeOnQueue`
+    /// mutation). Safe to call from any thread — a handful of variable reads,
+    /// no I/O.
+    func currentPlaybackPositionSnapshot() -> PlaybackPositionSnapshot {
+        audioQueue.sync {
+            PlaybackPositionSnapshot(
+                loadedSampleID: loadedSampleID,
+                currentSampleFrame: currentSampleFrame,
+                totalFrames: totalFrames,
+                dvsLoopFrames: dvsLoopFrames
             )
         }
     }

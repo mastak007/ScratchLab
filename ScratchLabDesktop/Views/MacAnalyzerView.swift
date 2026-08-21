@@ -243,6 +243,14 @@ private struct DebugTimecodeCaptureCard: View {
 }
 #endif
 
+#if DEBUG
+private final class OverlayCache: ObservableObject {
+    var timeline: ReviewOverlayTimeline?
+    var diagnostics: OverlayTimingDiagnostics?
+    var sourceStamp: Date?
+}
+#endif
+
 struct MacAnalyzerView: View {
     private static let practiceBeatModeColumns = [
         GridItem(.flexible(), spacing: 10),
@@ -591,7 +599,14 @@ struct MacAnalyzerView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
-    @StateObject private var demoModeController = ScratchLabDemoModeController()
+    // Practice notation is authored against the reel manifest's audio file.
+    // Do not use the generic dry-demo default here: it is a different recording
+    // with a different duration and cannot stay aligned with baby_reel.json.
+    @StateObject private var demoModeController = ScratchLabDemoModeController(
+        audioFileName: PracticeReelTimeline.loadBundled(
+            named: PracticeReelTimeline.babyReelManifestName
+        )?.audioFile ?? ScratchLabDemoSessionBuilder.demoAudioFileName
+    )
     /// Dedicated beat engine for Demo with Beat mode. Isolated from the
     /// practice-beat engine so mode switches don't stomp each other.
     @StateObject private var demoWithBeatEngine = ScratchLabBeatEngine()
@@ -601,6 +616,16 @@ struct MacAnalyzerView: View {
     /// legacy timed `practiceRunCard` above it — this coordinator never
     /// reads `captureEngine.lastScratchDetection`.
     @StateObject private var practiceCoordinator = PracticeGameplayCoordinator()
+    /// Live performed-notation preview for the active Practice scored
+    /// attempt (`.copying`) — constructed fresh when the attempt's real
+    /// recording starts and frozen when it ends, so the just-completed trace
+    /// remains inspectable until a new attempt replaces it. Never feeds
+    /// Review/export.
+    @State private var practiceLiveNotationTracker: LivePerformedNotationTracker?
+    /// Live performed-notation preview for the active Capture take —
+    /// constructed fresh per take at record-start, discarded at stop.
+    /// Fully decoupled from `completeRoutineFinalization`'s own pipeline.
+    @State private var captureLiveNotationTracker: LivePerformedNotationTracker?
     // REMOVED: @ObservedObject private var runtimeDiagnostics — see Fix 1.
     // ScratchLabRuntimeDiagnostics.shared is read directly in leaf computed
     // properties so the root MacAnalyzerView.body is not invalidated at
@@ -622,15 +647,12 @@ struct MacAnalyzerView: View {
     @State private var practiceLastSavedAccuracy = 0.0
     @State private var practiceLastSavedDuration: TimeInterval = 0
     @State private var practiceTimer: Timer?
-    /// Exactly one pending auto-stop for the active `practiceCoordinator`
-    /// attempt at a time — cancelled and replaced, never left to stack, so
-    /// retry can never leave two stop timers scheduled.
-    @State private var practiceAttemptAutoStopWorkItem: DispatchWorkItem?
     /// Set when a completed take carried no usable movement evidence to
     /// score — `PracticeAttemptEvidenceResolver` correctly refused to guess,
     /// but the card still needs to tell the learner why nothing happened
     /// and that the loop is free to try again, not stuck.
     @State private var practiceScoredAttemptUnavailableMessage: String?
+    @State private var practiceAttemptStartInProgress = false
     @State private var routineCountInBeat: Int?
     // Demo with Beat transport state
     @State private var isDemoWithBeatMode = false
@@ -658,13 +680,10 @@ struct MacAnalyzerView: View {
     @State private var showNotationOverlay = false
     @State private var showCameraPassthrough = false
     #if DEBUG
-    /// Cache the overlay timeline and its diagnostics so neither
-    /// `ReviewOverlayTimeline.build()` nor `OverlayTimingDiagnostics.compute()`
-    /// re-runs on every SwiftUI body evaluation — only when the captured
-    /// snapshot identity (capturedAt) or target notation changes.
-    @State private var cachedOverlayTimeline: ReviewOverlayTimeline?
-    @State private var cachedOverlayDiagnostics: OverlayTimingDiagnostics?
-    @State private var cachedOverlaySourceStamp: Date? = nil
+    /// Holds cached overlay timeline and diagnostics between SwiftUI body
+    /// evaluations. Stored as a reference type so mutations to its properties
+    /// do not trigger SwiftUI's state-during-update assertion.
+    @StateObject private var overlayCache = OverlayCache()
     #endif
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
@@ -788,6 +807,42 @@ struct MacAnalyzerView: View {
             Text(scheduleLine).font(.caption).foregroundStyle(.secondary)
             Text(scheduleCountsLine).font(.caption).foregroundStyle(.secondary)
             Text(engineLine).font(.caption).foregroundStyle(.secondary)
+            playbackPositionTrack
+        }
+    }
+
+    /// Live "ahh" read-position track — a horizontal bar with a moving marker
+    /// at the throttled `playbackPositionSnapshot.normalizedPosition`, plus a
+    /// frame/total readout. Minimal diagnostic companion to the DVS drive text
+    /// above; a static waveform render is a follow-up (no AVAudioFile peak
+    /// renderer exists yet).
+    private var playbackPositionTrack: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Sample read position")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let snapshot = captureEngine.playbackPositionSnapshot, snapshot.totalFrames > 0 {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(height: 4)
+                            .frame(maxHeight: .infinity, alignment: .center)
+                        Rectangle()
+                            .fill(ScratchLabDesign.Sem.textAccent)
+                            .frame(width: 2, height: 12)
+                            .offset(x: geo.size.width * CGFloat(snapshot.normalizedPosition) - 1)
+                    }
+                }
+                .frame(height: 16)
+                Text("frame \(snapshot.currentSampleFrame) / \(snapshot.totalFrames)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("no sample loaded")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -965,6 +1020,7 @@ struct MacAnalyzerView: View {
         }
         .onChange(of: routineSessionStore.selectedSessionID) { _, _ in
             synchronizeSelectedRoutineSession()
+            practiceLiveNotationTracker = nil
         }
         .onDisappear {
             beatEngine.stop()
@@ -976,6 +1032,7 @@ struct MacAnalyzerView: View {
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             captureEngine.setPerformerMonitorStreamingEnabled(false)
+            practiceLiveNotationTracker = nil
 #if ENABLE_TIMECODE_LIVE_TAP
             dvsControlProcessingLoop.stop()
 #endif
@@ -1001,6 +1058,7 @@ struct MacAnalyzerView: View {
             demoWithBeatStartUptime = nil
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
+            practiceLiveNotationTracker = nil
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
@@ -1164,12 +1222,27 @@ struct MacAnalyzerView: View {
                     maxWidth: ScratchLabDesign.Sidebar.practiceMax
                 )
 
-            VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
-                practiceStageHeader
-                practiceTeachingNotation
-                practiceOptionalLiveInput
+            // Wrapped in a ScrollView (matching the `practiceSidebar` pattern
+            // above) so header + notation + camera stay reachable at short
+            // macOS window heights instead of being compressed/clipped by
+            // the HSplitView pane with no scroll fallback. Single ScrollView,
+            // no nesting — none of the content below has a scroll of its own,
+            // so normal trackpad scrolling is never trapped.
+            ScrollView {
+                VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
+                    practiceStageHeader
+                    practiceTeachingNotation
+                    if let practiceLiveNotationTracker {
+                        LivePerformedNotationCard(
+                            tracker: practiceLiveNotationTracker,
+                            bpm: Double(routineSessionSetup.bpmValue ?? 79),
+                            isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
+                        )
+                    }
+                    practiceOptionalLiveInput
+                }
+                .padding(ScratchLabDesign.Stage.outerPadding)
             }
-            .padding(ScratchLabDesign.Stage.outerPadding)
             .background(ScratchLabDesign.Surface.canvas)
         }
     }
@@ -1182,6 +1255,33 @@ struct MacAnalyzerView: View {
     /// `ScratchPhraseChartView` / `ScratchMotionRenderer` the iOS lane and
     /// Review use). When the demo (WATCH/LISTEN) or a scored COPY runs, the
     /// panel animates with a playhead; otherwise it shows the target phrase.
+
+    /// How the Practice notation viewport is anchored to the playhead.
+    /// `.trailingEdge` pins the playhead to the right edge so the target
+    /// scrolls underneath it (Karl's reference video); `.centered` keeps the
+    /// previous symmetric window with future target strokes visible ahead of
+    /// the playhead. Pure presentation — no scoring/export/data impact.
+    private enum PracticeNotationDomainMode {
+        case centered
+        case trailingEdge
+        case copyLookAhead
+    }
+
+    private func practiceNotationDomain(
+        now: TimeInterval,
+        mode: PracticeNotationDomainMode
+    ) -> ClosedRange<TimeInterval> {
+        let windowSeconds: Double = 1.44 + 1.76 // reuse the existing 3.2s viewport
+        switch mode {
+        case .centered:
+            return (now - 1.44)...(now + 1.76)
+        case .trailingEdge:
+            return (now - windowSeconds)...now
+        case .copyLookAhead:
+            return (now - 0.4)...(now + windowSeconds - 0.4)
+        }
+    }
+
     private var practiceTeachingNotation: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1196,19 +1296,39 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(practicePresentationState.variant.color)
             }
 
-            if let notation = ScratchNotation.babyScratchFull76BeatQuantized ?? ScratchNotation.babyScratch {
-                TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
-                    let now = practiceNotationCurrentTime
-                    ScratchNotationPanel(
-                        lane: .target,
-                        presentation: .standard,
-                        source: .target(notation),
-                        bpm: 79,
-                        domain: (now - 1.44)...(now + 1.76),
-                        playheadTime: now,
-                        mode: practicePresentationState.notationMode,
-                        canvasHeightOverride: 320
-                    )
+            if let notation = practiceTeachingSequenceNotation {
+                if let tracker = practiceLiveNotationTracker {
+                    TimelineView(.animation(paused: tracker.isFrozen || accessibilityReduceMotion)) { context in
+                        let now = practiceCopyNotationTime(
+                            at: context.date,
+                            notation: notation,
+                            tracker: tracker
+                        )
+                        ScratchNotationPanel(
+                            lane: .target,
+                            presentation: .standard,
+                            source: .target(notation),
+                            bpm: practiceTeachingBPM,
+                            domain: practiceNotationDomain(now: now, mode: .copyLookAhead),
+                            playheadTime: now,
+                            mode: practicePresentationState.notationMode,
+                            canvasHeightOverride: 220
+                        )
+                    }
+                } else {
+                    TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
+                        let now = practiceNotationCurrentTime
+                        ScratchNotationPanel(
+                            lane: .target,
+                            presentation: .standard,
+                            source: .target(notation),
+                            bpm: practiceTeachingBPM,
+                            domain: practiceNotationDomain(now: now, mode: .copyLookAhead),
+                            playheadTime: now,
+                            mode: practicePresentationState.notationMode,
+                            canvasHeightOverride: 320
+                        )
+                    }
                 }
             } else {
                 Text("Target notation isn't available for this technique yet.")
@@ -1220,6 +1340,34 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var practiceTeachingSequenceNotation: ScratchNotation? {
+        if let reel = PracticeReelTimeline.loadBundled(
+            named: PracticeReelTimeline.babyReelManifestName
+        ) {
+            return reel.referenceNotation()
+        }
+        guard let notation = ScratchNotation.babyScratch else { return nil }
+        return notation.projectedToSeconds(bpm: practiceNotationBPM) ?? notation
+    }
+
+    private var practiceTeachingBPM: Double {
+        PracticeReelTimeline.loadBundled(
+            named: PracticeReelTimeline.babyReelManifestName
+        )?.bpm ?? practiceNotationBPM
+    }
+
+    private func practiceCopyNotationTime(
+        at date: Date,
+        notation: ScratchNotation,
+        tracker: LivePerformedNotationTracker
+    ) -> TimeInterval {
+        guard let session = practiceCoordinator.lastSession else { return 0 }
+        let elapsed = max(0, (tracker.frozenAt ?? date).timeIntervalSince(session.startedAt))
+        let duration = notation.timelineDuration
+        guard duration > 0 else { return 0 }
+        return elapsed.truncatingRemainder(dividingBy: duration)
+    }
+
     /// Camera / live input is optional and progressively disclosed — it is
     /// NOT part of the standard Practice teaching surface. Collapsed by
     /// default so the notation stays dominant; expanding it offers the live
@@ -1229,8 +1377,17 @@ struct MacAnalyzerView: View {
             if liveInputEnabled {
                 liveCameraStage(
                     title: "Practice Camera",
-                    subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
+                    subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)",
+                    videoGravity: .resizeAspect
                 )
+                // Adaptive bounded height: the card's own `.aspectRatio(16/9,
+                // contentMode: .fit)` already shrinks proportionally with
+                // whatever width is available, so this `maxHeight` is purely
+                // a ceiling — it never forces a fixed height that could clip
+                // content at a different window size, it only stops the
+                // camera from dominating the Practice viewport when there's
+                // plenty of vertical room.
+                .frame(maxHeight: 320)
                 .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
@@ -1244,15 +1401,12 @@ struct MacAnalyzerView: View {
                 .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
             }
         } label: {
-            HStack(spacing: 8) {
-                Label("Camera / live input", systemImage: "video")
-                    .font(ScratchLabDesign.Typo.disclosureLabel)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text(liveInputEnabled ? "On" : "Off")
-                    .font(ScratchLabDesign.Typo.statusPill)
-                    .foregroundStyle(liveInputEnabled ? ScratchLabDesign.Sem.danger : .secondary)
-            }
+            cameraDisclosureRow(
+                title: "Camera / live input",
+                subtitle: liveInputEnabled ? "Live camera preview below" : "Optional live input for practice",
+                status: liveInputEnabled ? "OPEN" : "CLOSED",
+                statusColor: liveInputEnabled ? ScratchLabDesign.Sem.textAccent : ScratchLabDesign.Sem.textSecondary
+            )
         }
         .padding(.horizontal, 4)
     }
@@ -1270,18 +1424,22 @@ struct MacAnalyzerView: View {
         // the raw AVAudioPlayer time, which can have startup jitter.
         if isDemoWithBeatMode, let anchor = demoWithBeatStartUptime {
             let elapsed = max(0, ProcessInfo.processInfo.systemUptime - anchor)
-            return BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: elapsed)
+            return practiceLoopedNotationTime(elapsed)
         }
         // Practice with Beat: follow beat clock so notation moves even though
         // the scratch demo audio is not playing.
         if practiceBeatStore.isPlaying, let anchor = practiceBeatStartUptime {
             let elapsed = max(0, ProcessInfo.processInfo.systemUptime - anchor)
-            return BabyScratchDemoPlaybackCoordinator.notationPhraseTime(for: elapsed)
+            return practiceLoopedNotationTime(elapsed)
         }
         // Listen (scratch only): follow the actual audio playback time.
-        return BabyScratchDemoPlaybackCoordinator.notationPhraseTime(
-            for: demoModeController.demoPlayer.currentPlaybackTime
-        )
+        return demoModeController.demoPlayer.sampledPlaybackTime()
+    }
+
+    private func practiceLoopedNotationTime(_ elapsed: TimeInterval) -> TimeInterval {
+        guard let duration = practiceTeachingSequenceNotation?.timelineDuration,
+              duration > 0 else { return 0 }
+        return max(0, elapsed).truncatingRemainder(dividingBy: duration)
     }
 
     /// The single derived Practice presentation state driving the whole
@@ -1318,18 +1476,47 @@ struct MacAnalyzerView: View {
                     captureEmptyStateStage
                 } else {
                     captureCameraSection
+                    if let captureLiveNotationTracker {
+                        LivePerformedNotationCard(
+                            tracker: captureLiveNotationTracker,
+                            bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                            isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
+                        )
+                    }
                 }
             }
             .padding(ScratchLabDesign.Stage.outerPadding)
             .background(ScratchLabDesign.Surface.canvas)
         }
+        .onChange(of: captureEngine.isRoutineRecording) { _, isRecording in
+            // Skip when a Practice scored attempt (not a Capture-tab take)
+            // is what actually started/stopped this recording — that case
+            // is owned by `practiceLiveNotationTracker` above, and a take
+            // can only ever be one or the other, never both at once.
+            guard !isPracticeScoredAttemptActive else { return }
+            if isRecording {
+                // Fresh tracker per take — a new instance is the reset, so
+                // no evidence from a prior take can leak into this one.
+                captureLiveNotationTracker = LivePerformedNotationTracker(
+                    dataSource: captureEngine.makeLivePerformedNotationDataSource()
+                )
+            } else {
+                captureLiveNotationTracker = nil
+            }
+        }
+    }
+
+    private var isPracticeScoredAttemptActive: Bool {
+        if case .copying = practiceCoordinator.state { return true }
+        return false
     }
 
     /// Camera is an optional visual guide, not the dominant Capture surface.
     /// It stays collapsed unless the user explicitly opens it; recording does
     /// not depend on it, and the collapsed disclosure never resizes the core
-    /// workflow. The standard preview is the clean live feed only — no
-    /// scrim/hand/deck/mixer overlays (calibration lives in Advanced).
+    /// workflow. The standard preview is the clean live feed, plus the
+    /// deck/mixer calibration overlay directly on the camera image (Edit
+    /// Boxes/Done) — the same shared component and state Practice uses.
     private var captureCameraSection: some View {
         DisclosureGroup(isExpanded: $showCaptureCamera) {
             Group {
@@ -1346,15 +1533,12 @@ struct MacAnalyzerView: View {
             }
             .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
         } label: {
-            HStack(spacing: 8) {
-                Label("Camera / visual guide", systemImage: "video")
-                    .font(ScratchLabDesign.Typo.disclosureLabel)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text(showCaptureCamera ? "Open" : "Closed")
-                    .font(ScratchLabDesign.Typo.statusPill)
-                    .foregroundStyle(.secondary)
-            }
+            cameraDisclosureRow(
+                title: "Camera / visual guide",
+                subtitle: showCaptureCamera ? "Plain preview below · no overlays" : "Optional visual guide",
+                status: showCaptureCamera ? "OPEN" : "CLOSED",
+                statusColor: showCaptureCamera ? ScratchLabDesign.Sem.textAccent : ScratchLabDesign.Sem.textSecondary
+            )
         }
         .padding(.horizontal, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2506,13 +2690,32 @@ struct MacAnalyzerView: View {
         )
     }
 
-    private func liveCameraStage(title: String, subtitle: String) -> some View {
+    /// - Parameter videoGravity: defaults to `.resizeAspectFill` (unchanged
+    ///   behavior for Capture and every other existing caller). Practice's
+    ///   live camera passes `.resizeAspect` so the full frame is visible,
+    ///   letterboxed rather than cropped.
+    private func liveCameraStage(title: String, subtitle: String, videoGravity: AVLayerVideoGravity = .resizeAspectFill) -> some View {
         cameraStageCard(title: title, subtitle: subtitle) {
-            // Standard camera preview: the live feed only. No scrim, no
-            // deck/mixer drag boxes, no hand-region pill, no coaching overlay
-            // — those calibration overlays live in Advanced only.
-            MacCameraPreviewView(session: captureEngine.captureSession)
+            // Standard camera preview + the deck/mixer calibration overlay,
+            // rendered directly on the camera image (both Practice and
+            // Capture, per Karl's directive). No hand-region pill, no
+            // coaching overlay. Advanced keeps its own separate, coarser
+            // Lock/Unlock + slider entry point; Performer Monitor keeps its
+            // own existing calibration editor — all three share the exact
+            // same `captureEngine.zoneAdjustments`/`calibrationLocked` state.
+            ZStack(alignment: .topTrailing) {
+                MacCameraPreviewView(session: captureEngine.captureSession, videoGravity: videoGravity)
+                CalibrationCameraOverlay(captureEngine: captureEngine)
+            }
         }
+        // Slice X.Perf.2: the disclosure (Practice `practiceOptionalLiveInput` /
+        // Capture `captureCameraSection`) animates its content height over
+        // SwiftUI's default duration; the AppKit `AVCaptureVideoPreviewLayer`
+        // (`resizeAspectFill`) would crop to each intermediate non-16:9 bounds
+        // during that animation, leaving a half-frame preview. Disable the
+        // animation for just this card so the layer settles to its final 16:9
+        // bounds while the disclosure chrome still animates around it.
+        .transaction { $0.disablesAnimations = true }
     }
 
     private var companionStage: some View {
@@ -3999,11 +4202,13 @@ struct MacAnalyzerView: View {
         if practiceBeatStore.isPlaying {
             return "Stop the practice beat to hear the coach demo."
         }
-        if !babyScratchDemo.isAudioAvailable {
-            return "Demo audio unavailable for this scratch."
-        }
-        if let lastErrorMessage = babyScratchDemo.lastErrorMessage {
-            return lastErrorMessage
+        // Reads `demoModeController` — the single controller Practice's
+        // actual Listen/Pause/Restart buttons drive (see `practiceCoachCard`)
+        // — not `babyScratchDemo`, which is a separate coordinator for the
+        // Advanced tab's Notation Lab and must never be the source of truth
+        // for status text adjacent to the Listen controls.
+        if !demoModeController.isReady {
+            return demoModeController.statusMessage
         }
         return coachInstruction.demoAudioRole == "withBeat"
             ? "Coach demo includes beat and scratch together."
@@ -4719,6 +4924,48 @@ struct MacAnalyzerView: View {
         )
     }
 
+    /// Figma `CameraDisclosureRow` (node 174:23) — the camera disclosure header
+    /// as a bordered surface card: title + subtitle on the left, a state pill on
+    /// the right. Surface fill, 1pt default border, 8pt radius, 16/12 padding,
+    /// title 14pt medium / subtitle 10pt regular / pill 10pt medium.
+    private func cameraDisclosureRow(
+        title: String,
+        subtitle: String,
+        status: String,
+        statusColor: Color
+    ) -> some View {
+        HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(status)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(statusColor)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, ScratchLabDesign.Spacing.lg)
+        .padding(.vertical, ScratchLabDesign.Spacing.md)
+        .frame(height: 60)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        )
+    }
+
     private func cameraStageCard<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
@@ -5205,7 +5452,6 @@ struct MacAnalyzerView: View {
         case .playing:           return "Playing"
         case .paused:            return "Paused"
         case .stopped:           return "Idle"
-        default:                 return "Idle"
         }
     }
 
@@ -7444,9 +7690,9 @@ struct MacAnalyzerView: View {
     ) -> (ReviewOverlayTimeline, OverlayTimingDiagnostics) {
         #if DEBUG
         let stamp = capturedSnapshot.capturedAt
-        if let cached = cachedOverlayTimeline,
-           let cachedDiag = cachedOverlayDiagnostics,
-           cachedOverlaySourceStamp == stamp {
+        if let cached = overlayCache.timeline,
+           let cachedDiag = overlayCache.diagnostics,
+           overlayCache.sourceStamp == stamp {
             return (cached, cachedDiag)
         }
         #endif
@@ -7459,9 +7705,9 @@ struct MacAnalyzerView: View {
         )
         let diag = OverlayTimingDiagnostics.compute(overlay: built)
         #if DEBUG
-        cachedOverlayTimeline = built
-        cachedOverlayDiagnostics = diag
-        cachedOverlaySourceStamp = stamp
+        overlayCache.timeline = built
+        overlayCache.diagnostics = diag
+        overlayCache.sourceStamp = stamp
         #endif
         return (built, diag)
     }
@@ -7680,6 +7926,7 @@ struct MacAnalyzerView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .scratchLabPrimaryButton(fillsWidth: true)
+                .disabled(!isPracticeSessionActive && practiceScoredAttemptStartDisabled)
 
                 if isPracticeSessionActive {
                     Button("Cancel") {
@@ -7902,26 +8149,29 @@ struct MacAnalyzerView: View {
     // Recording button calls) rather than a second capture-start path —
     // this file does not add any new detector/DVS/MIDI logic. Evidence for
     // an attempt is only available once that recording finalizes
-    // (`captureEngine.lastRoutineDetectedNotation`), so the attempt window
-    // is closed by an auto-stop timer anchored to when recording actually
-    // starts (`captureEngine.isRoutineRecording` flipping true), not by
-    // watching live evidence — macOS has no live evidence stream to watch.
+    // (`captureEngine.lastRoutineDetectedNotation`). COPY remains open while
+    // the teaching phrase loops and finalizes only when the learner stops.
 
-    /// `nil` unless the selected scratch type has a canonical `BeatPattern`
-    /// — today, Baby Scratch alone. `nil` means the scored loop stays off
-    /// rather than guessing a target for an unevidenced technique.
+    /// Practice is explicitly the Baby Scratch lesson, so its trustworthy
+    /// target must not depend on whether the separate Capture-session form has
+    /// already published a scratch selection.
     private var practiceCanonicalPattern: ScratchNotation.BeatPattern? {
-        routineSessionSetup.scratchType.flatMap {
-            ScratchNotation.canonicalBeatPattern(forScratchID: $0.rawValue)
-        }
+        ScratchNotation.canonicalBeatPattern(
+            forScratchID: CaptureSessionScratchType.babyScratch.rawValue
+        )
+    }
+
+    private var practiceNotationBPM: Double {
+        Double(
+            routineSessionSetup.bpmValue
+                ?? CaptureClickTrackDefaults.defaultTimedBPM
+        )
     }
 
     private var practiceScoredAttemptStartDisabled: Bool {
         routineCountInBeat != nil
-            || routineStartDisabled
             || captureEngine.isRoutineRecording
-            || practiceCanonicalPattern == nil
-            || routineSessionSetup.bpmValue == nil
+            || practiceAttemptStartInProgress
     }
 
     private var practiceScoredAttemptCard: some View {
@@ -7930,7 +8180,7 @@ struct MacAnalyzerView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Scored attempt")
                         .font(.headline)
-                    Text("Watch the demo above, then Copy one Baby Scratch cycle for a real, deterministic score.")
+                    Text("Watch the demo, then copy each zoomed target as the sequence loops. The result scores the first complete cycle.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -7956,15 +8206,20 @@ struct MacAnalyzerView: View {
         .padding(20)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onChange(of: captureEngine.isRoutineRecording) { _, isRecording in
-            guard case .copying(let session) = practiceCoordinator.state else { return }
+            guard case .copying = practiceCoordinator.state else { return }
             if isRecording {
-                schedulePracticeAttemptAutoStop(after: session.closesAfterSeconds)
+                // Fresh tracker per attempt — a new instance is the reset,
+                // so no evidence from a prior attempt can leak into this one.
+                practiceLiveNotationTracker = LivePerformedNotationTracker(
+                    dataSource: captureEngine.makeLivePerformedNotationDataSource()
+                )
+            } else {
+                practiceLiveNotationTracker?.freeze()
             }
         }
         .onChange(of: captureEngine.lastRoutineDetectedNotation) { _, snapshot in
             guard case .copying = practiceCoordinator.state, let snapshot else { return }
-            practiceAttemptAutoStopWorkItem?.cancel()
-            practiceAttemptAutoStopWorkItem = nil
+            practiceLiveNotationTracker?.freeze()
             if practiceCoordinator.completeAttempt(snapshot: snapshot) != nil {
                 practiceScoredAttemptUnavailableMessage = nil
             } else {
@@ -8000,34 +8255,17 @@ struct MacAnalyzerView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button("Start Copying") {
-                        startPracticeScoredAttempt()
+                    Button(practiceAttemptStartInProgress ? "Preparing…" : "Start Copying") {
+                        Task { await startPracticeScoredAttempt() }
                     }
                     .scratchLabPrimaryButton()
                     .disabled(practiceScoredAttemptStartDisabled)
                 }
             }
 
-        case .copying(let session):
+        case .copying:
             VStack(alignment: .leading, spacing: 10) {
-                // TARGET notation during COPY — shows the learner what to copy
-                if let pattern = practiceCanonicalPattern,
-                   let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0,
-                   let target = pattern.materialized(bpm: Double(bpmValue)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("TARGET — copy this")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color(white: 0.50))
-                        ScratchPhraseChartView(
-                            source: .target(target),
-                            bpm: Double(bpmValue),
-                            showPlayhead: false
-                        )
-                        .frame(height: 90)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                }
-                Text("Copying one cycle — closes automatically in about \(String(format: "%.1f", session.closesAfterSeconds))s.")
+                Text("The target sequence loops until you stop. Copy each scratch during the gap before the next target.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                 Button("Stop now") {
@@ -8102,42 +8340,108 @@ struct MacAnalyzerView: View {
 
     /// Mirrors the main Start/Stop Recording button's action
     /// (`handleMainCaptureAction`) verbatim — no second capture-start path.
-    private func startPracticeScoredAttempt() {
-        guard let pattern = practiceCanonicalPattern,
-              let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0,
-              !captureEngine.isRoutineRecording else { return }
-        practiceScoredAttemptUnavailableMessage = nil
+    @discardableResult
+    @MainActor
+    private func startPracticeScoredAttempt() async -> Bool {
+        let bpmValue = routineSessionSetup.bpmValue
+            ?? CaptureClickTrackDefaults.defaultTimedBPM
+        guard let pattern = practiceCanonicalPattern, bpmValue > 0,
+              !captureEngine.isRoutineRecording,
+              !practiceAttemptStartInProgress else {
+            practiceScoredAttemptUnavailableMessage =
+                "Practice needs a Baby Scratch session with a valid BPM before live notation can start."
+            return false
+        }
+
+        // Practice owns a concrete Baby Scratch lesson. Materialize those
+        // defaults into the shared session configuration only when the user
+        // starts, so capture persistence/export receives complete metadata
+        // without requiring a prior visit to the Capture tab.
+        routineSessionSetup.scratchType = .babyScratch
+        if routineSessionSetup.bpmValue == nil {
+            routineSessionSetup.bpmText = String(bpmValue)
+        }
+
+        guard captureEngine.calibrationLocked else {
+            practiceScoredAttemptUnavailableMessage =
+                "Tap Done to lock the calibration boxes before starting Copy."
+            return false
+        }
+
+        practiceAttemptStartInProgress = true
+        defer { practiceAttemptStartInProgress = false }
+        practiceScoredAttemptUnavailableMessage = "Preparing camera and audio…"
+
+        if !liveInputEnabled {
+            startMacLiveInput()
+        }
+        captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+
+        guard await waitForPracticeCaptureReadiness() else {
+            practiceScoredAttemptUnavailableMessage =
+                "Live capture isn't ready. Check the camera and audio input in Capture, then try again."
+            return false
+        }
+
+        practiceLiveNotationTracker = nil
         practiceCoordinator.beginAttempt(
             pattern: pattern, bpm: Double(bpmValue),
             countInBeats: routineSessionSetup.config.countInBeats
         )
         handleMainCaptureAction()
+
+        guard await waitForPracticeRecordingStart() else {
+            practiceCoordinator.abortAttempt()
+            practiceScoredAttemptUnavailableMessage = captureEngine.routineRecordingStatus
+            return false
+        }
+
+        if practiceLiveNotationTracker == nil {
+            practiceLiveNotationTracker = LivePerformedNotationTracker(
+                dataSource: captureEngine.makeLivePerformedNotationDataSource()
+            )
+        }
+        practiceScoredAttemptUnavailableMessage = nil
+        return true
     }
 
-    /// The manual escape hatch: stops real recording if it's still running,
-    /// AND always frees the coordinator from `.copying` — unlike the
-    /// auto-stop path, this must work even when `isRoutineRecording` has
-    /// already gone false (e.g. the take already finalized with unusable
-    /// evidence), which is exactly the state a stuck attempt is found in.
+    @MainActor
+    private func waitForPracticeCaptureReadiness() async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(6))
+        while clock.now < deadline {
+            if captureEngine.isRoutineCaptureReady { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return false }
+        }
+        return captureEngine.isRoutineCaptureReady
+    }
+
+    @MainActor
+    private func waitForPracticeRecordingStart() async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while clock.now < deadline {
+            if captureEngine.isRoutineRecording { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+            if Task.isCancelled { return false }
+        }
+        return captureEngine.isRoutineRecording
+    }
+
+    /// Stops the capture window but deliberately leaves the coordinator in
+    /// `.copying` until `lastRoutineDetectedNotation` arrives. Aborting here
+    /// used to make the snapshot handler ignore the completed take and made
+    /// the notation presentation disappear at the one-cycle boundary.
     private func stopPracticeScoredAttempt() {
-        practiceAttemptAutoStopWorkItem?.cancel()
-        practiceAttemptAutoStopWorkItem = nil
         if captureEngine.isRoutineRecording {
             handleMainCaptureAction()
+        } else {
+            // No finalization can arrive when recording never started (or
+            // already failed), so retain an explicit escape from a stuck UI.
+            practiceCoordinator.abortAttempt()
         }
-        practiceCoordinator.abortAttempt()
-    }
-
-    /// Schedules the ONE pending auto-stop for the active attempt,
-    /// cancelling any previous one first — retry can never leave two
-    /// stop timers scheduled.
-    private func schedulePracticeAttemptAutoStop(after seconds: TimeInterval) {
-        practiceAttemptAutoStopWorkItem?.cancel()
-        let workItem = DispatchWorkItem {
-            stopPracticeScoredAttempt()
-        }
-        practiceAttemptAutoStopWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, seconds), execute: workItem)
+        practiceLiveNotationTracker?.freeze()
     }
 
     /// "Retry" and "Next Attempt" are the same operation today — there is
@@ -8873,6 +9177,21 @@ struct MacAnalyzerView: View {
 
     @MainActor
     private func handleRoutineRecordingButton() async {
+        // Calibration recording guard: Capture must not start while
+        // calibration editing remains open — refuse explicitly (never a
+        // silent background lock-flip) and require the user to tap Done
+        // first. Checked before the count-in/beat/reservation flow even
+        // starts, so no path below this can reach `startRoutineRecording`.
+        // Only guards the START transition (`!isRoutineRecording`) — Stop
+        // is never blocked by calibration state.
+        if CaptureGuideEditModel.recordActionIsBlockedByCalibration(
+            isRoutineRecording: captureEngine.isRoutineRecording,
+            calibrationLocked: captureEngine.calibrationLocked
+        ) {
+            captureEngine.reportRoutineRecordingIssue("Finish editing calibration boxes — tap Done before recording.")
+            return
+        }
+
         practiceBeatStore.handleRecordingFlowStarted()
 
         if routineCountInBeat != nil {
@@ -9914,6 +10233,14 @@ struct MacAnalyzerView: View {
     }
 
     private func startPracticeSession() {
+        Task { @MainActor in
+            guard await startPracticeScoredAttempt() else { return }
+            beginPracticeSessionTimer()
+        }
+    }
+
+    @MainActor
+    private func beginPracticeSessionTimer() {
         practiceTimer?.invalidate()
         isPracticeSessionActive = true
         practiceTimeRemaining = practiceDuration.duration
@@ -9939,6 +10266,10 @@ struct MacAnalyzerView: View {
 
     private func finishPracticeSession(saveResult: Bool) {
         guard isPracticeSessionActive else { return }
+
+        if case .copying = practiceCoordinator.state {
+            stopPracticeScoredAttempt()
+        }
 
         practiceTimer?.invalidate()
         practiceTimer = nil

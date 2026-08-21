@@ -165,6 +165,36 @@ struct PracticeReelTimeline: Decodable, Equatable, Sendable {
 
 extension PracticeReelTimeline {
 
+    /// Canonical notation view of the reel's authored reference strokes.
+    ///
+    /// The reel manifest is already the frame-aligned source of truth for
+    /// Practice audio, including the deliberately empty copy windows. Keeping
+    /// those gaps empty is important: the learner sees the example approach,
+    /// then gets uncluttered space in which to answer it. Copy ghosts remain a
+    /// separate optional renderer concern and are not folded into this source.
+    func referenceNotation() -> ScratchNotation {
+        ScratchNotation(
+            version: version,
+            scratchID: scratchID,
+            demoStart: 0,
+            demoEnd: audioDuration,
+            phraseStart: 0,
+            phraseEnd: audioDuration,
+            timingBasis: "practice_reel_seconds_v\(version)",
+            bpm: bpm,
+            beatsPerBar: bpm == nil ? nil : 4,
+            strokes: strokes.map { stroke in
+                ScratchNotation.Stroke(
+                    startTime: stroke.startTime,
+                    endTime: stroke.endTime,
+                    direction: stroke.direction,
+                    speedClassification: stroke.speedClassification,
+                    faderState: stroke.faderState
+                )
+            }
+        )
+    }
+
     /// Decodes a manifest from raw JSON data.
     static func decoded(from data: Data) throws -> PracticeReelTimeline {
         try JSONDecoder().decode(PracticeReelTimeline.self, from: data)
