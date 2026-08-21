@@ -9,8 +9,6 @@ import Combine
 // MARK: - Game Mode
 enum GameMode: String, CaseIterable {
     case practice = "Practice"
-    case aiChallenge = "Rival Challenge"
-    case onlineBattle = "Online Battle"
     case tutorial = "Tutorial"
 }
 
@@ -36,13 +34,6 @@ class GameState: ObservableObject {
     @Published var currentAccuracy: Double = 0.0
     @Published var currentStreak: Int = 0
     @Published var bestStreak: Int = 0
-    
-    // Battle mode
-    @Published var currentBattle: BattleSession?
-    @Published var isMyTurn: Bool = true
-    
-    // AI Character
-    @Published var currentAICharacter: AICharacter = .rookie
     
     // Timer
     private var sessionTimer: Timer?
@@ -174,104 +165,6 @@ struct SessionResult: Codable, Identifiable {
     }
 }
 
-// MARK: - Battle Session
-struct BattleSession: Codable, Identifiable {
-    let id: UUID
-    let scratchID: String
-    let roundDuration: TimeInterval // 90 seconds
-    var player1ID: String
-    var player2ID: String
-    var player1Score: Int
-    var player2Score: Int
-    var player1Accuracy: Double
-    var player2Accuracy: Double
-    var player1VideoURL: URL?
-    var player2VideoURL: URL?
-    var currentRound: Int
-    var totalRounds: Int
-    var status: BattleStatus
-    var createdAt: Date
-    var updatedAt: Date
-    
-    enum BattleStatus: String, Codable {
-        case waiting = "Waiting for opponent"
-        case player1Turn = "Player 1's turn"
-        case player2Turn = "Player 2's turn"
-        case completed = "Completed"
-        case cancelled = "Cancelled"
-    }
-    
-    init(scratchID: String, player1ID: String) {
-        self.id = UUID()
-        self.scratchID = scratchID
-        self.roundDuration = 90
-        self.player1ID = player1ID
-        self.player2ID = ""
-        self.player1Score = 0
-        self.player2Score = 0
-        self.player1Accuracy = 0
-        self.player2Accuracy = 0
-        self.currentRound = 1
-        self.totalRounds = 1
-        self.status = .waiting
-        self.createdAt = Date()
-        self.updatedAt = Date()
-    }
-}
-
-// MARK: - AI Character
-enum AICharacter: String, CaseIterable, Codable {
-    case rookie = "DJ Rookie"
-    case flash = "Flash Gordon"
-    case cipher = "MC Cipher"
-    case nova = "DJ Nova"
-    case legend = "Grand Master L"
-    
-    var level: Int {
-        switch self {
-        case .rookie: return 1
-        case .flash: return 2
-        case .cipher: return 3
-        case .nova: return 4
-        case .legend: return 5
-        }
-    }
-    
-    var description: String {
-        switch self {
-        case .rookie: return "Just starting out. Perfect for learning the basics."
-        case .flash: return "Quick hands, building skills. A worthy practice partner."
-        case .cipher: return "Seasoned battler with solid fader work."
-        case .nova: return "Rising star with creative combinations."
-        case .legend: return "The ultimate challenge. Decades of experience."
-        }
-    }
-    
-    var avatarImageName: String {
-        return self.rawValue.lowercased().replacingOccurrences(of: " ", with: "_")
-    }
-    
-    var primaryColor: String {
-        switch self {
-        case .rookie: return "4CAF50"
-        case .flash: return "2196F3"
-        case .cipher: return "FF9800"
-        case .nova: return "E91E63"
-        case .legend: return "9C27B0"
-        }
-    }
-    
-    var skillMultiplier: Double {
-        switch self {
-        case .rookie: return 0.6
-        case .flash: return 0.75
-        case .cipher: return 0.85
-        case .nova: return 0.92
-        case .legend: return 0.98
-        }
-    }
-}
-
 // MARK: - Player Profile
 struct PlayerProfile: Codable, Identifiable {
     let id: String
@@ -307,7 +200,6 @@ struct Level: Identifiable, Codable {
     let requiredAccuracy: Double // 90% to pass
     let scratchIDs: [String]
     let comboScratchID: String
-    let aiCharacter: String
     let unlockRequirement: String
     
     var isComboUnlocked: Bool {
@@ -326,7 +218,6 @@ extension Level {
             requiredAccuracy: 90,
             scratchIDs: ["baby_scratch", "forward_scratch", "backward_scratch", "release_scratch"],
             comboScratchID: "combo_l1",
-            aiCharacter: AICharacter.rookie.rawValue,
             unlockRequirement: "Available from start"
         ),
         Level(
@@ -336,7 +227,6 @@ extension Level {
             requiredAccuracy: 90,
             scratchIDs: ["tear", "chirp", "scribble", "stab"],
             comboScratchID: "combo_l2",
-            aiCharacter: AICharacter.flash.rawValue,
             unlockRequirement: "Complete Level 1 combo with 90% accuracy"
         ),
         Level(
@@ -346,7 +236,6 @@ extension Level {
             requiredAccuracy: 90,
             scratchIDs: ["transform", "crab", "flare_1click", "orbit"],
             comboScratchID: "combo_l3",
-            aiCharacter: AICharacter.cipher.rawValue,
             unlockRequirement: "Complete Level 2 combo with 90% accuracy"
         ),
         Level(
@@ -356,7 +245,6 @@ extension Level {
             requiredAccuracy: 90,
             scratchIDs: ["flare_2click", "twiddle", "boomerang", "hydroplane"],
             comboScratchID: "combo_l4",
-            aiCharacter: AICharacter.nova.rawValue,
             unlockRequirement: "Complete Level 3 combo with 90% accuracy"
         ),
         Level(
@@ -366,7 +254,6 @@ extension Level {
             requiredAccuracy: 90,
             scratchIDs: ["flare_3click", "autobahn", "military", "prizm"],
             comboScratchID: "combo_l5",
-            aiCharacter: AICharacter.legend.rawValue,
             unlockRequirement: "Complete Level 4 combo with 90% accuracy"
         )
     ]
