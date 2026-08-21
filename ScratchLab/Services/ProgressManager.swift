@@ -208,15 +208,6 @@ class ProgressManager: ObservableObject {
         #endif
     }
     
-    func recordBattleResult(won: Bool, opponentID: String?) {
-        if won {
-            playerProfile?.battlesWon += 1
-        } else {
-            playerProfile?.battlesLost += 1
-        }
-        saveProgress()
-    }
-    
     // MARK: - Unlock Logic
     
     private func checkAndUnlockContent(afterMastering scratchID: String) {

@@ -282,8 +282,6 @@ struct PlayerProfile: Codable, Identifiable {
     var totalScore: Int
     var level: Int
     var experience: Int
-    var battlesWon: Int
-    var battlesLost: Int
     var scratchesMastered: [String]
     var joinedDate: Date
     var lastActiveDate: Date
@@ -295,17 +293,9 @@ struct PlayerProfile: Codable, Identifiable {
         self.totalScore = 0
         self.level = 1
         self.experience = 0
-        self.battlesWon = 0
-        self.battlesLost = 0
         self.scratchesMastered = []
         self.joinedDate = Date()
         self.lastActiveDate = Date()
-    }
-    
-    var winRate: Double {
-        let total = battlesWon + battlesLost
-        guard total > 0 else { return 0 }
-        return Double(battlesWon) / Double(total) * 100
     }
 }
 
