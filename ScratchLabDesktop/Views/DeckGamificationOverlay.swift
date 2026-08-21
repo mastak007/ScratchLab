@@ -232,10 +232,6 @@ struct DeckGamificationOverlay: View {
                     .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .allowsHitTesting(false)
                 }
-
-                topHud
-                    .padding(20)
-                    .allowsHitTesting(false)
             }
         }
     }
@@ -314,26 +310,6 @@ struct DeckGamificationOverlay: View {
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .contentShape(Rectangle())
         .gesture(interactiveCalibrationGesture(layout: layout, size: size))
-    }
-
-    private var topHud: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                ForEach(0..<5, id: \.self) { index in
-                    Image(systemName: index < detector.visibleStarCount ? "star.fill" : "star")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(index < detector.visibleStarCount ? Color(nsColor: .systemGreen) : Color.white.opacity(0.35))
-                }
-            }
-
-            Text("Stars won: \(detector.sessionStars)")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.black.opacity(0.7), in: Capsule())
-        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: detector.sessionStars)
     }
 
     /// Pure coordinate conversion from normalized Vision space (origin
