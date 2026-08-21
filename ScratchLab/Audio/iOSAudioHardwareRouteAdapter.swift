@@ -46,7 +46,9 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
     ) -> AudioHardwareRouteState {
         guard let activePort = session.currentRoute.inputs.first else {
             routeState = .unavailable
+            #if DEBUG
             logIfChanged()
+            #endif
             return routeState
         }
 
@@ -109,7 +111,9 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
         }
 
         routeState = nextState
+        #if DEBUG
         logIfChanged()
+        #endif
         return nextState
     }
 
