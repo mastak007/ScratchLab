@@ -532,7 +532,10 @@ private struct AdvancedHubView: View {
                 action: { showingWatchCapture = true }
             )
 
-            #if DEBUG && canImport(RealityKit)
+            #if DEBUG
+            developerSectionHeader
+
+            #if canImport(RealityKit)
             MenuButton(
                 title: "3D Coach Demo",
                 subtitle: "Preview the 3D coach model animation",
@@ -542,7 +545,6 @@ private struct AdvancedHubView: View {
             )
             #endif
 
-            #if DEBUG
             MenuButton(
                 title: "Virtual Platter Prototype",
                 subtitle: "Developer-only scratch-on-glass slice (no capture/ML)",
@@ -553,6 +555,27 @@ private struct AdvancedHubView: View {
             #endif
         }
     }
+
+    #if DEBUG
+    // Visually separates developer/experimental tools from the production
+    // menu above so a DEBUG build doesn't read as a developer menu end to
+    // end. Compiles out entirely in Release — the cards below it already
+    // do too, this only adds the divider/label around them. Reuses the
+    // existing card-heading + secondary-body tokens (see `MenuButton`
+    // above) rather than introducing a new style.
+    private var developerSectionHeader: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("DEVELOPER")
+                .font(ScratchLabDesign.Typo.sectionLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.warning)
+            Text("Experimental tools")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, ScratchLabDesign.Spacing.xs)
+    }
+    #endif
 
     private var watchRelayStatusText: String {
         if companionRelayBroadcaster.connectedPeerNames.isEmpty {
