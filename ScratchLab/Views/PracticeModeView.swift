@@ -279,11 +279,38 @@ struct PracticeModeView: View {
         return "Best run this session: \(bestRun). Keep the hits closer together and clear the full phrase."
     }
 
+    // Truthful hardware naming: a USB audio interface (RANE ONE MKII and
+    // similar) is not a microphone, so the ready/off states must not claim
+    // "Microphone" while one is the active route.
+    private var isUSBHardwareActive: Bool {
+        audioEngine.audioHardwareRouteState.transport == .usb
+    }
+
+    // DVS readiness requires all three: a selected stereo pair, active PCM,
+    // and the decoder confirming valid timecode. No DVS timecode decoder is
+    // wired into the iOS multichannel path yet (out of scope for this
+    // phase — see project handoff notes), so `decoderReportsValidTimecode`
+    // is always false and this state is unreachable until that lands. Do
+    // not report "DVS Ready" without wiring a real decoder signal here.
+    private var isDVSReady: Bool {
+        guard audioEngine.audioHardwareRouteState.selectedStereoPair != nil else { return false }
+        guard audioEngine.audioHardwareRouteState.isInputActive else { return false }
+        let decoderReportsValidTimecode = false
+        return decoderReportsValidTimecode
+    }
+
     private var micStatusTitle: String {
+        if isDVSReady { return "DVS Ready" }
         switch audioEngine.inputMonitorState {
         case .micOff:
-            return "Microphone Off"
+            return isUSBHardwareActive ? "USB Audio Off" : "Microphone Off"
         case .micLive:
+            if isUSBHardwareActive {
+                if let name = audioEngine.audioHardwareRouteState.deviceName, !name.isEmpty {
+                    return "\(name) Ready"
+                }
+                return "USB Audio Ready"
+            }
             return "Microphone Ready"
         case .listening:
             return "Connected"
@@ -295,9 +322,9 @@ struct PracticeModeView: View {
     private var micStatusIcon: String {
         switch audioEngine.inputMonitorState {
         case .micOff:
-            return "mic.slash.fill"
+            return isUSBHardwareActive ? "cable.connector.slash" : "mic.slash.fill"
         case .micLive:
-            return "mic.fill"
+            return isUSBHardwareActive ? "cable.connector" : "mic.fill"
         case .listening:
             return "waveform"
         case .noSignal:

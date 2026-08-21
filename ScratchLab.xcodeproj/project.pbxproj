@@ -217,6 +217,8 @@
 		AHRSIOS0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */; };
 		AHRSMAC0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */; };
 		AHRSTEST001AHRSTESTSRC /* AudioHardwareRouteStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AHRSTEST000AHRSTESTREF /* AudioHardwareRouteStateTests.swift */; };
+		DVHP0IOS000DVHP0SOURCE /* DVSHardwareProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVHP0000000DVHP0FILEREF /* DVSHardwareProfile.swift */; };
+		DVHP0MAC000DVHP0SOURCE /* DVSHardwareProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVHP0000000DVHP0FILEREF /* DVSHardwareProfile.swift */; };
 		DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */; };
 		DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */; };
 		DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */; };
@@ -936,6 +938,7 @@
 		SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerUserMixerGainTests.swift; sourceTree = "<group>"; };
 		SPMT0001FREF /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerMIDIPlatterTests.swift; sourceTree = "<group>"; };
 		AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioHardwareRouteState.swift; sourceTree = "<group>"; };
+		DVHP0000000DVHP0FILEREF /* DVSHardwareProfile.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DVSHardwareProfile.swift; sourceTree = "<group>"; };
 		AHRSTEST000AHRSTESTREF /* AudioHardwareRouteStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHardwareRouteStateTests.swift; sourceTree = "<group>"; };
 		SPTR0001FREF /* ScratchPlatterTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTracker.swift; sourceTree = "<group>"; };
 		SPTR0002FREF /* ScratchPlatterTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTrackerTests.swift; sourceTree = "<group>"; };
@@ -1352,6 +1355,7 @@
 				A2000006 /* GameState.swift */,
 				D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */,
 				AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */,
+				DVHP0000000DVHP0FILEREF /* DVSHardwareProfile.swift */,
 				SPCM000000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift */,
 				SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */,
 				PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */,
@@ -2115,6 +2119,7 @@
 				TSDEA001TSDEA001TSDEA001 /* TimecodeSignedRateDenseEstimator.swift in Sources */,
 				DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
 				AHRSMAC0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */,
+				DVHP0MAC000DVHP0SOURCE /* DVSHardwareProfile.swift in Sources */,
 				SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 				DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */,
 				DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */,
@@ -2298,6 +2303,7 @@
 				TSDEB001TSDEB001TSDEB001 /* TimecodeSignedRateDenseEstimator.swift in Sources */,
 				DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
 				AHRSIOS0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */,
+				DVHP0IOS000DVHP0SOURCE /* DVSHardwareProfile.swift in Sources */,
 				SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 			);
 		};

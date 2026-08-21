@@ -45,17 +45,27 @@ struct AudioHardwareRouteState: Equatable, Sendable {
             }
         }
 
-        /// Decides which pair a route adapter should treat as selected: the
-        /// previously remembered pair if it is still among the currently
-        /// available pairs, otherwise the first available pair, otherwise
-        /// `nil` (for example a true single-channel microphone, or metadata
-        /// too malformed to yield any complete pair).
+        /// Decides which pair a route adapter should treat as selected:
+        /// 1. the previously remembered pair, if still available;
+        /// 2. otherwise a hardware-specific known-good default (see
+        ///    `DVSHardwareProfile`), if the caller supplies one and it's
+        ///    available;
+        /// 3. otherwise the first available pair;
+        /// 4. otherwise `nil` (a true single-channel microphone, or metadata
+        ///    too malformed to yield any complete pair).
+        /// `preferredDefault` only ever wins on a *first-time* selection —
+        /// it never overrides an existing remembered choice, including one
+        /// that happens to equal the generic first-pair default.
         static func resolveSelection(
             availablePairs: [StereoPair],
-            remembered: StereoPair?
+            remembered: StereoPair?,
+            preferredDefault: StereoPair? = nil
         ) -> StereoPair? {
             if let remembered, availablePairs.contains(remembered) {
                 return remembered
+            }
+            if let preferredDefault, availablePairs.contains(preferredDefault) {
+                return preferredDefault
             }
             return availablePairs.first
         }

@@ -225,6 +225,15 @@ class AudioEngine: ObservableObject {
         audioHardwareRouteState = hardwareRouteAdapter.routeState
     }
 
+    /// Selects a stereo pair on the active multichannel input device (for
+    /// example "3/4" on a RANE ONE MKII), for a hardware-input-picker UI.
+    /// No-op if the pair isn't among `audioHardwareRouteState.availableStereoPairs`.
+    /// Persisted by device UID in the adapter.
+    func selectStereoPair(_ pair: AudioHardwareRouteState.StereoPair) {
+        hardwareRouteAdapter.selectStereoPair(pair)
+        audioHardwareRouteState = hardwareRouteAdapter.routeState
+    }
+
     var hasExternalPracticeInput: Bool {
         availableInputs.contains { $0.portType == .usbAudio || $0.portType == .lineIn }
     }

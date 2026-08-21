@@ -1011,6 +1011,121 @@ struct HardwareProfileCard: View {
     }
 }
 
+// MARK: - AudioHardwareInputCard
+//
+// Truthful iOS hardware-input status: reflects `AudioHardwareRouteState`
+// as-is, never implies "Microphone Ready" for a USB device, and never
+// implies a device is connected when the route state says otherwise. Pure,
+// state-driven (no AVAudioSession/AudioEngine access) so it renders the
+// same on macOS and iOS from whatever `AudioHardwareRouteState` a caller
+// hands it.
+
+struct AudioHardwareInputCard: View {
+    let routeState: AudioHardwareRouteState
+    var onSelectStereoPair: (AudioHardwareRouteState.StereoPair) -> Void = { _ in }
+
+    private var isDetected: Bool { routeState.deviceName != nil }
+
+    private var readiness: InputReadinessState {
+        guard isDetected else { return .setupRequired }
+        return routeState.isInputActive ? .ready : .detected
+    }
+
+    private var titleText: String {
+        routeState.deviceName ?? "No Audio Input Detected"
+    }
+
+    private var transportLabel: String {
+        switch routeState.transport {
+        case .usb:      return "USB"
+        case .builtIn:  return "Built-in"
+        case .lineIn:   return "Line In"
+        case .headset:  return "Headset"
+        case .bluetooth: return "Bluetooth"
+        case .virtual:  return "Virtual"
+        case .unknown:  return "Unknown"
+        }
+    }
+
+    private var sampleRateText: String {
+        guard let rate = routeState.sampleRate else { return "—" }
+        let kiloHertz = rate / 1000
+        if kiloHertz.truncatingRemainder(dividingBy: 1) == 0 {
+            return "\(Int(kiloHertz)) kHz"
+        }
+        return String(format: "%.1f kHz", kiloHertz)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+            HStack {
+                Text(titleText)
+                    .font(ScratchLabDesign.Typo.title3)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Spacer()
+                StatusBadge(title: "", value: readiness.label, variant: readiness.variant)
+            }
+
+            if isDetected {
+                HStack(spacing: ScratchLabDesign.Spacing.lg) {
+                    statField(label: "TRANSPORT", value: transportLabel)
+                    statField(label: "SAMPLE RATE", value: sampleRateText)
+                    statField(label: "CHANNELS", value: "\(routeState.channelCount)")
+                }
+
+                if routeState.availableStereoPairs.count > 1 {
+                    stereoPairPicker
+                } else if let selected = routeState.selectedStereoPair {
+                    statField(label: "INPUT", value: selected.displayName)
+                }
+            } else {
+                Text("Connect a microphone, USB audio interface, or line input to see it here.")
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .scratchLabCard(.standard)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("\(titleText), \(readiness.label)"))
+    }
+
+    private func statField(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+            Text(value)
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+        }
+    }
+
+    private var stereoPairPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("STEREO PAIR")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+
+            Picker(
+                "Stereo pair",
+                selection: Binding(
+                    get: { routeState.selectedStereoPair },
+                    set: { newValue in
+                        if let newValue { onSelectStereoPair(newValue) }
+                    }
+                )
+            ) {
+                ForEach(routeState.availableStereoPairs) { pair in
+                    Text(pair.displayName).tag(Optional(pair))
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(ScratchLabDesign.Sem.accent)
+        }
+    }
+}
+
 // MARK: - RecoveryCard (Figma node 163:33)
 
 enum RecoveryIssue: String, CaseIterable, Sendable {

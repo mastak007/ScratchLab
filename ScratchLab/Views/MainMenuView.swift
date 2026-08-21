@@ -340,6 +340,7 @@ private struct ReviewPlaceholderView: View {
 private struct AdvancedHubView: View {
     @EnvironmentObject private var companionRelayBroadcaster: CompanionCameraBroadcaster
     @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
+    @EnvironmentObject private var audioEngine: AudioEngine
     @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
 
     @State private var showingDemoMode = false
@@ -362,6 +363,10 @@ private struct AdvancedHubView: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
+                    AudioHardwareInputCard(
+                        routeState: audioEngine.audioHardwareRouteState,
+                        onSelectStereoPair: { audioEngine.selectStereoPair($0) }
+                    )
                     relayStatusCard
                     advancedMenuButtons
                 }

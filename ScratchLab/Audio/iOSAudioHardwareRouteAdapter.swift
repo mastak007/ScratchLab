@@ -17,8 +17,17 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
     // Remembers the last selected stereo pair per device UID so a device
     // that drops out and reconnects (or a route-change notification that
     // re-observes the same device) restores the user's choice instead of
-    // silently resetting to the first pair.
+    // silently resetting to the first pair. In-memory cache backed by
+    // `UserDefaults` (see `persistedSelection`/`persistSelection` below) so
+    // the choice also survives an app relaunch, not just this process.
     private var rememberedSelectionByDeviceUID: [String: AudioHardwareRouteState.StereoPair] = [:]
+
+    private static let selectionDefaultsKeyPrefix = "iOSAudioHardwareRouteAdapter.selectedStereoPair."
+    private let userDefaults: UserDefaults
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+    }
 
     #if DEBUG
     private var lastLoggedState: AudioHardwareRouteState = .unavailable
@@ -72,9 +81,12 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
 
         let availablePairs = AudioHardwareRouteState.StereoPair.contiguousPairs(channelCount: reportedChannelCount)
         let remembered = rememberedSelectionByDeviceUID[activePort.uid]
+            ?? persistedSelection(forDeviceUID: activePort.uid)
+        let profileDefault = DVSHardwareProfile.preferredStereoPair(forDeviceName: activePort.portName)
         let selectedPair = AudioHardwareRouteState.StereoPair.resolveSelection(
             availablePairs: availablePairs,
-            remembered: remembered
+            remembered: remembered,
+            preferredDefault: profileDefault
         )
 
         let nextState = AudioHardwareRouteState.observing(
@@ -93,6 +105,7 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
 
         if let confirmedPair = nextState.selectedStereoPair {
             rememberedSelectionByDeviceUID[activePort.uid] = confirmedPair
+            persistSelection(confirmedPair, forDeviceUID: activePort.uid)
         }
 
         routeState = nextState
@@ -106,12 +119,15 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
         routeState = routeState.updatingInputActivity(isActive: isActive, signalLevel: signalLevel)
     }
 
-    /// Manually selects a stereo pair (for a future device-picker UI). No-op
-    /// if the pair is not among the currently available pairs.
+    /// Manually selects a stereo pair from the device-picker UI. No-op if
+    /// the pair is not among the currently available pairs. Persisted by
+    /// device UID so the choice survives a route refresh, device
+    /// reconnect, or app relaunch.
     func selectStereoPair(_ pair: AudioHardwareRouteState.StereoPair) {
         guard routeState.availableStereoPairs.contains(pair) else { return }
         if let uid = routeState.deviceUID {
             rememberedSelectionByDeviceUID[uid] = pair
+            persistSelection(pair, forDeviceUID: uid)
         }
         routeState = AudioHardwareRouteState(
             deviceName: routeState.deviceName,
@@ -124,6 +140,22 @@ final class iOSAudioHardwareRouteAdapter: ObservableObject {
             selectedStereoPair: pair,
             isInputActive: routeState.isInputActive,
             signalLevel: routeState.signalLevel
+        )
+    }
+
+    private func persistedSelection(forDeviceUID uid: String) -> AudioHardwareRouteState.StereoPair? {
+        guard let raw = userDefaults.string(forKey: Self.selectionDefaultsKeyPrefix + uid) else { return nil }
+        let parts = raw.split(separator: "-")
+        guard parts.count == 2,
+              let first = Int(parts[0]),
+              let second = Int(parts[1]) else { return nil }
+        return AudioHardwareRouteState.StereoPair(firstChannelIndex: first, secondChannelIndex: second)
+    }
+
+    private func persistSelection(_ pair: AudioHardwareRouteState.StereoPair, forDeviceUID uid: String) {
+        userDefaults.set(
+            "\(pair.firstChannelIndex)-\(pair.secondChannelIndex)",
+            forKey: Self.selectionDefaultsKeyPrefix + uid
         )
     }
 

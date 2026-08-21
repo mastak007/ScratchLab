@@ -214,6 +214,83 @@ final class AudioHardwareRouteStateTests: XCTestCase {
         XCTAssertEqual(selected?.displayName, "1/2")
     }
 
+    // MARK: - DVS hardware profile default (Phase 2)
+
+    func testRaneOneMKIIProfileDefaultsToPairThreeFour() {
+        let pair = DVSHardwareProfile.preferredStereoPair(forDeviceName: "Rane ONE MKII")
+
+        XCTAssertEqual(pair?.displayName, "3/4")
+    }
+
+    func testProfileLookupIsCaseInsensitiveAndSubstringMatched() {
+        XCTAssertEqual(
+            DVSHardwareProfile.preferredStereoPair(forDeviceName: "RANE ONE MKII")?.displayName,
+            "3/4"
+        )
+        XCTAssertEqual(
+            DVSHardwareProfile.preferredStereoPair(forDeviceName: "USB Rane ONE MKII Audio")?.displayName,
+            "3/4"
+        )
+    }
+
+    func testUnknownDeviceHasNoProfileDefault() {
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: "Generic USB Audio"))
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: nil))
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: ""))
+    }
+
+    func testProfileDefaultAppliesOnlyWhenNoRememberedSelectionExists() throws {
+        let pairs = AudioHardwareRouteState.StereoPair.contiguousPairs(channelCount: 14)
+        let profileDefault = DVSHardwareProfile.preferredStereoPair(forDeviceName: "Rane ONE MKII")
+
+        // First-time selection (no remembered pair yet) — profile default wins.
+        let firstTime = AudioHardwareRouteState.StereoPair.resolveSelection(
+            availablePairs: pairs,
+            remembered: nil,
+            preferredDefault: profileDefault
+        )
+        XCTAssertEqual(firstTime?.displayName, "3/4")
+
+        // A remembered pair (e.g. the user picked something else) still wins
+        // over the profile default.
+        let userChoice = try XCTUnwrap(
+            AudioHardwareRouteState.StereoPair(firstChannelIndex: 6, secondChannelIndex: 7)
+        )
+        let restored = AudioHardwareRouteState.StereoPair.resolveSelection(
+            availablePairs: pairs,
+            remembered: userChoice,
+            preferredDefault: profileDefault
+        )
+        XCTAssertEqual(restored?.displayName, "7/8")
+    }
+
+    func testProfileDefaultFallsBackToFirstPairWhenUnavailable() {
+        // Profile default (3/4 = indices 2/3) doesn't fit a 2-channel device.
+        let pairs = AudioHardwareRouteState.StereoPair.contiguousPairs(channelCount: 2)
+        let profileDefault = DVSHardwareProfile.preferredStereoPair(forDeviceName: "Rane ONE MKII")
+
+        let selected = AudioHardwareRouteState.StereoPair.resolveSelection(
+            availablePairs: pairs,
+            remembered: nil,
+            preferredDefault: profileDefault
+        )
+
+        XCTAssertEqual(selected?.displayName, "1/2")
+    }
+
+    func testUnknownDeviceStillDefaultsToFirstPair() {
+        let pairs = AudioHardwareRouteState.StereoPair.contiguousPairs(channelCount: 14)
+        let profileDefault = DVSHardwareProfile.preferredStereoPair(forDeviceName: "Generic USB Audio")
+
+        let selected = AudioHardwareRouteState.StereoPair.resolveSelection(
+            availablePairs: pairs,
+            remembered: nil,
+            preferredDefault: profileDefault
+        )
+
+        XCTAssertEqual(selected?.displayName, "1/2")
+    }
+
     // MARK: - Interleaved PCM extraction
 
     func testExtractInterleavedRaneStylePairThreeFourReadsIndicesTwoAndThree() throws {
