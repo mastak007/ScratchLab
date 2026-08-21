@@ -12,6 +12,7 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
 import os
 
 struct VirtualPlatterPrototypeView: View {

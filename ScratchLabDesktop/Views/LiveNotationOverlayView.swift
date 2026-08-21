@@ -199,7 +199,6 @@ struct LiveNotationOverlayView: View {
         let events = viewportEvents
         while i < events.count {
             let e0 = events[i]
-            let isLast = i == events.count - 1
             let hasNext = i + 1 < events.count
 
             // Determine if this is a standalone (let-go) or paired with next
@@ -260,8 +259,6 @@ struct LiveNotationOverlayView: View {
                 let bActive = currentTime >= turnPoint && currentTime < b_te
                 let fFuture = f_ts > currentTime
                 let bFuture = !bActive && turnPoint > currentTime
-                let fPast = turnPoint <= currentTime
-                let bPast = b_te <= currentTime
 
                 // F line
                 let fColor: Color; let fAlpha: Double

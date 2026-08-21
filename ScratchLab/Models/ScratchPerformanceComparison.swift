@@ -597,7 +597,6 @@ enum ScratchPerformanceAlignment {
         let alignment = align(target: target, performed: performed)
         let scoredStart = alignment.scoredPerformedRange.lowerBound
         let scoredEnd = alignment.scoredPerformedRange.upperBound
-        let scoredCount = scoredEnd - scoredStart
         let scoredTargetCount = alignment.unscoredTargetStrokeIndices.isEmpty
             ? target.strokes.count
             : (alignment.unscoredTargetStrokeIndices.first ?? target.strokes.count)

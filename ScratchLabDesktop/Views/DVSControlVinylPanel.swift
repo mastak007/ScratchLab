@@ -1,5 +1,6 @@
 #if DEBUG
 import SwiftUI
+import Combine
 
 /// Mac Analyzer panel: DVS control-vinyl signal diagnostics.
 ///

@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import AppKit
 import ApplicationServices
+import Combine
 import Network
 import OSLog
 import Darwin
@@ -2611,9 +2612,9 @@ struct MacAnalyzerView: View {
             }
 #if ENABLE_TIMECODE_LIVE_TAP
             .onAppear {
-                captureEngine.timecodeAudioCallback = { [weak timecodePipeline] left, right, sampleRate, hostTime in
-                    guard let pipeline = timecodePipeline,
-                          pipeline.liveTapEnabled,
+                let pipeline = timecodePipeline
+                captureEngine.timecodeAudioCallback = { [pipeline] left, right, sampleRate, hostTime in
+                    guard pipeline.liveTapEnabled,
                           pipeline.mode != .disabled else { return }
 
                     // The callback deposits audio into a lock-protected,

@@ -815,7 +815,9 @@ class AudioEngine: ObservableObject {
         return tmp.appendingPathComponent("scratchlab_input_\(stamp).wav")
     }
 
-    private static func writeMonoWAV(samples: [Float], sampleRate: Double, to url: URL) throws {
+    /// Pure file encoding with no access to `AudioEngine` state. This runs on
+    /// the utility queue above so WAV I/O never blocks the main actor.
+    nonisolated private static func writeMonoWAV(samples: [Float], sampleRate: Double, to url: URL) throws {
         let frameCount = samples.count
         let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16

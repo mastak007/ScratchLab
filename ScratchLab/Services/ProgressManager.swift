@@ -453,9 +453,14 @@ class ProgressManager: ObservableObject {
         activateGameCenterIfNeeded()
         guard isGameCenterEnabled else { return }
         
-        let gcViewController = GKGameCenterViewController(leaderboardID: gameCenterLeaderboardID, playerScope: .global, timeScope: .allTime)
-        gcViewController.gameCenterDelegate = viewController as? GKGameCenterControllerDelegate
-        viewController.present(gcViewController, animated: true)
+        let accessPoint = GKAccessPoint.shared
+        accessPoint.parentWindow = viewController.view.window
+        accessPoint.trigger(
+            leaderboardID: gameCenterLeaderboardID,
+            playerScope: .global,
+            timeScope: .allTime,
+            handler: nil
+        )
         #endif
     }
     #endif

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import QuartzCore
 
 // MARK: - Display Mode
@@ -719,7 +720,6 @@ struct NotationTimelineCanvas: View {
             let loop = vm.loopDuration
             let targetH = size.height * targetLaneHeightFraction
             let targetRect = CGRect(x: 0, y: 0, width: size.width, height: targetH)
-            let motionY = targetH           // top of motion trace band (unused in canvas; lane is separate view)
 
             let visibleDuration = loop * visibleWindowMultiplier
             let pps = size.width / CGFloat(visibleDuration)

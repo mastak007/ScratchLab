@@ -1867,6 +1867,7 @@ struct CameraPreviewView: View {
 private struct CameraPreviewLayer: UIViewRepresentable {
     final class Coordinator: NSObject {
         var captureSession: AVCaptureSession?
+        var previewLayer: AVCaptureVideoPreviewLayer?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1889,8 +1890,9 @@ private struct CameraPreviewLayer: UIViewRepresentable {
 
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer.videoGravity = .resizeAspectFill
-        previewLayer.frame = UIScreen.main.bounds
+        previewLayer.frame = view.bounds
         view.layer.addSublayer(previewLayer)
+        context.coordinator.previewLayer = previewLayer
 
         DispatchQueue.global(qos: .userInitiated).async {
             captureSession.startRunning()
@@ -1899,11 +1901,14 @@ private struct CameraPreviewLayer: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.previewLayer?.frame = uiView.bounds
+    }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
         coordinator.captureSession?.stopRunning()
         coordinator.captureSession = nil
+        coordinator.previewLayer = nil
     }
 }
 

@@ -10104,7 +10104,8 @@ extension CaptureReliabilityPhase1CoreTests {
             timecodeCase.contains("captureEngine.timecodeAudioCallback = {"),
             "Timecode Input must install the live callback."
         )
-        XCTAssertTrue(timecodeCase.contains("guard let pipeline = timecodePipeline,"))
+        XCTAssertTrue(timecodeCase.contains("let pipeline = timecodePipeline"))
+        XCTAssertTrue(timecodeCase.contains("captureEngine.timecodeAudioCallback = { [pipeline]"))
         XCTAssertTrue(timecodeCase.contains("pipeline.liveTapEnabled,"))
         XCTAssertTrue(timecodeCase.contains("pipeline.mode != .disabled else { return }"))
         XCTAssertTrue(timecodeCase.contains("debugCaptureTask?.cancel()"))
