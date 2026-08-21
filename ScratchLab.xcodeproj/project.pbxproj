@@ -7,10 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		001612E92ED99CAA4694DEC0 /* DemoAudioResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43FAC91040FD8593E6573BE8 /* DemoAudioResolverTests.swift */; };
 		05F9D91012A71F64B197833A /* LivePerformedNotationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6159D19ABAFFEDC31B928846 /* LivePerformedNotationTracker.swift */; };
 		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
-		095BCF02912937C6F5C70E6B /* MacCameraPreviewViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63691DBB63BF90526963B487 /* MacCameraPreviewViewTests.swift */; };
 		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
 		10335717A9714A7DCC2A1484 /* DJRigLayoutDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000008 /* DJRigLayoutDetector.swift */; };
 		14D30A730D2E3376F83B18F1 /* TimecodeSourceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */; };
@@ -51,6 +49,7 @@
 		4B483DA41620D1907FC95730 /* TimecodeSourceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */; };
 		4DAB9D29DE22539C24AB3F8C /* TimecodeSignalDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */; };
 		4F998549DF91E8F237D8FE94 /* Archive+BackingConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */; };
+		4FDACB5016CD4B02FDB66CAE /* CalibrationCameraOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD29626A6524ED750E9DB318 /* CalibrationCameraOverlayTests.swift */; };
 		50B80AC355A23C04AF2C1A4E /* ScratchLabNotificationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000028 /* ScratchLabNotificationController.swift */; };
 		51C2E5862F9F900000E87B79 /* CoachPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */; };
 		51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 51C2E59F2FA1B00000E87B79 /* Coach.usdz */; };
@@ -58,6 +57,7 @@
 		5242E17A90BAFAD885F7DBA7 /* Archive+ReadingDeprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */; };
 		5E99E314C614D039721A33ED /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
 		5EB4210D6F24B3426C9341BB /* SessionSharePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */; };
+		60364B2C9AC93AB752507768 /* MacCameraPreviewViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D62536817BC9DBF5EB5DB1E1 /* MacCameraPreviewViewTests.swift */; };
 		6280EBCD5F2AA4BC39B512EB /* Entry+InfoZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 814A24D8C57AEC800882D641 /* Entry+InfoZIP.swift */; };
 		66F3352B981B0991A9D08A9D /* Archive+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3AD50998DDDF043D697A50 /* Archive+Helpers.swift */; };
 		6A677B41D9030E13F18D6FF9 /* SessionSharePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */; };
@@ -74,9 +74,7 @@
 		8A689B811423AC79DCD5A667 /* Archive+Reading.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11CD9497FC8B738E59E347C /* Archive+Reading.swift */; };
 		8D4B3424898BEBDDC8D70A9A /* TimecodeSignalDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */; };
 		8E2BDEAD0BB509A80C9FAB5F /* Archive+MemoryFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02E4CEF8129F5BD651B9FFE /* Archive+MemoryFile.swift */; };
-		8E62200AF78F971ABA150C12 /* LivePerformedNotationTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55E0AE8F56586D2CFDAB1998 /* LivePerformedNotationTrackerTests.swift */; };
 		923253E866827B1462A8E5DF /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
-		959BB77FFFCF7CDB35342873 /* CalibrationCameraOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D4E158B802E707DC21AF3D6 /* CalibrationCameraOverlayTests.swift */; };
 		9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000009 /* DeckGamificationOverlay.swift */; };
 		A1000001 /* ScratchLabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* ScratchLabApp.swift */; };
 		A1000002 /* MainMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* MainMenuView.swift */; };
@@ -117,6 +115,7 @@
 		AA100002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA100001 /* PrivacyInfo.xcprivacy */; };
 		AA200002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AA200001 /* PrivacyInfo.xcprivacy */; };
 		AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */; };
+		AF5D9C2247472C52F3D1D981 /* LivePerformedNotationTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C63B14E9A67BCD33D3E122B /* LivePerformedNotationTrackerTests.swift */; };
 		APG1001000APG001APG00001 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
 		APG1001000APG001APG00002 /* AudioPhraseGridProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG1000000APG001APG00001 /* AudioPhraseGridProjection.swift */; };
 		APG2011000APG002APG00001 /* AudioPhraseGridProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APG2010000APG002APG00001 /* AudioPhraseGridProjectionTests.swift */; };
@@ -217,6 +216,7 @@
 		DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */; };
 		DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */; };
 		DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */; };
+		E385D44674BCF69C6FA51E28 /* DemoAudioResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDF657B2C4F779F3F68B087E /* DemoAudioResolverTests.swift */; };
 		E5009FC91972EB296C33E935 /* ScratchLabWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 72136EA79B0481A6FF882A74 /* ScratchLabWatch.app */; };
 		E56353E1CE56FFD80BB2EE77 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F3902F8BCE1A1BDEDEC1AE8B /* Foundation.framework */; };
 		E629FE9BA4457C9CDA41CC02 /* FileManager+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */; };
@@ -600,6 +600,7 @@
 /* Begin PBXFileReference section */
 		03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSourceState.swift; sourceTree = "<group>"; };
 		0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ReadingDeprecated.swift"; sourceTree = "<group>"; };
+		0C63B14E9A67BCD33D3E122B /* LivePerformedNotationTrackerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LivePerformedNotationTrackerTests.swift; sourceTree = "<group>"; };
 		148BC7CB94407983BCE8807C /* Archive+WritingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+WritingDeprecated.swift"; sourceTree = "<group>"; };
 		176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionSharePresenter.swift; sourceTree = "<group>"; };
 		1783A90FC878E8D656330AFD /* Data+Compression.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Data+Compression.swift"; sourceTree = "<group>"; };
@@ -607,15 +608,12 @@
 		2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureReliabilityPhase1Tests.swift; sourceTree = "<group>"; };
 		207BAC452827202EE87BABD7 /* TimecodeInputStatusCard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeInputStatusCard.swift; sourceTree = "<group>"; };
 		297DFB7B5D76685C97545701 /* TimecodeSignalDiagnostics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSignalDiagnostics.swift; sourceTree = "<group>"; };
-		2D4E158B802E707DC21AF3D6 /* CalibrationCameraOverlayTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CalibrationCameraOverlayTests.swift; path = ScratchLabDesktopTests/CalibrationCameraOverlayTests.swift; sourceTree = "<group>"; };
 		32CC571642E05056BEF1F753 /* LICENSE */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
-		34976142FFE8ED14D0F144D9 /* LivePerformedNotationTrackerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LivePerformedNotationTrackerTests.swift; path = ScratchLabDesktopTests/LivePerformedNotationTrackerTests.swift; sourceTree = "<group>"; };
 		35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchLabWatchApp.swift; sourceTree = "<group>"; };
 		39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIP.swift"; sourceTree = "<group>"; };
 		3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionExportCoordinator.swift; sourceTree = "<group>"; };
 		402318FE35178B49FF365798 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ZIP64.swift"; sourceTree = "<group>"; };
-		43FAC91040FD8593E6573BE8 /* DemoAudioResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DemoAudioResolverTests.swift; path = ScratchLabDesktopTests/DemoAudioResolverTests.swift; sourceTree = "<group>"; };
 		472ED49B7202325C8D3C8887 /* Archive+Progress.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Progress.swift"; sourceTree = "<group>"; };
 		4AC26632A6C58E1F015123CC /* Date+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Date+ZIP.swift"; sourceTree = "<group>"; };
 		514AF3882F535649000B597C /* ScratchLab.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = ScratchLab.xctestplan; sourceTree = "<group>"; };
@@ -623,11 +621,8 @@
 		518282CE2F5DD2800077484A /* ScratchLab 2.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ScratchLab 2.xctestplan"; sourceTree = "<group>"; };
 		51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachPreviewView.swift; sourceTree = "<group>"; };
 		51C2E59F2FA1B00000E87B79 /* Coach.usdz */ = {isa = PBXFileReference; lastKnownFileType = file; path = Resources/Coach/Coach.usdz; sourceTree = "<group>"; };
-		55E0AE8F56586D2CFDAB1998 /* LivePerformedNotationTrackerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LivePerformedNotationTrackerTests.swift; path = ScratchLabDesktopTests/LivePerformedNotationTrackerTests.swift; sourceTree = "<group>"; };
-		5883956FBB6C0178A19E2462 /* CalibrationCameraOverlayTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CalibrationCameraOverlayTests.swift; path = ScratchLabDesktopTests/CalibrationCameraOverlayTests.swift; sourceTree = "<group>"; };
 		60C82374A8F86A201BE7551E /* Archive+BackingConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+BackingConfiguration.swift"; sourceTree = "<group>"; };
 		6159D19ABAFFEDC31B928846 /* LivePerformedNotationTracker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LivePerformedNotationTracker.swift; sourceTree = "<group>"; };
-		63691DBB63BF90526963B487 /* MacCameraPreviewViewTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MacCameraPreviewViewTests.swift; path = ScratchLabDesktopTests/MacCameraPreviewViewTests.swift; sourceTree = "<group>"; };
 		66649EBF865FFA9347DA6AC9 /* FileManager+ZIPDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIPDeprecated.swift"; sourceTree = "<group>"; };
 		6CC7E75BB998D9ECAC1FEEC5 /* Entry+Serialization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Entry+Serialization.swift"; sourceTree = "<group>"; };
 		72136EA79B0481A6FF882A74 /* ScratchLabWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLabWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -642,7 +637,6 @@
 		99F2F64AABE1E0E0C9A89579 /* Data+CompressionDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Data+CompressionDeprecated.swift"; sourceTree = "<group>"; };
 		9B0FC101729EC232E4DCDC86 /* Archive+Writing.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Writing.swift"; sourceTree = "<group>"; };
 		9C84E64FE028B5FEAEB4A7F8 /* TimecodeAudioBuffer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeAudioBuffer.swift; sourceTree = "<group>"; };
-		9E369E7A6BF30795195834EB /* MacCameraPreviewViewTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MacCameraPreviewViewTests.swift; path = ScratchLabDesktopTests/MacCameraPreviewViewTests.swift; sourceTree = "<group>"; };
 		9E40AFA8F68E91632E54E273 /* CalibrationCameraOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CalibrationCameraOverlay.swift; sourceTree = "<group>"; };
 		A2000001 /* ScratchLabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchLabApp.swift; sourceTree = "<group>"; };
 		A2000002 /* MainMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainMenuView.swift; sourceTree = "<group>"; };
@@ -711,7 +705,7 @@
 		C6A538F8E7E35F650A2868BB /* WatchCaptureHubView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchCaptureHubView.swift; sourceTree = "<group>"; };
 		C71F1101A1B2C3D4E5F60711 /* ClickTrackEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClickTrackEngine.swift; sourceTree = "<group>"; };
 		C71F1201A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchLabBeatEngine.swift; sourceTree = "<group>"; };
-		C8B18E0C932BA7E1F03A1A41 /* DemoAudioResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DemoAudioResolverTests.swift; path = ScratchLabDesktopTests/DemoAudioResolverTests.swift; sourceTree = "<group>"; };
+		CD29626A6524ED750E9DB318 /* CalibrationCameraOverlayTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CalibrationCameraOverlayTests.swift; sourceTree = "<group>"; };
 		CES1000000CES001CES00001 /* CoachingEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEvent.swift; sourceTree = "<group>"; };
 		CES2010000CES002CES00001 /* CoachingEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingEventTests.swift; sourceTree = "<group>"; };
 		CEV1000000CEV001CEV00001 /* CoachingEventVocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Coaching/CoachingEventVocabulary.swift; sourceTree = "<group>"; };
@@ -736,6 +730,7 @@
 		CXL0000000010001CXL00001 /* CXLNotationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCapture.swift; sourceTree = "<group>"; };
 		CXL0000000010001CXL00002 /* CXLNotationCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CXLNotationCaptureTests.swift; sourceTree = "<group>"; };
 		D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureCore.swift; sourceTree = "<group>"; };
+		D62536817BC9DBF5EB5DB1E1 /* MacCameraPreviewViewTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewViewTests.swift; sourceTree = "<group>"; };
 		D8A10821073521D744B544DE /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		DA980A27B4DE9C32875B6AC4 /* URL+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "URL+ZIP.swift"; sourceTree = "<group>"; };
 		DAC0000000DAC001DAC00001 /* DemoAudioClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAudioClock.swift; sourceTree = "<group>"; };
@@ -765,6 +760,7 @@
 		F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeInputSample.swift; sourceTree = "<group>"; };
 		F9TESTREF10AA0010AA0010A /* ScratchLabDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScratchLabDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDBF73D0049CA3C2C011273 /* TimecodeSignalDiagnosticsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSignalDiagnosticsTests.swift; sourceTree = "<group>"; };
+		FDF657B2C4F779F3F68B087E /* DemoAudioResolverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DemoAudioResolverTests.swift; sourceTree = "<group>"; };
 		GAN1000000GAN001GAN00001 /* GridAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/GridAnnotation.swift; sourceTree = "<group>"; };
 		GAN2010000GAN002GAN00001 /* GridAnnotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridAnnotationTests.swift; sourceTree = "<group>"; };
 		LFSA000000LFSA01LFSA0001 /* LaneFaderSpanAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneFaderSpanAdapterTests.swift; sourceTree = "<group>"; };
@@ -1189,14 +1185,10 @@
 				TCR000027TCR027TCR00001 /* TimecodeSignedRateExcursionStabilizerTests.swift */,
 				TSDTR001TSDTR001TSDTR001 /* TimecodeSignedRateDenseEstimatorTests.swift */,
 				DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */,
-				55E0AE8F56586D2CFDAB1998 /* LivePerformedNotationTrackerTests.swift */,
-				63691DBB63BF90526963B487 /* MacCameraPreviewViewTests.swift */,
-				43FAC91040FD8593E6573BE8 /* DemoAudioResolverTests.swift */,
-				2D4E158B802E707DC21AF3D6 /* CalibrationCameraOverlayTests.swift */,
-				34976142FFE8ED14D0F144D9 /* LivePerformedNotationTrackerTests.swift */,
-				9E369E7A6BF30795195834EB /* MacCameraPreviewViewTests.swift */,
-				C8B18E0C932BA7E1F03A1A41 /* DemoAudioResolverTests.swift */,
-				5883956FBB6C0178A19E2462 /* CalibrationCameraOverlayTests.swift */,
+				0C63B14E9A67BCD33D3E122B /* LivePerformedNotationTrackerTests.swift */,
+				D62536817BC9DBF5EB5DB1E1 /* MacCameraPreviewViewTests.swift */,
+				FDF657B2C4F779F3F68B087E /* DemoAudioResolverTests.swift */,
+				CD29626A6524ED750E9DB318 /* CalibrationCameraOverlayTests.swift */,
 			);
 			path = ScratchLabDesktopTests;
 			sourceTree = "<group>";
@@ -2432,10 +2424,10 @@
 				TCT000010TCT010TCT00001 /* TimecodeSignedRateExcursionStabilizerTests.swift in Sources */,
 				TSDT0001TSDT0001TSDT0001 /* TimecodeSignedRateDenseEstimatorTests.swift in Sources */,
 				DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */,
-				8E62200AF78F971ABA150C12 /* LivePerformedNotationTrackerTests.swift in Sources */,
-				095BCF02912937C6F5C70E6B /* MacCameraPreviewViewTests.swift in Sources */,
-				001612E92ED99CAA4694DEC0 /* DemoAudioResolverTests.swift in Sources */,
-				959BB77FFFCF7CDB35342873 /* CalibrationCameraOverlayTests.swift in Sources */,
+				AF5D9C2247472C52F3D1D981 /* LivePerformedNotationTrackerTests.swift in Sources */,
+				60364B2C9AC93AB752507768 /* MacCameraPreviewViewTests.swift in Sources */,
+				E385D44674BCF69C6FA51E28 /* DemoAudioResolverTests.swift in Sources */,
+				4FDACB5016CD4B02FDB66CAE /* CalibrationCameraOverlayTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
