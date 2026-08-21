@@ -1535,7 +1535,7 @@ struct MacAnalyzerView: View {
         } label: {
             cameraDisclosureRow(
                 title: "Camera / visual guide",
-                subtitle: showCaptureCamera ? "Plain preview below · no overlays" : "Optional visual guide",
+                subtitle: showCaptureCamera ? "Live preview below · calibration boxes may appear" : "Optional visual guide",
                 status: showCaptureCamera ? "OPEN" : "CLOSED",
                 statusColor: showCaptureCamera ? ScratchLabDesign.Sem.textAccent : ScratchLabDesign.Sem.textSecondary
             )
