@@ -83,6 +83,7 @@
 		A1000005 /* Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* Scratch.swift */; };
 		A1000006 /* GameState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* GameState.swift */; };
 		A1000007 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* AudioEngine.swift */; };
+		IHRA0000000IHRA0SOURCE /* iOSAudioHardwareRouteAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = IHRA0000000IHRA0FILEREF /* iOSAudioHardwareRouteAdapter.swift */; };
 		A1000008 /* SampleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000008 /* SampleManager.swift */; };
 		A1000009 /* BackingTrackManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000009 /* BackingTrackManager.swift */; };
 		A1000010 /* EquipmentDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* EquipmentDetector.swift */; };
@@ -213,6 +214,9 @@
 		DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */; };
 		DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
 		DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
+		AHRSIOS0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */; };
+		AHRSMAC0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */; };
+		AHRSTEST001AHRSTESTSRC /* AudioHardwareRouteStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AHRSTEST000AHRSTESTREF /* AudioHardwareRouteStateTests.swift */; };
 		DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */; };
 		DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVST000000DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift */; };
 		DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */; };
@@ -645,6 +649,7 @@
 		A2000005 /* Scratch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scratch.swift; sourceTree = "<group>"; };
 		A2000006 /* GameState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameState.swift; sourceTree = "<group>"; };
 		A2000007 /* AudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngine.swift; sourceTree = "<group>"; };
+		IHRA0000000IHRA0FILEREF /* iOSAudioHardwareRouteAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iOSAudioHardwareRouteAdapter.swift; sourceTree = "<group>"; };
 		A2000008 /* SampleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleManager.swift; sourceTree = "<group>"; };
 		A2000009 /* BackingTrackManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackingTrackManager.swift; sourceTree = "<group>"; };
 		A2000010 /* EquipmentDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquipmentDetector.swift; sourceTree = "<group>"; };
@@ -930,6 +935,8 @@
 		SPCT000000SPCT01SPCT0001 /* ScratchPerformanceComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPerformanceComparisonTests.swift; sourceTree = "<group>"; };
 		SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerUserMixerGainTests.swift; sourceTree = "<group>"; };
 		SPMT0001FREF /* ScratchSamplePlaybackControllerMIDIPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSamplePlaybackControllerMIDIPlatterTests.swift; sourceTree = "<group>"; };
+		AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioHardwareRouteState.swift; sourceTree = "<group>"; };
+		AHRSTEST000AHRSTESTREF /* AudioHardwareRouteStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHardwareRouteStateTests.swift; sourceTree = "<group>"; };
 		SPTR0001FREF /* ScratchPlatterTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTracker.swift; sourceTree = "<group>"; };
 		SPTR0002FREF /* ScratchPlatterTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPlatterTrackerTests.swift; sourceTree = "<group>"; };
 		SQA0000000SQA001SQA00001 /* SessionQualityAnalyzer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionQualityAnalyzer.swift; sourceTree = "<group>"; };
@@ -1079,6 +1086,7 @@
 				PHR2010000PHR002PHR00001 /* PhraseTests.swift */,
 				ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */,
 				PTS2010000PTS002PTS00001 /* PhraseTimingSummaryTests.swift */,
+				AHRSTEST000AHRSTESTREF /* AudioHardwareRouteStateTests.swift */,
 				APS2010000APS002APS00001 /* AudioPhraseSummaryTests.swift */,
 				APG2010000APG002APG00001 /* AudioPhraseGridProjectionTests.swift */,
 				TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */,
@@ -1343,6 +1351,7 @@
 				A2000005 /* Scratch.swift */,
 				A2000006 /* GameState.swift */,
 				D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */,
+				AHRS0000000AHRS0FILEREF /* AudioHardwareRouteState.swift */,
 				SPCM000000SPCM01SPCM0001 /* ScratchPerformanceComparison.swift */,
 				SGAM000000SGAM01SGAM0001 /* ScratchGameplayAttempt.swift */,
 				PGCO000000PGCO01PGCO0001 /* PracticeGameplayCoordinator.swift */,
@@ -1427,6 +1436,7 @@
 			isa = PBXGroup;
 			children = (
 				A2000007 /* AudioEngine.swift */,
+				IHRA0000000IHRA0FILEREF /* iOSAudioHardwareRouteAdapter.swift */,
 				A2000008 /* SampleManager.swift */,
 				A2000009 /* BackingTrackManager.swift */,
 				A2000015 /* ScratchAnalyzer.swift */,
@@ -2104,6 +2114,7 @@
 				TCA000026TCA026TCA00001 /* TimecodeSignedRateExcursionStabilizer.swift in Sources */,
 				TSDEA001TSDEA001TSDEA001 /* TimecodeSignedRateDenseEstimator.swift in Sources */,
 				DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
+				AHRSMAC0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */,
 				SCV0MAC001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 				DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */,
 				DVSL0MAC001DVS001DVSL0001 /* DVSLiveLogger.swift in Sources */,
@@ -2211,6 +2222,7 @@
 				A1000020 /* ScratchFormulaParser.swift in Sources */,
 				A1000021 /* ScratchFormulaRenderer.swift in Sources */,
 				A1000007 /* AudioEngine.swift in Sources */,
+				IHRA0000000IHRA0SOURCE /* iOSAudioHardwareRouteAdapter.swift in Sources */,
 				A1000008 /* SampleManager.swift in Sources */,
 				A1000009 /* BackingTrackManager.swift in Sources */,
 				A1000010 /* EquipmentDetector.swift in Sources */,
@@ -2285,6 +2297,7 @@
 				TCB000026TCB026TCB00001 /* TimecodeSignedRateExcursionStabilizer.swift in Sources */,
 				TSDEB001TSDEB001TSDEB001 /* TimecodeSignedRateDenseEstimator.swift in Sources */,
 				DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */,
+				AHRSIOS0000AHRS0SOURCE /* AudioHardwareRouteState.swift in Sources */,
 				SCV0IOS001SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift in Sources */,
 			);
 		};
@@ -2424,6 +2437,7 @@
 				TCT000010TCT010TCT00001 /* TimecodeSignedRateExcursionStabilizerTests.swift in Sources */,
 				TSDT0001TSDT0001TSDT0001 /* TimecodeSignedRateDenseEstimatorTests.swift in Sources */,
 				DVST000001DVS001DVST0001 /* DVSControlVinylAnalyzerTests.swift in Sources */,
+				AHRSTEST001AHRSTESTSRC /* AudioHardwareRouteStateTests.swift in Sources */,
 				AF5D9C2247472C52F3D1D981 /* LivePerformedNotationTrackerTests.swift in Sources */,
 				60364B2C9AC93AB752507768 /* MacCameraPreviewViewTests.swift in Sources */,
 				E385D44674BCF69C6FA51E28 /* DemoAudioResolverTests.swift in Sources */,

@@ -56,6 +56,7 @@ class AudioEngine: ObservableObject {
     private var inputNode: AVAudioInputNode?
     private var playerNode: AVAudioPlayerNode?
     private var isInputTapInstalled = false
+    private let hardwareRouteAdapter = iOSAudioHardwareRouteAdapter()
     
     // Analysis buffers
     private var analysisBuffer: [Float] = []
@@ -73,6 +74,7 @@ class AudioEngine: ObservableObject {
     @Published var activeInputName: String = "Microphone"
     @Published var scratchMotionDirection: ScratchMotionDirection = .neutral
     @Published var scratchMotionFeedback: ScratchMotionFeedback?
+    @Published private(set) var audioHardwareRouteState: AudioHardwareRouteState = .unavailable
 
     // User-visible audio error surface. Set on every session/engine/
     // permission failure path so the UI can show something instead of a
@@ -192,6 +194,8 @@ class AudioEngine: ObservableObject {
         let activePort = session.currentRoute.inputs.first
         activeInputName = displayName(for: activePort)
 
+        publishAudioHardwareRouteState(isInputActive: false, signalLevel: 0)
+
         guard let activePort else { return }
 
         switch activePort.portType {
@@ -202,6 +206,23 @@ class AudioEngine: ObservableObject {
         default:
             break
         }
+    }
+
+    private func publishAudioHardwareRouteState(
+        isInputActive: Bool,
+        signalLevel: Float
+    ) {
+        audioHardwareRouteState = hardwareRouteAdapter.refresh(
+            session: AVAudioSession.sharedInstance(),
+            inputNode: inputNode,
+            isInputActive: isInputActive,
+            signalLevel: signalLevel
+        )
+    }
+
+    private func publishInputActivity(isActive: Bool, signalLevel: Float) {
+        hardwareRouteAdapter.updateActivity(isActive: isActive, signalLevel: signalLevel)
+        audioHardwareRouteState = hardwareRouteAdapter.routeState
     }
 
     var hasExternalPracticeInput: Bool {
@@ -354,6 +375,7 @@ class AudioEngine: ObservableObject {
         playerNode = AVAudioPlayerNode()
         
         guard let input = inputNode, let player = playerNode else { return }
+        publishAudioHardwareRouteState(isInputActive: false, signalLevel: 0)
         
         // Attach nodes
         engine.attach(player)
@@ -441,6 +463,7 @@ class AudioEngine: ObservableObject {
         isRunning = false
         isAnalyzing = false
         inputLevel = 0
+        publishInputActivity(isActive: false, signalLevel: 0)
         inputMonitorState = .micOff
         backingTrackStatus = .idle
         scratchMotionAnalyzer.reset()
@@ -451,7 +474,10 @@ class AudioEngine: ObservableObject {
     // MARK: - Audio Processing
     
     private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let packet = Self.audioPacket(from: buffer) else { return }
+        guard let packet = Self.audioPacket(
+            from: buffer,
+            selectedStereoPair: audioHardwareRouteState.selectedStereoPair
+        ) else { return }
         let samples = packet.samples
         guard !samples.isEmpty else { return }
 
@@ -470,7 +496,12 @@ class AudioEngine: ObservableObject {
         
         let now = Date()
         Task { @MainActor in
-            self.inputLevel = (self.inputLevel * 0.7) + (rms * 0.3)
+            let smoothedInputLevel = (self.inputLevel * 0.7) + (rms * 0.3)
+            self.inputLevel = smoothedInputLevel
+            self.publishInputActivity(
+                isActive: true,
+                signalLevel: smoothedInputLevel
+            )
             if rms > self.signalDetectionThreshold {
                 self.lastSignalDetectedAt = now
             }
@@ -662,7 +693,107 @@ class AudioEngine: ObservableObject {
         )
     }
 
-    private static func audioPacket(from buffer: AVAudioPCMBuffer) -> InputAudioPacket? {
+    /// Decodes one channel's raw PCM into normalized `Float` samples. Shared
+    /// by the multichannel-aware paths below so format handling (float32,
+    /// int16, int32) stays in one place.
+    private static func rawFloatSamples(
+        from audioBuffer: AudioBuffer,
+        isFloat: Bool,
+        bitsPerChannel: Int
+    ) -> [Float]? {
+        guard let rawData = audioBuffer.mData else { return nil }
+
+        if isFloat && bitsPerChannel == 32 {
+            let samples = rawData.assumingMemoryBound(to: Float.self)
+            let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
+            return Array(UnsafeBufferPointer(start: samples, count: sampleCount))
+        } else if bitsPerChannel == 16 {
+            let samples = rawData.assumingMemoryBound(to: Int16.self)
+            let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int16>.size
+            return (0..<sampleCount).map { Float(samples[$0]) / Float(Int16.max) }
+        } else if bitsPerChannel == 32 {
+            let samples = rawData.assumingMemoryBound(to: Int32.self)
+            let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int32>.size
+            return (0..<sampleCount).map { Float(samples[$0]) / Float(Int32.max) }
+        }
+        return nil
+    }
+
+    /// Extracts one stereo pair's left/right samples directly from the
+    /// input buffer's per-channel PCM, without downmixing any other channel
+    /// first. Handles both interleaved (single `AudioBuffer`, N channels
+    /// per frame) and non-interleaved (one `AudioBuffer` per channel)
+    /// layouts. Returns `nil` safely — never traps — if the buffer is
+    /// narrower than the pair requires or carries no decodable PCM. For a
+    /// 14-channel RANE ONE MKII, selecting pair "3/4" extracts hardware
+    /// channel indices 2 and 3 (zero-based).
+    static func extractStereoPair(
+        from buffer: AVAudioPCMBuffer,
+        pair: AudioHardwareRouteState.StereoPair
+    ) -> (left: [Float], right: [Float])? {
+        let asbd = buffer.format.streamDescription.pointee
+        let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bitsPerChannel = Int(asbd.mBitsPerChannel)
+        let channelCount = max(1, Int(asbd.mChannelsPerFrame))
+
+        guard pair.secondChannelIndex < channelCount else { return nil }
+
+        if isNonInterleaved {
+            guard pair.secondChannelIndex < buffers.count,
+                  let left = rawFloatSamples(
+                    from: buffers[pair.firstChannelIndex],
+                    isFloat: isFloat,
+                    bitsPerChannel: bitsPerChannel
+                  ),
+                  let right = rawFloatSamples(
+                    from: buffers[pair.secondChannelIndex],
+                    isFloat: isFloat,
+                    bitsPerChannel: bitsPerChannel
+                  ) else {
+                return nil
+            }
+            let frameCount = min(left.count, right.count)
+            guard frameCount > 0 else { return nil }
+            return (Array(left.prefix(frameCount)), Array(right.prefix(frameCount)))
+        }
+
+        guard let audioBuffer = buffers.first,
+              let interleaved = rawFloatSamples(
+                from: audioBuffer,
+                isFloat: isFloat,
+                bitsPerChannel: bitsPerChannel
+              ) else {
+            return nil
+        }
+        return pair.extractInterleaved(interleaved, channelCount: channelCount)
+    }
+
+    private static func audioPacket(
+        from buffer: AVAudioPCMBuffer,
+        selectedStereoPair: AudioHardwareRouteState.StereoPair?
+    ) -> InputAudioPacket? {
+        // A selected pair means the route adapter has identified a specific
+        // stereo pair on this hardware (for example "3/4" on a multichannel
+        // USB interface). Extract just those two channels before any
+        // downmixing so unrelated channels on the same device never bleed
+        // into analysis.
+        if let selectedStereoPair,
+           let extracted = extractStereoPair(from: buffer, pair: selectedStereoPair) {
+            let frameCount = min(extracted.left.count, extracted.right.count)
+            guard frameCount > 0 else { return nil }
+            var monoSamples = [Float](repeating: 0, count: frameCount)
+            for frame in 0..<frameCount {
+                monoSamples[frame] = (extracted.left[frame] + extracted.right[frame]) * 0.5
+            }
+            return InputAudioPacket(samples: monoSamples, sampleRate: buffer.format.sampleRate)
+        }
+
+        // No selected pair — for example a genuine single-channel
+        // microphone with no stereo pair to select. Fall back to
+        // downmixing whatever channels are present, matching ScratchLab's
+        // original route-unaware behaviour for that case.
         let asbd = buffer.format.streamDescription.pointee
 
         let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
@@ -673,21 +804,12 @@ class AudioEngine: ObservableObject {
         var channelSamples: [[Float]] = []
 
         for audioBuffer in buffers {
-            guard let rawData = audioBuffer.mData else { continue }
-
-            if isFloat && bitsPerChannel == 32 {
-                let samples = rawData.assumingMemoryBound(to: Float.self)
-                let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
-                channelSamples.append(Array(UnsafeBufferPointer(start: samples, count: sampleCount)))
-            } else if bitsPerChannel == 16 {
-                let samples = rawData.assumingMemoryBound(to: Int16.self)
-                let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int16>.size
-                channelSamples.append((0..<sampleCount).map { Float(samples[$0]) / Float(Int16.max) })
-            } else if bitsPerChannel == 32 {
-                let samples = rawData.assumingMemoryBound(to: Int32.self)
-                let sampleCount = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int32>.size
-                channelSamples.append((0..<sampleCount).map { Float(samples[$0]) / Float(Int32.max) })
-            }
+            guard let decoded = rawFloatSamples(
+                from: audioBuffer,
+                isFloat: isFloat,
+                bitsPerChannel: bitsPerChannel
+            ) else { continue }
+            channelSamples.append(decoded)
         }
 
         guard !channelSamples.isEmpty else { return nil }

@@ -1,3 +1,23 @@
+- [x] iOS DVS + MIDI parity — Tasks 1/2/3/4/6: hardware route adapter + multichannel PCM routing
+  - Added `iOSAudioHardwareRouteAdapter` (new file, iOS target only) as the dedicated AVAudioSession → `AudioHardwareRouteState` bridge; `AudioEngine` now delegates to it instead of an inline private observer struct.
+  - Added `StereoPair.resolveSelection(availablePairs:remembered:)` (default-first / restore-remembered / safe-nil-fallback) and `StereoPair.extractInterleaved(_:channelCount:)` (pure, testable channel extraction) to `AudioHardwareRouteState`.
+  - `AudioEngine` now extracts the selected stereo pair from the raw PCM buffer *before* downmixing (`extractStereoPair(from:pair:)`), instead of always downmixing every channel. A 14-channel RANE-style device selecting "3/4" now reads exactly hardware indices 2/3; mono/stereo mic behavior is unchanged (verified: falls back to the prior full-downmix path when no pair is selected).
+  - DEBUG-only "Audio Route Changed" diagnostics moved into the adapter, gated on actual metadata change only.
+  - Added 8 new tests (selection defaulting/remembering/fallback, interleaved extraction incl. the RANE 3/4 example, malformed-input safety). All 18 tests passed on the macOS test host.
+  - Verification: macOS, iPhone 17, iPad (A16), and Apple Watch Series 11 (42mm) simulator Debug builds succeeded; `plutil -lint` and `git diff --check` passed.
+  - Explicitly not done: no live DVS/turntable validation (no hardware available), no CoreMIDI, no DVS decoding, no UI (no device-picker view), no commit. Tasks 5/7–9 outside this phase's task list are not applicable here (Task 5 = no-regressions requirement, satisfied by design; Tasks 7–9 not defined in this phase's brief).
+
+- [x] iOS DVS + MIDI parity — Task 2 only: truthful iOS USB audio hardware discovery
+  - Added an iOS route observer beside the existing `AudioEngine` analysis path. It publishes the active input's name, UID, transport, sample rate, channels, stereo pairs, PCM callback activity, and signal level into `AudioHardwareRouteState` using `AVAudioSession.availableInputs`, the active port/channel metadata, and `AVAudioInputNode.inputFormat(forBus:)`.
+  - Added mocked-description coverage for no input, mono, stereo, multichannel, and invalid channel metadata. DEBUG logging reports hardware identity/format only when those fields change.
+  - Verification: 10/10 focused tests passed in each of two test-plan configurations; macOS, iPhone 17, iPad (A16), and Apple Watch Series 11 simulator builds succeeded. Tasks 3–9 remain unstarted.
+
+- [x] iOS DVS + MIDI parity — Task 1 only: shared audio hardware route state
+  - Added a platform-neutral `AudioHardwareRouteState` value model for device identity, transport, sample rate, channel count, available/selected stereo pairs, input activity, and normalized signal level.
+  - Added deterministic adjacent stereo-pair derivation and validation/normalization tests. The model contains no AVAudioSession, CoreAudio, MIDI, engine, or UI code.
+  - Verification: focused tests passed 5/5 in each of the two configured test-plan runs; macOS, iPhone 17, iPad (A16), and Apple Watch Series 11 simulator builds succeeded.
+  - Task 2 subsequently completed; Tasks 3–9 remain unstarted.
+
 - [x] ASC beta compiler-warning audit and behavior-preserving cleanup
   - Baseline: clean macOS Debug emitted 29 warning lines: 18 distinct compiler diagnostics (duplicated where shared sources compiled into multiple targets) plus one App Intents metadata-tool notice. Cross-destination builds exposed 6 additional distinct compiler diagnostics and one Watch asset-catalog warning, for 24 distinct compiler warnings and 2 distinct non-compiler warnings overall.
   - Fixed: explicit Combine imports; Sendable conformance corrected without `@unchecked Sendable`; DVS callback ownership made explicitly strong with no retain cycle; current SwiftUI `onChange` closures; side-effect-free unused locals removed; container-relative camera preview sizing; pure DEBUG WAV writer marked narrowly `nonisolated`; deprecated Game Center presentation migrated to `GKAccessPoint`; invalid Watch accent-color build setting removed.
