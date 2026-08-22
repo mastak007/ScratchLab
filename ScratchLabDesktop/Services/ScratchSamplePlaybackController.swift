@@ -3557,11 +3557,7 @@ final class ScratchSamplePlaybackController {
     ]
 
     private func wavURL(for sampleID: String) -> URL? {
-        guard let fileName = Self.sampleFileNames[sampleID],
-              let root = Bundle.main.resourceURL else { return nil }
-        let url = root.appendingPathComponent(fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url
+        ScratchSampleResolver.url(for: sampleID)
     }
 
     static var knownSampleIDs: Set<String> {

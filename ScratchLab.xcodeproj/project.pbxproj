@@ -255,6 +255,12 @@
 		MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0FREF0001 /* MIDIFaderCurve.swift */; };
 		MIDCRV0TBF0001 /* MIDIFaderCurveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */; };
 		MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */; };
+		MIDPRS0IOS0001 /* MIDIChannelMessageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */; };
+		MIDPRS0MAC0001 /* MIDIChannelMessageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */; };
+		MIDRDY0IOS0001 /* MIDIReadinessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDRDY0FREF0001 /* MIDIReadinessState.swift */; };
+		MIDRDY0MAC0001 /* MIDIReadinessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDRDY0FREF0001 /* MIDIReadinessState.swift */; };
+		IOSMID0IOS0001 /* iOSMIDIManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = IOSMID0FREF0001 /* iOSMIDIManager.swift */; };
+		IOSLRN0IOS0001 /* iOSMIDILearnCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = IOSLRN0FREF0001 /* iOSMIDILearnCoordinator.swift */; };
 		MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */; };
 		MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */; };
 		MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */; };
@@ -273,6 +279,10 @@
 		MIDREG0MAC0005 /* MIDIVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0005 /* MIDIVerification.swift */; };
 		MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0006 /* ParsedMIDIMessage.swift */; };
 		MIDREG0MAC0007 /* MIDILearnedMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0007 /* MIDILearnedMapping.swift */; };
+		MIDAR0IOS0001 /* MIDIActionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDAR0FREF0001 /* MIDIActionResolver.swift */; };
+		MIDAR0MAC0001 /* MIDIActionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDAR0FREF0001 /* MIDIActionResolver.swift */; };
+		SMPR0000IOS0001 /* ScratchSampleResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMPR0000FREF0001 /* ScratchSampleResolver.swift */; };
+		SMPR0000MAC0001 /* ScratchSampleResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMPR0000FREF0001 /* ScratchSampleResolver.swift */; };
 		MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */; };
 		MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */; };
 		MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */; };
@@ -780,6 +790,10 @@
 		MIDCRV0FREF0001 /* MIDIFaderCurve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurve.swift; sourceTree = "<group>"; };
 		MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurveTests.swift; sourceTree = "<group>"; };
 		MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPacketBoundsCrashFixTests.swift; sourceTree = "<group>"; };
+		MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIChannelMessageParser.swift; sourceTree = "<group>"; };
+		MIDRDY0FREF0001 /* MIDIReadinessState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIReadinessState.swift; sourceTree = "<group>"; };
+		IOSMID0FREF0001 /* iOSMIDIManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSMIDIManager.swift; sourceTree = "<group>"; };
+		IOSLRN0FREF0001 /* iOSMIDILearnCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSMIDILearnCoordinator.swift; sourceTree = "<group>"; };
 		MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIUserMixerGainTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMappingTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnEngineTests.swift; sourceTree = "<group>"; };
@@ -791,6 +805,8 @@
 		MIDREG0FREF0005 /* MIDIVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerification.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0006 /* ParsedMIDIMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParsedMIDIMessage.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0007 /* MIDILearnedMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMapping.swift; sourceTree = "<group>"; };
+		MIDAR0FREF0001 /* MIDIActionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIActionResolver.swift; sourceTree = "<group>"; };
+		SMPR0000FREF0001 /* ScratchSampleResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSampleResolver.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistryTests.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerificationModelTests.swift; sourceTree = "<group>"; };
 		MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPlatterContinuousDrive.swift; sourceTree = "<group>"; };
@@ -1291,6 +1307,7 @@
 				A5000005 /* Models */,
 				A5000009 /* Formula */,
 				A5000006 /* Audio */,
+				IOSMID0GRP0001 /* MIDI */,
 				A5000007 /* Detection */,
 				A5000050 /* ML */,
 				A5000008 /* Services */,
@@ -1432,8 +1449,17 @@
 				SCV0000000SCV001SCV00001 /* SeratoControlVinylAnalyzer.swift */,
 				SBPMGRP00001000 /* ScratchSoundBank */,
 				CI00GRP00001 /* ControllerInput */,
+				SMPR0000GRP00001 /* Samples */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		SMPR0000GRP00001 /* Samples */ = {
+			isa = PBXGroup;
+			children = (
+				SMPR0000FREF0001 /* ScratchSampleResolver.swift */,
+			);
+			path = Samples;
 			sourceTree = "<group>";
 		};
 		A5000006 /* Audio */ = {
@@ -1581,10 +1607,22 @@
 		CI00GRP00001 /* ControllerInput */ = {
 			isa = PBXGroup;
 			children = (
+				MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */,
+				MIDRDY0FREF0001 /* MIDIReadinessState.swift */,
+				MIDAR0FREF0001 /* MIDIActionResolver.swift */,
 				MIDREG0GRP0001 /* Registry */,
 				CTLPRF0GRP0001 /* Profile */,
 			);
 			path = ControllerInput;
+			sourceTree = "<group>";
+		};
+		IOSMID0GRP0001 /* MIDI */ = {
+			isa = PBXGroup;
+			children = (
+				IOSMID0FREF0001 /* iOSMIDIManager.swift */,
+				IOSLRN0FREF0001 /* iOSMIDILearnCoordinator.swift */,
+			);
+			path = MIDI;
 			sourceTree = "<group>";
 		};
 		CTLPRF0GRP0001 /* Profile */ = {
@@ -2024,8 +2062,12 @@
 				MIDREG0MAC0004 /* MIDIHardwareRegistry.swift in Sources */,
 				MIDREG0MAC0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */,
+				MIDPRS0MAC0001 /* MIDIChannelMessageParser.swift in Sources */,
+				MIDRDY0MAC0001 /* MIDIReadinessState.swift in Sources */,
 				MIDREG0MAC0007 /* MIDILearnedMapping.swift in Sources */,
 				MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */,
+				MIDAR0MAC0001 /* MIDIActionResolver.swift in Sources */,
+				SMPR0000MAC0001 /* ScratchSampleResolver.swift in Sources */,
 				CTLPRF0MAC0001 /* ControllerProfile.swift in Sources */,
 				CTLPRF0MAC0002 /* ControllerProfileCatalog.swift in Sources */,
 				CTLPRF0MAC0003 /* DDJFlx10Profile.swift in Sources */,
@@ -2153,8 +2195,12 @@
 				MIDREG0IOS0004 /* MIDIHardwareRegistry.swift in Sources */,
 				MIDREG0IOS0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */,
+				MIDPRS0IOS0001 /* MIDIChannelMessageParser.swift in Sources */,
+				MIDRDY0IOS0001 /* MIDIReadinessState.swift in Sources */,
 				MIDREG0IOS0007 /* MIDILearnedMapping.swift in Sources */,
 				MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */,
+				MIDAR0IOS0001 /* MIDIActionResolver.swift in Sources */,
+				SMPR0000IOS0001 /* ScratchSampleResolver.swift in Sources */,
 				CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */,
 				CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */,
 				CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */,
@@ -2227,6 +2273,8 @@
 				A1000020 /* ScratchFormulaParser.swift in Sources */,
 				A1000021 /* ScratchFormulaRenderer.swift in Sources */,
 				A1000007 /* AudioEngine.swift in Sources */,
+				IOSMID0IOS0001 /* iOSMIDIManager.swift in Sources */,
+				IOSLRN0IOS0001 /* iOSMIDILearnCoordinator.swift in Sources */,
 				IHRA0000000IHRA0SOURCE /* iOSAudioHardwareRouteAdapter.swift in Sources */,
 				A1000008 /* SampleManager.swift in Sources */,
 				A1000009 /* BackingTrackManager.swift in Sources */,

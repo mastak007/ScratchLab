@@ -31,6 +31,9 @@ private struct RootContainerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var gameState = GameState()
     @StateObject private var audioEngine = AudioEngine()
+    @StateObject private var midiManager = IOSMIDIManager()
+    @StateObject private var midiLearnCoordinator = IOSMIDILearnCoordinator()
+    @StateObject private var midiControllerDispatcher = IOSMIDIControllerDispatcher()
     @StateObject private var progressManager = ProgressManager()
     @StateObject private var practiceBeatStore = PracticeBeatStore()
     @StateObject private var companionRelayBroadcaster = CompanionCameraBroadcaster()
@@ -42,12 +45,16 @@ private struct RootContainerView: View {
         ContentView()
             .environmentObject(gameState)
             .environmentObject(audioEngine)
+            .environmentObject(midiManager)
+            .environmentObject(midiLearnCoordinator)
+            .environmentObject(midiControllerDispatcher)
             .environmentObject(progressManager)
             .environmentObject(practiceBeatStore)
             .environmentObject(companionRelayBroadcaster)
             .environmentObject(watchMotionCaptureStore)
             .environmentObject(sessionUploadManager)
             .onAppear {
+                configureMIDILearn()
                 configureWatchRelay()
                 refreshWatchCapturePipelineIfNeeded()
                 sessionUploadManager.refresh()
@@ -55,6 +62,9 @@ private struct RootContainerView: View {
             .onChange(of: companionRelayBroadcaster.pendingWatchControlCommand) { _, command in
                 guard let command else { return }
                 handleRemoteWatchControlCommand(command)
+            }
+            .onChange(of: midiManager.sources) { _, _ in
+                configureMIDILearnDevice()
             }
             .onChange(of: companionRelayBroadcaster.connectedPeerNames) { _, peers in
                 guard !peers.isEmpty, let latestCapture = watchMotionCaptureStore.importedSessions.first else { return }
@@ -72,6 +82,24 @@ private struct RootContainerView: View {
                 refreshWatchCapturePipelineIfNeeded()
                 sessionUploadManager.refresh()
             }
+    }
+
+    private func configureMIDILearn() {
+        midiManager.onMessage = { [weak midiLearnCoordinator, weak midiControllerDispatcher] message in
+            midiLearnCoordinator?.receive(message)
+            midiControllerDispatcher?.receive(message)
+        }
+        configureMIDILearnDevice()
+    }
+
+    private func configureMIDILearnDevice() {
+        guard midiManager.sources.count == 1, let source = midiManager.sources.first else {
+            midiLearnCoordinator.clearDeviceSelection()
+            midiControllerDispatcher.updateMapping(deviceIdentifier: nil)
+            return
+        }
+        midiLearnCoordinator.selectDevice(id: source.id, name: source.name)
+        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
     }
 
     private func configureWatchRelay() {

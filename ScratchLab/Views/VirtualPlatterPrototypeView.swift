@@ -33,7 +33,9 @@ struct VirtualPlatterPrototypeView: View {
     /// Motor transport. While on, the virtual record spins clockwise at a
     /// constant speed (advances record phase + the marker). Hand-scratch
     /// works whether this is on or off. Identical model in both modes.
-    @State private var isPlaying = false
+    /// Driven by the app-level MIDI dispatch (or the on-screen Play button),
+    /// so a controller PLAY flips it too.
+    @EnvironmentObject private var controller: IOSMIDIControllerDispatcher
 
     /// THE single source of truth (record turns, 0.0 = 12 o'clock). The
     /// View owns and advances it; it drives the marker directly and is the
@@ -229,14 +231,14 @@ struct VirtualPlatterPrototypeView: View {
 
             Button(action: togglePlay) {
                 HStack(spacing: 8) {
-                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                    Text(isPlaying ? "Stop" : "Play")
+                    Image(systemName: controller.isPlaying ? "stop.fill" : "play.fill")
+                    Text(controller.isPlaying ? "Stop" : "Play")
                 }
                 .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.black)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
-                .background(isPlaying ? Color(hex: "EF4444") : Color(hex: "22C55E"),
+                .background(controller.isPlaying ? Color(hex: "EF4444") : Color(hex: "22C55E"),
                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
@@ -436,7 +438,7 @@ struct VirtualPlatterPrototypeView: View {
         // held still, OR the motor driving it with the finger up. Held still
         // / finger up with the motor off ⇒ not moving ⇒ the audio freezes.
         let fingerMoving = platter.isDragging && platter.direction != .idle
-        let motorMoving = !platter.isDragging && allowMotor && isPlaying
+        let motorMoving = !platter.isDragging && allowMotor && controller.isPlaying
         let recordIsMoving = fingerMoving || motorMoving
 
         if platter.isDragging {
@@ -446,7 +448,7 @@ struct VirtualPlatterPrototypeView: View {
                 recordPhase += delta
             }
             // else: gripped but still → HOLD (no phase change), motor off.
-        } else if allowMotor && isPlaying {
+        } else if allowMotor && controller.isPlaying {
             recordPhase += motorTurnsPerTick
         }
         // else: finger up, motor off → frozen.
@@ -469,8 +471,8 @@ struct VirtualPlatterPrototypeView: View {
     }
 
     private func togglePlay() {
-        isPlaying.toggle()
-        if isPlaying { cueRecord() }
+        controller.togglePlaying()
+        if controller.isPlaying { cueRecord() }
     }
 
     private func startStage() {
@@ -776,24 +778,33 @@ final class VirtualPlatterAudio: NSObject, ObservableObject, AVAudioPlayerDelega
         player.enableRate = false      // no pitch/time warp — original ahhh
         player.numberOfLoops = 0       // one-shot
         player.delegate = self         // detect natural end of the one-shot
-        player.prepareToPlay()
+        // prepareToPlay is deferred to start(): it warms the hardware decode
+        // buffers and can block, so it runs off the main thread there.
         self.player = player
     }
 
     func start() {
         #if canImport(UIKit)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, options: [.mixWithOthers])
-        try? session.setActive(true)
-        #endif
+        // The synchronous AVAudioSession configuration has no async overload
+        // that resolves here, so move the blocking work off the main thread.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try? session.setActive(true)
+            self?.player?.prepareToPlay()
+        }
+        #else
         player?.prepareToPlay()
+        #endif
     }
 
     func stop() {
         player?.stop()
         #if canImport(UIKit)
-        try? AVAudioSession.sharedInstance().setActive(false,
-            options: [.notifyOthersOnDeactivation])
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? AVAudioSession.sharedInstance().setActive(false,
+                options: [.notifyOthersOnDeactivation])
+        }
         #endif
     }
 
@@ -848,6 +859,7 @@ struct VirtualPlatterPrototypeView_Previews: PreviewProvider {
         NavigationStack {
             VirtualPlatterPrototypeView()
         }
+        .environmentObject(IOSMIDIControllerDispatcher())
         .preferredColorScheme(.dark)
     }
 }
