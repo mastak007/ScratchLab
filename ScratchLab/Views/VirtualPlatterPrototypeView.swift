@@ -36,6 +36,9 @@ struct VirtualPlatterPrototypeView: View {
     /// Driven by the app-level MIDI dispatch (or the on-screen Play button),
     /// so a controller PLAY flips it too.
     @EnvironmentObject private var transport: TransportState
+    /// The app-level iOS scratch playback engine — receives platter position
+    /// observations from this view.
+    @EnvironmentObject private var playbackEngine: IOScratchPlaybackEngine
 
     /// THE single source of truth (record turns, 0.0 = 12 o'clock). The
     /// View owns and advances it; it drives the marker directly and is the
@@ -503,6 +506,15 @@ struct VirtualPlatterPrototypeView: View {
         // The single place the record phase advances (finger or motor).
         advanceRecord(allowMotor: true)
 
+        // Observe the current platter position into the scratch playback
+        // engine (data-flow only — no audio, no seeking).
+        let position = VirtualPlatterSampleMapper.platterPosition(
+            recordPhase: recordPhase,
+            direction: platter.direction,
+            velocity: Double(platter.angularVelocity)
+        )
+        playbackEngine.updatePlatterPosition(position)
+
         guard mode == .stage, stageRunning else { return }
         stageClock += 1.0 / 60.0
 
@@ -860,6 +872,7 @@ struct VirtualPlatterPrototypeView_Previews: PreviewProvider {
             VirtualPlatterPrototypeView()
         }
         .environmentObject(TransportState())
+        .environmentObject(IOScratchPlaybackEngine())
         .preferredColorScheme(.dark)
     }
 }

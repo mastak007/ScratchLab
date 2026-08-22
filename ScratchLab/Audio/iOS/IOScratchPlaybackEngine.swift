@@ -1,5 +1,5 @@
 // IOScratchPlaybackEngine.swift
-// ScratchLab — iOS Scratch Playback Engine (Phase 1 boundary)
+// ScratchLab — iOS Scratch Playback Engine (runtime boundary)
 //
 // iOS-specific scratch playback boundary. This is the platform-side sink for
 // resolved hot-cue triggers: the iOS MIDI dispatch resolves an action and calls
@@ -18,6 +18,15 @@ final class IOScratchPlaybackEngine: ObservableObject {
     /// The active hot-cue player. Retained so playback is not cut short when a
     /// fresh `AVAudioPlayer` would otherwise deallocate at the end of the call.
     private var hotCuePlayer: AVAudioPlayer?
+
+    /// The latest observed platter position. Stored only — Phase 2 is the
+    /// data-flow boundary; no sample seeking or audio changes yet.
+    private var currentPlatterPosition: PlatterPosition?
+
+    #if DEBUG
+    private var lastPlatterLogUptime: TimeInterval = -.infinity
+    private let platterLogInterval: TimeInterval = 0.5
+    #endif
 
     /// Load a scratch sample by ID. Phase 1 stub — full scratch loading is a
     /// later phase; the current runtime only performs one-shot hot-cue playback.
@@ -64,5 +73,19 @@ final class IOScratchPlaybackEngine: ObservableObject {
     /// Stop the current hot-cue playback.
     func stop() {
         hotCuePlayer?.stop()
+    }
+
+    /// Observe the latest platter position. Phase 2 stores it only — no sample
+    /// seeking, no audio changes, no transport changes. Full scratch playback
+    /// is a later phase.
+    func updatePlatterPosition(_ position: PlatterPosition) {
+        currentPlatterPosition = position
+        #if DEBUG
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastPlatterLogUptime >= platterLogInterval {
+            lastPlatterLogUptime = now
+            print("[SCRATCH-DEBUG] platter position received · phase=\(position.phase) direction=\(position.direction) velocity=\(position.velocity)")
+        }
+        #endif
     }
 }
