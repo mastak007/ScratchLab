@@ -66,6 +66,11 @@ struct PracticeModeView: View {
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
+    /// Live scratch-performance data feed — reads the RANE platter movement
+    /// this dispatcher already tracks for MIDI parity, so the Result
+    /// screen's MY PERFORMANCE notation panel has real evidence instead of
+    /// always resolving `.targetOnly`. See `practiceResultNotation` below.
+    @EnvironmentObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
 
     // Compact vertical size class is iPhone landscape (and small split-view).
     // Used only for surgical landscape adjustments — every branch keeps the
@@ -299,10 +304,19 @@ struct PracticeModeView: View {
         return decoderReportsValidTimecode
     }
 
+    // True only once AVAudioSession has actually observed a route (built-in
+    // mic, USB interface, whatever) — before that (pre-session, or a
+    // malformed/absent route) there is nothing truthful to call a
+    // "microphone" at all, so `micStatusTitle` must not default to one.
+    private var hasDetectedAudioHardware: Bool {
+        audioEngine.audioHardwareRouteState.deviceName != nil
+    }
+
     private var micStatusTitle: String {
         if isDVSReady { return "DVS Ready" }
         switch audioEngine.inputMonitorState {
         case .micOff:
+            guard hasDetectedAudioHardware else { return "No Input Connected" }
             return isUSBHardwareActive ? "USB Audio Off" : "Microphone Off"
         case .micLive:
             if isUSBHardwareActive {
@@ -322,6 +336,7 @@ struct PracticeModeView: View {
     private var micStatusIcon: String {
         switch audioEngine.inputMonitorState {
         case .micOff:
+            guard hasDetectedAudioHardware else { return "questionmark.circle" }
             return isUSBHardwareActive ? "cable.connector.slash" : "mic.slash.fill"
         case .micLive:
             return isUSBHardwareActive ? "cable.connector" : "mic.fill"
@@ -558,6 +573,7 @@ struct PracticeModeView: View {
                             inputSourceOptions: practiceInputSources,
                             activeInputName: audioEngine.activeInputName,
                             inputRouteHint: practiceInputHint,
+                            detectedUSBDeviceName: isUSBHardwareActive ? audioEngine.audioHardwareRouteState.deviceName : nil,
                             topSafeAreaInset: geometry.safeAreaInsets.top,
                             bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
                             onSelectInputSource: { source in audioEngine.selectInputSource(source) },
@@ -978,7 +994,7 @@ struct PracticeModeView: View {
         .padding(.vertical, 6)
         .background(Color.black.opacity(0.5), in: Capsule())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Microphone: \(micStatusTitle)")
+        .accessibilityLabel("Audio input: \(micStatusTitle)")
     }
 
     // Compact practice-beat toggle. When the user hasn't enabled a beat in
@@ -1313,6 +1329,7 @@ struct PracticeModeView: View {
         comboCompleted = false
         comboCompletionQueued = false
         sessionProgressPersisted = false
+        midiControllerDispatcher.resetCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
         sessionTipText = isComboChallengeMode
@@ -1431,6 +1448,7 @@ struct PracticeModeView: View {
         comboCompleted = false
         comboCompletionQueued = false
         sessionProgressPersisted = false
+        midiControllerDispatcher.resetCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
         sessionTipText = ""
@@ -1706,14 +1724,30 @@ struct PracticeModeView: View {
     }
 
     // The Result surface's notation evidence is capability-driven: the live
-    // mic Practice path captures sound and timing only, so its movement-event
-    // list is empty and `resolve` returns `.targetOnly`. The decision itself
-    // lives in `PracticeResultNotation.resolve` (pure, evidence-driven) — a
-    // future DVS/MIDI/camera input path that supplies movement events here
-    // lights up the real TARGET + MY PERFORMANCE comparison with no change
-    // to the result view.
+    // mic Practice path captures sound and timing only, so it has no
+    // movement evidence and `resolve` returns `.targetOnly`. When a RANE
+    // platter was used this attempt, `midiControllerDispatcher` already
+    // accumulated its CC6 telemetry (see `resetCapturedPlatterEvents` in
+    // `startSession`/`resetSession`); `platterMovementEvents` decodes it via
+    // the same shared `CaptureCore.derivePlatterMovementEvents` macOS's
+    // Practice/Review notation uses. The decision itself lives in
+    // `PracticeResultNotation.resolve` (pure, evidence-driven) — this is the
+    // "future DVS/MIDI/camera input path" the type's own doc comment
+    // anticipated; no change to the result view itself.
     private var practiceResultNotation: PracticeResultNotation {
-        PracticeResultNotation.resolve(performedMovementEvents: [])
+        let events = midiControllerDispatcher.platterMovementEvents
+        #if DEBUG
+        if !events.isEmpty {
+            print("[SCRATCH-DEBUG] practice received update · movementEvents=\(events.count)")
+        }
+        #endif
+        let resolved = PracticeResultNotation.resolve(performedMovementEvents: events)
+        #if DEBUG
+        if case .comparison = resolved {
+            print("[SCRATCH-DEBUG] notation renderer received performance data")
+        }
+        #endif
+        return resolved
     }
 
     private func registerComboHitIfNeeded(_ result: ScratchAnalysisResult) -> Bool {
@@ -2031,6 +2065,17 @@ private struct PracticeReadyOverlay: View {
     let onBack: () -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @EnvironmentObject private var midiManager: IOSMIDIManager
+    @EnvironmentObject private var midiLearnCoordinator: IOSMIDILearnCoordinator
+    @ObservedObject private var sampleManager = SampleManager.shared
+
+    private let faderActions: [MIDISemanticAction] = [
+        .crossfader, .leftUpfader, .rightUpfader
+    ]
+    private let hotCueActions: [MIDISemanticAction] = [
+        .hotCue1, .hotCue2, .hotCue3, .hotCue4,
+        .hotCue5, .hotCue6, .hotCue7, .hotCue8
+    ]
 
     private var presentation: ScratchNotationPanelPresentation {
         ScratchLabAdaptiveLayout.notationPresentation(isRegularWidth: horizontalSizeClass == .regular)
@@ -2094,6 +2139,8 @@ private struct PracticeReadyOverlay: View {
                                     statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
                                 }
 
+                                midiMappingCard
+
                                 openPracticeCard
 
                                 readyActions
@@ -2117,6 +2164,8 @@ private struct PracticeReadyOverlay: View {
                             statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
                         }
 
+                        midiMappingCard
+
                         openPracticeCard
 
                         readyActions
@@ -2127,6 +2176,146 @@ private struct PracticeReadyOverlay: View {
                 .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
             }
         }
+    }
+
+    private var midiMappingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("MIDI mapping")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(midiDeviceDetail)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                Spacer()
+                Circle()
+                    .fill(midiStatusColor)
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
+            }
+
+            ForEach(faderActions, id: \.rawValue) { action in
+                midiLearnRow(action)
+            }
+
+            DisclosureGroup("Hot cues") {
+                VStack(spacing: 8) {
+                    ForEach(hotCueActions, id: \.rawValue) { action in
+                        midiLearnRow(action)
+                    }
+                }
+                .padding(.top, 8)
+            }
+            .tint(.white)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+
+            if !midiLearnCoordinator.feedback.isEmpty {
+                Text(midiLearnCoordinator.feedback)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("midi-learn-feedback")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        }
+        .accessibilityIdentifier("midi-mapping-card")
+    }
+
+    private func midiLearnRow(_ action: MIDISemanticAction) -> some View {
+        let learned = midiLearnCoordinator.control(for: action)
+        let isLearning = midiLearnCoordinator.activeAction == action
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(action.displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(learned.map(mappingDetail) ?? "Not mapped")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                Spacer(minLength: 8)
+                if learned != nil {
+                    Button("Clear") { midiLearnCoordinator.clear(action) }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                Button(isLearning ? "Cancel" : (learned == nil ? "Learn" : "Relearn")) {
+                    if isLearning {
+                        midiLearnCoordinator.cancelLearning()
+                    } else {
+                        midiLearnCoordinator.startLearning(action)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(isLearning ? Color.orange : ScratchLabDesign.Sem.accent)
+                .disabled(!canLearnMIDI && !isLearning)
+                .accessibilityIdentifier("midi-learn-\(action.rawValue)")
+            }
+
+            if let learned, action.hotCueIndex != nil {
+                Picker("Scratch sample", selection: Binding(
+                    get: { learned.assignedSampleID ?? "" },
+                    set: { sampleID in
+                        midiLearnCoordinator.assignSample(
+                            sampleID.isEmpty ? nil : sampleID,
+                            to: action
+                        )
+                    }
+                )) {
+                    Text("No sample").tag("")
+                    ForEach(sampleManager.availableSamples) { sample in
+                        Text(sample.displayName).tag(sample.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(ScratchLabDesign.Sem.accent)
+                .accessibilityIdentifier("midi-sample-\(action.rawValue)")
+            }
+        }
+    }
+
+    private var canLearnMIDI: Bool { midiManager.sources.count == 1 }
+
+    private var midiDeviceDetail: String {
+        switch midiManager.sources.count {
+        case 0: return "Connect a controller to enable Learn"
+        case 1:
+            let name = midiManager.sources[0].name
+            return midiManager.readinessState == .receivingMessages
+                ? "\(name) · receiving messages"
+                : "\(name) · connected"
+        default: return "Multiple MIDI sources found; connect one to learn"
+        }
+    }
+
+    private var midiStatusColor: Color {
+        switch midiManager.readinessState {
+        case .unavailable: return .gray
+        case .deviceConnected: return .orange
+        case .receivingMessages: return .green
+        }
+    }
+
+    private func mappingDetail(_ control: MIDILearnedControl) -> String {
+        let type = control.messageType == .controlChange ? "CC" : "Note"
+        let sample = control.assignedSampleID.flatMap(sampleDisplayName)
+            .map { " · \($0)" } ?? ""
+        return "\(type) \(control.controlNumber) · Ch \(control.channel + 1)\(sample)"
+    }
+
+    private func sampleDisplayName(for sampleID: String) -> String? {
+        sampleManager.availableSamples.first(where: { $0.id == sampleID })?.displayName
     }
 
     private var readyActions: some View {
@@ -2197,12 +2386,24 @@ struct SessionSetupOverlay: View {
     let inputSourceOptions: [AudioInputSource]
     let activeInputName: String
     let inputRouteHint: String
+    /// The detected USB device's name (e.g. "Rane ONE MKII"), when the
+    /// active route is USB — lets the Wired Input tile name the actual
+    /// hardware instead of a generic "USB / interface" label. `nil` when no
+    /// USB device is currently detected.
+    let detectedUSBDeviceName: String?
     let topSafeAreaInset: CGFloat
     let bottomSafeAreaInset: CGFloat
     let onSelectInputSource: (AudioInputSource) -> Void
     let onStart: () -> Void
     let onBack: () -> Void
-    
+
+    private func inputTileSubtitle(for source: AudioInputSource) -> String {
+        if source == .lineIn, let detectedUSBDeviceName, !detectedUSBDeviceName.isEmpty {
+            return detectedUSBDeviceName
+        }
+        return source == .lineIn ? "USB / interface" : "Room / turntable mic"
+    }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.8)
@@ -2328,7 +2529,7 @@ struct SessionSetupOverlay: View {
                                             .font(.system(size: 15, weight: .semibold))
                                             .foregroundColor(selectedInputSource == source ? .black : .white)
 
-                                        Text(source == .lineIn ? "USB / interface" : "Room / turntable mic")
+                                        Text(inputTileSubtitle(for: source))
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundColor(selectedInputSource == source ? .black.opacity(0.72) : .white.opacity(0.62))
                                     }

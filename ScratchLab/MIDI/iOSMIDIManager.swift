@@ -1,6 +1,7 @@
 import Combine
 import CoreMIDI
 import Foundation
+import QuartzCore
 
 private func scratchLabIOSMIDIReadProc(
     packetList: UnsafePointer<MIDIPacketList>,
@@ -325,6 +326,18 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// own copy there too — this isn't a new duplication pattern).
     private static let midiStepsPerRevolution: Double = 3932
 
+    /// Per-attempt accumulation of raw CC6 platter telemetry, in the exact
+    /// shared `CaptureCore.RawMixerMIDIEvent` shape macOS's
+    /// `MacCaptureEngine.capturedMidiCCEvents` accumulates. Decoded by
+    /// `platterMovementEvents` below via the same shared, unmodified
+    /// `CaptureCore.derivePlatterMovementEvents` pure function macOS uses
+    /// for Practice/Review notation — no separate decode algorithm. This is
+    /// purely a notation/state feed; it plays no part in scratch audio or
+    /// hotcue behaviour. Reset per attempt via `resetCapturedPlatterEvents()`.
+    @Published private(set) var capturedPlatterMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    private var captureBaselineTimestamp: Double = CACurrentMediaTime()
+    private static let iOSPlatterDeviceName = "iOS RANE Platter"
+
     #if DEBUG
     private var lastPlatterDebugLogUptime: TimeInterval = -.infinity
     private let platterDebugLogInterval: TimeInterval = 0.5
@@ -344,6 +357,31 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// resolve against the right per-device assignments.
     func updateMapping(deviceIdentifier: String?) {
         currentMapping = deviceIdentifier.flatMap { learnStore.load(deviceIdentifier: $0) }
+    }
+
+    /// Clears accumulated CC6 telemetry and rebaselines the take-relative
+    /// clock. Call at the start of each new Practice attempt/take so a prior
+    /// attempt's movement can never leak into the next one's notation trace.
+    func resetCapturedPlatterEvents() {
+        capturedPlatterMIDIEvents.removeAll()
+        captureBaselineTimestamp = CACurrentMediaTime()
+        #if DEBUG
+        print("[SCRATCH-DEBUG] shared scratch state reset for new attempt")
+        #endif
+    }
+
+    /// Canonical decoded movement events for the current attempt, via the
+    /// same shared `CaptureCore.derivePlatterMovementEvents` decode macOS's
+    /// `MacCaptureEngine.resolvedControllerMovementEvents` uses for its
+    /// Practice/Review notation. Right deck only (channel 1), matching the
+    /// single-loaded-sample product decision already applied throughout
+    /// this dispatcher.
+    var platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        CaptureCore.derivePlatterMovementEvents(
+            from: capturedPlatterMIDIEvents,
+            controller: 6,
+            channel: ScratchPlatterTracker.rightChannel
+        )
     }
 
     /// Process one parsed MIDI message. Transport presses toggle the shared
@@ -396,6 +434,29 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         let delta = platterTracker.ingest(channel: channel, value: Int(message.value))
         let steps = platterTracker.accumulatedSteps(for: channel)
         let direction = platterTracker.recentDirection(for: channel)
+
+        // Notation/state feed only — parallel to (not a replacement for)
+        // the audio-driving `platterTracker.ingest` above. Recorded for
+        // both decks, matching this dispatcher's existing "both decks
+        // tracked for parity/diagnostics" precedent; `platterMovementEvents`
+        // filters to the right deck at decode time, same as macOS.
+        let eventTimestamp = CACurrentMediaTime()
+        capturedPlatterMIDIEvents.append(CaptureCore.RawMixerMIDIEvent(
+            timestamp: eventTimestamp,
+            takeRelativeTime: max(0, eventTimestamp - captureBaselineTimestamp),
+            deviceName: Self.iOSPlatterDeviceName,
+            channel: channel,
+            controller: 6,
+            value: Int(message.value),
+            normalizedValue: Double(message.value) / 127.0,
+            mappedControl: nil
+        ))
+        #if DEBUG
+        let shouldLogSharedState = capturedPlatterMIDIEvents.count % 32 == 0
+        if shouldLogSharedState {
+            print("[SCRATCH-DEBUG] shared scratch state updated · capturedEvents=\(capturedPlatterMIDIEvents.count)")
+        }
+        #endif
 
         #if DEBUG
         let shouldLog: Bool = {
