@@ -2,14 +2,16 @@
 // ScratchLab — iOS Continuous Scratch Renderer
 //
 // Stereo scratch renderer that owns the loaded PCM sample and renders it
-// through an AVAudioSourceNode render callback. PlatterPosition is the sole
-// playback authority: the main thread converts a PlatterPosition into a frame
-// index (via update(position:)); the render thread only ever reads and holds
-// that frame — it never runs its own clock.
+// through an AVAudioSourceNode render callback. PlatterPosition remains the
+// sole playback authority: the main thread converts a PlatterPosition into a
+// target frame index (via update(position:)). The render thread never sets
+// that target itself — it only smoothly follows it, sample by sample, so
+// audio doesn't step at the ~60Hz rate PlatterPosition updates arrive at.
 //
 // Thread model: the render callback runs on the audio render thread and must
-// never touch MainActor/SwiftUI state. It reads a lock-protected snapshot of the
-// playhead; the main thread writes that snapshot.
+// never touch MainActor/SwiftUI state. It reads a lock-protected snapshot of
+// the target and the last-rendered position; the main thread writes the
+// target (and can force-reset the rendered position on load/reset).
 
 import AVFoundation
 import Foundation
@@ -25,14 +27,30 @@ final class IOScratchRenderer {
 
     private let lock = NSLock()
 
-    // Protected by `lock`; read by the render thread, written by the main thread.
+    // Protected by `lock`.
     private var sampleBuffer: AVAudioPCMBuffer?
     private var totalFrames = 0
-    private var framePosition: Double = 0
+    /// Set only by `update(position:)` from PlatterPosition — the playback
+    /// authority. The render thread never writes this.
+    private var targetFramePosition: Double = 0
+    /// The actual playhead the render thread reads from. Written by the
+    /// render thread each callback as it follows `targetFramePosition`, and
+    /// force-reset (by the main thread) on `load`/`reset`.
+    private var currentFramePosition: Double = 0
+
+    private static let renderSampleRate: Double = 44_100
+    /// How quickly the render thread's playhead closes the gap to the
+    /// target — short enough to erase the ~60Hz PlatterPosition step (a new
+    /// target roughly every 16.7ms) and stay tight to the finger, long enough
+    /// to smooth the jump between targets into a continuous sweep instead of
+    /// a step. Not a clock: with a fixed target this asymptotically settles
+    /// and holds, it never keeps moving on its own.
+    private static let followTimeConstant: Double = 0.008
+    private static let followAlpha: Double = 1 - exp(-1.0 / (renderSampleRate * followTimeConstant))
 
     /// The audio source node. The owning engine attaches it to an AVAudioEngine.
     lazy var sourceNode: AVAudioSourceNode = {
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)!
+        let format = AVAudioFormat(standardFormatWithSampleRate: Self.renderSampleRate, channels: 2)!
         return AVAudioSourceNode(format: format) { [weak self] isSilence, _, frameCount, audioBufferList in
             guard let self else {
                 isSilence.pointee = true
@@ -43,28 +61,31 @@ final class IOScratchRenderer {
     }()
 
     /// Install a loaded PCM sample and hold the playhead at the top, silent
-    /// until a PlatterPosition update moves it.
+    /// until a PlatterPosition update moves the target.
     func load(buffer: AVAudioPCMBuffer) {
         lock.lock()
         sampleBuffer = buffer
         totalFrames = Int(buffer.frameLength)
-        framePosition = 0
+        targetFramePosition = 0
+        currentFramePosition = 0
         lock.unlock()
     }
 
-    /// Update the playhead from a PlatterPosition. PlatterPosition is the only
-    /// playback authority — the render thread never advances this on its own;
-    /// it only ever holds whatever frame was last written here.
+    /// Update the playback target from a PlatterPosition. PlatterPosition is
+    /// the only playback authority — this only ever moves where the render
+    /// thread is *heading*; the render thread itself decides how smoothly it
+    /// gets there.
     func update(position: PlatterPosition) {
         lock.lock()
-        framePosition = position.normalizedPosition * Double(totalFrames)
+        targetFramePosition = position.normalizedPosition * Double(totalFrames)
         lock.unlock()
     }
 
-    /// Reset the playhead to the top.
+    /// Reset the playhead and its target to the top.
     func reset() {
         lock.lock()
-        framePosition = 0
+        targetFramePosition = 0
+        currentFramePosition = 0
         lock.unlock()
     }
 
@@ -78,7 +99,8 @@ final class IOScratchRenderer {
         lock.lock()
         let buffer = sampleBuffer
         let totalFrames = self.totalFrames
-        let pos = framePosition
+        let target = targetFramePosition
+        var current = currentFramePosition
         lock.unlock()
 
         guard let buffer, totalFrames > 0,
@@ -100,19 +122,26 @@ final class IOScratchRenderer {
         let srcR = channelCount > 1 ? src[1] : src[0]  // preserve stereo; no downmix
         let lastFrame = totalFrames - 1
 
-        // PlatterPosition sets one frame per update; hold it for the entire
-        // buffer — the render thread does not advance its own clock.
-        let clamped = min(max(pos, 0), Double(lastFrame))
-        let i0 = Int(clamped)
-        let frac = Float(clamped - Double(i0))
-        let i1 = min(i0 + 1, lastFrame)
-        let sampleL = srcL[i0] + frac * (srcL[i1] - srcL[i0])
-        let sampleR = srcR[i0] + frac * (srcR[i1] - srcR[i0])
-
         for frame in 0..<Int(frameCount) {
-            dstL[frame] = sampleL
-            dstR?[frame] = sampleR
+            // Follow the target, not run a clock: with a fixed target this
+            // term shrinks to ~0 and `current` holds, it does not keep
+            // advancing under its own power.
+            current += (target - current) * Self.followAlpha
+
+            let clamped = min(max(current, 0), Double(lastFrame))
+            let i0 = Int(clamped)
+            let frac = Float(clamped - Double(i0))
+            let i1 = min(i0 + 1, lastFrame)
+            dstL[frame] = srcL[i0] + frac * (srcL[i1] - srcL[i0])
+            dstR?[frame] = srcR[i0] + frac * (srcR[i1] - srcR[i0])
         }
+
+        // Persist the clamped position, not the raw follower value, so a
+        // stale target (e.g. buffer swapped mid-callback) can't leave a
+        // runaway value to carry into the next callback.
+        lock.lock()
+        currentFramePosition = min(max(current, 0), Double(lastFrame))
+        lock.unlock()
 
         return noErr
     }
