@@ -127,8 +127,13 @@ final class IOScratchRenderer {
             pos += vel
         }
 
+        // Store the clamped position, not the raw accumulator: `pos` can walk
+        // past the sample boundary while a direction is held, and the next
+        // `update(position:)` normally overwrites it anyway — but clamping
+        // here keeps the stored value in-range if a main-thread update is
+        // ever delayed, instead of leaving a runaway value to unwind later.
         lock.lock()
-        framePosition = pos
+        framePosition = min(max(pos, 0), Double(lastFrame))
         lock.unlock()
 
         return noErr
