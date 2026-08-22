@@ -39,6 +39,12 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         return WCSession.default
     }
 
+    private func log(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        print("[WatchImport] \(message())")
+        #endif
+    }
+
     override init() {
         super.init()
         createCaptureDirectoryIfNeeded()
@@ -70,10 +76,12 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     func activateIfNeeded() {
         guard !hasActivatedWatchSession else { return }
         guard let watchSession else {
+            log("activation skipped — WCSession unsupported on this device")
             connectionSummary = "Watch transfer is unavailable on this device."
             return
         }
 
+        log("activating WCSession")
         hasActivatedWatchSession = true
         watchSession.delegate = self
         watchSession.activate()
@@ -94,10 +102,12 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                         metadataName: nil,
                         removeSourceAfterImport: true
                     )
+                    self.log("decode/import succeeded (pending): id=\(latestImportedCapture.id) sessionID=\(latestImportedCapture.session.sessionID) takeID=\(latestImportedCapture.session.takeID ?? "nil")")
                     importedCapture = importedCapture.map {
                         $0.session.deviceRecordedAtStart >= latestImportedCapture.session.deviceRecordedAtStart ? $0 : latestImportedCapture
                     } ?? latestImportedCapture
                 } catch {
+                    self.log("decode/import FAILED (pending) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
                     continue
                 }
             }
@@ -404,6 +414,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                     removeSourceAfterImport: false
                 )
 
+                self.log("decode/import succeeded: id=\(importedCapture.id) sessionID=\(importedCapture.session.sessionID) takeID=\(importedCapture.session.takeID ?? "nil")")
+
                 DispatchQueue.main.async {
                     self.reconcileStoredCaptures()
                     self.importedSessions.removeAll { $0.id == importedCapture.id }
@@ -412,6 +424,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                     self.onImportedCapture?(importedCapture)
                 }
             } catch {
+                self.log("decode/import FAILED for \(sessionFile.fileURL.lastPathComponent): \(error.localizedDescription)")
+
                 DispatchQueue.main.async {
                     self.lastImportStatus = "Watch transfer failed to import. Open the watch app and try stopping another capture."
                 }
@@ -543,6 +557,7 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 extension WatchMotionCaptureStore: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         DispatchQueue.main.async {
+            self.log("activation completed: state=\(activationState.rawValue) error=\(error?.localizedDescription ?? "none")")
             self.refreshConnectionStatus(using: session)
             if error != nil {
                 self.lastImportStatus = "Watch connection needs attention."
@@ -576,6 +591,7 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
     }
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        log("received file from watch: \(file.fileURL.lastPathComponent) metadata=\(file.metadata ?? [:])")
         importTransferredFile(file)
     }
 }

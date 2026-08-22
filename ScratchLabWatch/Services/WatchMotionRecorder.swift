@@ -32,9 +32,23 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
     private var collectedSamples: [WatchMotionSample] = []
     private var elapsedTimer: Timer?
 
+    // File names (not full paths — persisted files can move directories
+    // across app versions, but the name is stable) this instance has queued
+    // via `transferFile` and not yet seen a `didFinish` callback for. Checked
+    // alongside `WCSession.outstandingFileTransfers` (the OS's own bookkeeping)
+    // before queueing so a retry sweep never double-queues a transfer that is
+    // still genuinely in flight.
+    private var outstandingFileTransfers: Set<String> = []
+
     private var watchSession: WCSession? {
         guard WCSession.isSupported() else { return nil }
         return WCSession.default
+    }
+
+    private func log(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        print("[WatchTransfer] \(message())")
+        #endif
     }
 
     override init() {
@@ -188,10 +202,12 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
 
     private func activateWatchSession() {
         guard let watchSession else {
+            log("activation skipped — WCSession unsupported on this device")
             transferStatus = "Pair your watch with your device to send sessions."
             return
         }
 
+        log("activating WCSession")
         watchSession.delegate = self
         watchSession.activate()
         refreshConnectivity(using: watchSession)
@@ -235,20 +251,69 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         return fileURL
     }
 
-    private func queueTransfer(of fileURL: URL) {
+    /// Queues `fileURL` for transfer, or leaves it on disk untouched if it
+    /// can't be queued right now. Never re-encodes or moves the file, so a
+    /// retried transfer carries the exact same sessionID/takeID bytes as the
+    /// original attempt. Safe to call repeatedly for the same file — an
+    /// already-outstanding transfer (ours or one the OS is already tracking)
+    /// is skipped rather than duplicated.
+    private func queueTransfer(of fileURL: URL, isRetry: Bool = false) {
+        let fileName = fileURL.lastPathComponent
+
         guard let watchSession, watchSession.activationState == .activated else {
+            log("queue skipped (session not activated): \(fileName)")
             transferStatus = "Saved on device. Open ScratchLab on your paired device later to import it."
             return
         }
 
-        let metadata = ["fileName": fileURL.lastPathComponent]
+        guard !outstandingFileTransfers.contains(fileName) else {
+            log("queue skipped (already tracked as in flight by this instance): \(fileName)")
+            return
+        }
+
+        guard !watchSession.outstandingFileTransfers.contains(where: { $0.file.fileURL.lastPathComponent == fileName }) else {
+            log("queue skipped (WCSession already has an outstanding transfer): \(fileName)")
+            outstandingFileTransfers.insert(fileName)
+            return
+        }
+
+        outstandingFileTransfers.insert(fileName)
+        let metadata = ["fileName": fileName]
         watchSession.transferFile(fileURL, metadata: metadata)
+        log("\(isRetry ? "retry-queued" : "queued") transfer: \(fileName) (session outstanding=\(watchSession.outstandingFileTransfers.count))")
 
         if watchSession.isCompanionAppInstalled {
-            transferStatus = "Queued the motion session for device import."
+            transferStatus = isRetry ? "Retrying send to your paired device…" : "Queued the motion session for device import."
         } else {
             transferStatus = "Saved on device. Install ScratchLab on your paired device to import it."
         }
+    }
+
+    /// Re-queues any persisted capture JSON that isn't already an outstanding
+    /// transfer, so a session that was queued but never delivered (no
+    /// `didFinish` callback ever observed — the file was simply left on disk)
+    /// gets another attempt as soon as the watch is next activated or
+    /// reachable, without waiting for the user to record another take.
+    private func retryPendingTransfersIfNeeded() {
+        guard let watchSession, watchSession.activationState == .activated else { return }
+
+        let pendingFiles = persistedCaptureFileURLs()
+        guard !pendingFiles.isEmpty else { return }
+
+        log("retry sweep: \(pendingFiles.count) persisted capture(s) on disk, \(watchSession.outstandingFileTransfers.count) outstanding at session level")
+
+        for fileURL in pendingFiles {
+            queueTransfer(of: fileURL, isRetry: true)
+        }
+    }
+
+    private func persistedCaptureFileURLs() -> [URL] {
+        let entries = (try? fileManager.contentsOfDirectory(
+            at: storageDirectoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return entries.filter { $0.pathExtension.lowercased() == "json" }
     }
 
     private var storageDirectoryURL: URL {
@@ -298,17 +363,21 @@ extension WatchMotionRecorder: WCSessionDelegate {
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         DispatchQueue.main.async {
+            self.log("activation completed: state=\(activationState.rawValue) error=\(error?.localizedDescription ?? "none")")
             self.refreshConnectivity(using: session)
             if let error {
                 print("Watch connection error: \(error.localizedDescription)")
                 self.transferStatus = "Watch connection needs attention."
             }
+            self.retryPendingTransfersIfNeeded()
         }
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
+            self.log("reachability changed: isReachable=\(session.isReachable)")
             self.refreshConnectivity(using: session)
+            self.retryPendingTransfersIfNeeded()
         }
     }
 
@@ -385,13 +454,36 @@ extension WatchMotionRecorder: WCSessionDelegate {
         }
     }
 
+    /// `error == nil` here means WatchConnectivity has taken ownership of the
+    /// file and guarantees eventual delivery — it does not by itself prove
+    /// the iPhone app has run `didReceive file:` yet, but there is nothing
+    /// further this device can or should do, so the local copy is safe to
+    /// remove. `error != nil` is the only case treated as a failure — a
+    /// callback that never arrives at all is deliberately not surfaced as
+    /// failure anywhere in this file (there is no captured error to report),
+    /// and is instead picked up again by `retryPendingTransfersIfNeeded()`.
     func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
-        guard let error else { return }
-
-        print("Watch transfer error: \(error.localizedDescription)")
+        let fileURL = fileTransfer.file.fileURL
+        let fileName = fileURL.lastPathComponent
 
         DispatchQueue.main.async {
-            self.transferStatus = "Unable to send to your paired device."
+            self.outstandingFileTransfers.remove(fileName)
+
+            if let error {
+                self.log("transfer failed: \(fileName) — \(error.localizedDescription)")
+                print("Watch transfer error: \(error.localizedDescription)")
+                self.transferStatus = "Couldn't send to your paired device. Will retry automatically."
+                return
+            }
+
+            self.log("transfer completed, handed off to WatchConnectivity: \(fileName)")
+            self.transferStatus = "Sent to your paired device."
+            do {
+                try self.fileManager.removeItem(at: fileURL)
+                self.log("removed delivered local copy: \(fileName)")
+            } catch {
+                self.log("delivered but couldn't remove local copy: \(fileName) — \(error.localizedDescription)")
+            }
         }
     }
 }
