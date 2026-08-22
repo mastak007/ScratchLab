@@ -71,6 +71,23 @@ final class IOScratchRenderer {
     private let isActiveWord = Atomic<UInt64>(0)
     private let nextIdentity = Atomic<UInt64>(0)
 
+    // MARK: - Capture tap (lock-free)
+    //
+    // Feeds an off-thread recorder with the exact samples already rendered
+    // for RANE monitoring below — no second renderer, no independent audio
+    // path. `captureRingL`/`captureRingR` hold ~4s of headroom (sized for
+    // drain-cadence jitter, not for holding a whole take): the sole consumer
+    // is a background timer in `IOScratchPlaybackEngine` that drains far
+    // faster than this can fill during normal operation. Producer (render
+    // thread) and consumer (drain timer) never touch the same index
+    // variable — `captureWriteIndex` is written only by the render thread
+    // and read only by the consumer; `captureReadIndex` is the reverse.
+    private let captureRingL = UnsafeMutablePointer<Float>.allocate(capacity: IOScratchRenderer.captureRingCapacity)
+    private let captureRingR = UnsafeMutablePointer<Float>.allocate(capacity: IOScratchRenderer.captureRingCapacity)
+    private let captureEnabledWord = Atomic<UInt64>(0)
+    private let captureWriteIndex = Atomic<UInt64>(0)
+    private let captureReadIndex = Atomic<UInt64>(0)
+
     /// PCM + table allocations, retained for the renderer's lifetime so the
     /// render thread never reads through a freed pointer. Touched only from
     /// the main thread (`load(buffer:)`), freed in `deinit`.
@@ -96,8 +113,16 @@ final class IOScratchRenderer {
     /// handling: the position follower below is already continuous, so a
     /// reversed target is chased smoothly, not jumped to.
     private var renderGain: Double = 1
+    /// Render-thread-owned running count of frames written into the capture
+    /// ring since the renderer was created; published to `captureWriteIndex`
+    /// once per callback (not once per frame) so the consumer always sees a
+    /// monotonic, internally consistent count.
+    private var localCaptureWriteIndex: UInt64 = 0
 
     private static let renderSampleRate: Double = 44_100
+    /// ~4s of ring headroom at the fixed render rate — see the capture-tap
+    /// doc comment above.
+    private static let captureRingCapacity = 4 * Int(renderSampleRate)
     private static let velocityTimeConstant: Double = 0.004
     private static let velocityAlpha: Double = 1 - exp(-1.0 / (renderSampleRate * velocityTimeConstant))
     private static let phaseCorrectionTimeConstant: Double = 0.150
@@ -131,6 +156,67 @@ final class IOScratchRenderer {
             allocation.deinitialize(count: 1)
             allocation.deallocate()
         }
+        captureRingL.deallocate()
+        captureRingR.deallocate()
+    }
+
+    /// The sample rate every capture-tap recording must be written at — the
+    /// renderer's own fixed render rate, so the recorded file always matches
+    /// what was actually rendered with no resampling.
+    static var captureSampleRate: Double { renderSampleRate }
+
+    /// Starts (or stops) copying rendered frames into the capture ring
+    /// buffer. Producer-side flag only — one atomic load per render
+    /// callback, checked once per frame inside the existing loop below.
+    func setCaptureTapEnabled(_ enabled: Bool) {
+        captureEnabledWord.store(enabled ? 1 : 0, ordering: .relaxed)
+    }
+
+    /// Drains every frame written to the ring since the last drain. Not
+    /// real-time-safe and not meant to be — call only from the single
+    /// off-render-thread consumer (see the capture-tap doc comment above).
+    func drainCapturedFrames() -> (left: [Float], right: [Float]) {
+        let writeIndex = captureWriteIndex.load(ordering: .acquiring)
+        var readIndex = captureReadIndex.load(ordering: .relaxed)
+        // The producer can only ever be ahead of the consumer; if it has
+        // lapped the ring (drain cadence fell far behind, which normal
+        // operation never triggers given the ~4s of headroom), drop the
+        // frames that were already overwritten rather than reading stale
+        // memory.
+        let capacity = UInt64(Self.captureRingCapacity)
+        if writeIndex - readIndex > capacity {
+            readIndex = writeIndex - capacity
+        }
+        let available = Int(writeIndex - readIndex)
+        guard available > 0 else { return ([], []) }
+
+        var left = [Float](repeating: 0, count: available)
+        var right = [Float](repeating: 0, count: available)
+        for offset in 0..<available {
+            let ringIndex = Int((readIndex + UInt64(offset)) % capacity)
+            left[offset] = captureRingL[ringIndex]
+            right[offset] = captureRingR[ringIndex]
+        }
+        captureReadIndex.store(writeIndex, ordering: .relaxed)
+        return (left, right)
+    }
+
+    /// Called from every early-silence exit of `render(...)` so the capture
+    /// ring stays a continuous, correctly-timed record of the take even
+    /// while nothing is armed — the normal per-frame loop below already
+    /// writes real (possibly zero) samples every callback it reaches; this
+    /// covers the callbacks that return before reaching that loop at all.
+    @inline(__always)
+    private func advanceCaptureRingWithSilence(frameCount: Int) {
+        guard captureEnabledWord.load(ordering: .relaxed) != 0 else { return }
+        let capacity = Self.captureRingCapacity
+        for _ in 0..<frameCount {
+            let ringIndex = Int(localCaptureWriteIndex % UInt64(capacity))
+            captureRingL[ringIndex] = 0
+            captureRingR[ringIndex] = 0
+            localCaptureWriteIndex += 1
+        }
+        captureWriteIndex.store(localCaptureWriteIndex, ordering: .releasing)
     }
 
     /// Install a loaded PCM sample. Copies the sample's own channel data into
@@ -240,11 +326,13 @@ final class IOScratchRenderer {
         guard isActiveWord.load(ordering: .relaxed) != 0,
               let raw = sampleTablePointer.load(ordering: .acquiring) else {
             isSilence.pointee = true
+            advanceCaptureRingWithSilence(frameCount: Int(frameCount))
             return noErr
         }
         let table = raw.assumingMemoryBound(to: ScratchSampleTable.self).pointee
         guard table.totalFrames > 0 else {
             isSilence.pointee = true
+            advanceCaptureRingWithSilence(frameCount: Int(frameCount))
             return noErr
         }
 
@@ -299,6 +387,8 @@ final class IOScratchRenderer {
         var renderedAudibleSample = false
 
         let rendererIsActive = isActiveWord.load(ordering: .relaxed) != 0
+        let captureTapEnabled = captureEnabledWord.load(ordering: .relaxed) != 0
+        let captureRingCapacity = Self.captureRingCapacity
         for frame in 0..<Int(frameCount) {
             if framesSinceControlUpdate < Int.max / 2 {
                 framesSinceControlUpdate += 1
@@ -349,12 +439,25 @@ final class IOScratchRenderer {
             dstL[frame] = left
             dstR?[frame] = right
             if left != 0 || right != 0 { renderedAudibleSample = true }
+
+            // Tee the exact same rendered samples into the capture ring —
+            // including silence, so a recording spans the full take
+            // continuously rather than only the audible spans.
+            if captureTapEnabled {
+                let ringIndex = Int(localCaptureWriteIndex % UInt64(captureRingCapacity))
+                captureRingL[ringIndex] = left
+                captureRingR[ringIndex] = right
+                localCaptureWriteIndex += 1
+            }
         }
 
         currentFramePosition = current
         currentVelocity = velocity
         renderGain = gain
         isSilence.pointee = ObjCBool(!renderedAudibleSample)
+        if captureTapEnabled {
+            captureWriteIndex.store(localCaptureWriteIndex, ordering: .releasing)
+        }
 
         return noErr
     }

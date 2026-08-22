@@ -9,6 +9,10 @@ struct CompanionCameraView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @State private var exportMixMode: ExportMixMode = .scratchOnly
     @State private var activeWatchCaptureLink: (sessionID: String, takeID: String)?
+    /// The rendered-scratch WAV destination for the take currently recording,
+    /// if any — set when scratch capture starts and consumed once the take
+    /// finishes (see `beginLinkedRecording`/`handleFinishedRecording`).
+    @State private var pendingScratchAudioURL: URL?
 
     @EnvironmentObject private var audioEngine: AudioEngine
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
@@ -16,6 +20,7 @@ struct CompanionCameraView: View {
     @EnvironmentObject private var progressManager: ProgressManager
     @EnvironmentObject private var sessionUploadManager: SessionUploadManager
     @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
+    @EnvironmentObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
     @Environment(\.dismiss) private var dismiss
     #if DEBUG
     @State private var isShowingStagingInspector = false
@@ -578,6 +583,7 @@ struct CompanionCameraView: View {
             ) { _ in }
             activeWatchCaptureLink = nil
         }
+        scratchPlaybackEngine.stopRecordingScratchAudio()
         broadcaster.endRecording()
     }
 
@@ -600,13 +606,41 @@ struct CompanionCameraView: View {
             activeWatchCaptureLink = nil
         }
 
+        beginScratchAudioCapture()
         broadcaster.beginRecording(captureTiming: captureTiming)
+    }
+
+    /// Records the exact live-rendered scratch signal (the same samples the
+    /// performer hears through the RANE) into a WAV alongside the take, so
+    /// the eventual `scratch_only.wav`/`scratch_with_beat.wav` export
+    /// carries the real performance instead of a silent camera-audio track.
+    /// Best-effort: a failure here still leaves Capture fully usable — the
+    /// existing camera-audio-derived fallback simply applies, as it always
+    /// has.
+    private func beginScratchAudioCapture() {
+        guard let directory = broadcaster.stagedCaptureDirectoryURL else {
+            pendingScratchAudioURL = nil
+            return
+        }
+        let url = directory.appendingPathComponent("\(UUID().uuidString)_scratch.wav")
+        pendingScratchAudioURL = url
+        Task {
+            do {
+                try await scratchPlaybackEngine.startRecordingScratchAudio(to: url)
+            } catch {
+                #if DEBUG
+                print("[AUDIO-CAPTURE-DEBUG] scratch recorder failed to start: \(error.localizedDescription)")
+                #endif
+            }
+        }
     }
 
     private func handleFinishedRecording() {
         beatEngine.stop()
         guard let summary = broadcaster.lastRecordingSummary else { return }
         let calibrationValid = captureStore.isCalibrationConfirmed
+        let scratchAudioURL = pendingScratchAudioURL
+        pendingScratchAudioURL = nil
 
         Task {
             let audioPresent = await Self.mediaContainsAudio(summary.mediaURL)
@@ -619,7 +653,8 @@ struct CompanionCameraView: View {
                 summary: summary,
                 audioPresent: audioPresent,
                 motionPresent: motionPresent,
-                calibrationValid: calibrationValid
+                calibrationValid: calibrationValid,
+                scratchAudioURL: scratchAudioURL
             )
         }
     }
@@ -876,12 +911,20 @@ struct CompanionCameraView: View {
                 takeID: review.summary.sidecar.takeID
             )
             let exportMotionPresent = linkedWatchCapture != nil
+            // Prefer the take's own live-rendered scratch capture; if it
+            // never started or failed, `audioArtifactURL: nil` falls back to
+            // the existing camera-audio-derived source exactly as before.
+            let scratchAudioURL: URL? = {
+                guard let url = review.scratchAudioURL,
+                      FileManager.default.fileExists(atPath: url.path) else { return nil }
+                return url
+            }()
             return SessionExportTake(
                 takeID: review.summary.sidecar.takeID,
                 takeNumber: review.summary.sidecar.appLocalTakeNumber,
                 bpm: review.summary.sidecar.sessionConfig?.bpm ?? config.bpm ?? 0,
                 mediaURL: review.summary.mediaURL,
-                audioArtifactURL: nil,
+                audioArtifactURL: scratchAudioURL,
                 sidecarURL: review.summary.sidecarURL,
                 watchCaptureSession: linkedWatchCapture?.session,
                 drillName: review.drillName,
@@ -1269,6 +1312,11 @@ private struct CaptureReview: Equatable {
     let operatorMessage: String
     var quality: CaptureQualityTag?
     var isComboTagged: Bool = false
+    /// The rendered-scratch WAV captured for this take, if the capture tap
+    /// started and produced a file. `nil` means no live-rendered scratch
+    /// audio was recorded for this take (capture never started, or failed) —
+    /// export falls back to its existing camera-audio-derived source.
+    var scratchAudioURL: URL?
 }
 
 @MainActor
@@ -1570,7 +1618,8 @@ private final class GuidedCaptureStore: ObservableObject {
         summary: CompanionCameraBroadcaster.RecordingSummary,
         audioPresent: Bool,
         motionPresent: Bool,
-        calibrationValid: Bool
+        calibrationValid: Bool,
+        scratchAudioURL: URL? = nil
     ) {
         guard lastHandledRecordingID != summary.id else { return }
         lastHandledRecordingID = summary.id
@@ -1606,7 +1655,8 @@ private final class GuidedCaptureStore: ObservableObject {
             audioPresent: audioPresent,
             motionStatusTitle: motionAssessment.motionStatusTitle,
             motionPresent: motionAssessment.motionPresent,
-            operatorMessage: operatorMessage
+            operatorMessage: operatorMessage,
+            scratchAudioURL: scratchAudioURL
         )
         flowState = .review
     }

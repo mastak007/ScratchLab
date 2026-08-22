@@ -89,6 +89,121 @@ private final class IOScratchMIDIControlLoop: @unchecked Sendable {
     }
 }
 
+/// Writes captured stereo Float32 frames to a WAV incrementally, off the
+/// audio thread entirely — this only ever runs on `IOScratchCaptureTap`'s own
+/// serial queue, never from `IOScratchRenderer.render(...)`. One writer per
+/// recorded take; never shared or reused across takes.
+private final class ScratchAudioCaptureWriter {
+    private let file: AVAudioFile
+    private let format: AVAudioFormat
+
+    init(destination: URL, sampleRate: Double, channelCount: AVAudioChannelCount) throws {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount) else {
+            throw NSError(
+                domain: "IOScratchPlaybackEngine",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Unable to build a capture format."]
+            )
+        }
+        self.format = format
+        self.file = try AVAudioFile(forWriting: destination, settings: format.settings)
+    }
+
+    func append(left: [Float], right: [Float]) throws {
+        guard !left.isEmpty,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(left.count)),
+              let channels = buffer.floatChannelData else {
+            return
+        }
+        buffer.frameLength = AVAudioFrameCount(left.count)
+        left.withUnsafeBufferPointer { source in
+            channels[0].update(from: source.baseAddress!, count: left.count)
+        }
+        if format.channelCount > 1 {
+            right.withUnsafeBufferPointer { source in
+                channels[1].update(from: source.baseAddress!, count: right.count)
+            }
+        }
+        try file.write(from: buffer)
+    }
+}
+
+/// Off-actor drain + write loop for the capture tap, structured exactly like
+/// `IOScratchMIDIControlLoop` above: a dedicated serial queue is the sole
+/// owner of the writer, the renderer reference, and the drain timer, so
+/// `IOScratchPlaybackEngine` (MainActor) never touches file I/O or the
+/// renderer's capture buffer directly — it only calls `start`/`stop`. This
+/// is a consumer only; it never renders or plays audio itself.
+private final class IOScratchCaptureTap: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.scratchlab.ios.scratch-capture-drain",
+        qos: .utility
+    )
+    private var timer: DispatchSourceTimer?
+    private var writer: ScratchAudioCaptureWriter?
+    private var renderer: IOScratchRenderer?
+
+    /// Begins recording. `renderer.setCaptureTapEnabled(true)` is called
+    /// before the timer starts so no drain tick can ever race a not-yet-armed
+    /// producer.
+    func start(renderer: IOScratchRenderer, destinationURL: URL, sampleRate: Double) throws {
+        stop()
+        let writer = try ScratchAudioCaptureWriter(
+            destination: destinationURL,
+            sampleRate: sampleRate,
+            channelCount: 2
+        )
+        renderer.setCaptureTapEnabled(true)
+
+        queue.sync {
+            self.renderer = renderer
+            self.writer = writer
+
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now() + 0.1, repeating: 0.1, leeway: .milliseconds(20))
+            timer.setEventHandler { [weak self] in
+                self?.drainLocked()
+            }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    /// Cancels the drain timer, performs one final drain to flush whatever
+    /// was rendered since the last tick, then releases the writer (closing
+    /// the file) and the renderer reference.
+    func stop() {
+        queue.sync {
+            timer?.setEventHandler {}
+            timer?.cancel()
+            timer = nil
+            renderer?.setCaptureTapEnabled(false)
+            drainLocked()
+            renderer = nil
+            writer = nil
+        }
+    }
+
+    /// Must only be called from `queue`.
+    private func drainLocked() {
+        guard let renderer, let writer else { return }
+        let (left, right) = renderer.drainCapturedFrames()
+        guard !left.isEmpty else { return }
+        do {
+            try writer.append(left: left, right: right)
+            #if DEBUG
+            let peak = (left + right).reduce(Float(0)) { max($0, abs($1)) }
+            print("[AUDIO-CAPTURE-DEBUG] rendered scratch frames submitted count=\(left.count)")
+            print("[AUDIO-CAPTURE-DEBUG] scratch recorder peak=\(peak)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[AUDIO-CAPTURE-DEBUG] scratch recorder write failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+}
+
 @MainActor
 final class IOScratchPlaybackEngine: ObservableObject {
 
@@ -96,11 +211,16 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private var renderer: IOScratchRenderer?
     private var outputConfiguration: OutputConfiguration?
     private let midiControlLoop = IOScratchMIDIControlLoop()
+    private let captureTap = IOScratchCaptureTap()
 
     private struct OutputConfiguration: Equatable {
         let preferredHardwareChannelCount: Int
         let usesDeck2ChannelMap: Bool
         let routeName: String
+    }
+
+    private enum PlaybackError: Error {
+        case audioSessionActivationFailed
     }
 
     /// The latest observed platter position.
@@ -117,26 +237,21 @@ final class IOScratchPlaybackEngine: ObservableObject {
     init() {}
 
     /// Load a scratch sample by ID into the renderer's PCM buffer.
-    func load(sampleID: String) {
+    private func load(sampleID: String) async throws -> IOScratchRenderer? {
         // HC1's catalog ID is `ahhh`, but the padded ScratchSamples asset is
         // not platter-ready (345 ms leading silence and >3 s trailing silence).
         // iOS uses the same trimmed 1.047 s asset as the proven DVS path.
         let playbackSampleID = sampleID == "ahhh" ? "dvs_ahhh" : sampleID
-        guard let url = ScratchSampleResolver.url(for: playbackSampleID) else { return }
-        do {
-            midiControlLoop.stop()
-            let renderer = try prepareRendererForCurrentRoute()
-            let file = try AVAudioFile(forReading: url)
-            let format = file.processingFormat
-            let frameCount = AVAudioFrameCount(file.length)
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
-            try file.read(into: buffer)
-            renderer.load(buffer: buffer)
-        } catch {
-            #if DEBUG
-            print("[SCRATCH-DEBUG] sample load failed · reason=\(error.localizedDescription)")
-            #endif
-        }
+        guard let url = ScratchSampleResolver.url(for: playbackSampleID) else { return nil }
+        midiControlLoop.stop()
+        let renderer = try await prepareRendererForCurrentRoute()
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        let frameCount = AVAudioFrameCount(file.length)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return nil }
+        try file.read(into: buffer)
+        renderer.load(buffer: buffer)
+        return renderer
     }
 
     /// Load a hot-cue sample, arm the renderer at the top, and activate its
@@ -148,29 +263,30 @@ final class IOScratchPlaybackEngine: ObservableObject {
         print("[MIDI-DEBUG] hotcue playback requested · sample=\(sampleID)")
         #endif
 
-        load(sampleID: sampleID)
-        guard let renderer else {
-            #if DEBUG
-            print("[MIDI-DEBUG] sample playback failed · reason=audio route unavailable")
-            #endif
-            return
-        }
-        hotCuePlatterPhase = midiControlLoop.latestPhase
-        renderer.update(relativePlatterSteps: 0, signedVelocityStepsPerSecond: 0)
-        do {
-            try startEngineIfNeeded()
-            renderer.activate()
-            midiControlLoop.start(
-                renderer: renderer,
-                hotCuePhase: hotCuePlatterPhase ?? 0
-            )
-            #if DEBUG
-            print("[MIDI-DEBUG] sample armed · \(sampleID)")
-            #endif
-        } catch {
-            #if DEBUG
-            print("[MIDI-DEBUG] sample playback failed · reason=\(error.localizedDescription)")
-            #endif
+        Task {
+            do {
+                guard let renderer = try await load(sampleID: sampleID) else {
+                    #if DEBUG
+                    print("[MIDI-DEBUG] sample playback failed · reason=audio route unavailable")
+                    #endif
+                    return
+                }
+                hotCuePlatterPhase = midiControlLoop.latestPhase
+                renderer.update(relativePlatterSteps: 0, signedVelocityStepsPerSecond: 0)
+                try startEngineIfNeeded()
+                renderer.activate()
+                midiControlLoop.start(
+                    renderer: renderer,
+                    hotCuePhase: hotCuePlatterPhase ?? 0
+                )
+                #if DEBUG
+                print("[MIDI-DEBUG] sample armed · \(sampleID)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("[MIDI-DEBUG] sample playback failed · reason=\(error.localizedDescription)")
+                #endif
+            }
         }
     }
 
@@ -178,6 +294,33 @@ final class IOScratchPlaybackEngine: ObservableObject {
     func stop() {
         midiControlLoop.stop()
         renderer?.reset()
+    }
+
+    /// Begins recording the exact rendered scratch signal — the same
+    /// samples already sent to the RANE for monitoring, tapped from the
+    /// renderer's existing capture ring rather than a second renderer or an
+    /// independently regenerated signal — into `url` for the duration of one
+    /// Capture take. Brings the render graph up (idempotently, via the same
+    /// route-preparation path `playHotCue` uses) even if no hot cue has been
+    /// triggered yet, so the resulting file spans the full take with silence
+    /// wherever nothing was played, matching how the take's other artifacts
+    /// already span the full take duration. Safe to call whether or not a
+    /// hot cue is armed; does not itself start or duplicate any playback.
+    func startRecordingScratchAudio(to url: URL) async throws {
+        let renderer = try await prepareRendererForCurrentRoute()
+        try startEngineIfNeeded()
+        try captureTap.start(
+            renderer: renderer,
+            destinationURL: url,
+            sampleRate: IOScratchRenderer.captureSampleRate
+        )
+    }
+
+    /// Stops recording and flushes the last captured frames to disk. Leaves
+    /// live monitoring/playback untouched — only the capture tap is torn
+    /// down.
+    func stopRecordingScratchAudio() {
+        captureTap.stop()
     }
 
     /// Observe the latest platter position and drive scratch playback:
@@ -213,9 +356,23 @@ final class IOScratchPlaybackEngine: ObservableObject {
     /// ONE MKII exposes Deck 1 on physical outputs 1/2 and Deck 2 on 3/4, so a
     /// four-channel discrete source writes only channels 2/3 (zero-based).
     /// Every other route retains the existing two-channel stereo graph.
-    private func prepareRendererForCurrentRoute() throws -> IOScratchRenderer {
+    private func prepareRendererForCurrentRoute() async throws -> IOScratchRenderer {
         let session = AVAudioSession.sharedInstance()
-        try session.setActive(true)
+        if #available(iOS 27.0, *) {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                session.activate { succeeded, error in
+                    if succeeded {
+                        continuation.resume()
+                    } else {
+                        continuation.resume(throwing: error ?? PlaybackError.audioSessionActivationFailed)
+                    }
+                }
+            }
+        } else {
+            try await Task.detached(priority: .userInitiated) {
+                try AVAudioSession.sharedInstance().setActive(true)
+            }.value
+        }
 
         let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
         let normalizedRouteName = routeName.lowercased()
