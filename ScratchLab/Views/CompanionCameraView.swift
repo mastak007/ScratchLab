@@ -8,6 +8,7 @@ struct CompanionCameraView: View {
     @StateObject private var beatEngine = ScratchLabBeatEngine()
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @State private var exportMixMode: ExportMixMode = .scratchOnly
+    @State private var activeWatchCaptureLink: (sessionID: String, takeID: String)?
 
     @EnvironmentObject private var audioEngine: AudioEngine
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
@@ -128,7 +129,10 @@ struct CompanionCameraView: View {
         view = AnyView(view.onChange(of: audioEngine.inputMonitorState) { _, _ in refreshReadiness() })
         view = AnyView(view.onChange(of: watchMotionCaptureStore.isWatchReachable) { _, _ in refreshReadiness() })
         view = AnyView(view.onChange(of: watchMotionCaptureStore.isWatchAppInstalled) { _, _ in refreshReadiness() })
-        view = AnyView(view.onChange(of: watchMotionCaptureStore.importedSessions.count) { _, _ in refreshReadiness() })
+        view = AnyView(view.onChange(of: watchMotionCaptureStore.importedSessions.count) { _, _ in
+            refreshReadiness()
+            refreshReviewMotionAssociation()
+        })
         view = AnyView(view.onChange(of: broadcaster.lastRecordingSummary?.id) { _, _ in
             handleFinishedRecording()
         })
@@ -542,8 +546,7 @@ struct CompanionCameraView: View {
                         )
                         Task { @MainActor in
                             captureStore.startTimedRecording {
-                                broadcaster.recordingSessionConfig = captureStore.sessionSetup.config
-                                broadcaster.beginRecording(captureTiming: captureTiming)
+                                beginLinkedRecording(captureTiming: captureTiming)
                             }
                         }
                     }
@@ -561,30 +564,57 @@ struct CompanionCameraView: View {
             recordingStartHostTime: ScratchLabBeatEngine.currentHostTime()
         )
         captureStore.beginCalibrationCapture(nextTakeNumber: broadcaster.nextTakeNumberPreview) {
-            broadcaster.recordingSessionConfig = captureStore.sessionSetup.config
-            broadcaster.beginRecording(captureTiming: captureTiming)
+            beginLinkedRecording(captureTiming: captureTiming)
         }
     }
 
     private func stopTake() {
         beatEngine.stop()
         captureStore.requestStopRecording()
+        if let link = activeWatchCaptureLink {
+            watchMotionCaptureStore.requestRemoteCaptureStop(
+                sessionID: link.sessionID,
+                takeID: link.takeID
+            ) { _ in }
+            activeWatchCaptureLink = nil
+        }
         broadcaster.endRecording()
+    }
+
+    /// Starts the existing WatchConnectivity capture command with the exact
+    /// identity the local recording sidecar will use. Recording remains
+    /// available when the watch is optional, skipped, or unreachable.
+    private func beginLinkedRecording(captureTiming: CaptureTimingMetadata) {
+        broadcaster.recordingSessionConfig = captureStore.sessionSetup.config
+
+        if !captureStore.motionSkipped, watchMotionCaptureStore.isWatchReachable {
+            let sessionID = captureStore.sessionSetup.config.sessionID
+            let takeNumber = captureStore.activeTake?.takeNumber ?? broadcaster.nextTakeNumberPreview
+            let takeID = CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber)
+            activeWatchCaptureLink = (sessionID, takeID)
+            watchMotionCaptureStore.requestRemoteCaptureStart(
+                sessionID: sessionID,
+                takeID: takeID
+            ) { _ in }
+        } else {
+            activeWatchCaptureLink = nil
+        }
+
+        broadcaster.beginRecording(captureTiming: captureTiming)
     }
 
     private func handleFinishedRecording() {
         beatEngine.stop()
         guard let summary = broadcaster.lastRecordingSummary else { return }
-        let linkedWatchCapture = watchMotionCaptureStore.linkedCapture(
-            sessionID: summary.sidecar.sessionID,
-            takeID: summary.sidecar.takeID
-        )
-        let motionPresent = linkedWatchCapture != nil
         let calibrationValid = captureStore.isCalibrationConfirmed
 
         Task {
             let audioPresent = await Self.mediaContainsAudio(summary.mediaURL)
             guard broadcaster.lastRecordingSummary?.id == summary.id else { return }
+            let motionPresent = watchMotionCaptureStore.hasLinkedCapture(
+                sessionID: summary.sidecar.sessionID,
+                takeID: summary.sidecar.takeID
+            )
             captureStore.handleRecordingFinished(
                 summary: summary,
                 audioPresent: audioPresent,
@@ -592,6 +622,15 @@ struct CompanionCameraView: View {
                 calibrationValid: calibrationValid
             )
         }
+    }
+
+    private func refreshReviewMotionAssociation() {
+        guard let review = captureStore.review,
+              watchMotionCaptureStore.hasLinkedCapture(
+                sessionID: review.summary.sidecar.sessionID,
+                takeID: review.summary.sidecar.takeID
+              ) else { return }
+        captureStore.markReviewMotionPresent()
     }
 
     private var hasRecentMotionImport: Bool {
@@ -1223,10 +1262,10 @@ private struct CaptureReview: Equatable {
     let summary: CompanionCameraBroadcaster.RecordingSummary
     let drillName: String
     let duration: TimeInterval
-    let syncStatus: String
+    var syncStatus: String
     let audioPresent: Bool
-    let motionStatusTitle: String
-    let motionPresent: Bool
+    var motionStatusTitle: String
+    var motionPresent: Bool
     let operatorMessage: String
     var quality: CaptureQualityTag?
     var isComboTagged: Bool = false
@@ -1581,6 +1620,21 @@ private final class GuidedCaptureStore: ObservableObject {
     func toggleComboTag() {
         guard var review else { return }
         review.isComboTagged.toggle()
+        self.review = review
+    }
+
+    func markReviewMotionPresent() {
+        guard var review, !review.motionPresent else { return }
+        let assessment = GuidedCaptureReviewStateResolver.motionAssessment(
+            calibrationValid: isCalibrationConfirmed,
+            audioPresent: review.audioPresent,
+            motionPresent: true,
+            motionSkipped: motionSkipped,
+            motionOptional: sessionSetup.drillMode.motionOptional
+        )
+        review.syncStatus = assessment.syncStatus
+        review.motionStatusTitle = assessment.motionStatusTitle
+        review.motionPresent = assessment.motionPresent
         self.review = review
     }
 
