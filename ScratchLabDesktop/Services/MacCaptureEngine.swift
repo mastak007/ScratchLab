@@ -8957,8 +8957,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             value: value,
             mapping: mapping
         )
-        guard case .hotCue(let action, let sampleID) = resolved,
-              let action, let sampleID, !sampleID.isEmpty else {
+        // Extract the learned hot-cue action for display, then let the shared
+        // trigger resolver make the "should fire" decision. No transport gating
+        // on macOS — the platter-driven hot-cue path has no transport toggle.
+        guard case .hotCue(let action, _) = resolved, let action else {
+            return false
+        }
+        let decision = HotCueTriggerResolver.resolve(action: resolved)
+        guard decision.shouldTrigger, let sampleID = decision.sampleID else {
             return false
         }
 

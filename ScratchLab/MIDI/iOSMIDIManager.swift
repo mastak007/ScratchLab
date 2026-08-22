@@ -326,9 +326,10 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     }
 
     /// Process one parsed MIDI message. Transport presses toggle the shared
-    /// transport state; hot-cue pads resolve only while it is playing.
+    /// transport state; hot-cue pads resolve through the shared trigger resolver.
     func receive(_ message: ParsedMIDIMessage) {
-        switch MIDIActionResolver.resolve(message: message, mapping: currentMapping) {
+        let action = MIDIActionResolver.resolve(message: message, mapping: currentMapping)
+        switch action {
         case .transport:
             transportState.toggle()
             #if DEBUG
@@ -336,8 +337,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             print("[MIDI-DEBUG] transport state = \(transportState.isPlaying ? "playing" : "stopped")")
             print("[MIDI-DEBUG] platter running = \(transportState.isPlaying)")
             #endif
-        case .hotCue(_, let sampleID):
-            guard transportState.isPlaying, let sampleID else { return }
+        case .hotCue:
+            let decision = HotCueTriggerResolver.resolve(action: action, transportState: transportState)
+            guard decision.shouldTrigger, let sampleID = decision.sampleID else { return }
             #if DEBUG
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
             #endif
