@@ -3,11 +3,12 @@
 //
 // iOS-specific scratch playback boundary. This is the platform-side sink for
 // resolved hot-cue triggers: the iOS MIDI dispatch resolves an action and calls
-// into this engine instead of owning audio itself. Phase 1 keeps the current
-// one-shot AVAudioPlayer implementation behind this interface unchanged.
+// into this engine instead of owning audio itself.
 //
-// NOT the final scratch engine — only the runtime boundary. Full scratch
-// playback (platter-driven, position-following) is a later phase.
+// Phase 3 replaces the temporary AVAudioPlayer one-shot with an AVAudioEngine +
+// AVAudioPlayerNode foundation. The public API is unchanged; only the internal
+// audio implementation moved from AVAudioPlayer to the engine. Platter-driven
+// scratching is a later phase.
 
 import AVFoundation
 import Foundation
@@ -15,9 +16,9 @@ import Foundation
 @MainActor
 final class IOScratchPlaybackEngine: ObservableObject {
 
-    /// The active hot-cue player. Retained so playback is not cut short when a
-    /// fresh `AVAudioPlayer` would otherwise deallocate at the end of the call.
-    private var hotCuePlayer: AVAudioPlayer?
+    /// The audio engine and player node that render one-shot hot-cue samples.
+    private let engine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
 
     /// The latest observed platter position. Stored only — Phase 2 is the
     /// data-flow boundary; no sample seeking or audio changes yet.
@@ -28,13 +29,18 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private let platterLogInterval: TimeInterval = 0.5
     #endif
 
+    init() {
+        engine.attach(playerNode)
+        engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
+    }
+
     /// Load a scratch sample by ID. Phase 1 stub — full scratch loading is a
     /// later phase; the current runtime only performs one-shot hot-cue playback.
     func load(sampleID: String) {
     }
 
-    /// Play a hot-cue sample immediately (one-shot). Current AVAudioPlayer-backed
-    /// implementation, unchanged in behaviour — just moved behind this boundary.
+    /// Play a hot-cue sample immediately (one-shot) through the AVAudioEngine
+    /// player node. Preserves the previous behaviour: load once, play once.
     func playHotCue(sampleID: String) {
         #if DEBUG
         print("[MIDI-DEBUG] hotcue playback requested · sample=\(sampleID)")
@@ -48,18 +54,27 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
 
         do {
-            let player = try AVAudioPlayer(contentsOf: url)
-            player.prepareToPlay()
-            hotCuePlayer = player
-            #if DEBUG
-            print("[MIDI-DEBUG] sample loaded · \(sampleID)")
-            #endif
-            guard player.play() else {
+            let file = try AVAudioFile(forReading: url)
+            let format = file.processingFormat
+            let frameCount = AVAudioFrameCount(file.length)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
                 #if DEBUG
-                print("[MIDI-DEBUG] sample playback failed · reason=play returned false")
+                print("[MIDI-DEBUG] sample playback failed · reason=buffer allocation")
                 #endif
                 return
             }
+            try file.read(into: buffer)
+
+            try startEngineIfNeeded()
+
+            #if DEBUG
+            print("[MIDI-DEBUG] sample loaded · \(sampleID)")
+            #endif
+
+            playerNode.stop()
+            playerNode.scheduleBuffer(buffer, at: nil, options: [])
+            playerNode.play()
+
             #if DEBUG
             print("[MIDI-DEBUG] sample playback started · \(sampleID)")
             #endif
@@ -72,7 +87,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
 
     /// Stop the current hot-cue playback.
     func stop() {
-        hotCuePlayer?.stop()
+        playerNode.stop()
     }
 
     /// Observe the latest platter position. Phase 2 stores it only — no sample
@@ -87,5 +102,12 @@ final class IOScratchPlaybackEngine: ObservableObject {
             print("[SCRATCH-DEBUG] platter position received · phase=\(position.phase) direction=\(position.direction) velocity=\(position.velocity)")
         }
         #endif
+    }
+
+    /// Start the audio engine once, idempotently.
+    private func startEngineIfNeeded() throws {
+        if !engine.isRunning {
+            try engine.start()
+        }
     }
 }
