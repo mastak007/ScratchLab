@@ -49,8 +49,9 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
     }
 
-    /// Start a hot-cue sample from the top (forward). Platter movement then
-    /// takes over direction/freeze via `updatePlatterPosition`.
+    /// Load a hot-cue sample and arm the renderer at the top. The renderer
+    /// does not auto-play — it holds silent at frame 0 until platter movement
+    /// (via `updatePlatterPosition`) moves the playhead.
     func playHotCue(sampleID: String) {
         #if DEBUG
         print("[MIDI-DEBUG] hotcue playback requested · sample=\(sampleID)")
@@ -60,11 +61,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
         do {
             try startEngineIfNeeded()
             #if DEBUG
-            print("[MIDI-DEBUG] sample loaded · \(sampleID)")
-            #endif
-            renderer.startForward()
-            #if DEBUG
-            print("[MIDI-DEBUG] sample playback started · \(sampleID)")
+            print("[MIDI-DEBUG] sample armed · \(sampleID)")
             #endif
         } catch {
             #if DEBUG
