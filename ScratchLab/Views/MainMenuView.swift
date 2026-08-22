@@ -16,6 +16,7 @@ struct MainMenuView: View {
     @State private var showingProfile = false
     @State private var showingSettings = false
     @State private var showingPracticeHub = false
+    @State private var showingCaptureHub = false
     @State private var showingAdvancedHub = false
 
     private var layoutMode: ScratchLabAdaptiveLayout.LayoutMode {
@@ -69,6 +70,13 @@ struct MainMenuView: View {
         .navigationDestination(isPresented: $showingAdvancedHub) {
             AdvancedHubView()
         }
+        .navigationDestination(isPresented: $showingCaptureHub) {
+            if ProcessInfo.processInfo.isiOSAppOnMac {
+                UnsupportedCompanionCameraView()
+            } else {
+                CompanionCameraView()
+            }
+        }
     }
 
     // The Home body shared by every adaptive mode — a sidebar frames it on
@@ -78,7 +86,6 @@ struct MainMenuView: View {
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
                 headerView
                 homeContent
-                menuButtons
             }
             .padding(.horizontal, 20)
             .padding(.top, geometry.safeAreaInsets.top + 12)
@@ -142,35 +149,240 @@ struct MainMenuView: View {
 
     // MARK: - V3.2 Home content (Figma node 33:2)
 
-    /// The approved V3.2 Home body: a hero "Live practice" card, the primary
-    /// Practice action, a Recent result card driven by real session history,
-    /// a Device status card driven by real audio-engine state, and the
-    /// production-truth footnote about Capture/Review. Camera and DVS/timecode
-    /// sync are described with static, honest copy — camera is genuinely
-    /// optional for Practice and DVS sync is genuinely not part of the
-    /// iPhone flow in this app (a macOS + controller workflow), so neither
-    /// line is a placeholder or an invented capability claim.
+    /// The Home body: a lesson-focused Practice hero matching macOS's Current
+    /// Lesson hierarchy, an entry into the existing on-device Capture flow,
+    /// an entry into Review, an entry into the existing Advanced / Mac
+    /// Companion hub, a Recent result card driven by real session history,
+    /// and a Device status card driven by real audio-engine state. Camera
+    /// and DVS/timecode sync are described with static, honest copy — camera
+    /// is genuinely optional for Practice and DVS sync is genuinely not part
+    /// of the iPhone flow in this app (a macOS + controller workflow), so
+    /// neither line is a placeholder or an invented capability claim.
     private var homeContent: some View {
         VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
-            HomeInfoCard(
-                title: "Live practice",
-                detail: "Mic or wired USB input · session results stay on device.",
-                isEmphasized: true
-            )
+            practiceEntryCard
 
-            Button(action: { showingPracticeHub = true }) {
-                Text("Practice")
-            }
-            .scratchLabPrimaryButton()
+            captureEntryCard
+
+            reviewEntryCard
+
+            advancedEntryCard
 
             HomeInfoCard(title: "Recent result", detail: recentResultDetail)
 
             HomeInfoCard(title: "Device status", detail: deviceStatusDetail)
-
-            Text("Capture and Review are intentionally absent until implemented.")
-                .font(.caption)
-                .foregroundStyle(ScratchLabDesign.Sem.muted)
         }
+    }
+
+    /// iOS entry counterpart of macOS's `practiceHeaderCard`: one coherent
+    /// Current Lesson card instead of a detached information card and generic
+    /// button. Readiness badges use only state already available on Home; the
+    /// existing Practice destination remains the sole owner of session setup.
+    private var practiceEntryCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemTight) {
+                    Text("CURRENT LESSON")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                    Label("Baby Scratch", systemImage: "figure.disc.sports")
+                        .font(ScratchLabDesign.Typo.pageTitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("One smooth push forward, one smooth pull back, with the fader open.")
+                        .font(ScratchLabDesign.Typo.body)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Label("Beginner", systemImage: "graduationcap.fill")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 88), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                StatusBadge(
+                    title: "Audio",
+                    value: audioEngine.isRunning ? "Ready" : "Set up in Practice",
+                    variant: audioEngine.isRunning ? .success : .ready,
+                    systemImage: "waveform"
+                )
+                StatusBadge(
+                    title: "Results",
+                    value: progressManager.sessionHistory.isEmpty ? "None yet" : "Saved",
+                    variant: progressManager.sessionHistory.isEmpty ? .neutral : .success,
+                    systemImage: progressManager.sessionHistory.isEmpty ? "circle.dashed" : "checkmark.seal.fill"
+                )
+                StatusBadge(
+                    title: "Hardware",
+                    value: "Optional",
+                    variant: .neutral,
+                    systemImage: "cable.connector"
+                )
+            }
+
+            Text("Mic or wired USB input · session results stay on device.")
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Button(action: { showingPracticeHub = true }) {
+                Label("Start practice", systemImage: "play.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+            .accessibilityHint("Opens the Baby Scratch practice lesson")
+        }
+        .scratchLabCard(.lessonHero)
+    }
+
+    /// Mobile counterpart of macOS's Capture Session header. This opens the
+    /// existing guided capture implementation; setup and readiness remain
+    /// owned by that flow so Home does not duplicate capture configuration.
+    private var captureEntryCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemTight) {
+                    Text("CAPTURE")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                    Label("Capture Session", systemImage: "record.circle")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Record clean takes with simple choices. Input routing, calibration, and raw details live in Advanced.")
+                        .font(ScratchLabDesign.Typo.body)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                StatusBadge(
+                    title: "Audio",
+                    value: audioEngine.isRunning ? "Ready" : "Check in Capture",
+                    variant: audioEngine.isRunning ? .success : .ready,
+                    systemImage: "waveform"
+                )
+            }
+
+            Text("Camera, audio, and optional Watch motion are checked before recording.")
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Button(action: { showingCaptureHub = true }) {
+                Label("Open Capture", systemImage: "arrow.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .scratchLabSecondaryButton(fillsWidth: true)
+            .accessibilityHint("Opens guided session setup and recording controls")
+        }
+        .scratchLabCard(.standard)
+    }
+
+    /// Review on iOS is the real post-recording stage owned by
+    /// `CompanionCameraView`; there is not yet a persisted standalone take
+    /// browser. Keep the Home entry honest by sending the user into Capture,
+    /// where every completed take proceeds directly to Review.
+    private var reviewEntryCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemTight) {
+                    Text("REVIEW")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                    Label("Review Take", systemImage: "checkmark.seal")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Check sync, audio, motion, quality, and take details immediately after recording.")
+                        .font(ScratchLabDesign.Typo.body)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                StatusBadge(
+                    title: "Available",
+                    value: "After Capture",
+                    variant: .neutral,
+                    systemImage: "arrow.turn.down.right"
+                )
+            }
+
+            Text("Finish a take in Capture to open its Review screen automatically.")
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Button(action: { showingCaptureHub = true }) {
+                Label("Capture a take to review", systemImage: "record.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .scratchLabSecondaryButton(fillsWidth: true)
+            .accessibilityHint("Opens Capture; Review follows after recording a take")
+        }
+        .scratchLabCard(.standard)
+    }
+
+    /// Entry into the existing `AdvancedHubView` — the same destination the
+    /// iPad regular-landscape sidebar already links to via `showingAdvancedHub`
+    /// (`AdaptiveSidebarView`, below). This card replaces the old de-emphasized
+    /// footer link so Advanced/Mac Companion has one Home-reachable entry
+    /// point instead of two; it does not introduce a second Advanced surface.
+    /// Copy names only what `AdvancedHubView` actually contains today (Mac
+    /// relay, audio hardware routing, Watch Capture, Companion Camera,
+    /// Performer Monitor) and the Mac badge reflects the same live
+    /// `companionRelayBroadcaster.connectedPeerNames` state `relayActiveCard`
+    /// already uses.
+    private var advancedEntryCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemTight) {
+                    Text("ADVANCED")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                    Label("Advanced / Mac Companion", systemImage: "slider.horizontal.3")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Mac relay, audio hardware routing, Watch Capture, Companion Camera, and Performer Monitor tools live here.")
+                        .font(ScratchLabDesign.Typo.body)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                StatusBadge(
+                    title: "Mac",
+                    value: companionRelayBroadcaster.connectedPeerNames.isEmpty ? "Not linked" : "Linked",
+                    variant: companionRelayBroadcaster.connectedPeerNames.isEmpty ? .neutral : .success,
+                    systemImage: "bolt.horizontal"
+                )
+            }
+
+            Text("Optional tools for Mac-connected capture and DJ hardware setup.")
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Button(action: { showingAdvancedHub = true }) {
+                Label("Open Advanced", systemImage: "arrow.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .scratchLabSecondaryButton(fillsWidth: true)
+            .accessibilityHint("Opens Mac relay, audio routing, Watch Capture, Companion Camera, and Performer Monitor tools")
+        }
+        .scratchLabCard(.standard)
     }
 
     /// Most recent real session, or an honest first-run message — never a
@@ -197,30 +409,18 @@ struct MainMenuView: View {
 
     // MARK: - Menu Buttons
 
-    // V3.2: Home's card list (Practice/Capture/Review/Advanced) is retired.
-    // "Practice" duplicated the V3.2 Practice button in `homeContent`, which
-    // already routes to the same `showingPracticeHub` destination. Capture/
-    // Review were DEBUG-only placeholders — Figma's approved Home explicitly
-    // states they must not appear as active V3.2 Home cards, so they're no
-    // longer Home-reachable (their placeholder destinations are untouched;
-    // this only removes the premature entry point). Advanced/Mac Companion
-    // has no Figma Home equivalent but is real, currently-shipping
+    // V3.2: Home's card list (Practice/Capture/Review) is retired as separate
+    // legacy-style entries. "Practice" duplicated the V3.2 Practice button in
+    // `homeContent`, which already routes to the same `showingPracticeHub`
+    // destination. Capture/Review were DEBUG-only placeholders — Figma's
+    // approved Home explicitly states they must not appear as active V3.2
+    // Home cards, so they're no longer Home-reachable (their placeholder
+    // destinations are untouched; this only removes the premature entry
+    // point). Advanced/Mac Companion is real, currently-shipping
     // functionality (Demo Mode, Watch Capture, Companion Cam, Performer
-    // Monitor) with no other entry point — kept, but as a de-emphasized
-    // secondary link rather than a legacy-style card.
-    private var menuButtons: some View {
-        Button(action: { showingAdvancedHub = true }) {
-            HStack(spacing: 6) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Advanced / Mac Companion")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-            .frame(minHeight: 44)
-        }
-        .accessibilityLabel("Advanced and Mac Companion tools")
-    }
+    // Monitor) — it now has its own Home card (`advancedEntryCard`, above)
+    // instead of the de-emphasized footer link this section used to hold, so
+    // there is exactly one Home entry point into `AdvancedHubView`.
 
     private var performerMonitorSubtitle: String {
         "Receive deck view on this device"
