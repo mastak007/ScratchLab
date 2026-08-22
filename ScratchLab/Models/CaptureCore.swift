@@ -1689,7 +1689,12 @@ private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
     }
 
     func prepareToPlay() {
-        player.prepareToPlay()
+        // Warm the decode buffers off the main thread: `AVAudioPlayer.prepareToPlay()`
+        // has no async variant and can block on first use.
+        let player = player
+        DispatchQueue.global(qos: .userInitiated).async {
+            player.prepareToPlay()
+        }
     }
 
     @discardableResult
@@ -1763,6 +1768,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     // Smoothing, latency-compensated clock for the Demo-mode notation playhead
     // — see `sampledPlaybackTime()`.
     private var syncClock = DemoAudioClock()
+    private var cachedOutputLatency: TimeInterval = 0
 
     init(
         resourceURLProvider: @escaping ResourceURLProvider = ScratchCoachDemoAudioPlayer.defaultResourceURLProvider(in: .main),
@@ -1773,6 +1779,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         self.playerFactory = playerFactory
         self.hostTimeProvider = hostTimeProvider
         registerLifecycleObservers()
+        refreshOutputLatency()
     }
 
     deinit {
@@ -1796,7 +1803,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     /// instead of stepping coarsely and leading the sound.
     func sampledPlaybackTime() -> TimeInterval {
         let hostTime = hostTimeProvider()
-        syncClock.outputLatency = Self.currentOutputLatency()
+        syncClock.outputLatency = cachedOutputLatency
         syncClock.ingest(
             playerTime: player?.currentTime ?? 0,
             isPlaying: player?.isPlaying ?? false,
@@ -1866,6 +1873,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
     func play() {
         guard let player, isAudioAvailable else { return }
+        refreshOutputLatency()
         if player.play() {
             playbackState = .playing
         } else {
@@ -1881,6 +1889,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
     func replay() {
         guard let player, isAudioAvailable else { return }
+        refreshOutputLatency()
         player.currentTime = 0
         if player.play() {
             playbackState = .playing
@@ -1967,15 +1976,20 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Current audio output latency, used to align the notation playhead with
-    /// what the listener hears. Sourced from the audio session on iOS; macOS
-    /// has no equivalent API, so compensation is off there.
-    nonisolated private static func currentOutputLatency() -> TimeInterval {
-        #if canImport(UIKit)
-        return max(0, AVAudioSession.sharedInstance().outputLatency)
-        #else
-        return 0
-        #endif
+    /// Refreshes the session latency away from the main actor. The sampled
+    /// playhead reads the last completed value without synchronously querying
+    /// AVAudioSession on every display update.
+    private func refreshOutputLatency() {
+        Task { [weak self] in
+            let latency = await Task.detached(priority: .userInitiated) {
+                #if canImport(UIKit)
+                return max(0, AVAudioSession.sharedInstance().outputLatency)
+                #else
+                return 0.0
+                #endif
+            }.value
+            self?.cachedOutputLatency = latency
+        }
     }
 
     private func clearLoadedAudio() {
