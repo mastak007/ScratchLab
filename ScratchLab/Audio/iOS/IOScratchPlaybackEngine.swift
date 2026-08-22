@@ -28,8 +28,31 @@ final class IOScratchPlaybackEngine: ObservableObject {
     #endif
 
     init() {
+        // Best-effort: request a clean 2-channel output route instead of
+        // exposing the RANE ONE MKII's full multichannel output surface
+        // (14 channels) to the graph. Independent of input channel count
+        // (preferredInputNumberOfChannels is untouched elsewhere, so DVS
+        // capture's full-channel-set input behaviour is unaffected).
+        try? AVAudioSession.sharedInstance().setPreferredOutputNumberOfChannels(2)
+
         engine.attach(renderer.sourceNode)
-        engine.connect(renderer.sourceNode, to: engine.mainMixerNode, format: nil)
+        let stereoFormat = AVAudioFormat(
+            standardFormatWithSampleRate: engine.outputNode.outputFormat(forBus: 0).sampleRate,
+            channels: 2
+        )
+        // Explicit stereo format end to end. `format: nil` on the source →
+        // mixer connection already carries the source node's own 2-channel
+        // format through, but the mixer → output connection is otherwise
+        // left to AVAudioEngine's automatic default wiring, which adopts
+        // the hardware's full (multichannel) output format. Against an
+        // untagged >2-channel discrete output bus, AVAudioMixerNode's pan
+        // logic has nothing to pan the stereo signal onto and only channel
+        // 0 reaches the output — the left-channel-only bug this fixes.
+        // Connecting explicitly with a 2-channel format instead makes the
+        // engine insert a plain channel-count converter (ch0→hw0, ch1→hw1)
+        // rather than routing through that pan logic.
+        engine.connect(renderer.sourceNode, to: engine.mainMixerNode, format: renderer.sourceNode.outputFormat(forBus: 0))
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
     }
 
     /// Load a scratch sample by ID into the renderer's PCM buffer.
