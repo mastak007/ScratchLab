@@ -34,6 +34,7 @@ private struct RootContainerView: View {
     @StateObject private var midiManager = IOSMIDIManager()
     @StateObject private var midiLearnCoordinator = IOSMIDILearnCoordinator()
     @StateObject private var transportState: TransportState
+    @StateObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
     @StateObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
     @StateObject private var progressManager = ProgressManager()
     @StateObject private var practiceBeatStore = PracticeBeatStore()
@@ -44,8 +45,13 @@ private struct RootContainerView: View {
 
     init() {
         let transportState = TransportState()
+        let scratchPlaybackEngine = IOScratchPlaybackEngine()
         _transportState = StateObject(wrappedValue: transportState)
-        _midiControllerDispatcher = StateObject(wrappedValue: IOSMIDIControllerDispatcher(transportState: transportState))
+        _scratchPlaybackEngine = StateObject(wrappedValue: scratchPlaybackEngine)
+        _midiControllerDispatcher = StateObject(wrappedValue: IOSMIDIControllerDispatcher(
+            transportState: transportState,
+            playbackEngine: scratchPlaybackEngine
+        ))
     }
 
     var body: some View {
@@ -55,6 +61,7 @@ private struct RootContainerView: View {
             .environmentObject(midiManager)
             .environmentObject(midiLearnCoordinator)
             .environmentObject(transportState)
+            .environmentObject(scratchPlaybackEngine)
             .environmentObject(midiControllerDispatcher)
             .environmentObject(progressManager)
             .environmentObject(practiceBeatStore)

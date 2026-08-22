@@ -1,4 +1,3 @@
-import AVFoundation
 import Combine
 import CoreMIDI
 import Foundation
@@ -310,12 +309,17 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     private let learnStore: MIDILearnedMappingStore
     private var currentMapping: MIDIDeviceMapping?
 
-    /// The active hot-cue player. Retained so playback is not cut short when a
-    /// fresh `AVAudioPlayer` would otherwise deallocate at the end of the call.
-    private var hotCuePlayer: AVAudioPlayer?
+    /// The iOS scratch playback boundary. The dispatcher resolves actions and
+    /// delegates audio to this engine instead of owning playback itself.
+    private let playbackEngine: IOScratchPlaybackEngine
 
-    init(transportState: TransportState, learnStore: MIDILearnedMappingStore = .default) {
+    init(
+        transportState: TransportState,
+        playbackEngine: IOScratchPlaybackEngine,
+        learnStore: MIDILearnedMappingStore = .default
+    ) {
         self.transportState = transportState
+        self.playbackEngine = playbackEngine
         self.learnStore = learnStore
     }
 
@@ -343,48 +347,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             #if DEBUG
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
             #endif
-            playHotCue(sampleID: sampleID)
+            playbackEngine.playHotCue(sampleID: sampleID)
         case .crossfader, .upfader, .unknown:
             break
-        }
-    }
-
-    /// Plays a resolved hot-cue sample immediately. Uses `AVAudioPlayer` — the
-    /// same lightweight path `SampleManager` uses for previews — so playback
-    /// coexists with the existing audio session: no session/category changes,
-    /// no DVS routing impact.
-    private func playHotCue(sampleID: String) {
-        #if DEBUG
-        print("[MIDI-DEBUG] hotcue playback requested · sample=\(sampleID)")
-        #endif
-
-        guard let url = ScratchSampleResolver.url(for: sampleID) else {
-            #if DEBUG
-            print("[MIDI-DEBUG] sample playback failed · reason=not found (\(sampleID))")
-            #endif
-            return
-        }
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: url)
-            player.prepareToPlay()
-            hotCuePlayer = player
-            #if DEBUG
-            print("[MIDI-DEBUG] sample loaded · \(sampleID)")
-            #endif
-            guard player.play() else {
-                #if DEBUG
-                print("[MIDI-DEBUG] sample playback failed · reason=play returned false")
-                #endif
-                return
-            }
-            #if DEBUG
-            print("[MIDI-DEBUG] sample playback started · \(sampleID)")
-            #endif
-        } catch {
-            #if DEBUG
-            print("[MIDI-DEBUG] sample playback failed · reason=\(error.localizedDescription)")
-            #endif
         }
     }
 
