@@ -84,6 +84,34 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         let reply: WatchCaptureControlReply
     }
 
+    private struct WatchAvailabilityPacket: Codable {
+        let kind: String
+        let isPaired: Bool
+        let isInstalled: Bool
+        let isReachable: Bool
+
+        init(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
+            self.kind = Self.packetKind
+            self.isPaired = isPaired
+            self.isInstalled = isInstalled
+            self.isReachable = isReachable
+        }
+
+        static let packetKind = "watch_availability_v1"
+    }
+
+    private struct WatchCaptureRelayAckPacket: Codable {
+        let kind: String
+        let captureID: UUID
+
+        init(captureID: UUID) {
+            self.kind = Self.packetKind
+            self.captureID = captureID
+        }
+
+        static let packetKind = "watch_motion_capture_relay_ack_v1"
+    }
+
     private struct PreparedRecording {
         let mediaURL: URL
         let sidecarURL: URL
@@ -125,6 +153,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     @Published private(set) var isStorageReady = true
     @Published private(set) var nextTakeNumberPreview = 1
     @Published private(set) var pendingWatchControlCommand: WatchControlCommandEvent?
+    var onWatchCaptureAcknowledged: ((UUID) -> Void)?
     var recordingSessionID = CaptureCore.LocalRecordingNaming.sessionID() {
         didSet {
             guard oldValue != recordingSessionID else { return }
@@ -286,16 +315,50 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
     func sendWatchCaptureSession(_ captureSession: WatchMotionCaptureSession, fileName: String) {
         captureQueue.async {
-            guard !self.session.connectedPeers.isEmpty else { return }
+            guard !self.session.connectedPeers.isEmpty else {
+                #if DEBUG
+                print("[WATCH-DEBUG] transfer failed/retrying — no Mac peer connected, sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil") id=\(captureSession.id)")
+                #endif
+                return
+            }
             let packet = WatchCaptureRelayPacket(fileName: fileName, captureSession: captureSession)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+
+            #if DEBUG
+            print("[WATCH-DEBUG] forwarding watch file to Mac sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil") id=\(captureSession.id)")
+            #endif
 
             do {
                 try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
             } catch {
+                #if DEBUG
+                print("[WATCH-DEBUG] transfer failed/retrying — forward to Mac failed: \(error.localizedDescription) id=\(captureSession.id)")
+                #endif
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to relay watch motion to Mac. Check connection."
                 }
+            }
+        }
+    }
+
+    /// Relays the local WCSession's live view of the watch (paired / installed / reachable) to
+    /// the Mac, so macOS never has to (and never does) infer reachability merely from pairing.
+    func sendWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
+        captureQueue.async {
+            guard !self.session.connectedPeers.isEmpty else { return }
+            let packet = WatchAvailabilityPacket(isPaired: isPaired, isInstalled: isInstalled, isReachable: isReachable)
+            guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+
+            #if DEBUG
+            print("[WATCH-DEBUG] forwarding watch availability to Mac paired=\(isPaired) installed=\(isInstalled) reachable=\(isReachable)")
+            #endif
+
+            do {
+                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
+            } catch {
+                #if DEBUG
+                print("[WATCH-DEBUG] transfer failed/retrying — forward watch availability to Mac failed: \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -379,18 +442,20 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
             self.requestAudioAccess { [weak self] audioGranted in
                 guard let self else { return }
-                self.audioPermissionGranted = audioGranted
-                self.configureAudioSessionIfNeeded()
-                self.refreshAvailableAudioInputs()
-                _ = self.validateStorageLocation()
+                self.captureQueue.async {
+                    self.audioPermissionGranted = audioGranted
+                    self.configureAudioSessionIfNeeded()
+                    self.refreshAvailableAudioInputs()
+                    _ = self.validateStorageLocation()
 
-                DispatchQueue.main.async {
-                    if !audioGranted {
-                        self.recordingStatus = "Microphone access is off. Local recordings will be silent."
+                    DispatchQueue.main.async {
+                        if !audioGranted {
+                            self.recordingStatus = "Microphone access is off. Local recordings will be silent."
+                        }
                     }
-                }
 
-                self.configureAndStart()
+                    self.configureAndStart()
+                }
             }
         }
     }
@@ -930,6 +995,17 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
                     payload: commandPacket.payload,
                     requestedAt: Date()
                 )
+            }
+            return
+        }
+
+        if let ackPacket = try? PropertyListDecoder().decode(WatchCaptureRelayAckPacket.self, from: data),
+           ackPacket.kind == WatchCaptureRelayAckPacket.packetKind {
+            #if DEBUG
+            print("[WATCH-DEBUG] Mac acknowledged import id=\(ackPacket.captureID)")
+            #endif
+            DispatchQueue.main.async {
+                self.onWatchCaptureAcknowledged?(ackPacket.captureID)
             }
         }
     }

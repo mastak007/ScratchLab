@@ -923,7 +923,9 @@ struct MacAnalyzerView: View {
                 title: "Relayed Watch Capture",
                 actionTitle: "Reconcile",
                 captureDirectoryURLProvider: { relayedWatchCaptureStore.captureDirectoryURL },
-                statusTextProvider: { relayedWatchCaptureStore.lastImportStatus },
+                statusTextProvider: {
+                    "\(relayedWatchCaptureStore.watchAvailabilitySummary)\n\(relayedWatchCaptureStore.lastImportStatus)"
+                },
                 runAction: { relayedWatchCaptureStore.reconcileStoredSessionsNow() },
                 validationReportProvider: nil
             )

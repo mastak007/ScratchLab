@@ -27,12 +27,17 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     @Published private(set) var isWatchAppInstalled = false
     @Published private(set) var isWatchReachable = false
     @Published private(set) var remoteCaptureState: RemoteCaptureState = .idle
+    @Published private(set) var macAcknowledgedCaptureIDs: Set<UUID> = []
 
     var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)?
+    /// (isPaired, isInstalled, isReachable) — fired whenever the local WCSession's view of the
+    /// watch changes, so the Mac bridge can relay a fresh snapshot over MultipeerConnectivity.
+    var onAvailabilityChange: ((Bool, Bool, Bool) -> Void)?
 
     private let fileManager = FileManager.default
     private let processingQueue = DispatchQueue(label: "com.scratchlab.watch-motion-import")
     private var hasActivatedWatchSession = false
+    private let macAcknowledgedCaptureIDsDefaultsKey = "com.scratchlab.watch.macAcknowledgedCaptureIDs"
 
     private var watchSession: WCSession? {
         guard WCSession.isSupported() else { return nil }
@@ -50,7 +55,25 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         createCaptureDirectoryIfNeeded()
         reconcileStoredCaptures()
         loadStoredSessions()
+        if let stored = UserDefaults.standard.stringArray(forKey: macAcknowledgedCaptureIDsDefaultsKey) {
+            macAcknowledgedCaptureIDs = Set(stored.compactMap(UUID.init(uuidString:)))
+        }
         activateIfNeeded()
+    }
+
+    /// Imported captures the Mac has not yet acknowledged importing. Used to retry the
+    /// iPhone -> Mac relay for every queued take on reconnect, not just the latest one.
+    func unsentCaptures() -> [ImportedWatchMotionCapture] {
+        importedSessions.filter { !macAcknowledgedCaptureIDs.contains($0.id) }
+    }
+
+    func markAcknowledgedByMac(_ id: UUID) {
+        guard !macAcknowledgedCaptureIDs.contains(id) else { return }
+        macAcknowledgedCaptureIDs.insert(id)
+        UserDefaults.standard.set(macAcknowledgedCaptureIDs.map(\.uuidString), forKey: macAcknowledgedCaptureIDsDefaultsKey)
+        #if DEBUG
+        print("[WATCH-DEBUG] Mac acknowledged import id=\(id)")
+        #endif
     }
 
     func jsonExportURL(for capture: ImportedWatchMotionCapture) -> URL {
@@ -227,6 +250,11 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         isWatchPaired = session.isPaired
         isWatchAppInstalled = session.isWatchAppInstalled
         isWatchReachable = session.isReachable
+
+        #if DEBUG
+        print("[WATCH-DEBUG] watch session state paired=\(isWatchPaired) installed=\(isWatchAppInstalled) reachable=\(isWatchReachable)")
+        #endif
+        onAvailabilityChange?(isWatchPaired, isWatchAppInstalled, isWatchReachable)
 
         if !session.isPaired {
             connectionSummary = "Pair your watch with this device to capture wrist motion."
@@ -592,6 +620,9 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
 
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         log("received file from watch: \(file.fileURL.lastPathComponent) metadata=\(file.metadata ?? [:])")
+        #if DEBUG
+        print("[WATCH-DEBUG] iPhone received watch file name=\(file.fileURL.lastPathComponent)")
+        #endif
         importTransferredFile(file)
     }
 }

@@ -72,6 +72,7 @@ private struct RootContainerView: View {
                 configureMIDILearn()
                 configureWatchRelay()
                 refreshWatchCapturePipelineIfNeeded()
+                syncWatchStateWithMac()
                 sessionUploadManager.refresh()
             }
             .onChange(of: companionRelayBroadcaster.pendingWatchControlCommand) { _, command in
@@ -82,11 +83,8 @@ private struct RootContainerView: View {
                 configureMIDILearnDevice()
             }
             .onChange(of: companionRelayBroadcaster.connectedPeerNames) { _, peers in
-                guard !peers.isEmpty, let latestCapture = watchMotionCaptureStore.importedSessions.first else { return }
-                companionRelayBroadcaster.sendWatchCaptureSession(
-                    latestCapture.session,
-                    fileName: latestCapture.fileURL.lastPathComponent
-                )
+                guard !peers.isEmpty else { return }
+                syncWatchStateWithMac()
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else {
@@ -95,6 +93,7 @@ private struct RootContainerView: View {
                 }
                 configureWatchRelay()
                 refreshWatchCapturePipelineIfNeeded()
+                syncWatchStateWithMac()
                 sessionUploadManager.refresh()
             }
     }
@@ -130,11 +129,39 @@ private struct RootContainerView: View {
                 fileName: importedCapture.fileURL.lastPathComponent
             )
         }
+        watchMotionCaptureStore.onAvailabilityChange = { isPaired, isInstalled, isReachable in
+            companionRelayBroadcaster.sendWatchAvailability(
+                isPaired: isPaired,
+                isInstalled: isInstalled,
+                isReachable: isReachable
+            )
+        }
+        companionRelayBroadcaster.onWatchCaptureAcknowledged = { id in
+            watchMotionCaptureStore.markAcknowledgedByMac(id)
+        }
     }
 
     private func refreshWatchCapturePipelineIfNeeded() {
         watchMotionCaptureStore.activateIfNeeded()
         watchMotionCaptureStore.checkForPendingImports()
+    }
+
+    /// Pushes current watch availability and every not-yet-acknowledged capture to a connected
+    /// Mac. Called on peer connect, app foreground, and launch so a Mac that connects after takes
+    /// were already queued still gets the full backlog, not just the most recent one.
+    private func syncWatchStateWithMac() {
+        guard !companionRelayBroadcaster.connectedPeerNames.isEmpty else { return }
+        companionRelayBroadcaster.sendWatchAvailability(
+            isPaired: watchMotionCaptureStore.isWatchPaired,
+            isInstalled: watchMotionCaptureStore.isWatchAppInstalled,
+            isReachable: watchMotionCaptureStore.isWatchReachable
+        )
+        for capture in watchMotionCaptureStore.unsentCaptures() {
+            companionRelayBroadcaster.sendWatchCaptureSession(
+                capture.session,
+                fileName: capture.fileURL.lastPathComponent
+            )
+        }
     }
 
     private func handleRemoteWatchControlCommand(_ command: CompanionCameraBroadcaster.WatchControlCommandEvent) {

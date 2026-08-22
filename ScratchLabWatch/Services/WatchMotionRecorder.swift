@@ -189,6 +189,10 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
             samples: finishedSamples
         )
 
+        #if DEBUG
+        print("[WATCH-DEBUG] motion queued sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil")")
+        #endif
+
         do {
             let fileURL = try persist(captureSession)
             queueTransfer(of: fileURL)
@@ -217,6 +221,10 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         isPhonePaired = session.activationState == .activated || session.isCompanionAppInstalled || session.isReachable
         isCompanionInstalled = session.isCompanionAppInstalled
         isPhoneReachable = session.isReachable
+
+        #if DEBUG
+        print("[WATCH-DEBUG] watch session state paired=\(isPhonePaired) installed=\(isCompanionInstalled) reachable=\(isPhoneReachable)")
+        #endif
 
         if !session.isCompanionAppInstalled {
             transferStatus = "Install ScratchLab on your paired device to receive watch captures."
@@ -301,6 +309,9 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         guard !pendingFiles.isEmpty else { return }
 
         log("retry sweep: \(pendingFiles.count) persisted capture(s) on disk, \(watchSession.outstandingFileTransfers.count) outstanding at session level")
+        #if DEBUG
+        print("[WATCH-DEBUG] transfer failed/retrying — retry sweep found \(pendingFiles.count) persisted capture(s) on disk")
+        #endif
 
         for fileURL in pendingFiles {
             queueTransfer(of: fileURL, isRetry: true)
@@ -472,6 +483,9 @@ extension WatchMotionRecorder: WCSessionDelegate {
             if let error {
                 self.log("transfer failed: \(fileName) — \(error.localizedDescription)")
                 print("Watch transfer error: \(error.localizedDescription)")
+                #if DEBUG
+                print("[WATCH-DEBUG] transfer failed/retrying — \(fileName): \(error.localizedDescription)")
+                #endif
                 self.transferStatus = "Couldn't send to your paired device. Will retry automatically."
                 return
             }
