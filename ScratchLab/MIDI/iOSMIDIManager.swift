@@ -2,6 +2,28 @@ import Combine
 import CoreMIDI
 import Foundation
 import QuartzCore
+import os
+
+/// Thread-safe handoff for the audio-only platter fast path. CoreMIDI invokes
+/// this before the parsed batch is enqueued on the main actor, while the
+/// existing `onMessage` pipeline remains the sole UI/notation/MIDI-learn path.
+private final class IOSMIDIPlatterMessageSink: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock()
+    private var handler: (@Sendable (ParsedMIDIMessage) -> Void)?
+
+    func setHandler(_ handler: @escaping @Sendable (ParsedMIDIMessage) -> Void) {
+        lock.lock()
+        self.handler = handler
+        lock.unlock()
+    }
+
+    func receive(_ message: ParsedMIDIMessage) {
+        lock.lock()
+        let handler = handler
+        lock.unlock()
+        handler?(message)
+    }
+}
 
 private func scratchLabIOSMIDIReadProc(
     packetList: UnsafePointer<MIDIPacketList>,
@@ -45,6 +67,18 @@ final class IOSMIDIManager: ObservableObject {
     /// Optional transport-level observation hook. Callers receive parsed
     /// messages only; no controller behaviour is attached here.
     var onMessage: ((ParsedMIDIMessage) -> Void)?
+
+    private nonisolated let platterMessageSink = IOSMIDIPlatterMessageSink()
+
+    /// Installs the audio-only CC6 consumer. Unlike `onMessage`, this callback
+    /// runs on CoreMIDI's receive thread before the batch reaches the main
+    /// actor, matching the macOS platter tracker's timing without moving any
+    /// UI, notation, MIDI Learn, or hot-cue resolution off the main actor.
+    func setPlatterAudioMessageHandler(
+        _ handler: @escaping @Sendable (ParsedMIDIMessage) -> Void
+    ) {
+        platterMessageSink.setHandler(handler)
+    }
 
     private struct ConnectedSource {
         let source: Source
@@ -205,6 +239,13 @@ final class IOSMIDIManager: ObservableObject {
         }
 
         guard !parsedMessages.isEmpty else { return }
+        for message in parsedMessages
+        where message.messageType == .controlChange
+            && message.controlNumber == 6
+            && (Int(message.channel) == ScratchPlatterTracker.leftChannel
+                || Int(message.channel) == ScratchPlatterTracker.rightChannel) {
+            platterMessageSink.receive(message)
+        }
         Task { @MainActor [weak self] in
             self?.publish(parsedMessages)
         }
@@ -319,6 +360,12 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// parity with macOS's diagnostics, but only the right platter (channel 1 /
     /// Deck 2) drives playback — same product decision macOS already applies.
     private let platterTracker = ScratchPlatterTracker()
+
+    /// Audio-only tracker fed directly from CoreMIDI before the main-actor
+    /// batch. It intentionally remains separate from `platterTracker`: the
+    /// latter preserves the existing UI/notation/debug path byte-for-byte,
+    /// while both reuse the same shared, thread-safe CC6 unwrap logic.
+    private nonisolated let audioPlatterTracker = ScratchPlatterTracker()
 
     /// One platter revolution's worth of CC6 ring-counter steps. Mirrors the
     /// same measured Rane ONE MKII constant macOS keeps locally in
@@ -557,6 +604,22 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         case .crossfader, .upfader, .unknown:
             break
         }
+    }
+
+    /// CoreMIDI-thread fast path used only to publish the right-deck absolute
+    /// phase to the audio clock. No ObservableObject or Practice state is
+    /// touched here.
+    nonisolated func receivePlatterAudioMessage(_ message: ParsedMIDIMessage) {
+        let channel = Int(message.channel)
+        guard message.messageType == .controlChange,
+              message.controlNumber == 6,
+              channel == ScratchPlatterTracker.leftChannel
+                || channel == ScratchPlatterTracker.rightChannel else { return }
+        audioPlatterTracker.ingest(channel: channel, value: Int(message.value))
+        guard channel == ScratchPlatterTracker.rightChannel else { return }
+        playbackEngine.publishRawPlatterPhase(
+            Double(audioPlatterTracker.accumulatedSteps(for: channel))
+        )
     }
 
     /// Decode one raw CC6 platter ring-counter event and, for the right deck

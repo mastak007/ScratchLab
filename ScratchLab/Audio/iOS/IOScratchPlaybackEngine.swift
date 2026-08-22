@@ -13,6 +13,81 @@
 import AVFoundation
 import Foundation
 import QuartzCore
+import Synchronization
+
+/// Keeps the platter-to-renderer control clock off the main actor. RANE CC6
+/// traffic also drives live SwiftUI notation state, so sharing `.main` with
+/// that bursty publication path makes the velocity sampling interval uneven
+/// enough to modulate pitch. macOS confines the equivalent clock to its serial
+/// audio queue; this is the minimal iOS counterpart.
+private final class IOScratchMIDIControlLoop: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.scratchlab.ios.midi-scratch-control",
+        qos: .userInteractive
+    )
+    private let latestPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
+
+    // Accessed only on `queue`.
+    private var drive = MIDIPlatterContinuousDrive()
+    private var timer: DispatchSourceTimer?
+    private var renderer: IOScratchRenderer?
+    private var hotCuePhase: Double = 0
+
+    func publish(phase: Double) {
+        guard phase.isFinite else { return }
+        latestPhaseBits.store(phase.bitPattern, ordering: .relaxed)
+    }
+
+    var latestPhase: Double {
+        Double(bitPattern: latestPhaseBits.load(ordering: .relaxed))
+    }
+
+    func start(renderer: IOScratchRenderer, hotCuePhase: Double) {
+        stop()
+        queue.sync {
+            drive.reset()
+            self.renderer = renderer
+            self.hotCuePhase = hotCuePhase
+
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(
+                deadline: .now(),
+                repeating: 1.0 / 60.0,
+                leeway: .milliseconds(1)
+            )
+            timer.setEventHandler { [weak self] in
+                self?.tick()
+            }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    /// Cancels and drains the serial queue before the renderer is reloaded or
+    /// reset, so its single control writer can never overlap lifecycle work.
+    func stop() {
+        queue.sync {
+            timer?.setEventHandler {}
+            timer?.cancel()
+            timer = nil
+            renderer = nil
+            drive.reset()
+        }
+    }
+
+    private func tick() {
+        guard let renderer else { return }
+        let phase = Double(bitPattern: latestPhaseBits.load(ordering: .relaxed))
+        let result = drive.tick(
+            accumulatedSteps: Int(phase),
+            now: CACurrentMediaTime()
+        )
+        renderer.update(
+            relativePlatterSteps: phase - hotCuePhase,
+            signedVelocityStepsPerSecond: result?.velocity ?? 0
+        )
+    }
+}
 
 @MainActor
 final class IOScratchPlaybackEngine: ObservableObject {
@@ -20,8 +95,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private let engine = AVAudioEngine()
     private var renderer: IOScratchRenderer?
     private var outputConfiguration: OutputConfiguration?
-    private var midiContinuousDrive = MIDIPlatterContinuousDrive()
-    private var midiCoalescingTimer: DispatchSourceTimer?
+    private let midiControlLoop = IOScratchMIDIControlLoop()
 
     private struct OutputConfiguration: Equatable {
         let preferredHardwareChannelCount: Int
@@ -50,6 +124,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
         let playbackSampleID = sampleID == "ahhh" ? "dvs_ahhh" : sampleID
         guard let url = ScratchSampleResolver.url(for: playbackSampleID) else { return }
         do {
+            midiControlLoop.stop()
             let renderer = try prepareRendererForCurrentRoute()
             let file = try AVAudioFile(forReading: url)
             let format = file.processingFormat
@@ -80,13 +155,15 @@ final class IOScratchPlaybackEngine: ObservableObject {
             #endif
             return
         }
-        hotCuePlatterPhase = currentPlatterPosition?.phase ?? 0
-        midiContinuousDrive.reset()
+        hotCuePlatterPhase = midiControlLoop.latestPhase
         renderer.update(relativePlatterSteps: 0, signedVelocityStepsPerSecond: 0)
         do {
             try startEngineIfNeeded()
             renderer.activate()
-            startMIDIControlLoop()
+            midiControlLoop.start(
+                renderer: renderer,
+                hotCuePhase: hotCuePlatterPhase ?? 0
+            )
             #if DEBUG
             print("[MIDI-DEBUG] sample armed · \(sampleID)")
             #endif
@@ -99,10 +176,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
 
     /// Stop playback entirely and reset the playhead.
     func stop() {
-        midiCoalescingTimer?.setEventHandler {}
-        midiCoalescingTimer?.cancel()
-        midiCoalescingTimer = nil
-        midiContinuousDrive.reset()
+        midiControlLoop.stop()
         renderer?.reset()
     }
 
@@ -119,6 +193,13 @@ final class IOScratchPlaybackEngine: ObservableObject {
         #endif
     }
 
+    /// CoreMIDI-thread publication surface for the audio-only absolute phase.
+    /// The control loop owns the atomic handoff; no actor-isolated state is
+    /// read or mutated here.
+    nonisolated func publishRawPlatterPhase(_ phase: Double) {
+        midiControlLoop.publish(phase: phase)
+    }
+
     // MARK: - Internals
 
     /// Start the audio engine once, idempotently.
@@ -126,40 +207,6 @@ final class IOScratchPlaybackEngine: ObservableObject {
         if !engine.isRunning {
             try engine.start()
         }
-    }
-
-    /// Match the macOS direct-MIDI drive: sample the accumulated CC6 position
-    /// at a bounded cadence and derive signed velocity from real monotonic
-    /// elapsed time. This avoids pitch modulation from per-packet timing and
-    /// from the tracker's diagnostic fixed-rate velocity estimate.
-    private func startMIDIControlLoop() {
-        midiCoalescingTimer?.setEventHandler {}
-        midiCoalescingTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(
-            deadline: .now(),
-            repeating: 1.0 / 60.0,
-            leeway: .milliseconds(1)
-        )
-        timer.setEventHandler { [weak self] in
-            self?.publishMIDIControlTick()
-        }
-        midiCoalescingTimer = timer
-        timer.resume()
-    }
-
-    private func publishMIDIControlTick() {
-        guard let renderer,
-              let position = currentPlatterPosition,
-              let hotCuePlatterPhase else { return }
-        let tick = midiContinuousDrive.tick(
-            accumulatedSteps: Int(position.phase),
-            now: CACurrentMediaTime()
-        )
-        renderer.update(
-            relativePlatterSteps: position.phase - hotCuePlatterPhase,
-            signedVelocityStepsPerSecond: tick?.velocity ?? 0
-        )
     }
 
     /// Builds the graph for the route observed at hot-cue load time. The RANE

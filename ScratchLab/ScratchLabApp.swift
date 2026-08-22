@@ -100,6 +100,9 @@ private struct RootContainerView: View {
     }
 
     private func configureMIDILearn() {
+        midiManager.setPlatterAudioMessageHandler { [weak midiControllerDispatcher] message in
+            midiControllerDispatcher?.receivePlatterAudioMessage(message)
+        }
         midiManager.onMessage = { [weak midiLearnCoordinator, weak midiControllerDispatcher] message in
             midiLearnCoordinator?.receive(message)
             midiControllerDispatcher?.receive(message)
