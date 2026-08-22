@@ -342,6 +342,18 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     private var captureBaselineTimestamp: Double = CACurrentMediaTime()
     private var liveNotationUpdateScheduled = false
     private static let liveNotationUpdateInterval: TimeInterval = 0.04
+    /// Keep live position normalization local to the same rolling interval the
+    /// Practice lane displays. Finalized Result notation continues to decode
+    /// the complete attempt from `capturedPlatterMIDIEvents`.
+    private static let liveNotationWindowDuration: TimeInterval = 3.2
+    /// Until the RANE touch-state message is captured, distinguish a released
+    /// powered platter from hand motion by its sustained, stable 33⅓-RPM CC6
+    /// rate. This gates only the live preview publication; raw attempt evidence
+    /// and Result decoding remain untouched.
+    private static let motorReleaseDetectionWindow: TimeInterval = 0.35
+    private static let motorReleaseMinimumDuration: TimeInterval = 0.28
+    private static let motorReleaseStepsPerSecondRange = 1_700.0...2_300.0
+    private var isSuppressingReleasedMotorRotation = false
     private static let iOSPlatterDeviceName = "iOS RANE Platter"
 
     #if DEBUG
@@ -372,6 +384,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         capturedPlatterMIDIEvents.removeAll()
         livePlatterMovementEvents.removeAll()
         captureBaselineTimestamp = CACurrentMediaTime()
+        isSuppressingReleasedMotorRotation = false
         #if DEBUG
         print("[SCRATCH-DEBUG] shared scratch state reset for new attempt")
         #endif
@@ -398,7 +411,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// segmentation rules remain the shared `CaptureCore` implementation.
     private var decodedLivePlatterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
         let result = CaptureCore.derivePlatterMovementEventsWithProvisional(
-            from: capturedPlatterMIDIEvents,
+            from: liveNotationMIDIEvents,
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
         )
@@ -422,14 +435,88 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         return result.committedEvents + [preview]
     }
 
+    /// Right-deck CC6 telemetry covering the visible live interval, plus the
+    /// immediately preceding sample needed to preserve the first modular
+    /// delta. Re-decoding this bounded slice rebases the decoder's existing
+    /// 0...1 position normalization as the window advances, preventing a long
+    /// forward or backward run from pinning the trace to an attempt-wide
+    /// maximum or minimum. This is presentation-only; the source telemetry is
+    /// never trimmed or mutated.
+    private var liveNotationMIDIEvents: [CaptureCore.RawMixerMIDIEvent] {
+        let matchesRightPlatter: (CaptureCore.RawMixerMIDIEvent) -> Bool = {
+            $0.controller == 6 && $0.channel == ScratchPlatterTracker.rightChannel
+        }
+        guard let latestTime = capturedPlatterMIDIEvents.last(where: matchesRightPlatter)?.takeRelativeTime else {
+            return []
+        }
+
+        let cutoff = max(0, latestTime - Self.liveNotationWindowDuration)
+        var reversedWindow: [CaptureCore.RawMixerMIDIEvent] = []
+        for event in capturedPlatterMIDIEvents.reversed() where matchesRightPlatter(event) {
+            reversedWindow.append(event)
+            if event.takeRelativeTime < cutoff {
+                break
+            }
+        }
+        return Array(reversedWindow.reversed())
+    }
+
     private func scheduleLiveNotationUpdate() {
         guard !liveNotationUpdateScheduled else { return }
         liveNotationUpdateScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.liveNotationUpdateInterval) { [weak self] in
             guard let self else { return }
             self.liveNotationUpdateScheduled = false
+            let suppressMotorRotation = self.isLikelyReleasedMotorRotation
+            #if DEBUG
+            if suppressMotorRotation != self.isSuppressingReleasedMotorRotation {
+                print("[NOTATION-DEBUG] released motor rotation \(suppressMotorRotation ? "suppressed" : "ended")")
+            }
+            #endif
+            self.isSuppressingReleasedMotorRotation = suppressMotorRotation
+            guard !suppressMotorRotation else { return }
             self.livePlatterMovementEvents = self.decodedLivePlatterMovementEvents
         }
+    }
+
+    /// Presentation-only release inference for the motorized right platter.
+    /// A real scratch reversal exits immediately because any backward travel
+    /// fails the forward-dominance gate. A short forward push also remains
+    /// visible because it cannot satisfy the sustained-duration gate.
+    private var isLikelyReleasedMotorRotation: Bool {
+        let matchesRightDeck: (CaptureCore.RawMixerMIDIEvent) -> Bool = {
+            $0.controller == 6 && $0.channel == ScratchPlatterTracker.rightChannel
+        }
+        guard let latest = capturedPlatterMIDIEvents.last(where: matchesRightDeck) else { return false }
+        let cutoff = latest.takeRelativeTime - Self.motorReleaseDetectionWindow
+        var reversedRecent: [CaptureCore.RawMixerMIDIEvent] = []
+        for event in capturedPlatterMIDIEvents.reversed() {
+            if event.takeRelativeTime < cutoff { break }
+            if matchesRightDeck(event) { reversedRecent.append(event) }
+        }
+        let recent = reversedRecent.reversed()
+        guard let first = recent.first, recent.count >= 2 else { return false }
+        let duration = latest.takeRelativeTime - first.takeRelativeTime
+        guard duration >= Self.motorReleaseMinimumDuration else { return false }
+
+        var forwardSteps = 0
+        var backwardSteps = 0
+        var previousValue = first.value
+        for event in recent.dropFirst() {
+            var delta = event.value - previousValue
+            if delta > 64 { delta -= 128 }
+            else if delta < -64 { delta += 128 }
+            if delta > 0 { forwardSteps += delta }
+            else if delta < 0 { backwardSteps += -delta }
+            previousValue = event.value
+        }
+
+        let totalTravel = forwardSteps + backwardSteps
+        guard totalTravel > 0 else { return false }
+        let forwardFraction = Double(forwardSteps) / Double(totalTravel)
+        let signedRate = Double(forwardSteps - backwardSteps) / duration
+        return forwardFraction >= 0.98
+            && Self.motorReleaseStepsPerSecondRange.contains(signedRate)
     }
 
     /// Process one parsed MIDI message. Transport presses toggle the shared

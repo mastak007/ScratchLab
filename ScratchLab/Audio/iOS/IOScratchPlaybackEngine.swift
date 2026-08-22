@@ -12,53 +12,45 @@
 
 import AVFoundation
 import Foundation
+import QuartzCore
 
 @MainActor
 final class IOScratchPlaybackEngine: ObservableObject {
 
     private let engine = AVAudioEngine()
-    private let renderer = IOScratchRenderer()
+    private var renderer: IOScratchRenderer?
+    private var outputConfiguration: OutputConfiguration?
+    private var midiContinuousDrive = MIDIPlatterContinuousDrive()
+    private var midiCoalescingTimer: DispatchSourceTimer?
+
+    private struct OutputConfiguration: Equatable {
+        let preferredHardwareChannelCount: Int
+        let usesDeck2ChannelMap: Bool
+        let routeName: String
+    }
 
     /// The latest observed platter position.
     private var currentPlatterPosition: PlatterPosition?
+    /// Absolute RANE step phase at the most recent hotcue press. Playback is
+    /// always derived relative to this origin so HC1 means audible frame zero.
+    private var hotCuePlatterPhase: Double?
 
     #if DEBUG
     private var lastPlatterLogUptime: TimeInterval = -.infinity
     private let platterLogInterval: TimeInterval = 0.5
     #endif
 
-    init() {
-        // Best-effort: request a clean 2-channel output route instead of
-        // exposing the RANE ONE MKII's full multichannel output surface
-        // (14 channels) to the graph. Independent of input channel count
-        // (preferredInputNumberOfChannels is untouched elsewhere, so DVS
-        // capture's full-channel-set input behaviour is unaffected).
-        try? AVAudioSession.sharedInstance().setPreferredOutputNumberOfChannels(2)
-
-        engine.attach(renderer.sourceNode)
-        let stereoFormat = AVAudioFormat(
-            standardFormatWithSampleRate: engine.outputNode.outputFormat(forBus: 0).sampleRate,
-            channels: 2
-        )
-        // Explicit stereo format end to end. `format: nil` on the source →
-        // mixer connection already carries the source node's own 2-channel
-        // format through, but the mixer → output connection is otherwise
-        // left to AVAudioEngine's automatic default wiring, which adopts
-        // the hardware's full (multichannel) output format. Against an
-        // untagged >2-channel discrete output bus, AVAudioMixerNode's pan
-        // logic has nothing to pan the stereo signal onto and only channel
-        // 0 reaches the output — the left-channel-only bug this fixes.
-        // Connecting explicitly with a 2-channel format instead makes the
-        // engine insert a plain channel-count converter (ch0→hw0, ch1→hw1)
-        // rather than routing through that pan logic.
-        engine.connect(renderer.sourceNode, to: engine.mainMixerNode, format: renderer.sourceNode.outputFormat(forBus: 0))
-        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
-    }
+    init() {}
 
     /// Load a scratch sample by ID into the renderer's PCM buffer.
     func load(sampleID: String) {
-        guard let url = ScratchSampleResolver.url(for: sampleID) else { return }
+        // HC1's catalog ID is `ahhh`, but the padded ScratchSamples asset is
+        // not platter-ready (345 ms leading silence and >3 s trailing silence).
+        // iOS uses the same trimmed 1.047 s asset as the proven DVS path.
+        let playbackSampleID = sampleID == "ahhh" ? "dvs_ahhh" : sampleID
+        guard let url = ScratchSampleResolver.url(for: playbackSampleID) else { return }
         do {
+            let renderer = try prepareRendererForCurrentRoute()
             let file = try AVAudioFile(forReading: url)
             let format = file.processingFormat
             let frameCount = AVAudioFrameCount(file.length)
@@ -82,9 +74,19 @@ final class IOScratchPlaybackEngine: ObservableObject {
         #endif
 
         load(sampleID: sampleID)
+        guard let renderer else {
+            #if DEBUG
+            print("[MIDI-DEBUG] sample playback failed · reason=audio route unavailable")
+            #endif
+            return
+        }
+        hotCuePlatterPhase = currentPlatterPosition?.phase ?? 0
+        midiContinuousDrive.reset()
+        renderer.update(relativePlatterSteps: 0, signedVelocityStepsPerSecond: 0)
         do {
             try startEngineIfNeeded()
             renderer.activate()
+            startMIDIControlLoop()
             #if DEBUG
             print("[MIDI-DEBUG] sample armed · \(sampleID)")
             #endif
@@ -97,7 +99,11 @@ final class IOScratchPlaybackEngine: ObservableObject {
 
     /// Stop playback entirely and reset the playhead.
     func stop() {
-        renderer.reset()
+        midiCoalescingTimer?.setEventHandler {}
+        midiCoalescingTimer?.cancel()
+        midiCoalescingTimer = nil
+        midiContinuousDrive.reset()
+        renderer?.reset()
     }
 
     /// Observe the latest platter position and drive scratch playback:
@@ -111,7 +117,6 @@ final class IOScratchPlaybackEngine: ObservableObject {
             print("[SCRATCH-DEBUG] platter position received · phase=\(position.phase) direction=\(position.direction) velocity=\(position.velocity)")
         }
         #endif
-        renderer.update(position: position)
     }
 
     // MARK: - Internals
@@ -121,5 +126,94 @@ final class IOScratchPlaybackEngine: ObservableObject {
         if !engine.isRunning {
             try engine.start()
         }
+    }
+
+    /// Match the macOS direct-MIDI drive: sample the accumulated CC6 position
+    /// at a bounded cadence and derive signed velocity from real monotonic
+    /// elapsed time. This avoids pitch modulation from per-packet timing and
+    /// from the tracker's diagnostic fixed-rate velocity estimate.
+    private func startMIDIControlLoop() {
+        midiCoalescingTimer?.setEventHandler {}
+        midiCoalescingTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(
+            deadline: .now(),
+            repeating: 1.0 / 60.0,
+            leeway: .milliseconds(1)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.publishMIDIControlTick()
+        }
+        midiCoalescingTimer = timer
+        timer.resume()
+    }
+
+    private func publishMIDIControlTick() {
+        guard let renderer,
+              let position = currentPlatterPosition,
+              let hotCuePlatterPhase else { return }
+        let tick = midiContinuousDrive.tick(
+            accumulatedSteps: Int(position.phase),
+            now: CACurrentMediaTime()
+        )
+        renderer.update(
+            relativePlatterSteps: position.phase - hotCuePlatterPhase,
+            signedVelocityStepsPerSecond: tick?.velocity ?? 0
+        )
+    }
+
+    /// Builds the graph for the route observed at hot-cue load time. The RANE
+    /// ONE MKII exposes Deck 1 on physical outputs 1/2 and Deck 2 on 3/4, so a
+    /// four-channel discrete source writes only channels 2/3 (zero-based).
+    /// Every other route retains the existing two-channel stereo graph.
+    private func prepareRendererForCurrentRoute() throws -> IOScratchRenderer {
+        let session = AVAudioSession.sharedInstance()
+        try session.setActive(true)
+
+        let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
+        let normalizedRouteName = routeName.lowercased()
+        let isRaneOne = normalizedRouteName.contains("rane") && normalizedRouteName.contains("one")
+        let supportsDeck2Pair = session.maximumOutputNumberOfChannels >= 4
+        let configuration = OutputConfiguration(
+            preferredHardwareChannelCount: isRaneOne && supportsDeck2Pair ? 4 : 2,
+            usesDeck2ChannelMap: isRaneOne && supportsDeck2Pair,
+            routeName: routeName
+        )
+        if configuration == outputConfiguration, let renderer {
+            return renderer
+        }
+
+        engine.stop()
+        if let renderer {
+            engine.disconnectNodeOutput(renderer.sourceNode)
+            engine.detach(renderer.sourceNode)
+        }
+        engine.disconnectNodeOutput(engine.mainMixerNode)
+
+        try session.setPreferredOutputNumberOfChannels(configuration.preferredHardwareChannelCount)
+        let renderer = IOScratchRenderer()
+        engine.attach(renderer.sourceNode)
+        let stereoFormat = renderer.sourceNode.outputFormat(forBus: 0)
+        engine.connect(
+            renderer.sourceNode,
+            to: engine.mainMixerNode,
+            format: stereoFormat
+        )
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
+
+        // The output unit's channel map is destination-indexed. Preserve the
+        // renderer's proven stereo graph and place it on the RANE's four-channel
+        // hardware surface as: Deck 1 L/R = silence, Deck 2 L/R = source L/R.
+        // Generic routes clear the override and retain ordinary stereo output.
+        engine.outputNode.auAudioUnit.channelMap = configuration.usesDeck2ChannelMap
+            ? [-1, -1, 0, 1]
+            : nil
+        self.renderer = renderer
+        outputConfiguration = configuration
+
+        #if DEBUG
+        print("[SCRATCH-DEBUG] playback output configured · route=\(routeName) hardwareChannels=\(configuration.preferredHardwareChannelCount) channelMap=\(engine.outputNode.auAudioUnit.channelMap ?? [])")
+        #endif
+        return renderer
     }
 }
