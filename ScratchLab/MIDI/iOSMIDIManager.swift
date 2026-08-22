@@ -313,6 +313,23 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// delegates audio to this engine instead of owning playback itself.
     private let playbackEngine: IOScratchPlaybackEngine
 
+    /// Platter CC6 ring-counter tracker, shared logic with the macOS runtime
+    /// (`MacCaptureEngine`/`ScratchPlatterTracker`). Both decks are tracked for
+    /// parity with macOS's diagnostics, but only the right platter (channel 1 /
+    /// Deck 2) drives playback — same product decision macOS already applies.
+    private let platterTracker = ScratchPlatterTracker()
+
+    /// One platter revolution's worth of CC6 ring-counter steps. Mirrors the
+    /// same measured Rane ONE MKII constant macOS keeps locally in
+    /// `MacCaptureEngine`/`ScratchSamplePlaybackController` (each side owns its
+    /// own copy there too — this isn't a new duplication pattern).
+    private static let midiStepsPerRevolution: Double = 3932
+
+    #if DEBUG
+    private var lastPlatterDebugLogUptime: TimeInterval = -.infinity
+    private let platterDebugLogInterval: TimeInterval = 0.5
+    #endif
+
     init(
         transportState: TransportState,
         playbackEngine: IOScratchPlaybackEngine,
@@ -332,6 +349,19 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// Process one parsed MIDI message. Transport presses toggle the shared
     /// transport state; hot-cue pads resolve through the shared trigger resolver.
     func receive(_ message: ParsedMIDIMessage) {
+        // Platter fast path — mirrors macOS's `MacCaptureEngine
+        // .dispatchMIDIChannelVoiceMessage`, which intercepts the raw CC6
+        // ring-counter on channel 0/1 before generic action resolution.
+        // `MIDIActionResolver` deliberately has no platter-movement case (it
+        // only knows transport/hot-cue/crossfader/upfader), so without this,
+        // platter CC6 messages fell through to `.unknown` and were dropped —
+        // the iOS parity gap this fixes.
+        if message.messageType == .controlChange, message.controlNumber == 6,
+           Int(message.channel) == ScratchPlatterTracker.leftChannel || Int(message.channel) == ScratchPlatterTracker.rightChannel {
+            handlePlatterCC(message)
+            return
+        }
+
         let action = MIDIActionResolver.resolve(message: message, mapping: currentMapping)
         switch action {
         case .transport:
@@ -343,6 +373,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             #endif
         case .hotCue:
             let decision = HotCueTriggerResolver.resolve(action: action, transportState: transportState)
+            #if DEBUG
+            print("[MIDI-DEBUG] hotcue trigger decision · shouldTrigger=\(decision.shouldTrigger) sample=\(decision.sampleID ?? "nil")")
+            #endif
             guard decision.shouldTrigger, let sampleID = decision.sampleID else { return }
             #if DEBUG
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
@@ -351,6 +384,63 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         case .crossfader, .upfader, .unknown:
             break
         }
+    }
+
+    /// Decode one raw CC6 platter ring-counter event and, for the right deck
+    /// only (channel 1 — same single-loaded-sample product decision macOS
+    /// applies), publish the resulting `PlatterPosition` to the playback
+    /// engine. The left deck (channel 0) is tracked for parity/diagnostics
+    /// but never drives playback, matching macOS.
+    private func handlePlatterCC(_ message: ParsedMIDIMessage) {
+        let channel = Int(message.channel)
+        let delta = platterTracker.ingest(channel: channel, value: Int(message.value))
+        let steps = platterTracker.accumulatedSteps(for: channel)
+        let direction = platterTracker.recentDirection(for: channel)
+
+        #if DEBUG
+        let shouldLog: Bool = {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastPlatterDebugLogUptime >= platterDebugLogInterval else { return false }
+            lastPlatterDebugLogUptime = now
+            return true
+        }()
+        if shouldLog {
+            print("[MIDI-DEBUG] platter CC6 received · channel=\(channel) value=\(message.value) delta=\(delta ?? 0)")
+            print("[MIDI-DEBUG] platter decoded · steps=\(steps) direction=\(String(describing: direction))")
+        }
+        #endif
+
+        guard channel == ScratchPlatterTracker.rightChannel else { return }
+
+        let platterDirection: PlatterDirection
+        switch direction {
+        case .forward: platterDirection = .forward
+        case .backward: platterDirection = .backward
+        case nil: platterDirection = .idle
+        }
+        let normalized = Self.normalizedPosition(forSteps: steps)
+        let position = PlatterPosition(
+            phase: Double(steps),
+            direction: platterDirection,
+            velocity: platterTracker.recentVelocity(for: channel),
+            normalizedPosition: normalized
+        )
+        #if DEBUG
+        if shouldLog {
+            print("[MIDI-DEBUG] platter normalizedPosition update · \(normalized)")
+        }
+        #endif
+        playbackEngine.updatePlatterPosition(position)
+    }
+
+    /// Maps accumulated CC6 steps onto a 0...1 sample position, one platter
+    /// revolution = one pass through the loaded sample (wrapping). Pure
+    /// control-path math — no clock, no velocity-driven playback; the
+    /// position only ever moves in direct response to a real MIDI delta.
+    private static func normalizedPosition(forSteps steps: Int) -> Double {
+        let wrapped = Double(steps).truncatingRemainder(dividingBy: midiStepsPerRevolution)
+        return wrapped < 0 ? (wrapped + midiStepsPerRevolution) / midiStepsPerRevolution
+                            : wrapped / midiStepsPerRevolution
     }
 
 }
