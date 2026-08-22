@@ -154,6 +154,10 @@ struct PracticeModeView: View {
     @State private var lastAccuracyValue: Double = 0
     // Notation feedback overlay state — driven by live scratch detection results.
     @State private var notationFeedbackState: NotationFeedbackState = .neutral
+    // Active-attempt performance evidence for the live notation lane. This is
+    // presentation state only; Result continues to resolve its finalized
+    // evidence directly from `midiControllerDispatcher.platterMovementEvents`.
+    @State private var livePerformedMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
 
     let durationOptions: [(String, TimeInterval)] = [
         ("5 min", 300),
@@ -591,6 +595,9 @@ struct PracticeModeView: View {
         .onDisappear {
             cleanupSession()
             practiceBeatStore.handleLeavingPractice()
+        }
+        .onReceive(midiControllerDispatcher.$livePlatterMovementEvents) { _ in
+            updateLivePerformedNotation()
         }
         .overlay {
             if showMicRationale {
@@ -1114,6 +1121,17 @@ struct PracticeModeView: View {
                 ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis,
                                   feedbackState: notationFeedbackState)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if !livePerformedMovementEvents.isEmpty {
+                    ScratchNotationPanel(
+                        lane: .performance,
+                        presentation: .compact,
+                        source: .performedPlatter(livePerformedMovementEvents),
+                        bpm: Double(practiceBeatStore.bpmValue),
+                        domain: livePerformanceDomain,
+                        mode: .liveComparison
+                    )
+                }
             }
         } else {
             // Graceful no-target state: this technique has no canonical
@@ -1329,6 +1347,7 @@ struct PracticeModeView: View {
         comboCompleted = false
         comboCompletionQueued = false
         sessionProgressPersisted = false
+        livePerformedMovementEvents = []
         midiControllerDispatcher.resetCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
@@ -1448,6 +1467,7 @@ struct PracticeModeView: View {
         comboCompleted = false
         comboCompletionQueued = false
         sessionProgressPersisted = false
+        livePerformedMovementEvents = []
         midiControllerDispatcher.resetCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
@@ -1474,6 +1494,7 @@ struct PracticeModeView: View {
         comboCompleted = false
         comboCompletionQueued = false
         sessionProgressPersisted = false
+        livePerformedMovementEvents = []
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
         sessionTipText = ""
@@ -1748,6 +1769,31 @@ struct PracticeModeView: View {
         }
         #endif
         return resolved
+    }
+
+    /// Bridges the dispatcher's published CC6 accumulation into the active
+    /// Practice attempt. SwiftUI then invalidates the existing performance
+    /// `ScratchNotationPanel`; no renderer geometry or notation grammar is
+    /// reimplemented here.
+    private func updateLivePerformedNotation() {
+        guard isSessionActive, !isPaused, practiceAssistMode != .demo else { return }
+        let events = midiControllerDispatcher.livePlatterMovementEvents
+        guard events != livePerformedMovementEvents else { return }
+        livePerformedMovementEvents = events
+        #if DEBUG
+        print("[SCRATCH-DEBUG] practice live state updated · movementEvents=\(events.count)")
+        if !events.isEmpty {
+            print("[NOTATION-DEBUG] renderer received live performance data · movementEvents=\(events.count)")
+        }
+        #endif
+    }
+
+    /// Rolling live window, matching the macOS tracker card's visible domain.
+    private var livePerformanceDomain: ClosedRange<TimeInterval>? {
+        guard let first = livePerformedMovementEvents.first,
+              let last = livePerformedMovementEvents.last else { return nil }
+        let end = max(first.startTime + 3.2, last.endTime)
+        return max(0, end - 3.2)...end
     }
 
     private func registerComboHitIfNeeded(_ result: ScratchAnalysisResult) -> Bool {

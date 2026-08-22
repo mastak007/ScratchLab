@@ -334,8 +334,14 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// for Practice/Review notation — no separate decode algorithm. This is
     /// purely a notation/state feed; it plays no part in scratch audio or
     /// hotcue behaviour. Reset per attempt via `resetCapturedPlatterEvents()`.
-    @Published private(set) var capturedPlatterMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    private(set) var capturedPlatterMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    /// Coalesced live renderer input. Raw platter MIDI can arrive much faster
+    /// than SwiftUI should redraw, so this is refreshed at the same ~25 Hz
+    /// cadence as the macOS live tracker rather than publishing every packet.
+    @Published private(set) var livePlatterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
     private var captureBaselineTimestamp: Double = CACurrentMediaTime()
+    private var liveNotationUpdateScheduled = false
+    private static let liveNotationUpdateInterval: TimeInterval = 0.04
     private static let iOSPlatterDeviceName = "iOS RANE Platter"
 
     #if DEBUG
@@ -364,6 +370,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// attempt's movement can never leak into the next one's notation trace.
     func resetCapturedPlatterEvents() {
         capturedPlatterMIDIEvents.removeAll()
+        livePlatterMovementEvents.removeAll()
         captureBaselineTimestamp = CACurrentMediaTime()
         #if DEBUG
         print("[SCRATCH-DEBUG] shared scratch state reset for new attempt")
@@ -382,6 +389,47 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
         )
+    }
+
+    /// Presentation-only movement stream for the active Practice surface.
+    /// Unlike `platterMovementEvents` (which force-closes the trailing run for
+    /// Result), this keeps the current run provisional and adapts it to the
+    /// existing performed-notation event shape. The decoder and its noise/
+    /// segmentation rules remain the shared `CaptureCore` implementation.
+    private var decodedLivePlatterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        let result = CaptureCore.derivePlatterMovementEventsWithProvisional(
+            from: capturedPlatterMIDIEvents,
+            controller: 6,
+            channel: ScratchPlatterTracker.rightChannel
+        )
+        guard let provisional = result.provisionalMovement else {
+            return result.committedEvents
+        }
+
+        let duration = max(0, provisional.currentTime - provisional.startTime)
+        let distance = abs(provisional.currentPosition - provisional.startPosition)
+        let preview = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: provisional.startTime,
+            endTime: provisional.currentTime,
+            startPosition: provisional.startPosition,
+            endPosition: provisional.currentPosition,
+            direction: provisional.direction,
+            movementKind: provisional.movementKind,
+            speed: duration > 0 ? distance / duration : 0,
+            confidence: 0.5,
+            source: "live_preview"
+        )
+        return result.committedEvents + [preview]
+    }
+
+    private func scheduleLiveNotationUpdate() {
+        guard !liveNotationUpdateScheduled else { return }
+        liveNotationUpdateScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.liveNotationUpdateInterval) { [weak self] in
+            guard let self else { return }
+            self.liveNotationUpdateScheduled = false
+            self.livePlatterMovementEvents = self.decodedLivePlatterMovementEvents
+        }
     }
 
     /// Process one parsed MIDI message. Transport presses toggle the shared
@@ -451,6 +499,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             normalizedValue: Double(message.value) / 127.0,
             mappedControl: nil
         ))
+        if channel == ScratchPlatterTracker.rightChannel {
+            scheduleLiveNotationUpdate()
+        }
         #if DEBUG
         let shouldLogSharedState = capturedPlatterMIDIEvents.count % 32 == 0
         if shouldLogSharedState {
@@ -466,7 +517,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             return true
         }()
         if shouldLog {
-            print("[MIDI-DEBUG] platter CC6 received · channel=\(channel) value=\(message.value) delta=\(delta ?? 0)")
+            print("[MIDI-DEBUG] platter movement received · channel=\(channel) value=\(message.value) delta=\(delta ?? 0)")
             print("[MIDI-DEBUG] platter decoded · steps=\(steps) direction=\(String(describing: direction))")
         }
         #endif
