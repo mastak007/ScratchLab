@@ -261,6 +261,7 @@
 		MIDRDY0MAC0001 /* MIDIReadinessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDRDY0FREF0001 /* MIDIReadinessState.swift */; };
 		IOSMID0IOS0001 /* iOSMIDIManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = IOSMID0FREF0001 /* iOSMIDIManager.swift */; };
 		ISCR0000IOS0001 /* IOScratchPlaybackEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = ISCR0000FREF0001 /* IOScratchPlaybackEngine.swift */; };
+		ISRR0000IOS0001 /* IOScratchRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ISRR0000FREF0001 /* IOScratchRenderer.swift */; };
 		IOSLRN0IOS0001 /* iOSMIDILearnCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = IOSLRN0FREF0001 /* iOSMIDILearnCoordinator.swift */; };
 		MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */; };
 		MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */; };
@@ -801,6 +802,7 @@
 		MIDRDY0FREF0001 /* MIDIReadinessState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIReadinessState.swift; sourceTree = "<group>"; };
 		IOSMID0FREF0001 /* iOSMIDIManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSMIDIManager.swift; sourceTree = "<group>"; };
 		ISCR0000FREF0001 /* IOScratchPlaybackEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOScratchPlaybackEngine.swift; sourceTree = "<group>"; };
+		ISRR0000FREF0001 /* IOScratchRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOScratchRenderer.swift; sourceTree = "<group>"; };
 		IOSLRN0FREF0001 /* iOSMIDILearnCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSMIDILearnCoordinator.swift; sourceTree = "<group>"; };
 		MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIUserMixerGainTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMappingTests.swift; sourceTree = "<group>"; };
@@ -1508,6 +1510,7 @@
 			isa = PBXGroup;
 			children = (
 				ISCR0000FREF0001 /* IOScratchPlaybackEngine.swift */,
+				ISRR0000FREF0001 /* IOScratchRenderer.swift */,
 			);
 			path = iOS;
 			sourceTree = "<group>";
@@ -2320,6 +2323,7 @@
 				A1000007 /* AudioEngine.swift in Sources */,
 				IOSMID0IOS0001 /* iOSMIDIManager.swift in Sources */,
 				ISCR0000IOS0001 /* IOScratchPlaybackEngine.swift in Sources */,
+				ISRR0000IOS0001 /* IOScratchRenderer.swift in Sources */,
 				IOSLRN0IOS0001 /* iOSMIDILearnCoordinator.swift in Sources */,
 				IHRA0000000IHRA0SOURCE /* iOSAudioHardwareRouteAdapter.swift in Sources */,
 				A1000008 /* SampleManager.swift in Sources */,
