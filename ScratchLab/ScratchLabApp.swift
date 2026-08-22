@@ -33,7 +33,8 @@ private struct RootContainerView: View {
     @StateObject private var audioEngine = AudioEngine()
     @StateObject private var midiManager = IOSMIDIManager()
     @StateObject private var midiLearnCoordinator = IOSMIDILearnCoordinator()
-    @StateObject private var midiControllerDispatcher = IOSMIDIControllerDispatcher()
+    @StateObject private var transportState: TransportState
+    @StateObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
     @StateObject private var progressManager = ProgressManager()
     @StateObject private var practiceBeatStore = PracticeBeatStore()
     @StateObject private var companionRelayBroadcaster = CompanionCameraBroadcaster()
@@ -41,12 +42,19 @@ private struct RootContainerView: View {
     @StateObject private var sessionUploadManager = SessionUploadManager()
     @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
 
+    init() {
+        let transportState = TransportState()
+        _transportState = StateObject(wrappedValue: transportState)
+        _midiControllerDispatcher = StateObject(wrappedValue: IOSMIDIControllerDispatcher(transportState: transportState))
+    }
+
     var body: some View {
         ContentView()
             .environmentObject(gameState)
             .environmentObject(audioEngine)
             .environmentObject(midiManager)
             .environmentObject(midiLearnCoordinator)
+            .environmentObject(transportState)
             .environmentObject(midiControllerDispatcher)
             .environmentObject(progressManager)
             .environmentObject(practiceBeatStore)

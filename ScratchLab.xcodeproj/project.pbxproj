@@ -283,6 +283,8 @@
 		MIDAR0MAC0001 /* MIDIActionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDAR0FREF0001 /* MIDIActionResolver.swift */; };
 		SMPR0000IOS0001 /* ScratchSampleResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMPR0000FREF0001 /* ScratchSampleResolver.swift */; };
 		SMPR0000MAC0001 /* ScratchSampleResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = SMPR0000FREF0001 /* ScratchSampleResolver.swift */; };
+		TRST0000IOS0001 /* TransportState.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRST0000FREF0001 /* TransportState.swift */; };
+		TRST0000MAC0001 /* TransportState.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRST0000FREF0001 /* TransportState.swift */; };
 		MIDREG0TBF0001 /* MIDIHardwareRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */; };
 		MIDREG0TBF0002 /* MIDIVerificationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */; };
 		MPCD0001IOS /* MIDIPlatterContinuousDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */; };
@@ -807,6 +809,7 @@
 		MIDREG0FREF0007 /* MIDILearnedMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMapping.swift; sourceTree = "<group>"; };
 		MIDAR0FREF0001 /* MIDIActionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIActionResolver.swift; sourceTree = "<group>"; };
 		SMPR0000FREF0001 /* ScratchSampleResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSampleResolver.swift; sourceTree = "<group>"; };
+		TRST0000FREF0001 /* TransportState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportState.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0001 /* MIDIHardwareRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIHardwareRegistryTests.swift; sourceTree = "<group>"; };
 		MIDREG0TREF0002 /* MIDIVerificationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIVerificationModelTests.swift; sourceTree = "<group>"; };
 		MPCD0001FREF /* MIDIPlatterContinuousDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPlatterContinuousDrive.swift; sourceTree = "<group>"; };
@@ -1450,8 +1453,17 @@
 				SBPMGRP00001000 /* ScratchSoundBank */,
 				CI00GRP00001 /* ControllerInput */,
 				SMPR0000GRP00001 /* Samples */,
+				TRST0000GRP00001 /* Transport */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		TRST0000GRP00001 /* Transport */ = {
+			isa = PBXGroup;
+			children = (
+				TRST0000FREF0001 /* TransportState.swift */,
+			);
+			path = Transport;
 			sourceTree = "<group>";
 		};
 		SMPR0000GRP00001 /* Samples */ = {
@@ -2068,6 +2080,7 @@
 				MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */,
 				MIDAR0MAC0001 /* MIDIActionResolver.swift in Sources */,
 				SMPR0000MAC0001 /* ScratchSampleResolver.swift in Sources */,
+				TRST0000MAC0001 /* TransportState.swift in Sources */,
 				CTLPRF0MAC0001 /* ControllerProfile.swift in Sources */,
 				CTLPRF0MAC0002 /* ControllerProfileCatalog.swift in Sources */,
 				CTLPRF0MAC0003 /* DDJFlx10Profile.swift in Sources */,
@@ -2201,6 +2214,7 @@
 				MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */,
 				MIDAR0IOS0001 /* MIDIActionResolver.swift in Sources */,
 				SMPR0000IOS0001 /* ScratchSampleResolver.swift in Sources */,
+				TRST0000IOS0001 /* TransportState.swift in Sources */,
 				CTLPRF0IOS0001 /* ControllerProfile.swift in Sources */,
 				CTLPRF0IOS0002 /* ControllerProfileCatalog.swift in Sources */,
 				CTLPRF0IOS0003 /* DDJFlx10Profile.swift in Sources */,

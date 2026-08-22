@@ -35,7 +35,7 @@ struct VirtualPlatterPrototypeView: View {
     /// works whether this is on or off. Identical model in both modes.
     /// Driven by the app-level MIDI dispatch (or the on-screen Play button),
     /// so a controller PLAY flips it too.
-    @EnvironmentObject private var controller: IOSMIDIControllerDispatcher
+    @EnvironmentObject private var transport: TransportState
 
     /// THE single source of truth (record turns, 0.0 = 12 o'clock). The
     /// View owns and advances it; it drives the marker directly and is the
@@ -231,14 +231,14 @@ struct VirtualPlatterPrototypeView: View {
 
             Button(action: togglePlay) {
                 HStack(spacing: 8) {
-                    Image(systemName: controller.isPlaying ? "stop.fill" : "play.fill")
-                    Text(controller.isPlaying ? "Stop" : "Play")
+                    Image(systemName: transport.isPlaying ? "stop.fill" : "play.fill")
+                    Text(transport.isPlaying ? "Stop" : "Play")
                 }
                 .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.black)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
-                .background(controller.isPlaying ? Color(hex: "EF4444") : Color(hex: "22C55E"),
+                .background(transport.isPlaying ? Color(hex: "EF4444") : Color(hex: "22C55E"),
                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
@@ -438,7 +438,7 @@ struct VirtualPlatterPrototypeView: View {
         // held still, OR the motor driving it with the finger up. Held still
         // / finger up with the motor off ⇒ not moving ⇒ the audio freezes.
         let fingerMoving = platter.isDragging && platter.direction != .idle
-        let motorMoving = !platter.isDragging && allowMotor && controller.isPlaying
+        let motorMoving = !platter.isDragging && allowMotor && transport.isPlaying
         let recordIsMoving = fingerMoving || motorMoving
 
         if platter.isDragging {
@@ -448,7 +448,7 @@ struct VirtualPlatterPrototypeView: View {
                 recordPhase += delta
             }
             // else: gripped but still → HOLD (no phase change), motor off.
-        } else if allowMotor && controller.isPlaying {
+        } else if allowMotor && transport.isPlaying {
             recordPhase += motorTurnsPerTick
         }
         // else: finger up, motor off → frozen.
@@ -471,8 +471,8 @@ struct VirtualPlatterPrototypeView: View {
     }
 
     private func togglePlay() {
-        controller.togglePlaying()
-        if controller.isPlaying { cueRecord() }
+        transport.toggle()
+        if transport.isPlaying { cueRecord() }
     }
 
     private func startStage() {
@@ -859,7 +859,7 @@ struct VirtualPlatterPrototypeView_Previews: PreviewProvider {
         NavigationStack {
             VirtualPlatterPrototypeView()
         }
-        .environmentObject(IOSMIDIControllerDispatcher())
+        .environmentObject(TransportState())
         .preferredColorScheme(.dark)
     }
 }

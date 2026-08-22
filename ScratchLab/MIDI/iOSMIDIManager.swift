@@ -294,17 +294,18 @@ final class IOSMIDIManager: ObservableObject {
 /// Main-thread controller-action dispatch for iOS. Bridges parsed MIDI from
 /// `IOSMIDIManager` to the virtual-platter transport and hot-cue runtime.
 ///
-/// Owns the shared motor-transport `isPlaying` state the platter view reads:
-/// a controller PLAY (transport Start/Stop press) flips it on/off, the platter
-/// motor then spins the record, and hot-cue presses are only resolved while it
-/// is playing. Resolves transport against the hardware registry's `.transport`
+/// References the shared `TransportState` the platter view reads: a controller
+/// PLAY (transport Start/Stop press) toggles it on/off, the platter motor then
+/// spins the record, and hot-cue presses are only resolved while it is playing.
+/// Resolves transport against the hardware registry's `.transport`
 /// bindings and hot cues against the learned mapping / pad router. No fader or
 /// platter-motion mapping, no audio playback, no MIDI Learn.
 @MainActor
 final class IOSMIDIControllerDispatcher: ObservableObject {
 
-    /// Shared motor-transport state. `true` = platter spinning / hot cues armed.
-    @Published private(set) var isPlaying = false
+    /// Shared transport state (play/stop) — the single source of truth the
+    /// virtual platter and macOS transport paths observe.
+    private let transportState: TransportState
 
     private let learnStore: MIDILearnedMappingStore
     private var currentMapping: MIDIDeviceMapping?
@@ -313,7 +314,8 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// fresh `AVAudioPlayer` would otherwise deallocate at the end of the call.
     private var hotCuePlayer: AVAudioPlayer?
 
-    init(learnStore: MIDILearnedMappingStore = .default) {
+    init(transportState: TransportState, learnStore: MIDILearnedMappingStore = .default) {
+        self.transportState = transportState
         self.learnStore = learnStore
     }
 
@@ -323,27 +325,19 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         currentMapping = deviceIdentifier.flatMap { learnStore.load(deviceIdentifier: $0) }
     }
 
-    func setPlaying(_ playing: Bool) {
-        isPlaying = playing
-    }
-
-    func togglePlaying() {
-        isPlaying.toggle()
-    }
-
-    /// Process one parsed MIDI message. Transport presses toggle the platter
-    /// motor; hot-cue pads resolve only while the transport is playing.
+    /// Process one parsed MIDI message. Transport presses toggle the shared
+    /// transport state; hot-cue pads resolve only while it is playing.
     func receive(_ message: ParsedMIDIMessage) {
         switch MIDIActionResolver.resolve(message: message, mapping: currentMapping) {
         case .transport:
-            togglePlaying()
+            transportState.toggle()
             #if DEBUG
             print("[MIDI-DEBUG] transportPlay received")
-            print("[MIDI-DEBUG] transport state = \(isPlaying ? "playing" : "stopped")")
-            print("[MIDI-DEBUG] platter running = \(isPlaying)")
+            print("[MIDI-DEBUG] transport state = \(transportState.isPlaying ? "playing" : "stopped")")
+            print("[MIDI-DEBUG] platter running = \(transportState.isPlaying)")
             #endif
         case .hotCue(_, let sampleID):
-            guard isPlaying, let sampleID else { return }
+            guard transportState.isPlaying, let sampleID else { return }
             #if DEBUG
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
             #endif

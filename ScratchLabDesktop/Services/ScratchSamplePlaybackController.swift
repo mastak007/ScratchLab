@@ -27,6 +27,11 @@ import Synchronization
 /// - No motion: audio stops after the current short segment plays out.
 final class ScratchSamplePlaybackController {
 
+    /// Shared transport-state observation (Step 3). Updated on load/unload so
+    /// the macOS platter-driven sample transport and iOS share one state model.
+    /// Observation only — nothing in this controller reads it back.
+    let transportState = TransportState()
+
     // MARK: - Audio engine
 
     private let engine = AVAudioEngine()
@@ -1522,6 +1527,9 @@ final class ScratchSamplePlaybackController {
         audioQueue.async { [weak self] in
             self?.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: playDiagnosticPreview, generation: generation)
         }
+        Task { @MainActor [weak self] in
+            self?.transportState.play()
+        }
         return true
     }
 
@@ -2988,6 +2996,9 @@ final class ScratchSamplePlaybackController {
 
     /// Unload the current sample and stop audio.
     func unload() {
+        Task { @MainActor [weak self] in
+            self?.transportState.stop()
+        }
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.dvsContinuousRenderer.publishIdle()
