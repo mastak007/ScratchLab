@@ -1100,10 +1100,18 @@ struct PracticeModeView: View {
     }
 
     // The unified notation-first timing lane — the primary learning surface in
-    // every mode and orientation. `axis` is the only orientation difference
-    // (vertical in portrait, horizontal in landscape): Demo audio-sync, the
-    // looping preview, and the parked Coached / Open state all flow through the
-    // one renderer. A status chip names the runtime state.
+    // every mode and orientation. Auto-cut / Guided / Coached / Open render
+    // through the canonical `ScratchNotationPanel` (`ScratchPhraseChartView`)
+    // — the same renderer as the pre-session "TARGET — COPY THIS" card and
+    // macOS Review — so target geometry, colour tokens, turnaround markers,
+    // and direction cues read identically everywhere. Demo keeps
+    // `ScratchMotionLane`: its call-and-response reel carries demo/copy
+    // segments and derived ghost strokes that `ScratchNotation` has no
+    // vocabulary for, and Demo never shows a live-performance overlay (see
+    // `updateLivePerformedNotation`'s `practiceAssistMode != .demo` guard) —
+    // so this isn't a duplicate of the target/performance surface, it's a
+    // genuinely different, narrower feature. A status chip names the runtime
+    // state.
     @ViewBuilder
     private func notationLanePanel(axis: LaneAxis) -> some View {
         if let lane = activeLane {
@@ -1118,19 +1126,19 @@ struct PracticeModeView: View {
 
                 notationInstructionalLine(content: lane.content, clock: lane.clock)
 
-                ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis,
-                                  feedbackState: notationFeedbackState)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if !livePerformedMovementEvents.isEmpty {
-                    ScratchNotationPanel(
-                        lane: .performance,
-                        presentation: .compact,
-                        source: .performedPlatter(livePerformedMovementEvents),
-                        bpm: Double(practiceBeatStore.bpmValue),
-                        domain: livePerformanceDomain,
-                        mode: .liveComparison
-                    )
+                if practiceAssistMode == .demo {
+                    ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis,
+                                      feedbackState: notationFeedbackState)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let targetNotation {
+                    // Fixed-height cards (see `canonicalLiveNotationPanel`) need
+                    // `.top` here, not the default `.center` — on the taller
+                    // iPad frame, centering left a large dead gap between the
+                    // instructional line above and the chart.
+                    canonicalLiveNotationPanel(targetNotation: targetNotation,
+                                               duration: lane.content.duration,
+                                               clock: lane.clock)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
         } else {
@@ -1150,6 +1158,138 @@ struct PracticeModeView: View {
             }
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // Canonical target/performance surface for Auto-cut, Guided, Coached, and
+    // Open — the same `ScratchNotationPanel` → `ScratchPhraseChartView` pair
+    // the pre-session "TARGET — COPY THIS" card and the existing live
+    // performance overlay already use (previously only the performance half
+    // of this pair rendered during a live session; the target half rendered
+    // through the separate `ScratchMotionLane`). `ScratchPhraseChartView`
+    // renders one static full phrase (no scrolling/tiling), so the moving
+    // element is the playhead, not the content — `clock.now(at:)` is always
+    // within `[0, duration]` here (`.looping` wraps via modulo, `.fixed`
+    // returns a constant in range; `.audioTime` is Demo-only and never
+    // reaches this branch), so it maps directly onto the static chart with
+    // no extra remapping. The performance lane keeps its own pre-existing
+    // rolling `livePerformanceDomain` window unchanged — it was already
+    // correct; only its neighbour (the target lane) was rendering through
+    // the wrong component.
+    //
+    // Canvas heights target macOS's own dominant Practice teaching surface
+    // proportions (`MacAnalyzerView.swift` / `LivePerformedNotationTracker
+    // .swift`): 220pt for target+performance shown together, 320pt for
+    // target alone — `ScratchPhraseChartView`'s fader-lane fraction and
+    // label sizes are tuned against those values. A visual pass across
+    // iPhone/iPad portrait/landscape found two failure modes from picking
+    // just one strategy: deriving the height purely from available space
+    // stretches the canvas far past those tuned proportions on iPad
+    // (mostly-empty fader lane); using the fixed macOS values unconditionally
+    // overflows the short iPhone-landscape frame and collides with the
+    // bottom coaching HUD. Capping the macOS value against what's actually
+    // available avoids both: iPad settles at the designed 220/320 (there's
+    // always room to spare), iPhone landscape shrinks below it to fit.
+    // Per-panel label line + card padding, matching `ScratchNotationPanel`'s
+    // own standard-presentation chrome (label row + `Card.padding` top/bottom).
+    private static let notationChromeAllowance: CGFloat = 34
+
+    // Pure height math, pulled out of the view builder below — nesting this
+    // logic inline inside `GeometryReader`/`TimelineView`'s closures made the
+    // combined expression too complex for the compiler to type-check
+    // ("generic parameter 'Content' could not be inferred").
+    private static func liveNotationCanvasHeights(
+        availableHeight: CGFloat, hasPerformance: Bool, spacing: CGFloat
+    ) -> (target: CGFloat, performance: CGFloat) {
+        guard hasPerformance else {
+            let target = max(60, min(320, availableHeight - notationChromeAllowance))
+            return (target, 0)
+        }
+        let halfBudget = (availableHeight - spacing) / 2
+        let target = max(60, min(220, halfBudget - notationChromeAllowance))
+        let performance = max(48, min(220, halfBudget - notationChromeAllowance))
+        return (target, performance)
+    }
+
+    // Canonical target/performance surface for Auto-cut, Guided, Coached, and
+    // Open — the same `ScratchNotationPanel` → `ScratchPhraseChartView` pair
+    // the pre-session "TARGET — COPY THIS" card and the existing live
+    // performance overlay already use (previously only the performance half
+    // of this pair rendered during a live session; the target half rendered
+    // through the separate `ScratchMotionLane`). `ScratchPhraseChartView`
+    // renders one static full phrase (no scrolling/tiling), so the moving
+    // element is the playhead, not the content — `clock.now(at:)` is always
+    // within `[0, duration]` here (`.looping` wraps via modulo, `.fixed`
+    // returns a constant in range; `.audioTime` is Demo-only and never
+    // reaches this branch), so it maps directly onto the static chart with
+    // no extra remapping. The performance lane keeps its own pre-existing
+    // rolling `livePerformanceDomain` window unchanged — it was already
+    // correct; only its neighbour (the target lane) was rendering through
+    // the wrong component.
+    //
+    // Canvas heights target macOS's own dominant Practice teaching surface
+    // proportions (`MacAnalyzerView.swift` / `LivePerformedNotationTracker
+    // .swift`): 220pt for target+performance shown together, 320pt for
+    // target alone — `ScratchPhraseChartView`'s fader-lane fraction and
+    // label sizes are tuned against those values. A visual pass across
+    // iPhone/iPad portrait/landscape found two failure modes from picking
+    // just one strategy: deriving the height purely from available space
+    // stretches the canvas far past those tuned proportions on iPad
+    // (mostly-empty fader lane); using the fixed macOS values unconditionally
+    // overflows the short iPhone-landscape frame and collides with the
+    // bottom coaching HUD. Capping the macOS value against what's actually
+    // available (`liveNotationCanvasHeights` above) avoids both: iPad
+    // settles at the designed 220/320 (there's always room to spare), iPhone
+    // landscape shrinks below it to fit.
+    @ViewBuilder
+    private func canonicalLiveNotationPanel(targetNotation: ScratchNotation,
+                                            duration: TimeInterval,
+                                            clock: LaneClock) -> some View {
+        let hasPerformance = !livePerformedMovementEvents.isEmpty
+        let spacing = ScratchLabDesign.Spacing.itemTight
+
+        GeometryReader { proxy in
+            let heights = Self.liveNotationCanvasHeights(
+                availableHeight: proxy.size.height, hasPerformance: hasPerformance, spacing: spacing
+            )
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+                let now = clock.now(at: timeline.date)
+                let actionLineFraction = duration > 0
+                    ? min(max(CGFloat(now / duration), 0), 1)
+                    : 0
+
+                VStack(alignment: .leading, spacing: spacing) {
+                    ZStack {
+                        ScratchNotationPanel(
+                            lane: .target,
+                            presentation: .standard,
+                            source: .target(targetNotation),
+                            bpm: Double(practiceBeatStore.bpmValue),
+                            playheadTime: now,
+                            mode: .liveComparison,
+                            canvasHeightOverride: heights.target
+                        )
+                        NotationFeedbackOverlay(
+                            state: notationFeedbackState,
+                            axis: .horizontal,
+                            actionLineFraction: actionLineFraction
+                        )
+                        .allowsHitTesting(false)
+                    }
+
+                    if hasPerformance {
+                        ScratchNotationPanel(
+                            lane: .performance,
+                            presentation: .standard,
+                            source: .performedPlatter(livePerformedMovementEvents),
+                            bpm: Double(practiceBeatStore.bpmValue),
+                            domain: livePerformanceDomain,
+                            mode: .liveComparison,
+                            canvasHeightOverride: heights.performance
+                        )
+                    }
+                }
+            }
         }
     }
 
