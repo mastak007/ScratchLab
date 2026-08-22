@@ -49,9 +49,10 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
     }
 
-    /// Load a hot-cue sample and arm the renderer at the top. The renderer
-    /// does not auto-play — it holds silent at frame 0 until platter movement
-    /// (via `updatePlatterPosition`) moves the playhead.
+    /// Load a hot-cue sample, arm the renderer at the top, and activate its
+    /// output. The renderer does not run its own clock — it holds the current
+    /// frame (silent at frame 0 until platter movement, via
+    /// `updatePlatterPosition`, moves the playhead) rather than free-running.
     func playHotCue(sampleID: String) {
         #if DEBUG
         print("[MIDI-DEBUG] hotcue playback requested · sample=\(sampleID)")
@@ -60,6 +61,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
         load(sampleID: sampleID)
         do {
             try startEngineIfNeeded()
+            renderer.activate()
             #if DEBUG
             print("[MIDI-DEBUG] sample armed · \(sampleID)")
             #endif
