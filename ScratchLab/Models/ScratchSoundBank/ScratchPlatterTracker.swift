@@ -144,6 +144,26 @@ final class ScratchPlatterTracker {
         }
     }
 
+    // MARK: - Shared position
+
+    /// Assemble the shared `PlatterPosition` for a deck from this tracker's
+    /// state. The normalized sample position is a playback-engine concern (it
+    /// needs the loaded sample length), so it is left 0 here.
+    func platterPosition(for channel: Int) -> PlatterPosition {
+        let direction: PlatterDirection
+        switch recentDirection(for: channel) {
+        case .forward: direction = .forward
+        case .backward: direction = .backward
+        case nil: direction = .idle
+        }
+        return PlatterPosition(
+            phase: Double(accumulatedSteps(for: channel)),
+            direction: direction,
+            velocity: recentVelocity(for: channel),
+            normalizedPosition: 0
+        )
+    }
+
     // MARK: - Reset
 
     /// Reset accumulated position and history for one or both decks.

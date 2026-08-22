@@ -94,6 +94,21 @@ enum VirtualPlatterSampleMapper {
         let audibleSpan = max(1.0 - cuePhase, 0.0001)
         return min(max((fraction - cuePhase) / audibleSpan, 0), 1)
     }
+
+    /// Assemble the shared `PlatterPosition` for the current record phase.
+    /// Pure — reuses `normalizedSamplePosition` for the sample position.
+    static func platterPosition(
+        recordPhase: Double,
+        direction: PlatterDirection,
+        velocity: Double
+    ) -> PlatterPosition {
+        PlatterPosition(
+            phase: recordPhase,
+            direction: direction,
+            velocity: velocity,
+            normalizedPosition: normalizedSamplePosition(recordPhase: recordPhase) ?? 0
+        )
+    }
 }
 
 // MARK: - Virtual platter
