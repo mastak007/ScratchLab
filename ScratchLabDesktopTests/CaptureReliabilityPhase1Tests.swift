@@ -2784,6 +2784,25 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(systemCheckSource.contains("Text(\"Open Record Controls\")"))
     }
 
+    func testGuidedCaptureLandscapeHidesHelperTextDuringPreRoll() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let landscapeBodySlice = try sourceSlice(
+            in: source,
+            from: "private var landscapeBody: some View {",
+            through: "private var headerBlock: some View {"
+        )
+
+        XCTAssertTrue(
+            landscapeBodySlice.contains("} else if flowState != .preRoll {"),
+            "Landscape footer must suppress idle helper text during the pre-roll count-in, matching portraitBody/controlsOnlyBlock"
+        )
+        XCTAssertFalse(
+            landscapeBodySlice.contains("} else {\n                helperText"),
+            "Landscape footer must not fall back to an unconditional else that shows helperText during pre-roll"
+        )
+    }
+
     func testPracticeFlowDoesNotCreateCaptureSessions() throws {
         let practiceSourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let practiceSource = try String(contentsOf: practiceSourceURL, encoding: .utf8)

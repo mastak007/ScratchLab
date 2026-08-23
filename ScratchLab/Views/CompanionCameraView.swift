@@ -2677,7 +2677,7 @@ private struct CaptureHubView: View {
             if flowState == .recording || flowState == .saving {
                 if let warningText { WarningBannerView(text: warningText) }
                 metricsRow
-            } else {
+            } else if flowState != .preRoll {
                 helperText
             }
         }
