@@ -257,10 +257,10 @@ final class MIDIPacketBoundsCrashFixTests: XCTestCase {
 
     // MARK: - Parser-level: stateless per-packet framing
 
-    private func decode(_ bytes: [UInt8]) -> [MacCaptureEngine.MIDIChannelMessageParser.Message] {
-        var messages: [MacCaptureEngine.MIDIChannelMessageParser.Message] = []
+    private func decode(_ bytes: [UInt8]) -> [MIDIChannelMessageParser.Message] {
+        var messages: [MIDIChannelMessageParser.Message] = []
         bytes.withUnsafeBytes { raw in
-            MacCaptureEngine.MIDIChannelMessageParser.parse(raw) { messages.append($0) }
+            MIDIChannelMessageParser.parse(raw) { messages.append($0) }
         }
         return messages
     }
