@@ -11596,10 +11596,15 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         XCTAssertFalse(source.contains("\"TTM\""), "Primary nav must not expose TTM branding")
         XCTAssertFalse(source.contains("\"SXRATCH\""), "Primary nav must not expose SXRATCH branding")
 
+        // FormulaPlaygroundView.swift (the only other source that ever carried the
+        // "TTM GRAPH" / "TTM-style aliases" labels this test guards against) was
+        // intentionally deleted as a dead prototype in commit 0d069852. Assert it
+        // stays removed rather than reading labels out of a file that no longer ships.
         let formulaURL = projectRootURL().appendingPathComponent("ScratchLab/Views/FormulaPlaygroundView.swift")
-        let formulaSource = try String(contentsOf: formulaURL, encoding: .utf8)
-        XCTAssertFalse(formulaSource.contains("\"TTM GRAPH\""), "TTM GRAPH label must be replaced")
-        XCTAssertFalse(formulaSource.contains("TTM-style aliases"), "TTM-style alias label must be replaced")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: formulaURL.path),
+            "FormulaPlaygroundView.swift was intentionally removed (commit 0d069852) and must not be reintroduced"
+        )
     }
 
     // Slice U.1 — Battle Mode user-facing copy must not contain "AI" wording.
@@ -11607,15 +11612,14 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
     // are allowed because they are not surfaced to users; only the literal UI
     // strings are guarded here.
     func testBattleModeUserFacingCopyHasNoAIWording() throws {
+        // AIBattleModeView.swift (the "AI BATTLE" / "Challenge an AI opponent"
+        // header and subtitle this test guards against) was intentionally deleted
+        // as a dead prototype in commit 0d069852. Assert it stays removed rather
+        // than reading copy out of a file that no longer ships.
         let battleURL = projectRootURL().appendingPathComponent("ScratchLab/Views/AIBattleModeView.swift")
-        let battleSource = try String(contentsOf: battleURL, encoding: .utf8)
         XCTAssertFalse(
-            battleSource.contains("\"AI BATTLE\""),
-            "Battle mode header must not display 'AI BATTLE'"
-        )
-        XCTAssertFalse(
-            battleSource.contains("\"Challenge an AI opponent\""),
-            "Battle mode subtitle must not display 'Challenge an AI opponent'"
+            FileManager.default.fileExists(atPath: battleURL.path),
+            "AIBattleModeView.swift was intentionally removed (commit 0d069852) and must not be reintroduced"
         )
 
         let gameStateURL = projectRootURL().appendingPathComponent("ScratchLab/Models/GameState.swift")
