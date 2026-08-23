@@ -219,10 +219,6 @@ final class IOScratchPlaybackEngine: ObservableObject {
         let routeName: String
     }
 
-    private enum PlaybackError: Error {
-        case audioSessionActivationFailed
-    }
-
     /// The latest observed platter position.
     private var currentPlatterPosition: PlatterPosition?
     /// Absolute RANE step phase at the most recent hotcue press. Playback is
@@ -358,21 +354,9 @@ final class IOScratchPlaybackEngine: ObservableObject {
     /// Every other route retains the existing two-channel stereo graph.
     private func prepareRendererForCurrentRoute() async throws -> IOScratchRenderer {
         let session = AVAudioSession.sharedInstance()
-        if #available(iOS 27.0, *) {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                session.activate { succeeded, error in
-                    if succeeded {
-                        continuation.resume()
-                    } else {
-                        continuation.resume(throwing: error ?? PlaybackError.audioSessionActivationFailed)
-                    }
-                }
-            }
-        } else {
-            try await Task.detached(priority: .userInitiated) {
-                try AVAudioSession.sharedInstance().setActive(true)
-            }.value
-        }
+        try await Task.detached(priority: .userInitiated) {
+            try AVAudioSession.sharedInstance().setActive(true)
+        }.value
 
         let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
         let normalizedRouteName = routeName.lowercased()
