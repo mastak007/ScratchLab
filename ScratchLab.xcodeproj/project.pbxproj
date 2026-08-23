@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A11CE0000000000000000002 /* ScratchLabLogo.svg in Resources */ = {isa = PBXBuildFile; fileRef = A11CE0000000000000000001 /* ScratchLabLogo.svg */; };
 		05F9D91012A71F64B197833A /* LivePerformedNotationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6159D19ABAFFEDC31B928846 /* LivePerformedNotationTracker.swift */; };
 		0640183FCA09CE900D306F4B /* Entry+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DBAEFA99EE8144FDE46EAC /* Entry+ZIP64.swift */; };
 		0F14F0AAE75EC474DE0DDCDD /* Data+Serialization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764F939FE06FBBE44F66CAB2 /* Data+Serialization.swift */; };
@@ -625,6 +626,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A11CE0000000000000000001 /* ScratchLabLogo.svg */ = {isa = PBXFileReference; lastKnownFileType = image.svg; name = ScratchLabLogo.svg; path = ScratchLab/Assets.xcassets/ScratchLabLogo.imageset/ScratchLabLogo.svg; sourceTree = SOURCE_ROOT; };
 		03DCFA12AB0F45ABAE1796FD /* TimecodeSourceState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSourceState.swift; sourceTree = "<group>"; };
 		0BAC4A44753A1FE444ED066E /* Archive+ReadingDeprecated.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ReadingDeprecated.swift"; sourceTree = "<group>"; };
 		0C63B14E9A67BCD33D3E122B /* LivePerformedNotationTrackerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LivePerformedNotationTrackerTests.swift; sourceTree = "<group>"; };
@@ -1575,6 +1577,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000001 /* ScratchLabDesktopApp.swift */,
+				A11CE0000000000000000001 /* ScratchLabLogo.svg */,
 				SLCORE00000000000000FR07 /* ScratchLabDesktop-Bridging-Header.h */,
 				ROM0000000ROM001ROM00001 /* Models */,
 				B5000002 /* Views */,
@@ -1933,6 +1936,7 @@
 		09C738A56A342FC5A7BBBEA3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				A11CE0000000000000000002 /* ScratchLabLogo.svg in Resources */,
 				B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */,
 				51C2E59D2FA1B00000E87B79 /* Coach.usdz in Resources */,
 				B9AF9ED6370241CF8BEFDB7C /* CoachDemoAudio in Resources */,

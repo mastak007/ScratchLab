@@ -1,23 +1,15 @@
 {
   "images" : [
     {
-      "filename" : "scratchlab-logo.png",
-      "idiom" : "universal",
-      "scale" : "1x"
-    },
-    {
-      "filename" : "scratchlab-logo.png",
-      "idiom" : "universal",
-      "scale" : "2x"
-    },
-    {
-      "filename" : "scratchlab-logo.png",
-      "idiom" : "universal",
-      "scale" : "3x"
+      "filename" : "ScratchLabLogo.svg",
+      "idiom" : "universal"
     }
   ],
   "info" : {
     "author" : "xcode",
     "version" : 1
+  },
+  "properties" : {
+    "preserves-vector-representation" : true
   }
 }

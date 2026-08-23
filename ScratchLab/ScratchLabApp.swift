@@ -296,6 +296,7 @@ struct SplashView: View {
                         .frame(width: 148, height: 148)
                         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
                         .shadow(color: Color.black.opacity(0.35), radius: 18, y: 12)
+                        .accessibilityHidden(true)
                 }
 
                 VStack(spacing: 12) {

@@ -74,6 +74,12 @@
   - Clarified `Surface.raised` as the approved `#101826` role while preserving the higher-contrast legacy card tier explicitly; added the reusable application gradient, common component geometry, missing metric/title roles, motion accent, and a warning button role.
   - Verification: focused design-system/capture tests passed 25/25; iOS Simulator and macOS Debug builds succeeded; `git diff --check` passed. The required broad gate retains unrelated repository baseline failures.
 
+- [x] Use the approved ScratchLab symbol asset consistently on iOS and macOS
+  - Replaced the iOS splash raster with the transparent vector symbol and retained the native `Text("ScratchLab")` wordmark below it, avoiding duplicated baked-in text.
+  - Replaced the legacy macOS Canvas record mark with the same shared SVG resource so both platforms use one visual identity.
+  - Confirmed the existing iOS/iPadOS AppIcon set and macOS `AppIcon.icns` already use the same symbol-only artwork on an opaque dark background, with no baked-in wordmark.
+  - Verification: focused iOS Simulator and macOS Debug builds succeeded; the iOS asset catalog contains the vector rendition; the macOS app bundle contains a loadable SVG; capture-pipeline fixtures passed 47/47. The broad desktop test plan retains unrelated existing shared-state, source-contract, fixture, and playback failures.
+
 - [x] iOS DVS + MIDI parity — Tasks 1/2/3/4/6: hardware route adapter + multichannel PCM routing
   - Added `iOSAudioHardwareRouteAdapter` (new file, iOS target only) as the dedicated AVAudioSession → `AudioHardwareRouteState` bridge; `AudioEngine` now delegates to it instead of an inline private observer struct.
   - Added `StereoPair.resolveSelection(availablePairs:remembered:)` (default-first / restore-remembered / safe-nil-fallback) and `StereoPair.extractInterleaved(_:channelCount:)` (pure, testable channel extraction) to `AudioHardwareRouteState`.
