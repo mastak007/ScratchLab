@@ -218,17 +218,9 @@ struct ContentView: View {
     
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(hex: "05070B"),
-                    Color(hex: "0B1018"),
-                    Color(hex: "101826")
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            
+            ScratchLabDesign.Surface.applicationBackground
+                .ignoresSafeArea()
+
             if showSplash {
                 SplashView(showSplash: $showSplash)
             } else {

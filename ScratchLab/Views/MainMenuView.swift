@@ -38,7 +38,7 @@ struct MainMenuView: View {
                             showingAdvancedHub: $showingAdvancedHub
                         )
                         .frame(width: 240)
-                        Divider().overlay(Color.white.opacity(0.08))
+                        Divider().overlay(ScratchLabDesign.Border.default)
 
                         homeScrollContent(geometry: geometry)
                     }
@@ -104,14 +104,14 @@ struct MainMenuView: View {
                             .font(.system(size: 20))
                         Text(progressManager.playerProfile?.displayName ?? "New DJ")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white)
+                            .foregroundColor(ScratchLabDesign.Sem.textPrimary)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                            .stroke(ScratchLabDesign.Surface.controlFill, lineWidth: 1)
                     )
                 }
                 .accessibilityLabel("Profile: \(progressManager.playerProfile?.displayName ?? "New DJ")")
@@ -121,12 +121,12 @@ struct MainMenuView: View {
                 Button(action: { showingSettings = true }) {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(ScratchLabDesign.Sem.textPrimary)
                         .frame(width: 44, height: 44)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                                .stroke(ScratchLabDesign.Surface.controlFill, lineWidth: 1)
                         )
                 }
                 .accessibilityLabel("Settings")
@@ -1285,16 +1285,8 @@ struct MenuButton: View {
 
 struct BackgroundView: View {
     var body: some View {
-        LinearGradient(
-            colors: [
-                Color(hex: "05070B"),
-                Color(hex: "0B1018"),
-                Color(hex: "101826")
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        ScratchLabDesign.Surface.applicationBackground
+            .ignoresSafeArea()
     }
 }
 
