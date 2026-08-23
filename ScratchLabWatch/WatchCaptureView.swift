@@ -8,14 +8,14 @@ struct WatchCaptureView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Watch Capture")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabCoreColor.textPrimary)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Start/Stop Take.")
                     Text("Send motion to your paired device.")
                 }
                 .font(.footnote)
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(ScratchLabCoreColor.textSecondary)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Start or stop a take. Send motion to your paired device.")
 
@@ -31,24 +31,32 @@ struct WatchCaptureView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .foregroundStyle(.white)
-                    .background(recorder.isRecording ? Color.red : Color.cyan.opacity(0.8))
+                    .foregroundStyle(ScratchLabCoreColor.textPrimary)
+                    .background(recorder.isRecording ? ScratchLabCoreColor.danger : ScratchLabCoreColor.accent)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(recorder.isRecording ? "Stop Take, recording in progress" : "Start Take")
 
                 VStack(alignment: .leading, spacing: 8) {
-                    infoRow(label: "Elapsed", value: recorder.elapsedDescription)
-                    infoRow(label: "Motion", value: "\(recorder.sampleCount)")
-                    infoRow(label: "Connection", value: recorder.isPhonePaired ? "Device Paired" : "Not Connected")
-                    infoRow(label: "Transfer", value: recorder.isPhoneReachable ? "Connected" : "Searching")
+                    infoRow(label: "Elapsed", value: recorder.elapsedDescription, tone: .neutral)
+                    infoRow(label: "Motion", value: "\(recorder.sampleCount)", tone: .neutral)
+                    infoRow(
+                        label: "Connection",
+                        value: recorder.isPhonePaired ? "Device Paired" : "Not Connected",
+                        tone: recorder.isPhonePaired ? .info : .muted
+                    )
+                    infoRow(
+                        label: "Transfer",
+                        value: recorder.isPhoneReachable ? "Connected" : "Searching",
+                        tone: recorder.isPhoneReachable ? .info : .muted
+                    )
                 }
                 .font(.caption2)
-                .foregroundStyle(.white.opacity(0.78))
 
                 Text("Keep the watch app open during recording.")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ScratchLabCoreColor.textTertiary)
                     .padding(.top, 2)
                     .accessibilityLabel("Keep the watch app open during recording.")
             }
@@ -56,7 +64,7 @@ struct WatchCaptureView: View {
         }
         .background(
             LinearGradient(
-                colors: [Color.black, Color.blue.opacity(0.45)],
+                colors: [ScratchLabCoreColor.canvas, ScratchLabCoreColor.raised, ScratchLabCoreColor.canvas],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -67,24 +75,40 @@ struct WatchCaptureView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(recorder.isRecording ? "Recording" : "Ready")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(recorder.isRecording ? .red : .cyan)
+                .foregroundStyle(recorder.isRecording ? ScratchLabCoreColor.danger : ScratchLabCoreColor.success)
+                .accessibilityLabel(recorder.isRecording ? "Status: Recording" : "Status: Ready")
 
             Text(recorder.transferStatus)
                 .font(.caption2)
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(WatchTransferStatusTone.tone(for: recorder.transferStatus).color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.white.opacity(0.08))
+        .background(ScratchLabCoreColor.controlFill)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func infoRow(label: String, value: String) -> some View {
+    private enum InfoRowTone {
+        case neutral
+        case info
+        case muted
+
+        var color: Color {
+            switch self {
+            case .neutral: return ScratchLabCoreColor.textSecondary
+            case .info:    return ScratchLabCoreColor.info
+            case .muted:   return ScratchLabCoreColor.textTertiary
+            }
+        }
+    }
+
+    private func infoRow(label: String, value: String, tone: InfoRowTone) -> some View {
         HStack {
             Text(label)
-                .foregroundStyle(.white.opacity(0.65))
+                .foregroundStyle(ScratchLabCoreColor.textSecondary)
             Spacer()
             Text(value)
+                .foregroundStyle(tone.color)
                 .multilineTextAlignment(.trailing)
         }
     }
@@ -94,6 +118,56 @@ struct WatchCaptureView: View {
             recorder.stopCapture()
         } else {
             recorder.startCapture()
+        }
+    }
+}
+
+/// Purely a display classification of `WatchMotionRecorder.transferStatus`'s
+/// existing, unchanged strings — never adds a state or claims connectivity
+/// the model doesn't already report. An unrecognized string (e.g. a future
+/// wording change) safely falls back to `.neutral` rather than guessing.
+private enum WatchTransferStatusTone {
+    case success
+    case warning
+    case danger
+    case info
+    case neutral
+
+    var color: Color {
+        switch self {
+        case .success: return ScratchLabCoreColor.success
+        case .warning: return ScratchLabCoreColor.warning
+        case .danger:  return ScratchLabCoreColor.danger
+        case .info:    return ScratchLabCoreColor.info
+        case .neutral: return ScratchLabCoreColor.textSecondary
+        }
+    }
+
+    static func tone(for status: String) -> WatchTransferStatusTone {
+        switch status {
+        case "Ready":
+            return .success
+        case "Recording":
+            return .danger
+        case "Sent to your paired device.":
+            return .success
+        case "Queued the motion session for device import.":
+            return .info
+        case "Motion capture is unavailable on this watch.",
+             "Unable to save the motion session.":
+            return .danger
+        case "No motion captured.",
+             "Motion capture stopped. Try again.",
+             "Pair your watch with your device to send sessions.",
+             "Install ScratchLab on your paired device to receive watch captures.",
+             "Saved on device. Open ScratchLab on your paired device later to import it.",
+             "Saved on device. Install ScratchLab on your paired device to import it.",
+             "Retrying send to your paired device…",
+             "Watch connection needs attention.",
+             "Couldn't send to your paired device. Will retry automatically.":
+            return .warning
+        default:
+            return .neutral
         }
     }
 }
