@@ -85,9 +85,24 @@ final class MIDILearnHangFixTests: XCTestCase {
     // MARK: 2. 10,000 CC6 events during each fader Learn
 
     func testTenThousandCC6EventsDuringEachFaderLearnCauseNoMutationAndBoundedPublication() {
+        // MacCaptureEngine restores the legacy crossfader preference during
+        // init. Preserve the user's value while ensuring this flood test
+        // starts from the nil mapping its assertions require.
+        let legacyMappingKey = "scratchlab.mac.crossfaderMIDIMapping"
+        let originalLegacyMapping = UserDefaults.standard.object(forKey: legacyMappingKey)
+        UserDefaults.standard.removeObject(forKey: legacyMappingKey)
+        defer {
+            if let originalLegacyMapping {
+                UserDefaults.standard.set(originalLegacyMapping, forKey: legacyMappingKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: legacyMappingKey)
+            }
+        }
+
         for action: MIDISemanticAction in [.crossfader, .leftUpfader, .rightUpfader] {
-            let engine = MacCaptureEngine(autoRefreshDevices: false)
             let deviceID = "midi_test_hang_10k_\(action.rawValue)"
+            cleanUpMIDIMapping(deviceIdentifier: deviceID)
+            let engine = MacCaptureEngine(autoRefreshDevices: false)
             engine.selectedMIDIInputSourceID = deviceID
             defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
@@ -286,15 +301,21 @@ final class MIDILearnHangFixTests: XCTestCase {
     // file I/O inline" assertion is the robust way to prove the same thing.
 
     func testCrossfaderLearnPersistenceDoesNotBlockTheCallingThread() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
         let deviceID = "midi_test_hang_no_sync_persistence"
-        engine.selectedMIDIInputSourceID = deviceID
         let defaultsKey = "scratchlab.mac.crossfaderMIDIMapping"
+        let originalLegacyMapping = UserDefaults.standard.object(forKey: defaultsKey)
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
         defer {
             cleanUpMIDIMapping(deviceIdentifier: deviceID)
-            UserDefaults.standard.removeObject(forKey: defaultsKey)
+            if let originalLegacyMapping {
+                UserDefaults.standard.set(originalLegacyMapping, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
         }
-        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        cleanUpMIDIMapping(deviceIdentifier: deviceID)
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.selectedMIDIInputSourceID = deviceID
 
         engine.startMIDILearn(for: .crossfader)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))

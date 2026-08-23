@@ -21,6 +21,15 @@ final class MIDIUserMixerGainTests: XCTestCase {
         MIDILearnedMappingStore.default.delete(deviceIdentifier: deviceIdentifier)
     }
 
+    /// `loadDeviceMappingForCurrentSource()` reads disk synchronously but
+    /// publishes its `@Published` mapping on the next main-queue turn.
+    /// Tests must observe that documented boundary instead of treating the
+    /// UI-facing state update as synchronous.
+    private func loadMappingAndWait(on engine: MacCaptureEngine) {
+        engine.loadDeviceMappingForCurrentSource()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
     private func makeSyntheticLoopBuffer(frames: Int = 8_000) throws -> AVAudioPCMBuffer {
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
@@ -45,15 +54,15 @@ final class MIDIUserMixerGainTests: XCTestCase {
         try Data("{ this is not valid mapping JSON".utf8).write(to: fileURL, options: .atomic)
     }
 
-    /// Saves a one-control mapping for `deviceID` and loads it onto
-    /// `engine` synchronously via the production `loadDeviceMappingForCurrentSource`
-    /// path (no persistence-queue wait needed — that call is synchronous).
+    /// Saves a one-control mapping for `deviceID`, then observes the production
+    /// load path through its main-queue publication boundary.
     private func installMapping(_ control: MIDILearnedControl, deviceID: String, on engine: MacCaptureEngine) {
+        cleanUpMIDIMapping(deviceIdentifier: deviceID)
         var mapping = MIDIDeviceMapping(deviceIdentifier: deviceID, deviceName: "Test Device")
         mapping.upsert(control)
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
     }
 
     /// `targetUserMixerGain` (the render core's un-ramped mirror of the
@@ -239,7 +248,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         // mapping straight from disk, not from any in-memory state.
         let relaunchedEngine = MacCaptureEngine(autoRefreshDevices: false)
         relaunchedEngine.selectedMIDIInputSourceID = deviceID
-        relaunchedEngine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: relaunchedEngine)
 
         let reloaded = try XCTUnwrap(relaunchedEngine.currentMIDIDeviceMapping)
         let reloadedUpfader = try XCTUnwrap(reloaded.control(for: .rightUpfader))
@@ -274,7 +283,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         mapping.upsert(MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceA
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
 
         engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 0)
         engine.evaluateUserMixerGainForCC(channel: 15, controller: 8, value: 0)
@@ -284,7 +293,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
 
         // Switch to a source with no stored mapping at all.
         engine.selectedMIDIInputSourceID = "midi_test_lifecycle_unmapped_source"
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
 
         XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0,
@@ -305,7 +314,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         mapping.upsert(MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceA
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 0)
         engine.evaluateUserMixerGainForCC(channel: 15, controller: 8, value: 0)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
@@ -313,7 +322,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
 
         try writeMalformedMappingFile(deviceIdentifier: deviceBroken)
         engine.selectedMIDIInputSourceID = deviceBroken
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
 
         XCTAssertFalse(engine.midiMappingError.isEmpty, "sanity: the load must actually have failed")
@@ -331,7 +340,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         mapping.upsert(MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
 
         // Right upfader at a distinctive, non-unity, non-zero value; crossfader closed.
         engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 64)
@@ -361,7 +370,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         mapping.upsert(MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
 
         // Crossfader inside its cut-in region (a distinctive, non-unity,
         // non-zero gain); right upfader closed.
@@ -392,7 +401,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         mapping.upsert(MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
 
         engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 0)
         engine.evaluateUserMixerGainForCC(channel: 15, controller: 8, value: 0)
@@ -450,7 +459,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         MIDILearnedMappingStore.default.save(mapping)
 
         engine.selectedMIDIInputSourceID = deviceID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
 
         XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0,
@@ -475,11 +484,11 @@ final class MIDIUserMixerGainTests: XCTestCase {
         MIDILearnedMappingStore.default.save(mappingB)
 
         engine.selectedMIDIInputSourceID = deviceA
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 0)
         // Rapid switch to B without draining A's queued gain work first.
         engine.selectedMIDIInputSourceID = deviceB
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
 
         XCTAssertEqual(engine.currentMIDIDeviceMapping?.deviceIdentifier, deviceB)
@@ -514,7 +523,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         XCTAssertGreaterThan(phaseBefore, 0, "sanity: phase must actually have advanced before the resets")
 
         // Exercise every lifecycle reset path once.
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         controller.resetCrossfaderGainToUnity()
         controller.resetRightUpfaderGainToUnity()
         controller.resetUserMixerGainToUnity()
@@ -540,7 +549,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         mapping.upsert(MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
         MIDILearnedMappingStore.default.save(mapping)
         engine.selectedMIDIInputSourceID = deviceID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
 
         engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 76) // 0.6 of 0...127
         engine.evaluateUserMixerGainForCC(channel: 15, controller: 8, value: 127)
@@ -577,13 +586,13 @@ final class MIDIUserMixerGainTests: XCTestCase {
 
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         engine.selectedMIDIInputSourceID = engineA
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.evaluateUserMixerGainForCC(channel: 15, controller: 8, value: 64) // midpoint
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
         XCTAssertEqual(publishedTargetUserMixerGain(engine), 0.5, accuracy: 0.01, "Device A's Blend curve: midpoint gain is 0.5")
 
         engine.selectedMIDIInputSourceID = engineBID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         engine.evaluateUserMixerGainForCC(channel: 15, controller: 8, value: 64) // still well past the 5% cut-in
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
         XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0, accuracy: 0.01, "Device B's Sharp Scratch curve: midpoint gain is already 1.0")
@@ -927,7 +936,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
 
         // Switch to device B mid-session.
         engine.selectedMIDIInputSourceID = deviceB
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertNil(engine.activeCurveCaptureAction, "a source change must cancel any in-progress curve-capture session")
@@ -961,8 +970,7 @@ final class MIDIUserMixerGainTests: XCTestCase {
         XCTAssertEqual(engine.activeCurveCaptureAction, .crossfader)
 
         engine.selectedMIDIInputSourceID = ""
-        engine.loadDeviceMappingForCurrentSource()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        loadMappingAndWait(on: engine)
 
         XCTAssertNil(engine.activeCurveCaptureAction, "switching to an empty/unmapped source must cancel the session")
     }

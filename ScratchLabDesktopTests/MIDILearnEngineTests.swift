@@ -25,6 +25,11 @@ final class MIDILearnEngineTests: XCTestCase {
         MIDILearnedMappingStore.default.delete(deviceIdentifier: deviceIdentifier)
     }
 
+    private func loadMappingAndWait(on engine: MacCaptureEngine) {
+        engine.loadDeviceMappingForCurrentSource()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
     func testCC6PlatterFloodIgnoredDuringUpfaderLearn() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let deviceID = "midi_test_cc6_flood"
@@ -231,6 +236,8 @@ final class MIDILearnEngineTests: XCTestCase {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let raneID = "midi_test_iso_rane"
         let pioneerID = "midi_test_iso_pioneer"
+        cleanUpMIDIMapping(deviceIdentifier: raneID)
+        cleanUpMIDIMapping(deviceIdentifier: pioneerID)
         defer {
             cleanUpMIDIMapping(deviceIdentifier: raneID)
             cleanUpMIDIMapping(deviceIdentifier: pioneerID)
@@ -243,7 +250,7 @@ final class MIDILearnEngineTests: XCTestCase {
         XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .crossfader)?.controlNumber, 8)
 
         engine.selectedMIDIInputSourceID = pioneerID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         XCTAssertNil(engine.currentMIDIDeviceMapping, "A device with no saved mapping must not inherit another device's mapping")
 
         engine.startMIDILearn(for: .crossfader)
@@ -253,18 +260,20 @@ final class MIDILearnEngineTests: XCTestCase {
 
         // Switching back to the Rane must restore ITS mapping, not the Pioneer's.
         engine.selectedMIDIInputSourceID = raneID
-        engine.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine)
         XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .crossfader)?.controlNumber, 8)
     }
 
     func testReconnectRestoresPersistedDeviceMapping() {
         let deviceID = "midi_test_reconnect"
+        cleanUpMIDIMapping(deviceIdentifier: deviceID)
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         let engine1 = MacCaptureEngine(autoRefreshDevices: false)
         engine1.selectedMIDIInputSourceID = deviceID
         engine1.startMIDILearn(for: .rightUpfader)
         _ = engine1.evaluateMIDILearnForCC(channel: 1, controller: 21, value: 100)
+        engine1.testOnly_waitForMappingPersistenceQueue()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertNotNil(engine1.currentMIDIDeviceMapping?.control(for: .rightUpfader))
 
@@ -272,7 +281,7 @@ final class MIDILearnEngineTests: XCTestCase {
         // device identifier must recover the same mapping.
         let engine2 = MacCaptureEngine(autoRefreshDevices: false)
         engine2.selectedMIDIInputSourceID = deviceID
-        engine2.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine2)
         XCTAssertEqual(engine2.currentMIDIDeviceMapping?.control(for: .rightUpfader)?.controlNumber, 21)
     }
 
@@ -468,6 +477,7 @@ final class MIDILearnEngineTests: XCTestCase {
 
     func testCalibrationPersistsAcrossRelaunch() {
         let deviceID = "midi_test_calibration_relaunch"
+        cleanUpMIDIMapping(deviceIdentifier: deviceID)
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         let engine1 = MacCaptureEngine(autoRefreshDevices: false)
@@ -485,7 +495,7 @@ final class MIDILearnEngineTests: XCTestCase {
 
         let engine2 = MacCaptureEngine(autoRefreshDevices: false)
         engine2.selectedMIDIInputSourceID = deviceID
-        engine2.loadDeviceMappingForCurrentSource()
+        loadMappingAndWait(on: engine2)
 
         let control = engine2.currentMIDIDeviceMapping?.control(for: .leftUpfader)
         XCTAssertEqual(control?.minValue, 15)

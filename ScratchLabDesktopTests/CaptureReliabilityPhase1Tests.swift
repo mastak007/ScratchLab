@@ -3014,9 +3014,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(macDemoSource.contains("Text(\"Demo\")"))
         XCTAssertTrue(macDemoSource.contains("Text(\"Hear the Baby Scratch reference and watch the coach demonstrate the move.\")"))
         XCTAssertTrue(macDemoSource.contains("No hardware needed"))
-        XCTAssertTrue(macAnalyzerSource.contains("@StateObject private var demoModeController = ScratchLabDemoModeController()"))
+        XCTAssertTrue(macAnalyzerSource.contains("@StateObject private var demoModeController = ScratchLabDemoModeController("))
         XCTAssertTrue(macAnalyzerSource.contains("if liveInputEnabled {\n                startMacLiveInput()"))
-        XCTAssertTrue(macAnalyzerSource.contains("Button(liveInputEnabled ? \"Live input on\" : \"Start live input\")"))
+        XCTAssertTrue(macAnalyzerSource.contains("Button(\"Start live input\", action: startMacLiveInput)"))
         XCTAssertTrue(macAnalyzerSource.contains("private func exportMacDemoSession()"))
         XCTAssertTrue(macAnalyzerSource.contains("try ScratchLabDemoSessionBuilder().makePackage()"))
         XCTAssertFalse(macAnalyzerSource.contains(".onAppear {\n            captureEngine.start()"))
@@ -4403,7 +4403,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("babyScratchDemo.configureBabyScratchIfNeeded()"))
         XCTAssertTrue(source.contains("babyScratchDemo.stop()"))
-        XCTAssertTrue(source.contains("\"Demo audio unavailable for this scratch.\""))
+        // Audio-unavailable messaging is truthfully surfaced by delegating to
+        // demoModeController.statusMessage rather than a hardcoded string.
+        XCTAssertTrue(source.contains("if !demoModeController.isReady {"))
+        XCTAssertTrue(source.contains("return demoModeController.statusMessage"))
         // ScratchCoachCardContent + animationStateProvider / coachPose now live
         // in the shared ScratchCoachViews; MacAnalyzerView exposes the coordinator
         // through coachCardTheme, playbackState, and the status-message surface.
@@ -6825,12 +6828,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("static func resolved(from storedValue: String)"))
     }
 
-    // Slice X.1: the Capture tab Inputs grid must include a Hand chip
-    // (so the user knows whether the Vision pipeline is actually
-    // tracking a hand) and a discoverable "Camera deck setup" affordance
-    // that unlocks calibration and switches the user to Advanced ->
-    // Camera Deck. The accompanying explainer copy must NOT imply that
-    // a green "Camera Ready" chip is enough to capture notation.
+    // Slice X.1: the Capture tab Inputs grid must include a Hand row so the
+    // user knows whether Vision is tracking a hand. Deck calibration is
+    // intentionally owned by Advanced -> Calibration and must not be
+    // duplicated or routed through the standard Capture flow.
     func testMacCaptureInputsExposeHandMotionAndCalibrationSetup() throws {
         let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: macSourceURL, encoding: .utf8)
@@ -6847,65 +6848,57 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Capture Inputs grid must include a Hand chip so users see whether motion is being tracked"
         )
         XCTAssertTrue(
-            inputsSlice.contains("captureHandMotionStatusValue"),
-            "Hand chip must derive its value from the live handMotionState helper"
+            inputsSlice.contains("state: captureHandMotionReadiness"),
+            "Hand chip must derive its readiness from the live handMotionState helper"
+        )
+        XCTAssertTrue(
+            inputsSlice.contains("detail: captureHandMotionStatusDetail"),
+            "Hand chip must derive its detail text from the live handMotionState helper"
         )
         XCTAssertTrue(
             source.contains("captureEngine.handMotionState"),
             "Hand chip helper must read MacCaptureEngine.handMotionState"
         )
 
-        // Slice X.1.1: calibration affordance routes the user to PRACTICE
-        // (where the live camera preview lives) with live input enabled
-        // AND calibration unlocked, so the deck/mixer overlay is drawn
-        // directly on the preview and is draggable. Advanced -> Camera
-        // Deck has no preview to overlay onto, so routing there left
-        // Karl looking at controls without boxes.
-        XCTAssertTrue(
-            inputsSlice.contains("\"Camera deck setup\""),
-            "Capture Inputs card must include a 'Camera deck setup' button so calibration is discoverable"
-        )
-        XCTAssertTrue(
-            inputsSlice.contains("captureEngine.calibrationLocked = false"),
-            "Camera deck setup must unlock the deck calibration overlay"
-        )
-        XCTAssertTrue(
-            inputsSlice.contains("liveInputEnabled = true"),
-            "Camera deck setup must enable live input so the camera preview becomes visible"
-        )
-        XCTAssertTrue(
+        // Slice X.1.1 follow-up: camera/deck calibration is intentionally
+        // Advanced-only now. The standard Capture tab must NOT expose
+        // calibration controls or route into Practice for setup — that
+        // regressed once (routing into Practice with no preview to overlay)
+        // and must not be restored here.
+        XCTAssertFalse(
             inputsSlice.contains("workspaceTab = .practice"),
-            "Camera deck setup must switch to the Practice tab where the live preview mounts the rig overlay"
+            "Capture Inputs card must not route into Practice for calibration setup"
         )
-        // Paired Lock affordance so the user can freeze the layout
-        // before recording without leaving the Capture tab.
-        XCTAssertTrue(
-            inputsSlice.contains("\"Lock calibration\""),
-            "Capture Inputs card must include a 'Lock calibration' button (visible while unlocked)"
+        XCTAssertFalse(
+            inputsSlice.contains("captureEngine.calibrationLocked ="),
+            "Capture Inputs card must not toggle calibration lock inline; that control lives in Advanced only"
         )
-        XCTAssertTrue(
-            inputsSlice.contains("captureEngine.calibrationLocked = true"),
-            "Lock calibration must re-lock the overlay"
-        )
-
-        // Explainer copy must not falsely imply Camera-Ready is enough,
-        // and must explicitly say record movement requires the deck/hand
-        // to be visible (Karl's "still possible to get audio-only" point).
-        XCTAssertTrue(
-            inputsSlice.contains("Camera Ready") && inputsSlice.contains("alone is not enough"),
-            "Calibration affordance must include copy that disambiguates Camera Ready from hand-motion-being-captured"
+        // The Advanced camera/deck section remains the sole owner of the
+        // calibration card and its lock affordance.
+        let advancedCameraDeckSlice = try sourceSlice(
+            in: source,
+            from: "case .cameraDeck:\n            VStack",
+            through: "case .midiFader:"
         )
         XCTAssertTrue(
-            inputsSlice.contains("Record movement requires the deck and hand to be visible"),
-            "Calibration explainer must state that record movement requires deck+hand visibility"
+            advancedCameraDeckSlice.contains("deckCalibrationCard"),
+            "Advanced -> Calibration must continue to own the deck calibration card"
+        )
+        XCTAssertTrue(
+            source.contains("private var deckCalibrationCard: some View"),
+            "Deck calibration must still live in its own Advanced-tab card"
+        )
+        XCTAssertTrue(
+            source.contains("\"Lock Fit\"") && source.contains("\"Unlock Fit\""),
+            "Deck calibration card must offer Lock Fit / Unlock Fit controls"
         )
 
         // Hand chip copy must not claim 'notation ready'. It reports
         // hand visibility / direction only; the user is responsible for
         // pointing the camera at the deck.
         XCTAssertTrue(
-            source.contains("\"Hand visible\""),
-            "Hand chip steady value must be 'Hand visible', not 'Hand steady' (avoids implying notation-ready)"
+            source.contains("Point the camera at your deck / hand"),
+            "Hand chip detail must guide the user to point the camera, not claim notation-ready"
         )
         XCTAssertFalse(
             source.contains("\"Hand steady\""),
@@ -6959,12 +6952,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             "Click",
             "Beat",
             "Calibration",
-            "Camera Ready",
+            "Camera",
             "Mixer MIDI",
             "Mixer Optional",
             "Watch Optional",
             "Start Capture",
-            "\"Stop\" : \"Record\"",
             "Retake",
             "Export Session",
             "Untitled Session",
@@ -6972,6 +6964,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         ] {
             XCTAssertTrue(source.contains(label), "Missing Capture label \(label)")
         }
+
+        // Main capture button title now comes from a dedicated helper with
+        // more states ("Retry take", "Start Capture") than the old ternary;
+        // anchor to that helper rather than an exact ternary expression.
+        XCTAssertTrue(source.contains("private var mainCaptureButtonTitle: String"))
+        XCTAssertTrue(source.contains("return \"Stop\""))
+        XCTAssertTrue(source.contains("return \"Record\""))
 
         for engineLabel in [
             "Audio Ready",
@@ -7285,7 +7284,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("private var selectedMixerMIDIDeviceName: String?"))
         XCTAssertTrue(source.contains("return captureEngine.midiListeningState"))
         XCTAssertTrue(source.contains("return \"Mixer Optional\""))
-        XCTAssertTrue(source.contains("selectedMixerMIDIDeviceName != nil ? .green : .secondary"))
+        // Mixer status color now uses the shared semantic design-system
+        // token rather than a raw SwiftUI .green literal.
+        XCTAssertTrue(source.contains("selectedMixerMIDIDeviceName != nil ? ScratchLabDesign.Sem.info : .secondary"))
         XCTAssertTrue(source.contains("Not Connected"))
         // The mixer status surface uses "Mixer MIDI" as the section title and
         // "MIDI Monitor" as the device-monitoring subsection. The previous
@@ -7306,7 +7307,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testPracticeSourceKeepsDemoPathAppReviewSafe() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        XCTAssertTrue(source.contains("Try the Baby Scratch demo, listen to the coach, and start a simple practice run."))
+        XCTAssertTrue(source.contains("Hear the Baby Scratch reference and watch the coach demonstrate the move."))
         XCTAssertTrue(source.contains("No hardware needed"))
         XCTAssertFalse(source.contains("dataset details"))
     }
@@ -7441,7 +7442,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("GKLeaderboard.submitScore"))
         XCTAssertTrue(source.contains("func showGameCenterLeaderboard(from viewController: UIViewController)"))
         XCTAssertTrue(source.contains("#if DEBUG\n        guard gameCenterFeatureEnabled else { return }"))
-        XCTAssertTrue(source.contains("GKGameCenterViewController"))
+        // Leaderboard surface now uses the lightweight GKAccessPoint overlay
+        // instead of presenting a full GKGameCenterViewController.
+        XCTAssertTrue(source.contains("GKAccessPoint.shared"))
         XCTAssertFalse(source.contains("leaderboardIDs: [\"scratchlab_highscores\"]"))
         XCTAssertFalse(source.contains("leaderboardID: \"scratchlab_highscores\""))
     }
@@ -9349,39 +9352,47 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
     // MARK: - Release readiness source-inspection tests
 
+    // Slice X.2 follow-up: the V3.2 Home redesign dropped the DEBUG-gated
+    // Capture/Review menu buttons entirely rather than keeping them behind
+    // a #if DEBUG route (there is no `menuButtons` property or
+    // showingCapturePlaceholder/showingReviewPlaceholder state any more).
+    // CapturePlaceholderView/ReviewPlaceholderView are intentionally kept
+    // as unreferenced dead code for a future re-wire but must not be reachable
+    // from any navigation route in ANY build configuration — a strictly
+    // safer App Review contract than "hidden outside DEBUG".
     func testMainMenuViewHidesCapturePlaceholderRouteOutsideDebug() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        // Isolate the menuButtons computed property body.
-        let menuButtonsSlice = try sourceSlice(
-            in: source,
-            from: "private var menuButtons: some View {",
-            through: "private var performerMonitorSubtitle"
+        XCTAssertTrue(
+            source.contains("private struct CapturePlaceholderView: View"),
+            "CapturePlaceholderView must still exist for a future re-wire"
+        )
+        XCTAssertTrue(
+            source.contains("private struct ReviewPlaceholderView: View"),
+            "ReviewPlaceholderView must still exist for a future re-wire"
+        )
+        XCTAssertTrue(
+            source.contains("On-device take capture is coming."),
+            "Capture placeholder must keep truthful coming-soon copy"
+        )
+        XCTAssertTrue(
+            source.contains("On-device Review is coming."),
+            "Review placeholder must keep truthful coming-soon copy"
         )
 
-        // Within menuButtons, the Capture/Review buttons must be inside a #if DEBUG block.
-        XCTAssertTrue(
-            menuButtonsSlice.contains("#if DEBUG"),
-            "menuButtons must have a #if DEBUG gate"
+        // No navigation route may instantiate either placeholder — the only
+        // occurrence of each identifier must be its own struct declaration.
+        XCTAssertEqual(
+            source.components(separatedBy: "CapturePlaceholderView").count - 1, 1,
+            "CapturePlaceholderView must not be referenced/instantiated by any route"
         )
-        let debugBlock = try sourceSlice(in: menuButtonsSlice, from: "#if DEBUG", through: "#endif")
-        XCTAssertTrue(
-            debugBlock.contains("showingCapturePlaceholder = true"),
-            "Capture placeholder route must be #if DEBUG gated in menuButtons"
+        XCTAssertEqual(
+            source.components(separatedBy: "ReviewPlaceholderView").count - 1, 1,
+            "ReviewPlaceholderView must not be referenced/instantiated by any route"
         )
-        XCTAssertTrue(
-            debugBlock.contains("showingReviewPlaceholder = true"),
-            "Review placeholder route must be #if DEBUG gated in menuButtons"
-        )
-        XCTAssertTrue(
-            debugBlock.contains("On-device take capture is coming."),
-            "Capture coming-soon subtitle must be inside the #if DEBUG block"
-        )
-        XCTAssertTrue(
-            debugBlock.contains("On-device review is coming."),
-            "Review coming-soon subtitle must be inside the #if DEBUG block"
-        )
+        XCTAssertFalse(source.contains("showingCapturePlaceholder"))
+        XCTAssertFalse(source.contains("showingReviewPlaceholder"))
     }
 
     func testSessionUploadConfigurationIsAlwaysUnconfiguredInRelease() throws {
@@ -9518,9 +9529,14 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
             source.contains("\"Progress to Mastery\""),
             "Practice view must not show \"Progress to Mastery\" — use estimate language"
         )
-        XCTAssertTrue(
-            source.contains("\"Practice progress estimate\""),
-            "Practice view must use \"Practice progress estimate\" in place of \"Progress to Mastery\""
+        // "Progress to Mastery" was replaced by estimate language and later
+        // consolidated: there is no longer a separate "Practice progress
+        // estimate" secondary label, only the score chip's "Practice
+        // estimate" title (asserted below) and the results overlay's
+        // "Match estimate" primary metric label (asserted above).
+        XCTAssertFalse(
+            source.contains("Mastery"),
+            "Practice view must not reintroduce any 'Mastery' terminology"
         )
         XCTAssertTrue(
             source.contains("\"Practice estimate\""),
