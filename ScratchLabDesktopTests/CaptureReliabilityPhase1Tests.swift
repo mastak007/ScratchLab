@@ -7149,7 +7149,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let tabSource = try sourceSlice(
             in: source,
             from: "TabView(selection: workspaceTabBinding)",
-            through: ".background(Color(nsColor: .windowBackgroundColor))"
+            through: ".background(ScratchLabDesign.Surface.applicationBackground)"
         )
         XCTAssertFalse(tabSource.contains("Notation Lab"))
         XCTAssertFalse(tabSource.contains("Test Lab"))

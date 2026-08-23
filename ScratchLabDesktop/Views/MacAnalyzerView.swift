@@ -958,7 +958,7 @@ struct MacAnalyzerView: View {
                 }
                 .tag(WorkspaceTab.advanced)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(ScratchLabDesign.Surface.applicationBackground)
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
@@ -1698,7 +1698,7 @@ struct MacAnalyzerView: View {
 
                 Label("No hardware needed", systemImage: "checkmark.seal.fill")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color(nsColor: .systemGreen))
+                    .foregroundStyle(ScratchLabDesign.Sem.success)
             }
 
             HStack(spacing: 10) {
@@ -1758,7 +1758,7 @@ struct MacAnalyzerView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(nsColor: .systemOrange))
+                    .tint(ScratchLabDesign.Sem.warning)
                 } else {
                     Button { startDemoWithBeat() } label: {
                         Label("Demo with Beat", systemImage: "metronome")
@@ -1802,7 +1802,7 @@ struct MacAnalyzerView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(ScratchLabDesign.Surface.surface, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
     }
 
     private var captureSidebar: some View {
@@ -2647,11 +2647,11 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Practice")
                     .font(.system(size: 24, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
                 Text("Watch the target, listen, then copy one Baby Scratch cycle.")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
 
             Spacer()
@@ -2670,11 +2670,11 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Capture Session")
                     .font(.system(size: 24, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
                 Text("Record clean takes with simple choices. Input routing, calibration, and raw details live in Advanced.")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
 
             Spacer()
@@ -3185,7 +3185,7 @@ struct MacAnalyzerView: View {
                         if !captureEngine.curveCaptureError.isEmpty {
                             Label(captureEngine.curveCaptureError, systemImage: "exclamationmark.triangle.fill")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Color(nsColor: .systemOrange))
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -3237,14 +3237,14 @@ struct MacAnalyzerView: View {
                 if !captureEngine.midiMappingError.isEmpty {
                     Label(captureEngine.midiMappingError, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if !captureEngine.calibrationError.isEmpty {
                     Label(captureEngine.calibrationError, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -4129,7 +4129,7 @@ struct MacAnalyzerView: View {
     }
 
     private var audioRoutingStatusColor: Color {
-        selectedAudioLooksMic ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)
+        selectedAudioLooksMic ? ScratchLabDesign.Sem.warning : ScratchLabDesign.Sem.success
     }
 
     private var stageLayout: StageLayout {
@@ -4961,10 +4961,10 @@ struct MacAnalyzerView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             ScratchLabDesign.Surface.surface,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                 .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         )
     }
@@ -4974,11 +4974,11 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
                 Text(subtitle)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
 
             content()
@@ -4988,7 +4988,7 @@ struct MacAnalyzerView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 
     private var captureEmptyStateStage: some View {
@@ -5002,11 +5002,11 @@ struct MacAnalyzerView: View {
                 VStack(spacing: 10) {
                     Text("Create your first session")
                         .font(.system(size: 26, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
                     Text("Name the session, choose a target, then record the first take.")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.74))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 420)
                 }
@@ -5018,7 +5018,7 @@ struct MacAnalyzerView: View {
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white.opacity(0.03))
+            .background(ScratchLabDesign.Surface.subtleFill.opacity(0.5))
         }
     }
 
@@ -5476,11 +5476,11 @@ struct MacAnalyzerView: View {
         let color: Color
         switch status.readiness {
         case .ready:
-            color = .green
+            color = ScratchLabDesign.Sem.success
         case .recording, .finalizing:
-            color = .orange
+            color = ScratchLabDesign.Sem.warning
         case .missingAudio, .missingVideo, .failed:
-            color = .red
+            color = ScratchLabDesign.Sem.danger
         }
 
         return Text(status.readiness.badgeTitle)
@@ -5829,7 +5829,7 @@ struct MacAnalyzerView: View {
         if stage == currentCaptureStage {
             return ScratchLabDesign.Sem.accent
         }
-        return Color.white.opacity(0.08)
+        return ScratchLabDesign.Surface.controlFill
     }
 
     private func captureStageIsComplete(_ stage: CaptureStage) -> Bool {
@@ -5999,7 +5999,7 @@ struct MacAnalyzerView: View {
                 if let routineMetadataStatusMessage {
                     Label(routineMetadataStatusMessage, systemImage: "exclamationmark.circle.fill")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -6177,8 +6177,8 @@ struct MacAnalyzerView: View {
             midiSourcePickerRow
 
             HStack(spacing: 8) {
-                testLabMetricBadge(title: "State", value: captureEngine.midiListeningState, color: captureEngine.availableMIDISources.isEmpty ? .secondary : .green)
-                testLabMetricBadge(title: "Events received", value: "\(captureEngine.midiEventsReceivedCount)", color: captureEngine.midiEventsReceivedCount == 0 ? .secondary : .green)
+                testLabMetricBadge(title: "State", value: captureEngine.midiListeningState, color: captureEngine.availableMIDISources.isEmpty ? .secondary : ScratchLabDesign.Sem.success)
+                testLabMetricBadge(title: "Events received", value: "\(captureEngine.midiEventsReceivedCount)", color: captureEngine.midiEventsReceivedCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -6264,9 +6264,7 @@ struct MacAnalyzerView: View {
             }
 #endif
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var captureLatestTakeCard: some View {
@@ -6275,14 +6273,14 @@ struct MacAnalyzerView: View {
                 .font(.headline)
 
             HStack(spacing: 8) {
-                testLabMetricBadge(title: "Takes", value: "\(visibleTakeCount)", color: visibleTakeCount == 0 ? .secondary : .green)
-                testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : .green)
+                testLabMetricBadge(title: "Takes", value: "\(visibleTakeCount)", color: visibleTakeCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
+                testLabMetricBadge(title: "Detected", value: reviewDetectedScratchLabel, color: captureEngine.lastScratchDetection == nil ? .secondary : ScratchLabDesign.Sem.success)
                 testLabMetricBadge(title: "Signal confidence", value: reviewConfidenceLabel, color: reviewConfidenceColor)
             }
 
             HStack(spacing: 8) {
-                testLabMetricBadge(title: "Strokes", value: "\(captureEngine.scratchDetectionCount)", color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green)
-                testLabMetricBadge(title: "Fader events", value: "\(captureEngine.cxlEventCount)", color: captureEngine.cxlEventCount == 0 ? .secondary : .green)
+                testLabMetricBadge(title: "Strokes", value: "\(captureEngine.scratchDetectionCount)", color: captureEngine.scratchDetectionCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
+                testLabMetricBadge(title: "Fader events", value: "\(captureEngine.cxlEventCount)", color: captureEngine.cxlEventCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
             }
 
             if captureEngine.lastRoutineRecordingURL != nil {
@@ -6428,11 +6426,11 @@ struct MacAnalyzerView: View {
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
-                            testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : .green)
-                            testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : .green)
-                            testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : .green)
-                            testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : .green)
-                            testLabMetricBadge(title: "Motion samples", value: "\(reviewMotionSampleCount)", color: reviewMotionSampleCount == 0 ? .secondary : .green)
+                            testLabMetricBadge(title: "Stroke count", value: "\(reviewStrokeCount)", color: reviewStrokeCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
+                            testLabMetricBadge(title: "Audio event count", value: "\(reviewAudioEventCount)", color: reviewAudioEventCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
+                            testLabMetricBadge(title: "Mixer MIDI count", value: "\(reviewMixerMIDIEventCount)", color: reviewMixerMIDIEventCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
+                            testLabMetricBadge(title: "Fader event count", value: "\(reviewFaderEventCount)", color: reviewFaderEventCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
+                            testLabMetricBadge(title: "Motion samples", value: "\(reviewMotionSampleCount)", color: reviewMotionSampleCount == 0 ? .secondary : ScratchLabDesign.Sem.success)
                         }
                     }
                     .padding(.top, 8)
@@ -6641,7 +6639,7 @@ struct MacAnalyzerView: View {
                     ForEach(warnings) { warning in
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
                                 .font(.system(size: 10))
                             Text("\(reviewWarningTitle(warning.kind)): \(warning.detail)")
                                 .font(.system(size: 11))
@@ -6709,7 +6707,7 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Review timeline")
                     .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                 switch reviewStagePresentation {
                 case .empty:
@@ -6717,7 +6715,7 @@ struct MacAnalyzerView: View {
                         title: "Record a take to begin",
                         message: "Your target pattern is ready below. Open Capture when you're ready to record your attempt.",
                         systemImage: "waveform.badge.plus",
-                        accent: .white,
+                        accent: ScratchLabDesign.Sem.accent,
                         actionTitle: "Open Capture",
                         actionSystemImage: "record.circle"
                     ) {
@@ -6730,7 +6728,7 @@ struct MacAnalyzerView: View {
                         title: "Recording in progress",
                         message: message,
                         systemImage: "record.circle.fill",
-                        accent: .red,
+                        accent: ScratchLabDesign.Sem.danger,
                         showsProgress: true,
                         actionTitle: "Open Capture",
                         actionSystemImage: "arrow.left"
@@ -6744,7 +6742,7 @@ struct MacAnalyzerView: View {
                         title: "Preparing your take",
                         message: message,
                         systemImage: "clock.arrow.circlepath",
-                        accent: .orange,
+                        accent: ScratchLabDesign.Sem.warning,
                         showsProgress: true
                     )
                     reviewTargetNotationStageCard
@@ -6754,7 +6752,7 @@ struct MacAnalyzerView: View {
                         title: title,
                         message: message,
                         systemImage: "exclamationmark.triangle.fill",
-                        accent: .red,
+                        accent: ScratchLabDesign.Sem.danger,
                         actionTitle: "Record another take",
                         actionSystemImage: "arrow.counterclockwise"
                     ) {
@@ -6773,7 +6771,7 @@ struct MacAnalyzerView: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .background(Color.black)
+        .background(ScratchLabDesign.Surface.canvas)
     }
 
     @ViewBuilder
@@ -6837,11 +6835,11 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                 Text(message)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.66))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let actionTitle, let action {
@@ -6863,7 +6861,7 @@ struct MacAnalyzerView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(accent.opacity(0.22), lineWidth: 1)
@@ -6900,11 +6898,11 @@ struct MacAnalyzerView: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(preview.headerText)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                         Spacer(minLength: 0)
                         Text("Preview")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(
@@ -6914,7 +6912,7 @@ struct MacAnalyzerView: View {
                     }
                     Text(preview.subtitleText)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.66))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: 4) {
                         reviewAudioOnsetPreviewRow(
@@ -6957,7 +6955,7 @@ struct MacAnalyzerView: View {
                     }
                     Text(preview.footerDisclaimer)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .scratchLabCard(.stage)
@@ -6981,10 +6979,10 @@ struct MacAnalyzerView: View {
             HStack(spacing: 6) {
                 Text("Uncertain timing marks")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.66))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 Text("· preview only · not exported")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
             Canvas { context, size in
                 guard
@@ -7004,12 +7002,12 @@ struct MacAnalyzerView: View {
                     let rect = CGRect(
                         x: x - 0.75, y: 0, width: 1.5, height: size.height
                     )
-                    context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                    context.fill(Path(rect), with: .color(ScratchLabDesign.Sem.textSecondary))
                 }
             }
             .frame(height: 14)
             .background(
-                Color.white.opacity(0.05),
+                ScratchLabDesign.Surface.subtleFill,
                 in: RoundedRectangle(cornerRadius: 4, style: .continuous)
             )
             if let first = firstTimestamp,
@@ -7021,7 +7019,7 @@ struct MacAnalyzerView: View {
                     Text(String(format: "%.2fs", last))
                 }
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
         }
     }
@@ -7030,11 +7028,11 @@ struct MacAnalyzerView: View {
         HStack {
             Text(label)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.66))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             Spacer()
             Text(value)
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
         }
     }
 
@@ -7072,11 +7070,11 @@ struct MacAnalyzerView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Target notation")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 Spacer(minLength: 0)
                 Text("Target: \(scratchType.title)")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
             Group {
                 if let notation {
@@ -7090,10 +7088,10 @@ struct MacAnalyzerView: View {
                 } else {
                     Text("Target notation unavailable for this scratch type.")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
                         .padding(12)
-                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
             #if DEBUG
@@ -7108,7 +7106,7 @@ struct MacAnalyzerView: View {
             #endif
             Text("Reference pattern. Stays visible even when no captured notation is available.")
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
         }
         .scratchLabCard(.stage)
     }
@@ -7330,21 +7328,21 @@ struct MacAnalyzerView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Target vs performed")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 Spacer(minLength: 0)
                 Text("Preview · estimated from captured evidence")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
 
             switch reviewPerformanceComparison {
             case .unavailable(let reason):
                 Text(reason)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
                     .padding(12)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous))
             case .ready(let model):
                 // Stacked comparison — TARGET above, MY PERFORMANCE below, on
                 // the same musical-time axis. Direct labels keep the two
@@ -7362,7 +7360,7 @@ struct MacAnalyzerView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Label("TARGET", systemImage: "target")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color(white: 0.55))
+                            .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
                         ScratchPhraseChartView(source: .target(model.notation), bpm: model.bpm,
                                                targetWindow: domain)
                             .frame(height: 96)
@@ -7371,7 +7369,7 @@ struct MacAnalyzerView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Label("MY PERFORMANCE", systemImage: "person.fill")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color(red: 0.30, green: 0.70, blue: 1.00))
+                            .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
                         ScratchPhraseChartView(source: .performedPlatter(model.performedEvents), bpm: model.bpm,
                                                capturedWindow: domain,
                                                performedFrame: performedFrame)
@@ -7389,7 +7387,7 @@ struct MacAnalyzerView: View {
                 DisclosureGroup {
                     Text("Dots at stroke starts: green on time · amber early · orange late · red wrong direction · hollow missed · white extra. Slashes show what you played; cyan/rose is the target.")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 4)
                     ScratchPhraseChartView(
@@ -7406,20 +7404,20 @@ struct MacAnalyzerView: View {
                 }
 
                 if let firstAttempt = reviewFirstCycleAttempt {
-                    Divider().overlay(Color.white.opacity(0.08))
+                    Divider().overlay(ScratchLabDesign.Border.default)
                     HStack(spacing: 8) {
                         Text("First-cycle attempt · preview")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         Spacer(minLength: 8)
                         if let grade = firstAttempt.grade {
                             Text(reviewGradeLabel(grade))
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                         }
                         Text(firstAttempt.overallScore.map { String(format: "%.0f", $0) } ?? "—")
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     }
                 }
 
@@ -7428,19 +7426,18 @@ struct MacAnalyzerView: View {
                         ForEach(model.coaching, id: \.self) { line in
                             Text(line)
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.85))
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary.opacity(0.85))
                         }
                     }
                 }
 
                 Text("On-device motion and timing comparison over \(model.cycles) target cycle\(model.cycles == 1 ? "" : "s"). Not saved, scored records, or exported — captured notation remains the source of truth.")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     @ViewBuilder
@@ -7476,14 +7473,14 @@ struct MacAnalyzerView: View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.66))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             Spacer(minLength: 8)
             Text(detail)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             Text(value.map { String(format: "%.0f", $0) } ?? "—")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .frame(minWidth: 30, alignment: .trailing)
         }
     }
@@ -7494,7 +7491,7 @@ struct MacAnalyzerView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Captured evidence")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 Spacer(minLength: 0)
                 if hasCapturedMotionNotation {
                     Button {
@@ -7508,7 +7505,7 @@ struct MacAnalyzerView: View {
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         }
                         .foregroundStyle(
-                            showNotationOverlay ? Color.white : Color.white.opacity(0.55)
+                            showNotationOverlay ? ScratchLabDesign.Sem.textPrimary : ScratchLabDesign.Sem.textTertiary
                         )
                     }
                     .buttonStyle(.borderless)
@@ -7516,8 +7513,8 @@ struct MacAnalyzerView: View {
                     .padding(.vertical, 3)
                     .background(
                         showNotationOverlay
-                            ? Color.white.opacity(0.15)
-                            : Color.white.opacity(0.07),
+                            ? ScratchLabDesign.Sem.accent.opacity(0.20)
+                            : ScratchLabDesign.Surface.subtleFill,
                         in: RoundedRectangle(cornerRadius: 4)
                     )
                     Button {
@@ -7531,7 +7528,7 @@ struct MacAnalyzerView: View {
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         }
                         .foregroundStyle(
-                            showCameraPassthrough ? Color.white : Color.white.opacity(0.55)
+                            showCameraPassthrough ? ScratchLabDesign.Sem.textPrimary : ScratchLabDesign.Sem.textTertiary
                         )
                     }
                     .buttonStyle(.borderless)
@@ -7539,8 +7536,8 @@ struct MacAnalyzerView: View {
                     .padding(.vertical, 3)
                     .background(
                         showCameraPassthrough
-                            ? Color.white.opacity(0.15)
-                            : Color.white.opacity(0.07),
+                            ? ScratchLabDesign.Sem.accent.opacity(0.20)
+                            : ScratchLabDesign.Surface.subtleFill,
                         in: RoundedRectangle(cornerRadius: 4)
                     )
                 }
@@ -7578,15 +7575,15 @@ struct MacAnalyzerView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(emptyCopy.title)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     Text(emptyCopy.subtitle)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             if showNotationOverlay,
                let snapshot = currentRoutineNotationSnapshot,
@@ -7623,11 +7620,11 @@ struct MacAnalyzerView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Overlay review")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 Spacer(minLength: 0)
                 Text("Visual only · timing comparison")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
 
             if let targetNotation,
@@ -7670,15 +7667,15 @@ struct MacAnalyzerView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
             Text(subtitle)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     /// Returns a cached `(ReviewOverlayTimeline, OverlayTimingDiagnostics)`
@@ -7766,7 +7763,7 @@ struct MacAnalyzerView: View {
         let labelDecision = reviewLabelDecision
         let exportMetric = reviewExportMetric
         return HStack(alignment: .top, spacing: 12) {
-            reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: .white)
+            reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: ScratchLabDesign.Sem.textPrimary)
             reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: reviewDetectedStyle.systemImage, color: reviewDetectedStyle.color)
             reviewFooterMetric(title: "Signal confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
             reviewFooterMetric(title: "Label", value: labelDecision.value, systemImage: labelDecision.systemImage, color: labelDecision.color)
@@ -7781,11 +7778,11 @@ struct MacAnalyzerView: View {
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                     .accessibilityHidden(true)
                 Text(title.uppercased())
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
@@ -7816,17 +7813,17 @@ struct MacAnalyzerView: View {
             if snapshot.notationSource == "detected" {
                 switch snapshot.recordMovementEvents.first?.source {
                 case "controller":
-                    return ReviewCapturedSource(label: "Controller platter", systemImage: "dial.medium", color: .green)
+                    return ReviewCapturedSource(label: "Controller platter", systemImage: "dial.medium", color: ScratchLabDesign.Sem.success)
                 case "timecode_live":
-                    return ReviewCapturedSource(label: "DVS timecode", systemImage: "waveform.path", color: .green)
+                    return ReviewCapturedSource(label: "DVS timecode", systemImage: "waveform.path", color: ScratchLabDesign.Sem.success)
                 default:
-                    return ReviewCapturedSource(label: "Video motion", systemImage: "figure.wave", color: .green)
+                    return ReviewCapturedSource(label: "Video motion", systemImage: "figure.wave", color: ScratchLabDesign.Sem.success)
                 }
             }
             return ReviewCapturedSource(label: "Motion only", systemImage: "figure.wave", color: amber)
         }
         if !snapshot.faderEvents.isEmpty {
-            return ReviewCapturedSource(label: "Fader", systemImage: "slider.horizontal.3", color: .green)
+            return ReviewCapturedSource(label: "Fader", systemImage: "slider.horizontal.3", color: ScratchLabDesign.Sem.success)
         }
         if !snapshot.audioEvents.isEmpty {
             return ReviewCapturedSource(label: "Audio only (timing)", systemImage: "ear.and.waveform", color: amber)
@@ -8015,7 +8012,7 @@ struct MacAnalyzerView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .tint(Color(nsColor: .systemOrange))
+                    .tint(ScratchLabDesign.Sem.warning)
                 } else {
                     Button { startDemoWithBeat() } label: {
                         Label("Demo with Beat", systemImage: "metronome")
@@ -8060,7 +8057,7 @@ struct MacAnalyzerView: View {
                 if isPracticeSessionActive {
                     Label("Live", systemImage: "record.circle.fill")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color(nsColor: .systemRed))
+                        .foregroundStyle(ScratchLabDesign.Sem.danger)
                 }
             }
 
@@ -8076,22 +8073,22 @@ struct MacAnalyzerView: View {
                 testLabMetricBadge(
                     title: "Timer",
                     value: formatPracticeTime(practiceTimeRemaining),
-                    color: isPracticeSessionActive ? .white : .secondary
+                    color: isPracticeSessionActive ? ScratchLabDesign.Sem.textPrimary : .secondary
                 )
                 testLabMetricBadge(
                     title: "Practice estimate",
                     value: "\(practiceScore)",
-                    color: practiceScore == 0 ? .secondary : .green
+                    color: practiceScore == 0 ? .secondary : ScratchLabDesign.Sem.success
                 )
                 testLabMetricBadge(
                     title: "Hits",
                     value: "\(practiceDetectionCount)",
-                    color: practiceDetectionCount == 0 ? .secondary : .green
+                    color: practiceDetectionCount == 0 ? .secondary : ScratchLabDesign.Sem.success
                 )
                 testLabMetricBadge(
                     title: "Average",
                     value: "\(Int(practiceAverageAccuracy.rounded()))%",
-                    color: practiceAverageAccuracy == 0 ? .secondary : .green
+                    color: practiceAverageAccuracy == 0 ? .secondary : ScratchLabDesign.Sem.success
                 )
             }
 
@@ -8119,7 +8116,7 @@ struct MacAnalyzerView: View {
                     systemImage: "checkmark.circle.fill"
                 )
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(nsColor: .systemGreen))
+                .foregroundStyle(ScratchLabDesign.Sem.success)
                 .fixedSize(horizontal: false, vertical: true)
 
                 if let snapshot = currentRoutineNotationSnapshot,
@@ -8192,7 +8189,7 @@ struct MacAnalyzerView: View {
                 if case .copying = practiceCoordinator.state {
                     Label("Copying", systemImage: "record.circle.fill")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color(nsColor: .systemRed))
+                        .foregroundStyle(ScratchLabDesign.Sem.danger)
                 }
             }
 
@@ -8205,9 +8202,7 @@ struct MacAnalyzerView: View {
                 practiceScoredAttemptBody
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
         .onChange(of: captureEngine.isRoutineRecording) { _, isRecording in
             guard case .copying = practiceCoordinator.state else { return }
             if isRecording {
@@ -8248,7 +8243,7 @@ struct MacAnalyzerView: View {
                 if let message = practiceScoredAttemptUnavailableMessage {
                     Text(message)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 10) {
@@ -8297,7 +8292,7 @@ struct MacAnalyzerView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("TARGET")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.45))
+                        .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
                     ScratchPhraseChartView(
                         source: .target(targetNotation),
                         bpm: result.bpm,
@@ -8306,14 +8301,14 @@ struct MacAnalyzerView: View {
                     .frame(height: 120)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                Divider().overlay(Color.white.opacity(0.06))
+                Divider().overlay(ScratchLabDesign.Border.default)
             }
 
             HStack(spacing: 8) {
                 if let grade = result.grade {
                     Text(reviewGradeLabel(grade))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 }
                 Text(result.overallScore.map { String(format: "%.0f", $0) } ?? "—")
                     .font(.system(size: 20, weight: .semibold, design: .monospaced))
@@ -8328,7 +8323,7 @@ struct MacAnalyzerView: View {
             if let coaching = result.coaching.first {
                 Text(coaching)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -8470,7 +8465,7 @@ struct MacAnalyzerView: View {
 
                 Text(practiceBeatStore.isBeatEnabled ? "On" : "Off")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(practiceBeatStore.isBeatEnabled ? Color(nsColor: .systemGreen) : .secondary)
+                    .foregroundStyle(practiceBeatStore.isBeatEnabled ? ScratchLabDesign.Sem.success : .secondary)
             }
 
             HStack(spacing: 10) {
@@ -8531,11 +8526,11 @@ struct MacAnalyzerView: View {
                             .font(.system(size: 14, weight: .bold))
                             .frame(width: 36, height: 36)
                             .background(
-                                Color(nsColor: .controlBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                ScratchLabDesign.Surface.surface,
+                                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                                     .stroke(Color.primary.opacity(0.18), lineWidth: 1)
                             )
                             .contentShape(Rectangle())
@@ -8565,11 +8560,11 @@ struct MacAnalyzerView: View {
                             .font(.system(size: 14, weight: .bold))
                             .frame(width: 36, height: 36)
                             .background(
-                                Color(nsColor: .controlBackgroundColor),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                ScratchLabDesign.Surface.surface,
+                                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                                     .stroke(Color.primary.opacity(0.18), lineWidth: 1)
                             )
                             .contentShape(Rectangle())
@@ -8599,16 +8594,16 @@ struct MacAnalyzerView: View {
             } label: {
                 Text(practiceBeatStore.isPlaying ? "Stop beat" : "Play beat")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.black)
+                    .foregroundStyle(ScratchLabDesign.Sem.textOnAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(
                         practiceBeatStore.isBeatEnabled
                             ? (practiceBeatStore.isPlaying
-                                ? Color(nsColor: .systemOrange)
-                                : Color(nsColor: .systemGreen))
-                            : Color(nsColor: .disabledControlTextColor).opacity(0.25),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                ? ScratchLabDesign.Sem.warning
+                                : ScratchLabDesign.Sem.success)
+                            : ScratchLabDesign.Surface.disabledFill,
+                        in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous)
                     )
             }
             .buttonStyle(.plain)
@@ -8619,7 +8614,7 @@ struct MacAnalyzerView: View {
                 HStack(spacing: 8) {
                     Text(playbackErrorMessage)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Retry beat") {
                         practiceBeatStore.retryPlayback()
@@ -8637,24 +8632,24 @@ struct MacAnalyzerView: View {
             testLabMetricBadge(
                 title: "Best",
                 value: "\(Int((progressManager.babyScratchProgress?.bestAccuracy ?? 0).rounded()))%",
-                color: (progressManager.babyScratchProgress?.bestAccuracy ?? 0) == 0 ? .secondary : .green
+                color: (progressManager.babyScratchProgress?.bestAccuracy ?? 0) == 0 ? .secondary : ScratchLabDesign.Sem.success
             )
             testLabMetricBadge(
                 title: "Attempts",
                 value: "\(progressManager.babyScratchProgress?.practiceCount ?? 0)",
-                color: (progressManager.babyScratchProgress?.practiceCount ?? 0) == 0 ? .secondary : .green
+                color: (progressManager.babyScratchProgress?.practiceCount ?? 0) == 0 ? .secondary : ScratchLabDesign.Sem.success
             )
             testLabMetricBadge(
                 title: "Recent",
                 value: "\(Int((progressManager.babyScratchProgress?.averageAccuracy ?? 0).rounded()))%",
-                color: (progressManager.babyScratchProgress?.averageAccuracy ?? 0) == 0 ? .secondary : .green
+                color: (progressManager.babyScratchProgress?.averageAccuracy ?? 0) == 0 ? .secondary : ScratchLabDesign.Sem.success
             )
             testLabMetricBadge(
                 title: "Practice progress",
                 value: progressManager.isScratchMastered("baby_scratch")
                     ? "Mastered"
                     : "\(Int((progressManager.babyScratchProgress?.progressToMastery ?? 0).rounded()))%",
-                color: progressManager.isScratchMastered("baby_scratch") ? .green : .secondary
+                color: progressManager.isScratchMastered("baby_scratch") ? ScratchLabDesign.Sem.success : .secondary
             )
         }
     }
@@ -8705,9 +8700,7 @@ struct MacAnalyzerView: View {
             .toggleStyle(.switch)
             .disabled(captureEngine.calibrationLocked)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var seratoScreenCard: some View {
@@ -8746,9 +8739,7 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(seratoWindowMover.statusColor)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var routineRecordingCard: some View {
@@ -9411,7 +9402,7 @@ struct MacAnalyzerView: View {
                     systemImage: captureEngine.canUseDirectSeratoCapture ? "waveform.badge.magnifyingglass" : "app.connected.to.app.below.fill"
                 )
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(captureEngine.canUseDirectSeratoCapture ? Color(nsColor: .systemGreen) : .secondary)
+                .foregroundStyle(captureEngine.canUseDirectSeratoCapture ? ScratchLabDesign.Sem.success : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
                 Text("ScratchLab will use Serato Virtual Audio first when it is available, then fall back to Direct Capture when needed.")
@@ -9420,9 +9411,7 @@ struct MacAnalyzerView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var practiceAudioCard: some View {
@@ -9480,7 +9469,7 @@ struct MacAnalyzerView: View {
 
             Label(captureEngine.directCaptureStatus, systemImage: captureEngine.canUseDirectSeratoCapture ? "waveform.badge.magnifyingglass" : "app.connected.to.app.below.fill")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(captureEngine.canUseDirectSeratoCapture ? Color(nsColor: .systemGreen) : .secondary)
+                .foregroundStyle(captureEngine.canUseDirectSeratoCapture ? ScratchLabDesign.Sem.success : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .scratchLabCard()
@@ -9511,7 +9500,7 @@ struct MacAnalyzerView: View {
             if captureEngine.isUsingContinuityCamera || captureEngine.isUsingDeskViewCamera {
                 Label("The same device cannot run ScratchLab Companion Camera while it is already being used as the main camera or Desk View.", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .systemOrange))
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
             }
 
             if captureEngine.hasDeskViewCameraOption {
@@ -9525,7 +9514,7 @@ struct MacAnalyzerView: View {
             if stageLayout == .desktopDeck && !captureEngine.isUsingMacCameraForDesktopDeck && !captureEngine.isUsingDeskViewCamera {
                 Label("Deck View is still using \(selectedCameraName), not the built-in camera.", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .systemOrange))
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
 
                 Button("Use Built-in Camera") {
                     captureEngine.preferMacCameraForDesktopDeck(force: true)
@@ -9534,9 +9523,7 @@ struct MacAnalyzerView: View {
                 .controlSize(.small)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var scratchCard: some View {
@@ -9653,7 +9640,7 @@ struct MacAnalyzerView: View {
             if captureEngine.isRoutineRecording || captureEngine.lastRoutineRecordingURL != nil {
                 Text(captureEngine.routineRecordingStatus)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(captureEngine.isRoutineRecording ? Color(nsColor: .systemRed) : .secondary)
+                    .foregroundStyle(captureEngine.isRoutineRecording ? ScratchLabDesign.Sem.danger : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -9699,7 +9686,7 @@ struct MacAnalyzerView: View {
             if captureEngine.calibrationLocked && !captureEngine.practiceViewEnabled {
                 Label("Layout locked. Press Space or use Start Recording when ready.", systemImage: "lock.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .systemGreen))
+                    .foregroundStyle(ScratchLabDesign.Sem.success)
             }
 
             if captureEngine.practiceViewEnabled {
@@ -9711,12 +9698,10 @@ struct MacAnalyzerView: View {
             if captureEngine.isUsingManualRigGuide {
                 Label("Deck position saved.", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .systemOrange))
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var routineRecordingButton: some View {
@@ -9760,12 +9745,12 @@ struct MacAnalyzerView: View {
                 testLabMetricBadge(
                     title: "Est. Conf",
                     value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
-                    color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
+                    color: captureEngine.coachConfidencePercent > 0 ? ScratchLabDesign.Sem.success : .secondary
                 )
                 testLabMetricBadge(
                     title: "Source",
                     value: captureEngine.coachSignalSource,
-                    color: captureEngine.coachSignalSource == "Searching" ? .secondary : .green
+                    color: captureEngine.coachSignalSource == "Searching" ? .secondary : ScratchLabDesign.Sem.success
                 )
             }
 
@@ -9792,9 +9777,7 @@ struct MacAnalyzerView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     /// Slice O — diagnostics-only readout. Displays the latest summary of
@@ -9865,9 +9848,7 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private func onsetDiagnosticRow(_ label: String, _ value: String) -> some View {
@@ -9940,9 +9921,7 @@ struct MacAnalyzerView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var practiceFeedbackCard: some View {
@@ -9954,17 +9933,17 @@ struct MacAnalyzerView: View {
                 testLabMetricBadge(
                     title: "Matches",
                     value: "\(captureEngine.scratchDetectionCount)",
-                    color: captureEngine.scratchDetectionCount == 0 ? .secondary : .green
+                    color: captureEngine.scratchDetectionCount == 0 ? .secondary : ScratchLabDesign.Sem.success
                 )
                 testLabMetricBadge(
                     title: "Stars",
                     value: "\(captureEngine.visibleStarCount)/5",
-                    color: captureEngine.visibleStarCount == 0 ? .secondary : .green
+                    color: captureEngine.visibleStarCount == 0 ? .secondary : ScratchLabDesign.Sem.success
                 )
                 testLabMetricBadge(
                     title: "Est. Conf",
                     value: captureEngine.coachConfidencePercent > 0 ? "\(captureEngine.coachConfidencePercent)%" : "—",
-                    color: captureEngine.coachConfidencePercent > 0 ? .green : .secondary
+                    color: captureEngine.coachConfidencePercent > 0 ? ScratchLabDesign.Sem.success : .secondary
                 )
             }
 
@@ -9977,7 +9956,7 @@ struct MacAnalyzerView: View {
                 testLabMetricBadge(
                     title: "Source",
                     value: captureEngine.coachSignalSource,
-                    color: captureEngine.coachSignalSource == "Searching" ? .secondary : .green
+                    color: captureEngine.coachSignalSource == "Searching" ? .secondary : ScratchLabDesign.Sem.success
                 )
             }
 
@@ -9999,7 +9978,7 @@ struct MacAnalyzerView: View {
                     systemImage: "checkmark.seal.fill"
                 )
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(nsColor: .systemGreen))
+                .foregroundStyle(ScratchLabDesign.Sem.success)
                 .fixedSize(horizontal: false, vertical: true)
 
                 if let firstFeedback = detection.feedback.first {
@@ -10038,9 +10017,7 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 
     private var practiceWorkflowCard: some View {
@@ -10189,7 +10166,7 @@ struct MacAnalyzerView: View {
                                 .foregroundStyle(.secondary)
                             Text("Captured notation is unavailable because no record movement was detected.")
                                 .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                         }
                     } else {
                         Text("Notation unavailable for this take.")
@@ -10199,14 +10176,14 @@ struct MacAnalyzerView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                 .padding(12)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
             } else {
                 Text("Record a routine first to see notation here.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 40, alignment: .center)
                     .padding(10)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
             }
         }
     }
@@ -10232,7 +10209,7 @@ struct MacAnalyzerView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
     }
 
     private func startPracticeSession() {
@@ -10399,11 +10376,11 @@ private struct ReviewLiveDiagnosticsOnsetCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(preview.headerText)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     Spacer(minLength: 0)
                     Text("Preview")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
@@ -10413,7 +10390,7 @@ private struct ReviewLiveDiagnosticsOnsetCard: View {
                 }
                 Text(preview.subtitleText)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.66))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 4) {
                     ReviewAudioOnsetCardRow("Source", preview.source.label)
@@ -10453,7 +10430,7 @@ private struct ReviewLiveDiagnosticsOnsetCard: View {
                 }
                 Text(preview.footerDisclaimer)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .scratchLabCard(.stage)
@@ -10473,11 +10450,11 @@ private struct ReviewAudioOnsetCardRow: View {
         HStack {
             Text(label)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.66))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             Spacer()
             Text(value)
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
         }
     }
 }
@@ -10495,10 +10472,10 @@ private struct OnsetMarkTimelineStrip: View {
             HStack(spacing: 6) {
                 Text("Uncertain timing marks")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.66))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 Text("· preview only · not exported")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
             Canvas { context, size in
                 guard
@@ -10518,12 +10495,12 @@ private struct OnsetMarkTimelineStrip: View {
                     let rect = CGRect(
                         x: x - 0.75, y: 0, width: 1.5, height: size.height
                     )
-                    context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                    context.fill(Path(rect), with: .color(ScratchLabDesign.Sem.textSecondary))
                 }
             }
             .frame(height: 14)
             .background(
-                Color.white.opacity(0.05),
+                ScratchLabDesign.Surface.subtleFill,
                 in: RoundedRectangle(cornerRadius: 4, style: .continuous)
             )
             if let first = firstTimestamp,
@@ -10535,7 +10512,7 @@ private struct OnsetMarkTimelineStrip: View {
                     Text(String(format: "%.2fs", last))
                 }
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
             }
         }
     }
@@ -10586,7 +10563,7 @@ private struct ReviewOverlayPlayableSurface: View {
 
             Text("Target (dim) over captured (primary). Drift shows as horizontal separation.")
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
         }
         .onChange(of: overlay.captured) { _, newCaptured in
             controller = OverlayReplayController(timeline: newCaptured)
@@ -10679,7 +10656,7 @@ private struct ReviewOverlayPlayableSurface: View {
                 label: "Matched",
                 symbol: "circle.fill",
                 foreground: dim.opacity(0.85),
-                background: Color.white.opacity(0.05)
+                background: ScratchLabDesign.Surface.subtleFill
             )
         case .early:
             return ChipPalette(
@@ -10750,7 +10727,7 @@ private struct ReviewOverlayPlayableSurface: View {
                 let cursor = controller.currentTime(at: context.date.timeIntervalSinceReferenceDate)
                 Text(elapsedLabel(cursor: cursor, duration: controller.duration))
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .accessibilityLabel("Replay position")
                     .accessibilityValue(
                         String(format: "%.2f seconds of %.2f", cursor, controller.duration)
@@ -10873,19 +10850,19 @@ private struct PerformerNotationDisplayView: View {
         VStack(spacing: 14) {
             Image(systemName: "waveform.slash")
                 .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.white.opacity(0.28))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
 
             Text("No Notation Captured")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             Text("Record a take to see captured strokes here.")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.38))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
         }
         .frame(maxWidth: .infinity, minHeight: 220)
         .background(
-            Color(white: 0.10),
+            ScratchLabDesign.Surface.subtleFill,
             in: RoundedRectangle(cornerRadius: 14, style: .continuous)
         )
     }
@@ -10938,7 +10915,7 @@ private struct PerformerNotationDisplayView: View {
                     weight: .semibold,
                     design: .monospaced
                 ))
-                .foregroundStyle(.white.opacity(0.82))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
 
             Spacer(minLength: 0)
@@ -10998,7 +10975,7 @@ private struct LiveNotationOverlayPlayable: View {
 
             Text("Captured strokes with live cursor · strokes reveal as cursor advances.")
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
         }
     }
 
@@ -11039,7 +11016,7 @@ private struct LiveNotationOverlayPlayable: View {
                 let cursor = controller.currentTime(at: context.date.timeIntervalSinceReferenceDate)
                 Text(String(format: "%.2fs / %.2fs", cursor, controller.duration))
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .accessibilityLabel("Overlay position")
                     .accessibilityValue(
                         String(format: "%.2f seconds of %.2f", cursor, controller.duration)
@@ -11078,20 +11055,20 @@ private struct RoutineSessionRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isSelected ? .white : .primary)
+                    .foregroundStyle(isSelected ? ScratchLabDesign.Sem.textOnAccent : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 Text(subtitle)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isSelected ? .white.opacity(0.84) : .secondary)
+                    .foregroundStyle(isSelected ? ScratchLabDesign.Sem.textOnAccent.opacity(0.84) : .secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 if let detail, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(isSelected ? .white.opacity(0.72) : .secondary)
+                        .foregroundStyle(isSelected ? ScratchLabDesign.Sem.textOnAccent.opacity(0.72) : .secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -11110,7 +11087,7 @@ private struct RoutineSessionRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(isSelected ? .white.opacity(0.85) : .secondary)
+                .foregroundStyle(isSelected ? ScratchLabDesign.Sem.textOnAccent.opacity(0.85) : .secondary)
                 .help("Copy session ID")
                 .accessibilityLabel("Copy session ID")
             }
@@ -11118,7 +11095,7 @@ private struct RoutineSessionRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
-            (isSelected ? ScratchLabDesign.Sem.accent : Color(nsColor: .windowBackgroundColor)),
+            (isSelected ? ScratchLabDesign.Sem.accent : ScratchLabDesign.Surface.surface),
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay(
@@ -11137,7 +11114,7 @@ private struct RoutineSessionErrorBanner: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Color(nsColor: .systemOrange))
+                .foregroundStyle(ScratchLabDesign.Sem.warning)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -11188,43 +11165,43 @@ private struct CompanionStageContent: View {
 
                 Text("\(frameStore.cameraPosition) cam")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.black)
+                    .foregroundColor(ScratchLabDesign.Sem.textOnAccent)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Color(nsColor: .systemGreen), in: Capsule())
+                    .background(ScratchLabDesign.Sem.success, in: Capsule())
                     .padding(20)
             }
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                     .font(.system(size: 30, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                 Text("Bring in the companion deck feed:")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                 Text("1. For watch relay only, just keep ScratchLab open on the iPhone main menu and connect it from the sidebar.\n2. For live deck video, mount the companion device above the decks and open ScratchLab > Companion Camera.\n3. Choose Deck so it sends the top-down platter and mixer view.\n4. Keep that screen open until the device appears in the Companion Feed sidebar, then click Connect.")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 28)
 
                 if !discoveredPeers.isEmpty {
                     Text("Nearby device ready: \(discoveredPeers.map(\.name).joined(separator: ", ")). Use Connect in the sidebar to link the iPhone for watch relay or add its deck view as a second camera.")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                         .padding(.horizontal, 20)
                 } else {
                     Text("If no device appears yet, keep ScratchLab open on the iPhone, leave both devices nearby, and wait a few seconds while ScratchLab keeps searching.")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 20)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white.opacity(0.06))
+            .background(ScratchLabDesign.Surface.subtleFill)
         }
     }
 }
@@ -11239,7 +11216,7 @@ private struct AudioRoutingOptionRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isActive ? Color(nsColor: .systemGreen) : .secondary)
+                .foregroundStyle(isActive ? ScratchLabDesign.Sem.success : .secondary)
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -11252,8 +11229,8 @@ private struct AudioRoutingOptionRow: View {
                             .font(.system(size: 10, weight: .bold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color(nsColor: .systemGreen).opacity(0.15), in: Capsule())
-                            .foregroundStyle(Color(nsColor: .systemGreen))
+                            .background(ScratchLabDesign.Sem.success.opacity(0.15), in: Capsule())
+                            .foregroundStyle(ScratchLabDesign.Sem.success)
                     }
                 }
 
@@ -11267,7 +11244,7 @@ private struct AudioRoutingOptionRow: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -11584,12 +11561,8 @@ struct MacPerformerMonitorView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color.black, Color(nsColor: .windowBackgroundColor)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            ScratchLabDesign.Surface.applicationBackground
+                .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 18) {
                 performerHeader
@@ -11635,26 +11608,26 @@ struct MacPerformerMonitorView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Performer Monitor")
                         .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     Text("Cue shows the next drill instruction, Deck View shows the live camera, Notation shows captured strokes for practice at decks.")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                     DisclosureGroup("Advanced connection") {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Use this only if nearby discovery does not find ScratchLab.")
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.72))
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                             Text(performerBroadcaster.manualConnectAddress)
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.72))
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         }
                         .padding(.top, 4)
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .tint(.white.opacity(0.8))
+                    .tint(ScratchLabDesign.Sem.textPrimary.opacity(0.8))
                 }
 
                 Spacer(minLength: 12)
@@ -11687,11 +11660,11 @@ struct MacPerformerMonitorView: View {
 
             Text(moveStatus)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             Text(performerBroadcaster.connectionStatus)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(performerBroadcaster.connectedPeerNames.isEmpty ? .white.opacity(0.6) : ScratchLabDesign.Sem.info)
+                .foregroundStyle(performerBroadcaster.connectedPeerNames.isEmpty ? ScratchLabDesign.Sem.textSecondary : ScratchLabDesign.Sem.info)
         }
     }
 
@@ -11700,7 +11673,7 @@ struct MacPerformerMonitorView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("NEXT CUE")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.58))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                 Text(captureEngine.babyScratchGuidanceCue)
                     .font(.system(size: 34, weight: .semibold))
@@ -11708,12 +11681,12 @@ struct MacPerformerMonitorView: View {
 
                 Text(captureEngine.babyScratchGuidanceDetail)
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.84))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary.opacity(0.84))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(22)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             HStack(spacing: 14) {
                 performerMetric(
@@ -11740,13 +11713,13 @@ struct MacPerformerMonitorView: View {
             HStack {
                 Text("Deck Setup View")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                 Spacer()
 
                 Text("\(captureEngine.selectedVideoSourceDescription) · \(captureEngine.rigStatusTitle)")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
 
             ZStack(alignment: .topLeading) {
@@ -11777,11 +11750,11 @@ struct MacPerformerMonitorView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Live Notation Display")
                 .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
             Text("Captured strokes with live cursor. Ideal for second monitor, Sidecar, or booth display while practising at decks.")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.64))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             PerformerNotationDisplayView(
@@ -11815,15 +11788,15 @@ struct MacPerformerMonitorView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.56))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             Text(value)
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(ScratchLabDesign.Surface.scrim, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var preferredDisplayButtonTitle: String {
@@ -11929,20 +11902,20 @@ struct MacPerformerMonitorView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased())
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             Text(value)
-                .font(.system(size: 20, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
+                .font(ScratchLabDesign.Typo.keyMetric)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .monospacedDigit()
 
             Text(detail)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.68))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .scratchLabCard()
     }
 }
 
@@ -11973,7 +11946,7 @@ private final class SeratoWindowMover: ObservableObject {
     var statusColor: Color {
         if statusMessage.localizedCaseInsensitiveContains("moved")
             || statusMessage.localizedCaseInsensitiveContains("showing on") {
-            return .green
+            return ScratchLabDesign.Sem.success
         }
         if statusMessage.localizedCaseInsensitiveContains("accessibility")
             || statusMessage.localizedCaseInsensitiveContains("not installed")
