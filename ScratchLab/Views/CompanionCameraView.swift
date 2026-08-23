@@ -61,11 +61,7 @@ struct CompanionCameraView: View {
             let bottomPadding = max(20, proxy.safeAreaInsets.bottom + 12)
 
             ZStack(alignment: .top) {
-                LinearGradient(
-                    colors: [Color(hex: "05070B"), Color(hex: "101826"), Color(hex: "05070B")],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                ScratchLabDesign.Surface.applicationBackground
                 .ignoresSafeArea()
 
                 currentScreen
@@ -1006,9 +1002,17 @@ private enum CaptureReadinessStatus: String {
 
     var color: Color {
         switch self {
-        case .ready: return Color(hex: "22C55E")
-        case .warning: return Color(hex: "F59E0B")
-        case .blocked: return Color(hex: "EF4444")
+        case .ready: return ScratchLabDesign.Sem.success
+        case .warning: return ScratchLabDesign.Sem.warning
+        case .blocked: return ScratchLabDesign.Sem.danger
+        }
+    }
+
+    var badgeVariant: StatusBadgeVariant {
+        switch self {
+        case .ready: return .success
+        case .warning: return .warning
+        case .blocked: return .danger
         }
     }
 }
@@ -1290,8 +1294,15 @@ private struct CaptureBanner: Identifiable, Equatable {
 
         var color: Color {
             switch self {
-            case .success: return Color(hex: "22C55E")
-            case .warning: return Color(hex: "F59E0B")
+            case .success: return ScratchLabDesign.Sem.success
+            case .warning: return ScratchLabDesign.Sem.warning
+            }
+        }
+
+        var badgeVariant: StatusBadgeVariant {
+            switch self {
+            case .success: return .success
+            case .warning: return .warning
             }
         }
     }
@@ -1822,16 +1833,16 @@ private struct CaptureScreen<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
                 Text(title)
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundColor(.white)
+                    .font(ScratchLabDesign.Typo.display)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.68))
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1925,20 +1936,15 @@ private struct SessionSetupView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             HStack {
                                 Text("Current Session")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white)
+                                    .font(ScratchLabDesign.Typo.cardHeading)
+                                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                                 Spacer()
 
                                 Button(action: onStartNewSession) {
                                     Text("New Session")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .background(Color.white.opacity(0.08), in: Capsule())
                                 }
-                                .buttonStyle(.plain)
+                                    .scratchLabTertiaryButton()
                             }
 
                             CaptureSessionSummaryRow(
@@ -1955,8 +1961,8 @@ private struct SessionSetupView: View {
                     CaptureCard {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Recent Sessions")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
+                                .font(ScratchLabDesign.Typo.cardHeading)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                             ForEach(sessionListPresentation.recentSessions) { session in
                                 Button(action: { onOpenSession(session.id) }) {
@@ -1990,9 +1996,9 @@ private struct SessionSetupView: View {
                         }
                         .padding(.top, 10)
                     }
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .tint(.white)
+                    .font(ScratchLabDesign.Typo.cardHeading)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .tint(ScratchLabDesign.Sem.textPrimary)
                 }
 
                 CaptureCard {
@@ -2020,15 +2026,15 @@ private struct SessionSetupView: View {
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Practice beat")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.72))
+                                    .font(ScratchLabDesign.Typo.label)
+                                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                                 Text(BeatEngineMode.silent.title)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(.white)
+                                    .font(ScratchLabDesign.Typo.bodyDefault)
+                                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(14)
-                                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .padding(ScratchLabDesign.Card.compactPadding)
+                                    .background(ScratchLabDesign.Surface.raised, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
                             }
                         }
 
@@ -2071,14 +2077,14 @@ private struct SessionSetupView: View {
 
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Notes (optional)")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.72))
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                             TextField("Add a short note", text: $notes, axis: .vertical)
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(14)
-                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .font(ScratchLabDesign.Typo.bodyDefault)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                                .padding(ScratchLabDesign.Card.compactPadding)
+                                .background(ScratchLabDesign.Surface.raised, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
                                 .lineLimit(3...5)
                         }
                     }
@@ -2086,20 +2092,14 @@ private struct SessionSetupView: View {
 
                 if let validationMessage {
                     Label(validationMessage, systemImage: "exclamationmark.circle.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(hex: "F59E0B"))
+                        .font(ScratchLabDesign.Typo.sectionLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Button(action: onContinue) {
-                    Text("Continue")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(isContinueEnabled ? Color(hex: "22C55E") : Color.white.opacity(0.22), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .disabled(!isContinueEnabled)
+                Button("Continue", action: onContinue)
+                    .scratchLabSuccessButton(fillsWidth: true)
+                    .disabled(!isContinueEnabled)
             }
             .padding(.bottom, 32)
         }
@@ -2240,32 +2240,32 @@ private struct CaptureSessionSummaryRow: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.bodyDefault.weight(.semibold))
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     Text(subtitle)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.label)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 }
 
                 Spacer(minLength: 12)
 
                 if let actionLabel {
                     Text(actionLabel)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(Color(hex: "22C55E"))
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(ScratchLabDesign.Sem.success)
                 }
             }
 
             Text(detail)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.62))
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(ScratchLabDesign.Card.compactPadding)
+        .background(ScratchLabDesign.Surface.raised, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous))
     }
 }
 
@@ -2277,33 +2277,24 @@ private struct CaptureTempoEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Timed capture")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white.opacity(0.72))
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
-            HStack(spacing: 8) {
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
                 ForEach(presetBPMs, id: \.self) { bpm in
-                    Button {
+                    Chip("\(bpm)", isSelected: Int(bpmText) == bpm, isNumeric: true) {
                         bpmText = String(bpm)
-                    } label: {
-                        Text("\(bpm)")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(Int(bpmText) == bpm ? .black : .white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(
-                                Int(bpmText) == bpm ? Color(hex: "22C55E") : Color.white.opacity(0.08),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
 
             TextField("Custom BPM (60–140)", text: $bpmText)
                 .keyboardType(.numberPad)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(.white)
-                .padding(14)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .font(ScratchLabDesign.Typo.bodyDefault)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .padding(ScratchLabDesign.Card.compactPadding)
+                .background(ScratchLabDesign.Surface.raised, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
         }
     }
 }
@@ -2339,19 +2330,13 @@ private struct SystemCheckView: View {
                 VStack(spacing: 12) {
                     if let configurationMessage, needsSessionSetup {
                         Label(configurationMessage, systemImage: "exclamationmark.circle.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(hex: "F59E0B"))
+                            .font(ScratchLabDesign.Typo.sectionLabel)
+                            .foregroundStyle(ScratchLabDesign.Sem.warning)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Button(action: hasRunCheck ? onRecheck : onStartCheck) {
-                        Text(hasRunCheck ? "Recheck" : "Start Setup Check")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Color(hex: "22C55E"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
+                    Button(hasRunCheck ? "Recheck" : "Start Setup Check", action: hasRunCheck ? onRecheck : onStartCheck)
+                        .scratchLabSuccessButton(fillsWidth: true)
 
                     if hasBlockingIssue {
                         CaptureSecondaryButton(title: "Fix Issues", action: onFixIssues)
@@ -2361,12 +2346,8 @@ private struct SystemCheckView: View {
 
                     Button(action: onBeginCapture) {
                         Text("Open Record Controls")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Color(hex: "0EA5E9"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
+                        .scratchLabPrimaryButton(fillsWidth: true)
 
                     if canSkipMotion {
                         CaptureSecondaryButton(title: "Skip Motion", action: onSkipMotion)
@@ -2374,6 +2355,35 @@ private struct SystemCheckView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A camera/deck preview paired with a control row, sized by the widescreen
+/// vs. tall shape of the space it's given (raw width/height comparison,
+/// rather than horizontal/vertical size class, because iPad reports the same
+/// regular/regular size classes in both orientations). Wide: preview fills
+/// the available height with controls beside it in a fixed-width column.
+/// Tall: preview dominates, controls sit in a footer below it.
+private struct CameraCalibrationAdaptiveLayout<Controls: View>: View {
+    let preview: CalibrationPreviewCard
+    @ViewBuilder let controls: (_ isWide: Bool) -> Controls
+
+    var body: some View {
+        GeometryReader { proxy in
+            let isWide = proxy.size.width > proxy.size.height
+            if isWide {
+                HStack(alignment: .top, spacing: 16) {
+                    preview
+                    controls(true)
+                        .frame(width: 220)
+                }
+            } else {
+                VStack(spacing: 16) {
+                    preview
+                    controls(false)
+                }
+            }
         }
     }
 }
@@ -2387,26 +2397,21 @@ private struct CameraSetupView: View {
     let onConfirmCamera: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            CalibrationPreviewCard(
+        CameraCalibrationAdaptiveLayout(
+            preview: CalibrationPreviewCard(
                 session: session,
                 videoRotationAngle: videoRotationAngle,
                 calibrationProfile: $calibrationProfile,
                 allowsEditing: true
             )
-
-            HStack(spacing: 12) {
+        ) { isWide in
+            let stack = isWide ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+            stack {
                 CaptureSecondaryButton(title: "Adjust Guides", action: onAdjustGuides)
 
-                Button(action: onConfirmCamera) {
-                    Text("Confirm Camera")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background((isCameraReady ? Color(hex: "22C55E") : Color.white.opacity(0.24)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .disabled(!isCameraReady)
+                Button("Confirm Camera", action: onConfirmCamera)
+                    .scratchLabSuccessButton(fillsWidth: true)
+                    .disabled(!isCameraReady)
             }
         }
     }
@@ -2435,31 +2440,31 @@ private struct AudioSetupView: View {
             CaptureCard {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Selected input")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.7))
+                        .font(ScratchLabDesign.Typo.label)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                     Text(selectedInputName)
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.title2)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Live meter")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.7))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                         ProgressView(value: normalizedLevel)
-                            .tint(isClipping ? Color(hex: "EF4444") : Color(hex: "22C55E"))
+                            .tint(isClipping ? ScratchLabDesign.Sem.danger : ScratchLabDesign.Sem.success)
 
                         HStack {
                             Text(canUseInput ? "Signal present" : "No signal yet")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.white.opacity(0.78))
+                                .font(ScratchLabDesign.Typo.bodySmall)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                             Spacer()
 
                             Text(isClipping ? "Clipping" : "Healthy")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(isClipping ? Color(hex: "FCA5A5") : Color(hex: "86EFAC"))
+                                .font(ScratchLabDesign.Typo.statusPill)
+                                .foregroundStyle(isClipping ? ScratchLabDesign.Sem.textError : ScratchLabDesign.Sem.textSuccess)
                         }
                     }
                 }
@@ -2477,23 +2482,13 @@ private struct AudioSetupView: View {
                 }
             } label: {
                 Text("Choose Input")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
+            .scratchLabSecondaryButton(fillsWidth: true)
 
             HStack(spacing: 12) {
-                Button(action: onUseThisInput) {
-                    Text("Use This Input")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background((canUseInput ? Color(hex: "22C55E") : Color.white.opacity(0.24)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .disabled(!canUseInput)
+                Button("Use This Input", action: onUseThisInput)
+                    .scratchLabSuccessButton(fillsWidth: true)
+                    .disabled(!canUseInput)
 
                 CaptureSecondaryButton(title: "Test Again", action: onTestAgain)
             }
@@ -2524,38 +2519,40 @@ private struct MotionSetupView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Text(isConnected ? "Device paired" : "Waiting for device")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundColor(.white)
+                            .font(ScratchLabDesign.Typo.sectionTitle)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                         Spacer()
 
-                        Text(isConnected ? "Ready" : "Warning")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(isConnected ? Color(hex: "86EFAC") : Color(hex: "FDE68A"))
+                        StatusBadge(
+                            title: "",
+                            value: isConnected ? "Ready" : "Warning",
+                            variant: isConnected ? .success : .warning
+                        )
                     }
 
                     Text(connectionSummary)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.76))
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Last sample")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.68))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                         Text(lastSampleText)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(.white)
+                            .font(ScratchLabDesign.Typo.bodyDefault)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Movement activity")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.68))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                         ProgressView(value: activityLevel)
-                            .tint(Color(hex: "6366F1"))
+                            .tint(ScratchLabDesign.Sem.motion)
                     }
                 }
             }
@@ -2582,29 +2579,26 @@ private struct CalibrationSetupView: View {
     let onUsePrevious: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            CalibrationPreviewCard(
+        CameraCalibrationAdaptiveLayout(
+            preview: CalibrationPreviewCard(
                 session: session,
                 videoRotationAngle: videoRotationAngle,
                 calibrationProfile: $calibrationProfile,
                 allowsEditing: true
             )
+        ) { isWide in
+            let stack = isWide ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+            VStack(spacing: 12) {
+                stack {
+                    Button("Save Calibration", action: onSave)
+                        .scratchLabSuccessButton(fillsWidth: true)
 
-            HStack(spacing: 12) {
-                Button(action: onSave) {
-                    Text("Save Calibration")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background(Color(hex: "22C55E"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    CaptureSecondaryButton(title: "Reset", action: onReset)
                 }
 
-                CaptureSecondaryButton(title: "Reset", action: onReset)
-            }
-
-            if hasStoredCalibration {
-                CaptureSecondaryButton(title: "Use Previous Calibration", action: onUsePrevious)
+                if hasStoredCalibration {
+                    CaptureSecondaryButton(title: "Use Previous Calibration", action: onUsePrevious)
+                }
             }
         }
     }
@@ -2639,141 +2633,203 @@ private struct CaptureHubView: View {
     }
 
     var body: some View {
+        GeometryReader { proxy in
+            if proxy.size.width > proxy.size.height {
+                landscapeBody
+            } else {
+                portraitBody
+            }
+        }
+    }
+
+    /// Preview dominates; status and controls stack in a footer below it.
+    private var portraitBody: some View {
         VStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("\(sessionLabel) · Take \(String(format: "%03d", takeNumber))")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(.white)
-
-                Text(readinessSummary)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white.opacity(0.72))
-                    .fixedSize(horizontal: false, vertical: true)
+            headerBlock
+            if showsRecordingIndicator { recordingIndicator }
+            previewStack
+            if flowState == .recording || flowState == .saving {
+                if let warningText { WarningBannerView(text: warningText) }
+                metricsRow
             }
+            controlsBlock
+        }
+    }
 
-            if showsRecordingIndicator {
-                HStack(spacing: 10) {
-                    Image(systemName: flowState == .saving ? "waveform.circle.fill" : "record.circle.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.white)
+    /// Header and status/helper text run full width above and below a
+    /// preview/controls HStack, so the control rail stays controls-only —
+    /// matching the rail CameraSetupView and CalibrationSetupView use in
+    /// landscape — instead of carrying text that only that rail's narrow
+    /// width would force to wrap or clip. This keeps the same fixed →
+    /// flexible → fixed sandwich shape portraitBody already relies on, with
+    /// the flexible preview never the first or only child of its stack.
+    private var landscapeBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            headerBlock
+            if showsRecordingIndicator { recordingIndicator }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(flowState == .saving ? "Finishing Recording" : "Recording")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.white)
-
-                        Text(clickTrackStatusText ?? "ScratchLab is actively capturing this take.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.82))
-                    }
-
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(
-                    flowState == .saving ? Color(hex: "EA580C") : Color(hex: "DC2626"),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(flowState == .saving
-                    ? "Finishing recording. ScratchLab is still capturing this take."
-                    : (clickTrackStatusText == nil
-                        ? "Recording. ScratchLab is actively capturing this take."
-                        : "Recording. Click track on. ScratchLab is actively capturing this take."))
-            }
-
-            ZStack {
-                CalibrationPreviewCard(
-                    session: session,
-                    videoRotationAngle: videoRotationAngle,
-                    calibrationProfile: $calibrationProfile,
-                    allowsEditing: allowsCalibrationEditing
-                )
-
-                if flowState == .preRoll {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.62))
-                            .frame(width: 140, height: 140)
-
-                        VStack(spacing: 8) {
-                            Text("Count-in")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(.white.opacity(0.72))
-
-                            Text("\(preRollCount)")
-                                .font(.system(size: 54, weight: .bold))
-                                .foregroundColor(.white)
-
-                            Text("Get ready")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.76))
-                        }
-                    }
-                }
+            HStack(alignment: .top, spacing: 16) {
+                previewStack
+                controlsOnlyBlock
+                    .frame(width: 220)
             }
 
             if flowState == .recording || flowState == .saving {
-                if let warningText {
-                    WarningBannerView(text: warningText)
-                }
+                if let warningText { WarningBannerView(text: warningText) }
+                metricsRow
+            } else {
+                helperText
+            }
+        }
+    }
 
-                HStack(spacing: 12) {
-                    TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                        CaptureMetricView(title: "Elapsed", value: elapsedTimeText(now: context.date))
-                    }
-                    CaptureMetricView(title: "Audio", value: audioStateText)
-                    CaptureMetricView(title: "Motion", value: motionStateText)
-                    CaptureMetricView(title: "Health", value: captureHealthText)
-                }
+    private var headerBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(sessionLabel) · Take \(String(format: "%03d", takeNumber))")
+                .font(ScratchLabDesign.Typo.sectionTitle)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            Text(readinessSummary)
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var recordingIndicator: some View {
+        HStack(spacing: 10) {
+            Image(systemName: flowState == .saving ? "waveform.circle.fill" : "record.circle.fill")
+                .font(ScratchLabDesign.Typo.sectionTitle)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(flowState == .saving ? "Finishing Recording" : "Recording")
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                Text(clickTrackStatusText ?? "ScratchLab is actively capturing this take.")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary.opacity(0.82))
             }
 
-            VStack(spacing: 12) {
-                if flowState == .recording || flowState == .saving {
-                    Button(action: onStop) {
-                        Text(flowState == .saving ? "Saving..." : "Stop Take")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 17)
-                            .background(Color(hex: "DC2626"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .disabled(flowState == .saving)
-                    .keyboardShortcut(.space, modifiers: [])
-                } else if flowState == .preRoll {
-                    Button(action: {}) {
-                        Text("Starting...")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 17)
-                            .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .disabled(true)
-                } else {
-                    Button(action: onStart) {
-                        Text("Record Take")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundColor(canStartTake ? .black : .white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 17)
-                            .background((canStartTake ? Color(hex: "22C55E") : Color(hex: "F59E0B")), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .keyboardShortcut(.space, modifiers: [])
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            flowState == .saving ? ScratchLabDesign.Sem.warning : ScratchLabDesign.Sem.danger,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(flowState == .saving
+            ? "Finishing recording. ScratchLab is still capturing this take."
+            : (clickTrackStatusText == nil
+                ? "Recording. ScratchLab is actively capturing this take."
+                : "Recording. Click track on. ScratchLab is actively capturing this take."))
+    }
 
-                    Text(canStartTake
-                         ? "Pause briefly before starting. Perform one scratch type only."
-                         : "Preview is live. Tap Record Take to jump to the remaining setup issue.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white.opacity(0.68))
-                        .fixedSize(horizontal: false, vertical: true)
+    private var previewStack: some View {
+        ZStack {
+            CalibrationPreviewCard(
+                session: session,
+                videoRotationAngle: videoRotationAngle,
+                calibrationProfile: $calibrationProfile,
+                allowsEditing: allowsCalibrationEditing
+            )
 
-                    CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
-                        .keyboardShortcut("k", modifiers: [])
+            if flowState == .preRoll {
+                ZStack {
+                    Circle()
+                        .fill(ScratchLabDesign.Surface.scrim)
+                        .frame(width: 140, height: 140)
+
+                    VStack(spacing: 8) {
+                        Text("Count-in")
+                            .font(ScratchLabDesign.Typo.statusPill)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                        Text("\(preRollCount)")
+                            .font(ScratchLabDesign.Typo.largeScore)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                        Text("Get ready")
+                            .font(ScratchLabDesign.Typo.controlValue)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    }
                 }
             }
         }
+    }
+
+    private var metricsRow: some View {
+        HStack(spacing: 12) {
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                CaptureMetricView(title: "Elapsed", value: elapsedTimeText(now: context.date))
+            }
+            CaptureMetricView(title: "Audio", value: audioStateText)
+            CaptureMetricView(title: "Motion", value: motionStateText)
+            CaptureMetricView(title: "Health", value: captureHealthText)
+        }
+    }
+
+    /// Full control stack: primary action button, plus (when idle) the
+    /// helper sentence and the Recheck Setup button.
+    private var controlsBlock: some View {
+        VStack(spacing: 12) {
+            primaryActionButton
+            if flowState != .recording, flowState != .saving, flowState != .preRoll {
+                helperText
+                CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
+                    .keyboardShortcut("k", modifiers: [])
+            }
+        }
+    }
+
+    /// Same as `controlsBlock` but without the helper sentence, for layouts
+    /// (landscape) that show that sentence elsewhere at full width instead
+    /// of wrapped inside a narrow control rail.
+    private var controlsOnlyBlock: some View {
+        VStack(spacing: 12) {
+            primaryActionButton
+            if flowState != .recording, flowState != .saving, flowState != .preRoll {
+                CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
+                    .keyboardShortcut("k", modifiers: [])
+            }
+        }
+    }
+
+    private var primaryActionButton: some View {
+        Group {
+            if flowState == .recording || flowState == .saving {
+                Button(flowState == .saving ? "Saving..." : "Stop Take", action: onStop)
+                    .scratchLabDestructiveButton(fillsWidth: true)
+                    .disabled(flowState == .saving)
+                    .keyboardShortcut(.space, modifiers: [])
+            } else if flowState == .preRoll {
+                Button("Starting...", action: {})
+                    .scratchLabSuccessButton(fillsWidth: true)
+                    .disabled(true)
+            } else {
+                if canStartTake {
+                    Button("Record Take", action: onStart)
+                        .scratchLabSuccessButton(fillsWidth: true)
+                        .keyboardShortcut(.space, modifiers: [])
+                } else {
+                    Button("Record Take", action: onStart)
+                        .scratchLabWarningButton(fillsWidth: true)
+                        .keyboardShortcut(.space, modifiers: [])
+                }
+            }
+        }
+    }
+
+    private var helperText: some View {
+        Text(canStartTake
+             ? "Pause briefly before starting. Perform one scratch type only."
+             : "Preview is live. Tap Record Take to jump to the remaining setup issue.")
+            .font(ScratchLabDesign.Typo.bodySmall)
+            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func elapsedTimeText(now: Date) -> String {
@@ -2800,13 +2856,13 @@ private struct TakeReviewView: View {
                 CaptureCard {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(review.operatorMessage)
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(.white)
+                            .font(ScratchLabDesign.Typo.keyMetric)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                         LazyVGrid(columns: reviewColumns, spacing: 10) {
-                            ReadinessPill(title: review.syncStatus, color: review.syncStatus == "Ready" ? Color(hex: "22C55E") : Color(hex: "F59E0B"))
-                            ReadinessPill(title: review.audioPresent ? "Audio Present" : "Missing Audio", color: review.audioPresent ? Color(hex: "22C55E") : Color(hex: "EF4444"))
-                            ReadinessPill(title: review.motionStatusTitle, color: review.motionPresent ? Color(hex: "22C55E") : Color(hex: "F59E0B"))
+                            ReadinessPill(title: review.syncStatus, variant: review.syncStatus == "Ready" ? .success : .warning)
+                            ReadinessPill(title: review.audioPresent ? "Audio Present" : "Missing Audio", variant: review.audioPresent ? .success : .danger)
+                            ReadinessPill(title: review.motionStatusTitle, variant: review.motionPresent ? .success : .warning)
                         }
                     }
                 }
@@ -2825,19 +2881,15 @@ private struct TakeReviewView: View {
                 CaptureCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Quality")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.72))
+                            .font(ScratchLabDesign.Typo.sectionLabel)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                         LazyVGrid(columns: qualityColumns, spacing: 10) {
                             ForEach(CaptureQualityTag.allCases) { quality in
-                                Button(action: { onSelectQuality(quality) }) {
-                                    Text(quality.title)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(review.quality == quality ? .black : .white)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 12)
-                                        .background((review.quality == quality ? Color(hex: "22C55E") : Color.white.opacity(0.08)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                Chip(quality.title, isSelected: review.quality == quality) {
+                                    onSelectQuality(quality)
                                 }
+                                .frame(maxWidth: .infinity)
                             }
                         }
 
@@ -2846,53 +2898,29 @@ private struct TakeReviewView: View {
                                 Image(systemName: review.isComboTagged ? "checkmark.square.fill" : "square")
                                 Text("Tag as Combo")
                             }
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white)
+                            .font(ScratchLabDesign.Typo.controlValue)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                         }
                     }
                 }
 
                 HStack(spacing: 12) {
-                    Button(action: onKeep) {
-                        Text("Keep")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Color(hex: "22C55E"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
+                    Button("Keep", action: onKeep)
+                        .scratchLabSuccessButton(fillsWidth: true)
 
-                    Button(action: onRetry) {
-                        Text("Retry")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .keyboardShortcut("r", modifiers: [])
+                    Button("Retry", action: onRetry)
+                        .scratchLabSecondaryButton(fillsWidth: true)
+                        .keyboardShortcut("r", modifiers: [])
                 }
 
                 HStack(spacing: 12) {
-                    Button(action: onDiscard) {
-                        Text("Discard")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Color(hex: "7F1D1D"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .keyboardShortcut("d", modifiers: [])
+                    Button("Discard", action: onDiscard)
+                        .scratchLabDestructiveButton(fillsWidth: true)
+                        .keyboardShortcut("d", modifiers: [])
 
-                    Button(action: onKeepAndNext) {
-                        Text("Keep and Next")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Color(hex: "0EA5E9"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .keyboardShortcut(.return, modifiers: [])
+                    Button("Keep and Next", action: onKeepAndNext)
+                        .scratchLabPrimaryButton(fillsWidth: true)
+                        .keyboardShortcut(.return, modifiers: [])
                 }
             }
             .padding(.bottom, 24)
@@ -2915,12 +2943,12 @@ private struct CaptureReviewDetailBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white.opacity(0.66))
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             Text(value)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+                .font(ScratchLabDesign.Typo.title3)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2958,12 +2986,12 @@ private struct SessionCompleteView: View {
             CaptureCard {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Take saved")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.keyMetric)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     Text("Keep the loop moving or reset the block before the next take.")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -2973,51 +3001,45 @@ private struct SessionCompleteView: View {
                 CaptureCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Upload Session")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.white)
+                            .font(ScratchLabDesign.Typo.sectionTitle)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                         Text(uploadJob?.statusText ?? (uploadAvailable ? "Ready to upload" : uploadAvailabilityText ?? "Upload isn't available right now."))
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.72))
+                            .font(ScratchLabDesign.Typo.pageSubtitle)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
 
                         Text("\(sessionName) · \(takeCount) take\(takeCount == 1 ? "" : "s")")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.7))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
 
                         if let uploadJob, uploadJob.fileSizeBytes > 0 {
                             Text(uploadJob.formattedFileSize)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.7))
+                                .font(ScratchLabDesign.Typo.technical)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
 
                         if let progressFraction = uploadJob?.progressFraction {
                             ProgressView(value: progressFraction)
-                                .tint(Color(hex: "22C55E"))
+                                .tint(ScratchLabDesign.Sem.success)
                         } else if uploadJob?.state == .preparing || uploadJob?.state == .requestingUploadURL {
                             ProgressView()
-                                .tint(Color(hex: "22C55E"))
+                                .tint(ScratchLabDesign.Sem.success)
                         }
 
-                        Button(action: onUploadSession) {
-                            Text(uploadJob?.state == .completed ? "Uploaded" : "Upload Session")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundColor(.black)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color(hex: "22C55E"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        }
-                        .disabled(
-                            !canShare
-                                || !uploadAvailable
-                                || uploadJob?.state == .completed
-                                || uploadJob?.state == .uploading
-                                || uploadJob?.state == .requestingUploadURL
-                                || uploadJob?.state == .preparing
-                        )
+                        Button(uploadJob?.state == .completed ? "Uploaded" : "Upload Session", action: onUploadSession)
+                            .scratchLabSuccessButton(fillsWidth: true)
+                            .disabled(
+                                !canShare
+                                    || !uploadAvailable
+                                    || uploadJob?.state == .completed
+                                    || uploadJob?.state == .uploading
+                                    || uploadJob?.state == .requestingUploadURL
+                                    || uploadJob?.state == .preparing
+                            )
 
                         if uploadJob?.canRetry == true {
                             CaptureSecondaryButton(title: "Retry Upload", action: onRetryUpload)
@@ -3030,18 +3052,18 @@ private struct SessionCompleteView: View {
             CaptureCard {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Share Session")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.sectionTitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     Text(exportStatusText ?? "Export this session as a ZIP archive.")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Export mix")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.72))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                         #if DEBUG
                         Picker("Export mix", selection: $exportMixMode) {
@@ -3053,8 +3075,8 @@ private struct SessionCompleteView: View {
                         .tint(.white)
                         #else
                         Text(ExportMixMode.scratchOnly.title)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white)
+                            .font(ScratchLabDesign.Typo.controlValue)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                             .onAppear {
                                 exportMixMode = .scratchOnly
                             }
@@ -3065,8 +3087,8 @@ private struct SessionCompleteView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(exportBlockingIssues, id: \.self) { issue in
                                 Text("• \(issue)")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(Color(hex: "FCA5A5"))
+                                    .font(ScratchLabDesign.Typo.label)
+                                    .foregroundStyle(ScratchLabDesign.Sem.textError)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -3074,47 +3096,35 @@ private struct SessionCompleteView: View {
 
                     if let exportSummaryText {
                         Text(exportSummaryText)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.7))
+                            .font(ScratchLabDesign.Typo.technical)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
 
                     if let exportWarningText {
                         Text(exportWarningText)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(hex: "F59E0B"))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.warning)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if let timingWarningText {
                         Text(timingWarningText)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(hex: "F59E0B"))
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.warning)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Button(action: onShareSession) {
-                        Text(isExporting ? "Preparing..." : "Share Session")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(Color(hex: "0EA5E9"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .disabled(isExporting || !canShare)
+                    Button(isExporting ? "Preparing..." : "Share Session", action: onShareSession)
+                        .scratchLabPrimaryButton(fillsWidth: true)
+                        .disabled(isExporting || !canShare)
                 }
             }
 
-            Button(action: onNextTake) {
-                Text("Next Take")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color(hex: "22C55E"), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .keyboardShortcut(.return, modifiers: [])
+            Button("Next Take", action: onNextTake)
+                .scratchLabSuccessButton(fillsWidth: true)
+                .keyboardShortcut(.return, modifiers: [])
 
             CaptureSecondaryButton(title: "Change Scratch Type", action: onChangeDrill)
                 .keyboardShortcut("c", modifiers: [])
@@ -3132,13 +3142,7 @@ private struct CaptureCard<Content: View>: View {
 
     var body: some View {
         content
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
+            .scratchLabCard(.standard)
     }
 }
 
@@ -3148,19 +3152,26 @@ private struct CaptureTextField: View {
     var keyboard: UIKeyboardType = .default
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.white.opacity(0.72))
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             TextField(title, text: $text)
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(.white)
-                .padding(14)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .font(ScratchLabDesign.Typo.bodyDefault)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .padding(ScratchLabDesign.Card.compactPadding)
+                .background(
+                    ScratchLabDesign.Surface.raised,
+                    in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                        .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+                }
         }
     }
 }
@@ -3172,24 +3183,31 @@ private struct CapturePickerField: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.72))
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                 HStack {
                     Text(selectionTitle)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.bodyDefault)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white.opacity(0.7))
+                        .font(ScratchLabDesign.Typo.label)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 }
-                .padding(14)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(ScratchLabDesign.Card.compactPadding)
+                .background(
+                    ScratchLabDesign.Surface.raised,
+                    in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                        .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+                }
             }
             .contentShape(Rectangle())
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3208,10 +3226,10 @@ private struct CaptureSelectionSheet<Content: View>: View {
         NavigationStack {
             List {
                 content
-                    .listRowBackground(Color.black)
+                    .listRowBackground(ScratchLabDesign.Surface.canvas)
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+            .background(ScratchLabDesign.Surface.canvas)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -3234,17 +3252,17 @@ private struct CaptureSelectionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: ScratchLabDesign.Spacing.md) {
                 Text(title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.white)
+                    .font(ScratchLabDesign.Typo.title3)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                 Spacer()
 
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(Color(hex: "22C55E"))
+                        .font(ScratchLabDesign.Typo.sectionTitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
                 }
             }
             .padding(.vertical, 8)
@@ -3259,29 +3277,28 @@ private struct CaptureStatusCard: View {
 
     var body: some View {
         CaptureCard {
-            HStack(spacing: 14) {
+            HStack(spacing: ScratchLabDesign.Spacing.itemRow) {
                 Circle()
                     .fill(result.status.color)
                     .frame(width: 12, height: 12)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
                     Text(result.kind.title)
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.title3)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     Text(result.detail)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 }
 
                 Spacer()
 
-                Text(result.status.label)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(result.status.color)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(result.status.color.opacity(0.14), in: Capsule())
+                StatusBadge(
+                    title: "",
+                    value: result.status.label,
+                    variant: result.status.badgeVariant
+                )
             }
         }
     }
@@ -3292,14 +3309,8 @@ private struct CaptureSecondaryButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
+        Button(title, action: action)
+            .scratchLabSecondaryButton(fillsWidth: true)
     }
 }
 
@@ -3331,12 +3342,12 @@ private struct CalibrationPreviewCard: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity)
         .aspectRatio(4.0 / 3.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         )
     }
 }
@@ -3354,19 +3365,19 @@ private struct InteractiveCalibrationZone: View {
         let rect = zone.rect(in: containerSize)
 
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel)
                 .stroke(role.color.opacity(0.92), lineWidth: allowsEditing ? 3 : 2)
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel)
                         .fill(role.color.opacity(0.12))
                 )
 
             Text(role.title)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.black.opacity(0.72), in: Capsule())
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .padding(.horizontal, ScratchLabDesign.Spacing.controlGap)
+                .padding(.vertical, ScratchLabDesign.Spacing.xs)
+                .background(ScratchLabDesign.Surface.scrim, in: Capsule())
                 .padding(8)
 
             if allowsEditing {
@@ -3375,7 +3386,7 @@ private struct InteractiveCalibrationZone: View {
                     .frame(width: 28, height: 28)
                     .overlay(
                         Circle()
-                            .stroke(Color.white.opacity(0.92), lineWidth: 2)
+                            .stroke(ScratchLabDesign.Sem.textPrimary.opacity(0.92), lineWidth: 2)
                     )
                     .contentShape(Circle())
                     .position(x: rect.width - 18, y: rect.height - 18)
@@ -3432,20 +3443,27 @@ private struct CaptureMetricView: View {
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.componentCompact) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.white.opacity(0.6))
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
 
             Text(value)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(.white)
+                .font(ScratchLabDesign.Typo.controlValue)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, ScratchLabDesign.Spacing.md)
+        .padding(.vertical, ScratchLabDesign.Spacing.controlGap)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(
+            ScratchLabDesign.Surface.raised,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
     }
 }
 
@@ -3453,19 +3471,25 @@ private struct WarningBannerView: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: ScratchLabDesign.Spacing.controlGap) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(Color(hex: "FDE68A"))
+                .foregroundStyle(ScratchLabDesign.Sem.warning)
 
             Text(text)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.white)
+                .font(ScratchLabDesign.Typo.sectionLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color(hex: "7C2D12").opacity(0.88), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(ScratchLabDesign.Card.compactPadding)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.warning, lineWidth: 1)
+        }
     }
 }
 
@@ -3473,39 +3497,38 @@ private struct CaptureBannerView: View {
     let banner: CaptureBanner
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: ScratchLabDesign.Spacing.md) {
             Circle()
                 .fill(banner.tone.color)
                 .frame(width: 10, height: 10)
 
             Text(banner.message)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white)
+                .font(ScratchLabDesign.Typo.controlValue)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, ScratchLabDesign.Spacing.lg)
+        .padding(.vertical, ScratchLabDesign.Spacing.md)
+        .background(
+            ScratchLabDesign.Surface.overlay,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         )
     }
 }
 
 private struct ReadinessPill: View {
     let title: String
-    let color: Color
+    let variant: StatusBadgeVariant
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 12, weight: .bold))
-            .foregroundColor(color)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(color.opacity(0.14), in: Capsule())
+        StatusBadge(title: "", value: title, variant: variant)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -3516,14 +3539,14 @@ private struct CaptureDetailRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.white.opacity(0.66))
+                .font(ScratchLabDesign.Typo.sectionLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
             Spacer()
 
             Text(value)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white)
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .multilineTextAlignment(.trailing)
         }
     }
@@ -3542,10 +3565,10 @@ private struct CaptureThumbnailView: View {
                     .scaledToFill()
             } else {
                 ZStack {
-                    Color.white.opacity(0.06)
+                    ScratchLabDesign.Surface.subtleFill
                     Image(systemName: "video")
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.display)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 }
                 .task {
                     await loadThumbnail()
@@ -3554,10 +3577,10 @@ private struct CaptureThumbnailView: View {
         }
         .frame(maxWidth: .infinity)
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         )
     }
 
