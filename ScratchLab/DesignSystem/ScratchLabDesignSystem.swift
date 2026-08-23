@@ -16,18 +16,9 @@ import SwiftUI
 // Convention: tokens live in `ScratchLabDesign.*` so they show up grouped in
 // auto-complete. Shared components live at the top level (StatusBadge, Chip).
 
-private extension Color {
-    /// Locked Figma hex → SwiftUI Color. Every semantic token resolves through
-    /// this so a role maps to one explicit RGB value, identical on macOS,
-    /// iPhone and iPad — no system-color drift, no raw literal at a call site.
-    init(scratchLabHex hex: UInt32) {
-        self.init(
-            red: Double((hex >> 16) & 0xFF) / 255.0,
-            green: Double((hex >> 8) & 0xFF) / 255.0,
-            blue: Double(hex & 0xFF) / 255.0
-        )
-    }
-}
+// The `Color(scratchLabHex:)` initializer lives in `ScratchLabCoreColors.swift`
+// now — it is shared with the Watch target (see that file's header), so it
+// can no longer be declared privately in just this file.
 
 enum ScratchLabDesign {
 
@@ -49,6 +40,11 @@ enum ScratchLabDesign {
         static let xxl: CGFloat = 24   // spacing/2xl
         static let xxxl: CGFloat = 32  // spacing/3xl
 
+        // Reusable component rhythm that falls between canonical layout steps.
+        static let componentTight: CGFloat = 2
+        static let componentCompact: CGFloat = 3
+        static let controlGap: CGFloat = 10
+
         // Workspace rhythm (existing call sites).
         static let cardGroup: CGFloat = 22         // between sibling cards in a sidebar
         static let cardSection: CGFloat = 18       // between major sections in a card
@@ -61,15 +57,25 @@ enum ScratchLabDesign {
         static let sidebarHorizontalCompact: CGFloat = 20  // Capture
     }
 
+    // MARK: Radius
+
+    enum Radius {
+        static let control: CGFloat = 8
+        static let compactPanel: CGFloat = 10
+        static let panel: CGFloat = 12
+        static let card: CGFloat = 18
+        static let hero: CGFloat = 22
+    }
+
     // MARK: Card
 
     enum Card {
         static let padding: CGFloat = 20
         static let stagePadding: CGFloat = 16
         static let compactPadding: CGFloat = 14
-        static let cornerRadius: CGFloat = 18
+        static let cornerRadius: CGFloat = Radius.card
         static let compactCornerRadius: CGFloat = 14
-        static let heroCornerRadius: CGFloat = 22  // outermost camera/notation
+        static let heroCornerRadius: CGFloat = Radius.hero  // outermost camera/notation
     }
 
     // MARK: Sidebar widths (macOS workspace layout)
@@ -115,11 +121,14 @@ enum ScratchLabDesign {
         static let title1     = Font.system(size: 28, weight: .semibold)
         static let title2     = Font.system(size: 22, weight: .semibold)
         static let title3     = Font.system(size: 17, weight: .semibold)
+        static let sectionTitle = Font.system(size: 18, weight: .semibold)
         static let bodyDefault = Font.system(size: 15, weight: .regular)
         static let bodySmall   = Font.system(size: 13, weight: .regular)
         static let label       = Font.system(size: 12, weight: .medium)
         static let caption     = Font.system(size: 11, weight: .medium)
         static let technical   = Font.system(size: 11, weight: .medium, design: .monospaced)
+        static let keyMetric   = Font.system(size: 24, weight: .bold)
+        static let largeScore  = Font.system(size: 48, weight: .bold)
 
         // Existing app-specific roles (kept for the current call sites; new
         // surfaces should prefer the canonical roles above).
@@ -158,17 +167,21 @@ enum ScratchLabDesign {
         //   amber  = warning / coaching correction / needs attention
         //   red    = recording / destructive / failure / urgent interruption
         //   grey   = inactive / unavailable / secondary
-        static let accent: Color   = Color(scratchLabHex: 0x0EA5E9)   // cyan/500
-        static let success: Color  = Color(scratchLabHex: 0x22C55E)   // green/500
-        static let warning: Color  = Color(scratchLabHex: 0xF59E0B)   // amber/500
-        static let danger: Color   = Color(scratchLabHex: 0xF44336)   // red/500
-        static let info: Color     = Color(scratchLabHex: 0x7DD3FC)   // cyan/300
+        // These roles resolve through `ScratchLabCoreColor` (shared with the
+        // Watch target — see ScratchLabCoreColors.swift) so there is exactly
+        // one canonical hex value per role across every ScratchLab target.
+        static let accent: Color   = ScratchLabCoreColor.accent    // cyan/500
+        static let success: Color  = ScratchLabCoreColor.success   // green/500
+        static let warning: Color  = ScratchLabCoreColor.warning   // amber/500
+        static let danger: Color   = ScratchLabCoreColor.danger    // red/500
+        static let info: Color     = ScratchLabCoreColor.info      // cyan/300
+        static let motion: Color   = Color(scratchLabHex: 0x6366F1)   // indigo/500
         static let muted: Color    = Color(scratchLabHex: 0x8D8A85)   // neutral/500
 
         // Text hierarchy — locked Figma `color/text/*`.
-        static let textPrimary: Color   = Color(scratchLabHex: 0xFFFFFF)
-        static let textSecondary: Color = Color(scratchLabHex: 0xA8A5A0)
-        static let textTertiary: Color  = Color(scratchLabHex: 0x8D8A85)
+        static let textPrimary: Color   = ScratchLabCoreColor.textPrimary
+        static let textSecondary: Color = ScratchLabCoreColor.textSecondary
+        static let textTertiary: Color  = ScratchLabCoreColor.textTertiary
         static let textAccent: Color    = Color(scratchLabHex: 0x7DD3FC)
         static let textSuccess: Color   = Color(scratchLabHex: 0x22C55E)
         static let textWarning: Color   = Color(scratchLabHex: 0xF59E0B)
@@ -200,16 +213,40 @@ enum ScratchLabDesign {
         // Locked Figma `color/bg/*` — dark-only product surfaces. The app is
         // intentionally dark (Foundations: "Dark application surfaces only");
         // these never fall back to adaptive system light surfaces.
-        static let canvas: Color   = Color(scratchLabHex: 0x05070B)   // ink/950
+        // `canvas`/`raised` resolve through `ScratchLabCoreColor` (shared
+        // with the Watch target) so the app background stays one canonical
+        // value across every ScratchLab target.
+        static let canvas: Color   = ScratchLabCoreColor.canvas   // ink/950
         static let surface: Color  = Color(scratchLabHex: 0x0B1018)   // ink/900
-        static let elevated: Color = Color(scratchLabHex: 0x101826)   // ink/850
-        static let raised: Color   = Color(scratchLabHex: 0x151E2B)   // ink/800
+        /// Approved V3.2 raised surface. `elevated` remains a compatibility
+        /// alias so existing callers cannot accidentally choose a different
+        /// value for the same semantic role.
+        static let raised: Color   = ScratchLabCoreColor.raised   // ink/850
+        static let elevated: Color = Self.raised
+        /// A higher-contrast legacy card tier. Kept explicitly named so it is
+        /// not confused with the approved `raised` role above.
+        static let highest: Color  = Color(scratchLabHex: 0x151E2B)   // ink/800
+
+        static let subtleFill: Color = Color.white.opacity(0.06)
+        static let controlFill: Color = Color.white.opacity(0.08)
+        static let disabledFill: Color = Color.white.opacity(0.18)
+        static let scrim: Color = Color.black.opacity(0.72)
+        static let overlay: Color = Color.black.opacity(0.86)
 
         // Role aliases for the names the existing views already consume.
-        static let card: Color         = Self.raised
+        static let card: Color         = Self.highest
+        static let disabledControl: Color = Self.highest
         static let window: Color       = Self.canvas
         static let stageOverlay: Color = Color.white.opacity(0.05)   // app-specific, unchanged
         static let divider: Color      = Border.default
+
+        static var applicationBackground: LinearGradient {
+            LinearGradient(
+                colors: [canvas, raised, canvas],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
     }
 
     // MARK: Notation palette (shared by notation + review surfaces)
@@ -471,20 +508,22 @@ struct StatusBadge: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.componentTight) {
+            if !title.isEmpty {
+                Text(title)
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
 
-            HStack(spacing: 4) {
+            HStack(spacing: ScratchLabDesign.Spacing.xxs) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(ScratchLabDesign.Typo.metricLabel)
                         .foregroundStyle(variant.color)
                         .accessibilityHidden(true)
                 }
                 Text(Self.dedupedStatusValue(title: title, value: value))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(ScratchLabDesign.Typo.statusPill)
                     .foregroundStyle(variant.color)
             }
         }
@@ -584,6 +623,7 @@ extension Chip where Label == Text {
 enum ScratchLabButtonRole {
     case primary
     case success
+    case warning
     case secondary
     case tertiary
     case destructive
@@ -601,7 +641,7 @@ private struct ScratchLabFilledButtonStyle: ButtonStyle {
 
     private var height: CGFloat {
         switch role {
-        case .primary, .success, .secondary, .destructive:
+        case .primary, .success, .warning, .secondary, .destructive:
             return ScratchLabDesign.Button.primaryHeight
         case .tertiary:
             return ScratchLabDesign.Button.tertiaryHeight
@@ -610,7 +650,7 @@ private struct ScratchLabFilledButtonStyle: ButtonStyle {
 
     private var font: Font {
         switch role {
-        case .primary, .success: return ScratchLabDesign.Typo.buttonPrimary
+        case .primary, .success, .warning: return ScratchLabDesign.Typo.buttonPrimary
         case .secondary: return ScratchLabDesign.Typo.buttonSecondary
         case .tertiary, .destructive: return ScratchLabDesign.Typo.buttonTertiary
         }
@@ -619,17 +659,18 @@ private struct ScratchLabFilledButtonStyle: ButtonStyle {
     private var foreground: Color {
         guard isEnabled else { return ScratchLabDesign.Sem.textTertiary }
         switch role {
-        case .primary, .success: return ScratchLabDesign.Sem.textOnAccent
+        case .primary, .success, .warning: return ScratchLabDesign.Sem.textOnAccent
         case .secondary, .destructive: return ScratchLabDesign.Sem.textPrimary
         case .tertiary: return ScratchLabDesign.Sem.textSecondary
         }
     }
 
     private var background: Color {
-        guard isEnabled else { return ScratchLabDesign.Surface.raised }
+        guard isEnabled else { return ScratchLabDesign.Surface.disabledControl }
         switch role {
         case .primary: return ScratchLabDesign.Sem.accent
         case .success: return ScratchLabDesign.Sem.success
+        case .warning: return ScratchLabDesign.Sem.warning
         case .secondary: return ScratchLabDesign.Surface.surface
         case .destructive: return ScratchLabDesign.Sem.danger
         case .tertiary: return .clear
@@ -643,10 +684,10 @@ private struct ScratchLabFilledButtonStyle: ButtonStyle {
             .padding(.horizontal, role == .tertiary ? 0 : ScratchLabDesign.Spacing.lg)
             .frame(minHeight: height)
             .frame(maxWidth: fillsWidth ? .infinity : nil)
-            .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(background, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
             .overlay {
                 if role == .secondary {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                         .stroke(isEnabled ? ScratchLabDesign.Border.default : Color.clear, lineWidth: 1)
                 }
             }
@@ -673,6 +714,10 @@ extension View {
     func scratchLabSuccessButton(fillsWidth: Bool = false) -> some View {
         modifier(ScratchLabButtonStyle(role: .success, fillsWidth: fillsWidth))
     }
+    /// Filled warning action that remains available but needs attention.
+    func scratchLabWarningButton(fillsWidth: Bool = false) -> some View {
+        modifier(ScratchLabButtonStyle(role: .warning, fillsWidth: fillsWidth))
+    }
     /// Bordered medium-weight action.
     func scratchLabSecondaryButton(fillsWidth: Bool = false) -> some View {
         modifier(ScratchLabButtonStyle(role: .secondary, fillsWidth: fillsWidth))
@@ -682,8 +727,8 @@ extension View {
         modifier(ScratchLabButtonStyle(role: .tertiary, fillsWidth: false))
     }
     /// Subtle destructive action (Discard, Reset).
-    func scratchLabDestructiveButton() -> some View {
-        modifier(ScratchLabButtonStyle(role: .destructive, fillsWidth: false))
+    func scratchLabDestructiveButton(fillsWidth: Bool = false) -> some View {
+        modifier(ScratchLabButtonStyle(role: .destructive, fillsWidth: fillsWidth))
     }
 }
 
@@ -1008,6 +1053,121 @@ struct HardwareProfileCard: View {
         .onTapGesture { action?() }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("\(name), \(tier.label), \(readiness.label)"))
+    }
+}
+
+// MARK: - AudioHardwareInputCard
+//
+// Truthful iOS hardware-input status: reflects `AudioHardwareRouteState`
+// as-is, never implies "Microphone Ready" for a USB device, and never
+// implies a device is connected when the route state says otherwise. Pure,
+// state-driven (no AVAudioSession/AudioEngine access) so it renders the
+// same on macOS and iOS from whatever `AudioHardwareRouteState` a caller
+// hands it.
+
+struct AudioHardwareInputCard: View {
+    let routeState: AudioHardwareRouteState
+    var onSelectStereoPair: (AudioHardwareRouteState.StereoPair) -> Void = { _ in }
+
+    private var isDetected: Bool { routeState.deviceName != nil }
+
+    private var readiness: InputReadinessState {
+        guard isDetected else { return .setupRequired }
+        return routeState.isInputActive ? .ready : .detected
+    }
+
+    private var titleText: String {
+        routeState.deviceName ?? "No Input Connected"
+    }
+
+    private var transportLabel: String {
+        switch routeState.transport {
+        case .usb:      return "USB"
+        case .builtIn:  return "Built-in"
+        case .lineIn:   return "Line In"
+        case .headset:  return "Headset"
+        case .bluetooth: return "Bluetooth"
+        case .virtual:  return "Virtual"
+        case .unknown:  return "Unknown"
+        }
+    }
+
+    private var sampleRateText: String {
+        guard let rate = routeState.sampleRate else { return "—" }
+        let kiloHertz = rate / 1000
+        if kiloHertz.truncatingRemainder(dividingBy: 1) == 0 {
+            return "\(Int(kiloHertz)) kHz"
+        }
+        return String(format: "%.1f kHz", kiloHertz)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+            HStack {
+                Text(titleText)
+                    .font(ScratchLabDesign.Typo.title3)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Spacer()
+                StatusBadge(title: "", value: readiness.label, variant: readiness.variant)
+            }
+
+            if isDetected {
+                HStack(spacing: ScratchLabDesign.Spacing.lg) {
+                    statField(label: "TRANSPORT", value: transportLabel)
+                    statField(label: "SAMPLE RATE", value: sampleRateText)
+                    statField(label: "CHANNELS", value: "\(routeState.channelCount)")
+                }
+
+                if routeState.availableStereoPairs.count > 1 {
+                    stereoPairPicker
+                } else if let selected = routeState.selectedStereoPair {
+                    statField(label: "STEREO PAIR", value: selected.displayName)
+                }
+            } else {
+                Text("Connect a microphone, USB audio interface, or line input to see it here.")
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .scratchLabCard(.standard)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("\(titleText), \(readiness.label)"))
+    }
+
+    private func statField(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+            Text(value)
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+        }
+    }
+
+    private var stereoPairPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("STEREO PAIR")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+
+            Picker(
+                "Stereo pair",
+                selection: Binding(
+                    get: { routeState.selectedStereoPair },
+                    set: { newValue in
+                        if let newValue { onSelectStereoPair(newValue) }
+                    }
+                )
+            ) {
+                ForEach(routeState.availableStereoPairs) { pair in
+                    Text(pair.displayName).tag(Optional(pair))
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(ScratchLabDesign.Sem.accent)
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import QuartzCore
 
 // MARK: - Display Mode
@@ -719,7 +720,6 @@ struct NotationTimelineCanvas: View {
             let loop = vm.loopDuration
             let targetH = size.height * targetLaneHeightFraction
             let targetRect = CGRect(x: 0, y: 0, width: size.width, height: targetH)
-            let motionY = targetH           // top of motion trace band (unused in canvas; lane is separate view)
 
             let visibleDuration = loop * visibleWindowMultiplier
             let pps = size.width / CGFloat(visibleDuration)
@@ -1447,7 +1447,7 @@ struct CapturedNotationDisplayView: View {
         if snapshot.faderEvents.isEmpty {
             return AnyView(
                 HStack(spacing: 8) {
-                    laneHeader("CROSSFADER", icon: "slider.horizontal.3")
+                    laneHeader("FADER", icon: "slider.horizontal.3")
                     Text("No fader data captured.")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
@@ -1460,7 +1460,7 @@ struct CapturedNotationDisplayView: View {
 
         return AnyView(
             VStack(alignment: .leading, spacing: 0) {
-                laneHeader("CROSSFADER", icon: "slider.horizontal.3")
+                laneHeader("FADER", icon: "slider.horizontal.3")
                 Canvas { ctx, size in
                     let labelX: CGFloat = 56
                     let top    = size.height * 0.12

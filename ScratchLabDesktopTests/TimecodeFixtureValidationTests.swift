@@ -212,6 +212,25 @@ final class TimecodeFixtureValidationTests: XCTestCase {
         }
     }
 
+    /// Gate for `testLocalFullHardwareFixtureArchiveIsIntactAndGapless`.
+    /// That audit reads its expectation catalog from `Fixtures/Timecode/`
+    /// (`hardwareFixtureDirectory`) — a different, separately-untracked
+    /// directory than the raw archive it verifies
+    /// (`localHardwareArchiveDirectory`). Gating only on the archive
+    /// directory's existence let a broad/CI run pass that guard whenever
+    /// only the archive happened to be present on the machine, then fail
+    /// hard once it reached the separately-missing catalog. Making the
+    /// whole audit explicitly opt-in — like every other multi-minute
+    /// `SCRATCHLAB_RUN_FULL_DVS_*_AUDIT` in this file — keeps default/CI
+    /// runs skipping regardless of which local fixture directories happen
+    /// to exist on the machine.
+    private func skipUnlessFullHardwareArchiveAuditRequested() throws {
+        guard ProcessInfo.processInfo.environment["SCRATCHLAB_RUN_FULL_HARDWARE_ARCHIVE_AUDIT"] == "1" else {
+            throw XCTSkip(
+                "Set SCRATCHLAB_RUN_FULL_HARDWARE_ARCHIVE_AUDIT=1 for the local full-archive integrity audit; the untracked hardware archive and fixture catalog are not present in CI, a fresh clone, or any environment without Karl's local hardware capture."
+            )
+        }
+    }
 
     private func hardwareFixtureCatalog() throws -> HardwareFixtureCatalog {
         let url = hardwareFixtureDirectory
@@ -1651,11 +1670,31 @@ final class TimecodeFixtureValidationTests: XCTestCase {
 
 
     func testLocalFullHardwareFixtureArchiveIsIntactAndGapless() throws {
-        guard FileManager.default.fileExists(atPath: localHardwareArchiveDirectory.path) else {
-            throw XCTSkip(
-                "Full hardware captures are intentionally local-only; archive not present on this machine."
-            )
-        }
+        try skipUnlessFullHardwareArchiveAuditRequested()
+
+        // Once explicitly requested, a missing prerequisite is a real
+        // defect to report clearly (not a silent skip) — the caller asked
+        // for this audit and needs to know which local directory is
+        // actually absent, rather than hitting an opaque decode error.
+        var isArchiveDirectory: ObjCBool = false
+        let archivePresent = FileManager.default.fileExists(
+            atPath: localHardwareArchiveDirectory.path, isDirectory: &isArchiveDirectory
+        ) && isArchiveDirectory.boolValue
+        XCTAssertTrue(
+            archivePresent,
+            "SCRATCHLAB_RUN_FULL_HARDWARE_ARCHIVE_AUDIT=1 requires the local full hardware archive at \(localHardwareArchiveDirectory.path); it is intentionally untracked and must exist on this machine to run the audit."
+        )
+
+        var isCatalogDirectory: ObjCBool = false
+        let catalogPresent = FileManager.default.fileExists(
+            atPath: hardwareFixtureDirectory.path, isDirectory: &isCatalogDirectory
+        ) && isCatalogDirectory.boolValue
+        XCTAssertTrue(
+            catalogPresent,
+            "SCRATCHLAB_RUN_FULL_HARDWARE_ARCHIVE_AUDIT=1 requires the local fixture expectation catalog at \(hardwareFixtureDirectory.path); it is intentionally untracked and must exist on this machine to run the audit."
+        )
+
+        guard archivePresent, catalogPresent else { return }
 
         let catalog = try hardwareFixtureCatalog()
         let transitionCatalog = try hardwareTransitionCatalog()
@@ -1727,6 +1766,52 @@ final class TimecodeFixtureValidationTests: XCTestCase {
                 manifest["sampleCount"] as? Int
             )
         }
+    }
+
+    // MARK: - 28b. Full archive audit opt-in gate behavior (regression)
+    //
+    // Proves `skipUnlessFullHardwareArchiveAuditRequested` skips by default
+    // regardless of ambient filesystem state — the specific regression this
+    // gate exists to prevent, where the audit ran (and failed) on any
+    // machine/CI runner where the untracked archive directory alone
+    // happened to exist. Each case saves and restores the real process
+    // environment variable so it never leaks into other tests.
+
+    func testFullHardwareArchiveAuditSkipsWhenOptInFlagIsUnset() throws {
+        let key = "SCRATCHLAB_RUN_FULL_HARDWARE_ARCHIVE_AUDIT"
+        let previousValue = ProcessInfo.processInfo.environment[key]
+        unsetenv(key)
+        defer {
+            if let previousValue {
+                setenv(key, previousValue, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
+        do {
+            try skipUnlessFullHardwareArchiveAuditRequested()
+            XCTFail("Expected XCTSkip when \(key) is unset")
+        } catch is XCTSkip {
+            // Expected — default/CI runs must skip.
+        } catch {
+            XCTFail("Expected XCTSkip, got \(error)")
+        }
+    }
+
+    func testFullHardwareArchiveAuditDoesNotSkipWhenOptInFlagIsSet() throws {
+        let key = "SCRATCHLAB_RUN_FULL_HARDWARE_ARCHIVE_AUDIT"
+        let previousValue = ProcessInfo.processInfo.environment[key]
+        setenv(key, "1", 1)
+        defer {
+            if let previousValue {
+                setenv(key, previousValue, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
+        XCTAssertNoThrow(try skipUnlessFullHardwareArchiveAuditRequested())
     }
 
     // MARK: - 29. DVS density and cross-flush position audit

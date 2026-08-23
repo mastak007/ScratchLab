@@ -8907,12 +8907,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// pairing is unaffected; only genuinely unmapped-as-hot-cue traffic is
     /// filtered before it ever reaches the resolver.
     private func isHotCueCandidate(messageType: LearnedMIDIMessageType, channel: Int, controlNumber: Int) -> Bool {
-        currentMIDIDeviceMapping?.controls.contains(where: { control in
-            control.action.hotCueIndex != nil
-                && control.messageType == messageType
-                && control.channel == channel
-                && control.controlNumber == controlNumber
-        }) ?? false
+        guard let mapping = currentMIDIDeviceMapping else { return false }
+        let resolved = MIDIActionResolver.resolve(
+            learnedType: messageType,
+            channel: channel,
+            controlNumber: controlNumber,
+            value: 127,
+            mapping: mapping
+        )
+        if case .hotCue(let action, _) = resolved { return action != nil }
+        return false
     }
 
     /// Resolve a MIDI CC or Note On event against the current device's learned
@@ -8943,19 +8947,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard value > 0 else { return false }
         guard let mapping = currentMIDIDeviceMapping else { return false }
 
-        // Find the first hot-cue mapping that matches this MIDI event.
-        let matching = mapping.controls.first { control in
-            guard control.action.hotCueIndex != nil else { return false }
-            guard control.messageType == messageType else { return false }
-            guard control.channel == channel else { return false }
-            guard control.controlNumber == controlNumber else { return false }
-            return true
+        // Resolve the hot-cue action through the shared semantic resolver
+        // (learned hot-cue mapping only — a nil action means the pad-router
+        // fallback, which is not the production hot-cue load path).
+        let resolved = MIDIActionResolver.resolve(
+            learnedType: messageType,
+            channel: channel,
+            controlNumber: controlNumber,
+            value: value,
+            mapping: mapping
+        )
+        // Extract the learned hot-cue action for display, then let the shared
+        // trigger resolver make the "should fire" decision. No transport gating
+        // on macOS — the platter-driven hot-cue path has no transport toggle.
+        guard case .hotCue(let action, _) = resolved, let action else {
+            return false
         }
-        guard let match = matching, let sampleID = match.assignedSampleID, !sampleID.isEmpty else {
+        let decision = HotCueTriggerResolver.resolve(action: resolved)
+        guard decision.shouldTrigger, let sampleID = decision.sampleID else {
             return false
         }
 
-        print("[HotCueAutoLoad] matched · action=\(match.action.displayName) sample=\(sampleID) channel=\(channel) control=\(controlNumber)")
+        print("[HotCueAutoLoad] matched · action=\(action.displayName) sample=\(sampleID) channel=\(channel) control=\(controlNumber)")
         // Enqueue the load onto the controller's private audio queue — no file I/O
         // or blocking on the MIDI callback.
         // A hot-cue press must only arm platter-controlled playback. The
@@ -8976,7 +8989,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             // Fail visibly: a hot cue pointing at a removed/missing sample should be
             // obvious in the UI, not a silent no-op on the pad press.
             publishOnMainAsync(field: "midiMappingError") { [weak self] in
-                let message = "\(match.action.displayName) is mapped to missing sample \"\(sampleID)\"."
+                let message = "\(action.displayName) is mapped to missing sample \"\(sampleID)\"."
                 if self?.midiMappingError != message { self?.midiMappingError = message }
             }
         }
@@ -9097,153 +9110,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] },
             cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) }
         )
-    }
-
-    /// Deterministic MIDI 1.0 channel-voice byte-stream parser used by
-    /// `receiveMIDIPacketList`. Extracted from the inline packet loop so
-    /// bounds safety and message framing can be unit tested independently
-    /// of a live CoreMIDI callback.
-    ///
-    /// Stateless by design, matching CoreMIDI's own contract for
-    /// `MIDIPacket.data` (see `MIDIServices.h`): "Running status is not
-    /// allowed" and "the MIDI messages in the packet must always be
-    /// complete, except for system-exclusive." Consequently `parse` never
-    /// carries state between calls, between packets, or across a SysEx that
-    /// doesn't close within the current packet — each call starts fresh and
-    /// only ever reads bytes from the single packet it was given.
-    enum MIDIChannelMessageParser {
-        /// One fully-decoded channel-voice message. `channel`/message type
-        /// are derived from `status` (`status & 0x0F` / `status & 0xF0`).
-        /// `data2` is `nil` only for the two-byte types (Program Change,
-        /// Channel Pressure); for every other type it is always present —
-        /// `parse` never emits a message it could not fully decode.
-        /// `data1`/`data2`, when present, are always `< 0x80`: this parser
-        /// never hands out an impossible (>127) controller or value byte.
-        struct Message {
-            let status: UInt8
-            let data1: UInt8
-            let data2: UInt8?
-        }
-
-        private enum DataByteResult {
-            case byte(UInt8)
-            /// A byte `>= 0x80` was found where a data byte was expected —
-            /// either a new status byte arrived early, or (since running
-            /// status is never assumed) a bare data byte was mistaken for
-            /// one on a prior malformed read. The byte is NOT consumed, so
-            /// the caller's next loop iteration reprocesses it fresh.
-            case malformed
-            /// Ran out of bytes in this packet before the message
-            /// completed. Per CoreMIDI's contract this packet is malformed
-            /// (only SysEx may be incomplete) — the message is dropped,
-            /// never carried into the next packet.
-            case truncated
-        }
-
-        /// Parses every complete channel-voice message in `bytes` — a
-        /// single `MIDIPacket`'s payload — calling `onMessage` once per
-        /// message in stream order. Never reads past `bytes.count` and
-        /// never emits a message with an out-of-range data byte. A data
-        /// byte encountered with no immediately-preceding status byte is
-        /// treated as malformed and dropped (running status is not
-        /// supported, matching the CoreMIDI packet contract).
-        static func parse(_ bytes: UnsafeRawBufferPointer, onMessage: (Message) -> Void) {
-            var i = 0
-            let count = bytes.count
-            var sysExActive = false
-            while i < count {
-                let byte = bytes[i]
-
-                // Real-time bytes (Clock, Start, Continue, Stop, Active
-                // Sensing, Reset) have highest priority and may legally
-                // appear anywhere in the stream, including mid-message;
-                // they never affect SysEx state.
-                if byte >= 0xF8 {
-                    i += 1
-                    continue
-                }
-                if sysExActive {
-                    if byte == 0xF7 { sysExActive = false }
-                    i += 1
-                    continue
-                }
-                if byte == 0xF0 {
-                    // SysEx start. Rane's platter/pad/fader path never
-                    // emits SysEx; skip its body safely. If it doesn't
-                    // close with 0xF7 before this packet ends, `sysExActive`
-                    // is simply discarded — never carried into the next
-                    // packet — since ScratchLab does not consume SysEx.
-                    sysExActive = true
-                    i += 1
-                    continue
-                }
-                if byte >= 0xF1 {
-                    // System Common (0xF1–0xF7, minus 0xF0 handled above).
-                    // Rane never sends these on this path; skip the status
-                    // byte only rather than guess a length and risk
-                    // misalignment.
-                    i += 1
-                    continue
-                }
-                if byte >= 0x80 {
-                    // Fresh channel-voice status byte.
-                    i += 1
-                    if let message = readData(bytes, &i, count, status: byte) {
-                        onMessage(message)
-                    }
-                    continue
-                }
-                // A data byte with no immediately-preceding status byte:
-                // CoreMIDI packets never use running status, so this is
-                // malformed input (or a resync landing point) — drop the
-                // single byte and try the next one.
-                i += 1
-            }
-        }
-
-        /// Reads the data byte(s) for `status`, starting at `i` (which
-        /// already points at the first data-byte candidate) and advancing
-        /// `i` past whatever it consumes. Real-time bytes encountered in a
-        /// data position are skipped in place. Returns `nil` — consuming
-        /// nothing further — if the message is malformed or runs out of
-        /// bytes before this packet ends; the message is dropped rather
-        /// than emitted with a bad or incomplete byte.
-        private static func readData(
-            _ bytes: UnsafeRawBufferPointer,
-            _ i: inout Int,
-            _ count: Int,
-            status: UInt8
-        ) -> Message? {
-            let type = status & 0xF0
-            let needsTwoDataBytes = !(type == 0xC0 || type == 0xD0)
-
-            guard case .byte(let data1) = nextDataByte(bytes, &i, count) else { return nil }
-            guard needsTwoDataBytes else {
-                return Message(status: status, data1: data1, data2: nil)
-            }
-            guard case .byte(let data2) = nextDataByte(bytes, &i, count) else { return nil }
-            return Message(status: status, data1: data1, data2: data2)
-        }
-
-        private static func nextDataByte(
-            _ bytes: UnsafeRawBufferPointer,
-            _ i: inout Int,
-            _ count: Int
-        ) -> DataByteResult {
-            while i < count {
-                let b = bytes[i]
-                if b >= 0xF8 {
-                    i += 1  // real-time, interleaved: consume and keep looking
-                    continue
-                }
-                if b >= 0x80 {
-                    return .malformed  // do not consume — let it restart parsing
-                }
-                i += 1
-                return .byte(b)
-            }
-            return .truncated
-        }
     }
 
     private func receiveMIDIPacketList(_ packetListPtr: UnsafePointer<MIDIPacketList>) {

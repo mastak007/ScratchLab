@@ -40,6 +40,38 @@ final class RelayedWatchCaptureStore: ObservableObject {
     @Published private(set) var lastImportStatus = "Waiting for a watch capture relay from companion device."
     @Published private(set) var remoteControlState: RemoteControlState = .idle
 
+    /// Live watch state as reported by the paired iPhone over the companion bridge. macOS has no
+    /// direct WCSession — this is the only source of truth for Watch pairing/reachability, and
+    /// `nil` means the iPhone hasn't reported anything yet (never assume reachable by default).
+    @Published private(set) var watchIsPaired = false
+    @Published private(set) var watchIsInstalled = false
+    @Published private(set) var watchIsReachable = false
+    @Published private(set) var watchAvailabilityUpdatedAt: Date?
+
+    var watchAvailabilitySummary: String {
+        guard watchAvailabilityUpdatedAt != nil else {
+            return "Watch status: waiting for the paired iPhone to report Apple Watch status."
+        }
+        if !watchIsPaired {
+            return "Watch status: no Apple Watch paired with the iPhone."
+        }
+        if !watchIsInstalled {
+            return "Watch status: paired, but ScratchLab is not installed on the watch."
+        }
+        if watchIsReachable {
+            return "Watch status: paired, installed, and reachable through the iPhone."
+        }
+        return "Watch status: paired and installed, but not currently reachable through the iPhone."
+    }
+
+    @MainActor
+    func updateWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
+        watchIsPaired = isPaired
+        watchIsInstalled = isInstalled
+        watchIsReachable = isReachable
+        watchAvailabilityUpdatedAt = Date()
+    }
+
     private let fileManager = FileManager.default
 
     var captureDirectoryURL: URL {
@@ -220,6 +252,31 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
 
     private struct WatchControlStatusPacket: Codable {
         let reply: WatchCaptureControlReply
+    }
+
+    private struct WatchAvailabilityPacket: Codable {
+        let kind: String
+        let isPaired: Bool
+        let isInstalled: Bool
+        let isReachable: Bool
+
+        var isWatchAvailability: Bool {
+            kind == Self.packetKind
+        }
+
+        static let packetKind = "watch_availability_v1"
+    }
+
+    private struct WatchCaptureRelayAckPacket: Codable {
+        let kind: String
+        let captureID: UUID
+
+        init(captureID: UUID) {
+            self.kind = Self.packetKind
+            self.captureID = captureID
+        }
+
+        static let packetKind = "watch_motion_capture_relay_ack_v1"
     }
 
     final class FrameStore: ObservableObject {
@@ -436,6 +493,25 @@ extension CompanionCameraReceiver: MCSessionDelegate {
                     suggestedFileName: relayPacket.fileName,
                     sourcePeerName: peerID.displayName
                 )
+                #if DEBUG
+                print("[WATCH-DEBUG] Mac received/imported watch file sessionID=\(relayPacket.captureSession.sessionID) takeID=\(relayPacket.captureSession.takeID ?? "nil") id=\(relayPacket.captureSession.id)")
+                #endif
+                self.sendCaptureAck(for: relayPacket.captureSession.id, to: peerID)
+            }
+            return
+        }
+
+        if let availabilityPacket = try? decoder.decode(WatchAvailabilityPacket.self, from: data),
+           availabilityPacket.isWatchAvailability {
+            #if DEBUG
+            print("[WATCH-DEBUG] Mac received watch availability paired=\(availabilityPacket.isPaired) installed=\(availabilityPacket.isInstalled) reachable=\(availabilityPacket.isReachable)")
+            #endif
+            Task { @MainActor in
+                self.relayedWatchCaptureStore.updateWatchAvailability(
+                    isPaired: availabilityPacket.isPaired,
+                    isInstalled: availabilityPacket.isInstalled,
+                    isReachable: availabilityPacket.isReachable
+                )
             }
             return
         }
@@ -481,6 +557,20 @@ extension CompanionCameraReceiver: MCSessionDelegate {
         attemptedAutoConnectPeerIDs.insert(onlyPeer.id)
         connectionStatus = "Auto-connecting to \(onlyPeer.name)"
         connect(to: onlyPeer)
+    }
+
+    private func sendCaptureAck(for captureID: UUID, to peerID: MCPeerID) {
+        guard session.connectedPeers.contains(peerID) else { return }
+        let packet = WatchCaptureRelayAckPacket(captureID: captureID)
+        guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+
+        do {
+            try session.send(encoded, toPeers: [peerID], with: .reliable)
+        } catch {
+            #if DEBUG
+            print("[WATCH-DEBUG] transfer failed/retrying — Mac ack send failed: \(error.localizedDescription) id=\(captureID)")
+            #endif
+        }
     }
 
     private func sendWatchControlCommand(_ payload: WatchCaptureCommandPayload) -> Bool {

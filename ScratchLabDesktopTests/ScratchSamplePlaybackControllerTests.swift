@@ -201,8 +201,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.load(sampleID: "ahhh")
         controller.waitForAudioQueue()
 
-        XCTAssertEqual(controller.currentSampleFrame, 0,
-            "Manual load(sampleID:) must still reset position on every call, unchanged from before")
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame,
+            "Manual load(sampleID:) must reset to the detected audible hot-cue onset")
     }
 
     // MARK: - diagnosticsSnapshot (hardware-silence triage)
@@ -344,8 +344,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.positionDidChange(steps: 110, direction: .forward)
         controller.waitForAudioQueue()
 
-        XCTAssertGreaterThan(controller.currentSampleFrame, 0)
-        XCTAssertEqual(controller.lastScheduledSourceFrame, 0)
+        XCTAssertGreaterThan(controller.currentSampleFrame, controller.hotCueOnsetFrame)
+        XCTAssertEqual(controller.lastScheduledSourceFrame, controller.hotCueOnsetFrame)
     }
 
     func testForwardMovementPastEndWrapsToStart() {
@@ -467,8 +467,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.positionDidChange(steps: baseline + 12, direction: .forward)
         controller.waitForAudioQueue()
 
-        XCTAssertGreaterThan(controller.currentSampleFrame, 0)
-        XCTAssertLessThan(controller.currentSampleFrame, 1_500)
+        XCTAssertGreaterThan(controller.currentSampleFrame, controller.hotCueOnsetFrame)
+        XCTAssertLessThan(controller.currentSampleFrame - controller.hotCueOnsetFrame, 1_500)
     }
 
     // MARK: - statusLabel
@@ -696,7 +696,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let controller = ScratchSamplePlaybackController()
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
-        // currentSampleFrame starts at 0 after load.
+        // currentSampleFrame starts at the detected audible hot-cue onset.
 
         // Move forward a bit first so backward motion has to cross the loop
         // origin ("12 o'clock") to reach the wrap, rather than starting
@@ -713,7 +713,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Push far enough backward to cross the loop origin. The old
         // clamp-without-wrapping behavior stuck at frame 0; looping instead
         // wraps the excess motion around to near the loop end.
-        controller.positionDidChange(steps: -300, direction: .backward)
+        controller.positionDidChange(steps: -1_000, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertGreaterThan(controller.currentSampleFrame, frameAfterForward,
@@ -976,7 +976,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop",
             "Single-step forward (frameDelta≈22) must be suppressed as nearStop")
         // Needle advances silently through the near-stop gate.
-        XCTAssertEqual(controller.currentSampleFrame, 22,
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame + 22,
             "Near-stop gate must advance needle silently (22 frames for 1 step)")
     }
 
@@ -1081,6 +1081,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let controller = ScratchSamplePlaybackController(
             schedulingClock: { now }
         )
+        controller.dvsUsesContinuousRenderer = false
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
@@ -1104,7 +1105,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             accuracy: 0.01,
             "DVS must report the captured sub-0.25x motion rate, not the varispeed floor"
         )
-        XCTAssertEqual(controller.currentSampleFrame, 101)
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame + 101)
     }
 
     func testDVSEarlySixtyHertzTickSchedulesWithoutInflatedCatchUpRate() {
@@ -1255,6 +1256,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let controller = ScratchSamplePlaybackController(
             schedulingClock: { now }
         )
+        controller.dvsUsesContinuousRenderer = false
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
@@ -1296,6 +1298,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         let controller = ScratchSamplePlaybackController(
             schedulingClock: { now }
         )
+        controller.dvsUsesContinuousRenderer = false
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
@@ -1339,6 +1342,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     /// the real bundled `ahhh.wav` asset, independent of any fixture.
     func testDVSSoftwareTimeStretchUsesCubicInterpolationNotPlainLinear() throws {
         let controller = ScratchSamplePlaybackController()
+        controller.dvsUsesContinuousRenderer = false
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
@@ -1480,7 +1484,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
 
         let before = controller.currentSampleFrame
-        XCTAssertEqual(before, 0)
+        XCTAssertEqual(before, controller.hotCueOnsetFrame)
 
         // Priming.
         controller.positionDidChange(steps: 0, direction: .forward)
@@ -1493,7 +1497,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.waitForAudioQueue()
 
         XCTAssertEqual(controller.lastScheduleSkippedReason, "nearStop")
-        XCTAssertEqual(controller.currentSampleFrame, 66,
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame + 66,
             "Near-stop gate must advance needle silently (3 steps × ~22.05 frames/step, rounded)")
     }
 
@@ -1512,7 +1516,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.positionDidChange(steps: 20, direction: .forward)
         controller.waitForAudioQueue()
         let frameAfterPush = controller.currentSampleFrame
-        XCTAssertEqual(frameAfterPush, 441)
+        XCTAssertEqual(frameAfterPush, controller.hotCueOnsetFrame + 441)
 
         Thread.sleep(forTimeInterval: 0.02)
 
@@ -1529,9 +1533,9 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastEffectiveFrameDelta, 441,
             "Effective frameDelta must match the last forward grain (441)")
         // With effectiveFrameDelta=441 and segmentFrames=min(441, pos+1),
-        // pos returns to 0 (needle back at start).
-        XCTAssertEqual(controller.currentSampleFrame, 0,
-            "Compensated backward grain must return needle to start")
+        // pos returns to the audible hot-cue onset.
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame,
+            "Compensated backward grain must return the needle to the hot-cue onset")
     }
 
     func testReversalCompensatesFirstForwardGrain() {
@@ -1578,7 +1582,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         // Simulate 3 baby-scratch cycles: forward push + backward return.
         // Each push: 20 steps forward → frameDelta ≈ 404 (actual).
-        // Each reversal: compensated to 404, returning needle near 0.
+        // Each reversal: compensated to the push distance, returning the
+        // needle to the audible hot-cue onset.
         for _ in 0..<3 {
             // Forward push.
             controller.positionDidChange(steps: 20, direction: .forward)
@@ -1593,8 +1598,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
         // After 3 cycles with compensation, needle should stay near start.
         // Without compensation, it would have drifted to ~3×404 forward.
-        XCTAssertEqual(controller.currentSampleFrame, 0,
-            "Baby-scratch cycles with reversal compensation must return near start")
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame,
+            "Baby-scratch cycles with reversal compensation must return to the hot-cue onset")
     }
 
     func testReversalCompensationNearLoopEndWrapsSafely() {
@@ -1629,7 +1634,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Push forward modestly, then backward to near zero.
+        // Push forward modestly, then backward to the audible cue origin.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
         controller.positionDidChange(steps: 20, direction: .forward)
@@ -1640,8 +1645,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Backward with large compensated grain — clamped to availableFrames.
         controller.positionDidChange(steps: 0, direction: .backward)
         controller.waitForAudioQueue()
-        XCTAssertEqual(controller.currentSampleFrame, 0,
-            "Compensated backward grain near start must stop at frame 0")
+        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame,
+            "Compensated backward grain near start must stop at the hot-cue onset")
     }
 
     func testNearStopGateStillWinsOverReversalCompensation() {

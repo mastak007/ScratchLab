@@ -31,6 +31,11 @@ private struct RootContainerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var gameState = GameState()
     @StateObject private var audioEngine = AudioEngine()
+    @StateObject private var midiManager = IOSMIDIManager()
+    @StateObject private var midiLearnCoordinator = IOSMIDILearnCoordinator()
+    @StateObject private var transportState: TransportState
+    @StateObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
+    @StateObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
     @StateObject private var progressManager = ProgressManager()
     @StateObject private var practiceBeatStore = PracticeBeatStore()
     @StateObject private var companionRelayBroadcaster = CompanionCameraBroadcaster()
@@ -38,30 +43,48 @@ private struct RootContainerView: View {
     @StateObject private var sessionUploadManager = SessionUploadManager()
     @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
 
+    init() {
+        let transportState = TransportState()
+        let scratchPlaybackEngine = IOScratchPlaybackEngine()
+        _transportState = StateObject(wrappedValue: transportState)
+        _scratchPlaybackEngine = StateObject(wrappedValue: scratchPlaybackEngine)
+        _midiControllerDispatcher = StateObject(wrappedValue: IOSMIDIControllerDispatcher(
+            transportState: transportState,
+            playbackEngine: scratchPlaybackEngine
+        ))
+    }
+
     var body: some View {
         ContentView()
             .environmentObject(gameState)
             .environmentObject(audioEngine)
+            .environmentObject(midiManager)
+            .environmentObject(midiLearnCoordinator)
+            .environmentObject(transportState)
+            .environmentObject(scratchPlaybackEngine)
+            .environmentObject(midiControllerDispatcher)
             .environmentObject(progressManager)
             .environmentObject(practiceBeatStore)
             .environmentObject(companionRelayBroadcaster)
             .environmentObject(watchMotionCaptureStore)
             .environmentObject(sessionUploadManager)
             .onAppear {
+                configureMIDILearn()
                 configureWatchRelay()
                 refreshWatchCapturePipelineIfNeeded()
+                syncWatchStateWithMac()
                 sessionUploadManager.refresh()
             }
             .onChange(of: companionRelayBroadcaster.pendingWatchControlCommand) { _, command in
                 guard let command else { return }
                 handleRemoteWatchControlCommand(command)
             }
+            .onChange(of: midiManager.sources) { _, _ in
+                configureMIDILearnDevice()
+            }
             .onChange(of: companionRelayBroadcaster.connectedPeerNames) { _, peers in
-                guard !peers.isEmpty, let latestCapture = watchMotionCaptureStore.importedSessions.first else { return }
-                companionRelayBroadcaster.sendWatchCaptureSession(
-                    latestCapture.session,
-                    fileName: latestCapture.fileURL.lastPathComponent
-                )
+                guard !peers.isEmpty else { return }
+                syncWatchStateWithMac()
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else {
@@ -70,8 +93,30 @@ private struct RootContainerView: View {
                 }
                 configureWatchRelay()
                 refreshWatchCapturePipelineIfNeeded()
+                syncWatchStateWithMac()
                 sessionUploadManager.refresh()
             }
+    }
+
+    private func configureMIDILearn() {
+        midiManager.setPlatterAudioMessageHandler { [weak midiControllerDispatcher] message in
+            midiControllerDispatcher?.receivePlatterAudioMessage(message)
+        }
+        midiManager.onMessage = { [weak midiLearnCoordinator, weak midiControllerDispatcher] message in
+            midiLearnCoordinator?.receive(message)
+            midiControllerDispatcher?.receive(message)
+        }
+        configureMIDILearnDevice()
+    }
+
+    private func configureMIDILearnDevice() {
+        guard midiManager.sources.count == 1, let source = midiManager.sources.first else {
+            midiLearnCoordinator.clearDeviceSelection()
+            midiControllerDispatcher.updateMapping(deviceIdentifier: nil)
+            return
+        }
+        midiLearnCoordinator.selectDevice(id: source.id, name: source.name)
+        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
     }
 
     private func configureWatchRelay() {
@@ -84,11 +129,39 @@ private struct RootContainerView: View {
                 fileName: importedCapture.fileURL.lastPathComponent
             )
         }
+        watchMotionCaptureStore.onAvailabilityChange = { isPaired, isInstalled, isReachable in
+            companionRelayBroadcaster.sendWatchAvailability(
+                isPaired: isPaired,
+                isInstalled: isInstalled,
+                isReachable: isReachable
+            )
+        }
+        companionRelayBroadcaster.onWatchCaptureAcknowledged = { id in
+            watchMotionCaptureStore.markAcknowledgedByMac(id)
+        }
     }
 
     private func refreshWatchCapturePipelineIfNeeded() {
         watchMotionCaptureStore.activateIfNeeded()
         watchMotionCaptureStore.checkForPendingImports()
+    }
+
+    /// Pushes current watch availability and every not-yet-acknowledged capture to a connected
+    /// Mac. Called on peer connect, app foreground, and launch so a Mac that connects after takes
+    /// were already queued still gets the full backlog, not just the most recent one.
+    private func syncWatchStateWithMac() {
+        guard !companionRelayBroadcaster.connectedPeerNames.isEmpty else { return }
+        companionRelayBroadcaster.sendWatchAvailability(
+            isPaired: watchMotionCaptureStore.isWatchPaired,
+            isInstalled: watchMotionCaptureStore.isWatchAppInstalled,
+            isReachable: watchMotionCaptureStore.isWatchReachable
+        )
+        for capture in watchMotionCaptureStore.unsentCaptures() {
+            companionRelayBroadcaster.sendWatchCaptureSession(
+                capture.session,
+                fileName: capture.fileURL.lastPathComponent
+            )
+        }
     }
 
     private func handleRemoteWatchControlCommand(_ command: CompanionCameraBroadcaster.WatchControlCommandEvent) {
@@ -145,17 +218,9 @@ struct ContentView: View {
     
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(hex: "05070B"),
-                    Color(hex: "0B1018"),
-                    Color(hex: "101826")
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            
+            ScratchLabDesign.Surface.applicationBackground
+                .ignoresSafeArea()
+
             if showSplash {
                 SplashView(showSplash: $showSplash)
             } else {
@@ -231,6 +296,7 @@ struct SplashView: View {
                         .frame(width: 148, height: 148)
                         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
                         .shadow(color: Color.black.opacity(0.35), radius: 18, y: 12)
+                        .accessibilityHidden(true)
                 }
 
                 VStack(spacing: 12) {
@@ -309,69 +375,78 @@ struct QuickStartView: View {
     ]
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(hex: "05070B"),
-                    Color(hex: "0B1018"),
-                    Color(hex: "101826")
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                ScratchLabDesign.Surface.applicationBackground
+                    .ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                HStack {
-                    if currentPage > 0 {
-                        Button("Back") {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                currentPage -= 1
+                VStack(spacing: ScratchLabDesign.Spacing.lg) {
+                    HStack {
+                        if currentPage > 0 {
+                            Button("Back") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    currentPage -= 1
+                                }
                             }
+                            .scratchLabTertiaryButton()
+                            .frame(minWidth: 64, alignment: .leading)
+                            .accessibilityLabel("Back")
+                        } else {
+                            Color.clear
+                                .frame(width: 64)
+                                .accessibilityHidden(true)
                         }
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.86))
-                        .accessibilityLabel("Back")
-                    } else {
-                        Color.clear
-                            .frame(width: 44, height: 24)
-                            .accessibilityHidden(true)
+
+                        Spacer()
+
+                        HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                            Image("ScratchLabLogo")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 32, height: 32)
+                                .accessibilityHidden(true)
+
+                            Text("ScratchLab")
+                                .font(ScratchLabDesign.Typo.title3)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        }
+
+                        Spacer()
+
+                        Button("Skip") {
+                            onFinish()
+                        }
+                        .scratchLabTertiaryButton()
+                        .frame(minWidth: 64, alignment: .trailing)
+                        .accessibilityLabel("Skip Quick Start")
                     }
+                    .padding(.horizontal, ScratchLabDesign.Spacing.xxl)
+                    .padding(.top, ScratchLabDesign.Spacing.lg)
 
-                    Spacer()
+                    QuickStartProgressView(
+                        pageCount: pages.count,
+                        currentPage: currentPage
+                    )
 
-                    Button("Skip") {
-                        onFinish()
+                    TabView(selection: $currentPage) {
+                        ForEach(pages) { page in
+                            QuickStartPageView(page: page)
+                                .padding(.horizontal, ScratchLabDesign.Spacing.xxl)
+                                .tag(page.id)
+                        }
                     }
-                    .font(.headline)
-                    .foregroundColor(Color(hex: "00D4FF"))
-                    .accessibilityLabel("Skip Quick Start")
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 18)
+                    .tabViewStyle(.page(indexDisplayMode: .never))
 
-                TabView(selection: $currentPage) {
-                    ForEach(pages) { page in
-                        QuickStartPageView(page: page)
-                            .padding(.horizontal, 24)
-                            .tag(page.id)
+                    Button(action: advanceOrFinish) {
+                        Text(currentPage == pages.count - 1 ? "Start Session" : "Next")
                     }
+                    .scratchLabPrimaryButton(fillsWidth: true)
+                    .frame(maxWidth: 560)
+                    .padding(.horizontal, ScratchLabDesign.Spacing.xxl)
+                    .padding(.bottom, ScratchLabDesign.Spacing.xxl)
+                    .accessibilityLabel(currentPage == pages.count - 1 ? "Start Session" : "Next quick start page")
                 }
-                .tabViewStyle(.page(indexDisplayMode: .always))
-                .indexViewStyle(.page(backgroundDisplayMode: .interactive))
-
-                Button(action: advanceOrFinish) {
-                    Text(currentPage == pages.count - 1 ? "Start Session" : "Next")
-                        .font(.headline)
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 56)
-                        .background(Color(hex: "00D4FF"))
-                        .cornerRadius(8)
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 28)
-                .accessibilityLabel(currentPage == pages.count - 1 ? "Start Session" : "Next quick start page")
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
     }
@@ -388,49 +463,111 @@ struct QuickStartView: View {
     }
 }
 
+private struct QuickStartProgressView: View {
+    let pageCount: Int
+    let currentPage: Int
+
+    var body: some View {
+        HStack(spacing: ScratchLabDesign.Spacing.sm) {
+            ForEach(0..<pageCount, id: \.self) { page in
+                Capsule()
+                    .fill(progressColor(for: page))
+                    .frame(width: page == currentPage ? 32 : 20, height: 4)
+                    .animation(.easeInOut(duration: 0.2), value: currentPage)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Quick Start progress")
+        .accessibilityValue("Step \(currentPage + 1) of \(pageCount)")
+    }
+
+    private func progressColor(for page: Int) -> Color {
+        if page < currentPage {
+            return ScratchLabDesign.Sem.success
+        }
+        if page == currentPage {
+            return ScratchLabDesign.Sem.accent
+        }
+        return ScratchLabDesign.Surface.disabledFill
+    }
+}
+
 private struct QuickStartPageView: View {
     let page: QuickStartPage
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer(minLength: 20)
+        ScrollView {
+            Group {
+                if horizontalSizeClass == .regular {
+                    HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.xxxl) {
+                        introduction
+                            .frame(maxWidth: 260)
 
-            Image(systemName: page.icon)
-                .font(.system(size: 56, weight: .semibold))
-                .foregroundColor(Color(hex: "00D4FF"))
-                .accessibilityHidden(true)
-
-            Text(page.title)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-                .multilineTextAlignment(.center)
-                .minimumScaleFactor(0.85)
-                .accessibilityLabel(page.title)
-
-            VStack(spacing: 14) {
-                ForEach(page.lines, id: \.self) { line in
-                    HStack(alignment: .top, spacing: 12) {
-                        Circle()
-                            .fill(Color(hex: "00D4FF"))
-                            .frame(width: 8, height: 8)
-                            .padding(.top, 7)
-                            .accessibilityHidden(true)
-
-                        Text(line)
-                            .font(.title3.weight(.medium))
-                            .foregroundColor(.white.opacity(0.84))
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Spacer(minLength: 0)
+                        instructions
+                            .frame(maxWidth: 440)
+                    }
+                } else {
+                    VStack(spacing: ScratchLabDesign.Spacing.xxl) {
+                        introduction
+                        instructions
                     }
                 }
             }
-            .frame(maxWidth: 520)
-
-            Spacer(minLength: 20)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity, minHeight: 360)
+            .padding(.vertical, ScratchLabDesign.Spacing.xl)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var introduction: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.lg) {
+            Image(systemName: page.icon)
+                .font(.system(size: 36, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.accent)
+                .frame(width: 72, height: 72)
+                .background(
+                    ScratchLabDesign.Sem.accent.opacity(0.12),
+                    in: RoundedRectangle(
+                        cornerRadius: ScratchLabDesign.Radius.hero,
+                        style: .continuous
+                    )
+                )
+                .accessibilityHidden(true)
+
+            Text(page.title)
+                .font(ScratchLabDesign.Typo.title1)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(page.title)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var instructions: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.lg) {
+            ForEach(page.lines, id: \.self) { line in
+                HStack(alignment: .top, spacing: ScratchLabDesign.Spacing.md) {
+                    Circle()
+                        .fill(ScratchLabDesign.Sem.accent)
+                        .frame(width: ScratchLabDesign.Spacing.sm, height: ScratchLabDesign.Spacing.sm)
+                        .padding(.top, ScratchLabDesign.Spacing.xs)
+                        .accessibilityHidden(true)
+
+                    Text(line)
+                        .font(ScratchLabDesign.Typo.bodyDefault)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .scratchLabCard(.standard)
     }
 }
 

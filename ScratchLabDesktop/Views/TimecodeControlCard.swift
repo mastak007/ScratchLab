@@ -1,6 +1,7 @@
 #if DEBUG
 
 import SwiftUI
+import Combine
 
 // MARK: - TimecodeControlCard
 
@@ -111,10 +112,10 @@ struct TimecodeControlCard: View {
                 applyPreset(restored)
             }
         }
-        .onChange(of: pipeline.mode) { newMode in
+        .onChange(of: pipeline.mode) { _, newMode in
             persistedModeRaw = newMode.rawValue
         }
-        .onChange(of: selectedPreset) { newPreset in
+        .onChange(of: selectedPreset) { _, newPreset in
             persistedPresetRaw = newPreset.rawValue
             applyPreset(newPreset)
         }

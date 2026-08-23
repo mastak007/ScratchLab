@@ -453,9 +453,9 @@ struct NotationSheetTests {
         #expect(!body.contains("practiceViewEnabled"))
     }
 
-    // MARK: 19. Crossfader lane label is present across notation surfaces
+    // MARK: 19. Canonical fader lane label is present across notation surfaces
 
-    @Test("Crossfader lane label appears in target, captured, and live notation views")
+    @Test("Fader lane label appears consistently in target, captured, and live notation views")
     func crossfaderLaneLabelPresentInAllSurfaces() throws {
         let viewsDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -470,8 +470,10 @@ struct NotationSheetTests {
         for name in files {
             let url = viewsDir.appendingPathComponent(name)
             let source = try String(contentsOf: url, encoding: .utf8)
-            #expect(source.contains("CROSSFADER"),
-                    "\(name) should label the crossfader lane with 'CROSSFADER'")
+            #expect(source.contains("\"FADER\""),
+                    "\(name) should use the canonical 'FADER' lane label")
+            #expect(!source.contains("\"CROSSFADER\""),
+                    "\(name) should not introduce a second lane-label vocabulary")
         }
     }
 

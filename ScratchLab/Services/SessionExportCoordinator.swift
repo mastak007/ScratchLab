@@ -1984,6 +1984,11 @@ struct SessionArchiveBuilder: Sendable {
                 withIntermediateDirectories: true
             )
             try fileManager.copyItem(at: audioArtifactURL, to: audioURL)
+            #if DEBUG
+            if let exportedFile = try? AVAudioFile(forReading: audioURL) {
+                print("[AUDIO-CAPTURE-DEBUG] exported scratch frames=\(exportedFile.length)")
+            }
+            #endif
             if takeContext.stemAvailability["beat_only"] == "available"
                 || takeContext.stemAvailability["scratch_with_beat"] == "available" {
                 let beatBuffer = try renderedBeatStemBuffer(

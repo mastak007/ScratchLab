@@ -123,7 +123,7 @@ struct LevelSelectView: View {
                         Image(systemName: "chevron.left")
                         Text("Menu")
                     }
-                    .foregroundColor(Color(hex: "FFD700"))
+                    .foregroundColor(ScratchLabDesign.Sem.accent)
                 }
             }
         }
@@ -148,12 +148,12 @@ struct LevelSelectView: View {
     private var headerView: some View {
         VStack(spacing: 8) {
             Text("LIVE PRACTICE")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(.white)
-            
+                .font(ScratchLabDesign.Typo.pageTitle)
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+
             Text("Pick a scratch first, then open the existing live setup with optional beat guidance and ScratchLab Coach.")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .font(ScratchLabDesign.Typo.pageSubtitle)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
                 .multilineTextAlignment(.center)
         }
     }
@@ -161,8 +161,8 @@ struct LevelSelectView: View {
     private var practiceSelectionSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("SELECT A SCRATCH")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.white.opacity(0.5))
+                .font(ScratchLabDesign.Typo.pageEyebrow)
+                .foregroundColor(ScratchLabDesign.Sem.textTertiary)
 
             ForEach(practiceScratchOptions) { scratch in
                 practiceScratchCard(for: scratch)
@@ -175,23 +175,23 @@ struct LevelSelectView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("BABY FLOW")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.title2)
+                        .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
                     Text("Visual combo challenge: lock 4 baby scratches in one loop at 100 BPM with optional beat guidance or live audio only.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.body)
+                        .foregroundColor(ScratchLabDesign.Sem.textSecondary)
                 }
 
                 Spacer()
 
                 Text(comboProgress?.comboCompleted == true ? "CLEARED" : "LIVE")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(comboProgress?.comboCompleted == true ? .black : .white)
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(comboProgress?.comboCompleted == true ? ScratchLabDesign.Sem.textOnAccent : ScratchLabDesign.Sem.textSecondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(comboProgress?.comboCompleted == true ? Color(hex: "FFD700") : Color(hex: "263238"))
-                    .cornerRadius(999)
+                    .background(comboProgress?.comboCompleted == true ? ScratchLabDesign.Sem.success : ScratchLabDesign.Surface.subtleFill)
+                    .clipShape(Capsule())
             }
 
             HStack(spacing: 16) {
@@ -205,51 +205,34 @@ struct LevelSelectView: View {
                 StatusBadge(
                     title: "Status",
                     value: comboStatusValue,
-                    variant: .warning,
+                    variant: comboProgress?.comboCompleted == true ? .success : .info,
                     systemImage: comboProgress?.comboCompleted == true ? "checkmark.seal.fill" : "repeat"
                 )
             }
 
             Text(comboStatusText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.65))
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
 
             Text("The cue stays visual here too, so the analyzer keeps following your live input without loading a beat.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.65))
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
 
             Text(progressManager.isScratchMastered("baby_scratch")
                 ? "You’ve got the core motion. Now clear one full phrase."
                 : "You can test the challenge now, but the cleanest runs come after Baby Scratch starts feeling automatic.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.65))
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
 
             Button(action: { showingComboChallenge = true }) {
                 HStack(spacing: 8) {
                     Image(systemName: "point.3.filled.connected.trianglepath.dotted")
                     Text(comboProgress?.comboCompleted == true ? "Run Combo Again" : "Start Combo Challenge")
-                        .font(.system(size: 16, weight: .bold))
                 }
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "FFD700"), Color(hex: "FF9800")],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(14)
             }
+            .scratchLabPrimaryButton(fillsWidth: true)
         }
-        .padding(20)
-        .background(Color.white.opacity(0.08))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(hex: "FFD700").opacity(0.25), lineWidth: 1)
-        )
-        .cornerRadius(16)
+        .scratchLabCard(.standard)
     }
 
     @ViewBuilder
@@ -260,24 +243,24 @@ struct LevelSelectView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(scratch.name.uppercased())
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(ScratchLabDesign.Typo.title2)
+                        .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
                     Text(scratch.description)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white.opacity(0.72))
+                        .font(ScratchLabDesign.Typo.body)
+                        .foregroundColor(ScratchLabDesign.Sem.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
 
                 Text(isBabyScratch ? "FOUNDATION" : "COACH")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(isBabyScratch ? .black : .white)
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(isBabyScratch ? ScratchLabDesign.Sem.textOnAccent : ScratchLabDesign.Sem.textSecondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(isBabyScratch ? Color(hex: "FFD700") : Color(hex: "263238"))
-                    .cornerRadius(999)
+                    .background(isBabyScratch ? ScratchLabDesign.Sem.accent : ScratchLabDesign.Surface.subtleFill)
+                    .clipShape(Capsule())
             }
 
             if isBabyScratch {
@@ -285,26 +268,26 @@ struct LevelSelectView: View {
                     StatusBadge(
                         title: "Best estimate",
                         value: "\(Int(progressManager.babyScratchProgress?.bestAccuracy ?? 0))%",
-                        variant: .warning,
+                        variant: .info,
                         systemImage: "star.fill"
                     )
 
                     StatusBadge(
                         title: "Attempts",
                         value: "\(progressManager.babyScratchProgress?.practiceCount ?? 0)",
-                        variant: .success,
+                        variant: .info,
                         systemImage: "waveform.path.ecg"
                     )
                 }
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Coach card and local demo audio load in the same setup overlay after you pick this scratch.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.68))
+                        .font(ScratchLabDesign.Typo.bodySecondary)
+                        .foregroundColor(ScratchLabDesign.Sem.textSecondary)
 
                     Text("Baby Scratch remains the tracked foundation drill. Chirp Flare opens the same live setup without forcing a Baby-only route.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.62))
+                        .font(ScratchLabDesign.Typo.bodySecondary)
+                        .foregroundColor(ScratchLabDesign.Sem.textTertiary)
                 }
             }
 
@@ -312,33 +295,11 @@ struct LevelSelectView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill")
                     Text(isBabyScratch ? "Start Baby Scratch" : "Start Chirp Flare")
-                        .font(.system(size: 16, weight: .bold))
                 }
-                .foregroundColor(.white)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(
-                    LinearGradient(
-                        colors: isBabyScratch
-                            ? [Color(hex: "4CAF50"), Color(hex: "2E7D32")]
-                            : [Color(hex: "0EA5E9"), Color(hex: "1D4ED8")],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(14)
             }
+            .scratchLabPrimaryButton()
         }
-        .padding(20)
-        .background(Color.white.opacity(0.08))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(
-                    isBabyScratch ? Color(hex: "FFD700").opacity(0.18) : Color(hex: "0EA5E9").opacity(0.22),
-                    lineWidth: 1
-                )
-        )
-        .cornerRadius(16)
+        .scratchLabCard(isBabyScratch ? .selected : .standard)
     }
 }
 

@@ -12,6 +12,7 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
 import os
 
 struct VirtualPlatterPrototypeView: View {
@@ -32,7 +33,12 @@ struct VirtualPlatterPrototypeView: View {
     /// Motor transport. While on, the virtual record spins clockwise at a
     /// constant speed (advances record phase + the marker). Hand-scratch
     /// works whether this is on or off. Identical model in both modes.
-    @State private var isPlaying = false
+    /// Driven by the app-level MIDI dispatch (or the on-screen Play button),
+    /// so a controller PLAY flips it too.
+    @EnvironmentObject private var transport: TransportState
+    /// The app-level iOS scratch playback engine — receives platter position
+    /// observations from this view.
+    @EnvironmentObject private var playbackEngine: IOScratchPlaybackEngine
 
     /// THE single source of truth (record turns, 0.0 = 12 o'clock). The
     /// View owns and advances it; it drives the marker directly and is the
@@ -114,9 +120,9 @@ struct VirtualPlatterPrototypeView: View {
             Button(action: { dismiss() }) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
                     .frame(width: 42, height: 42)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                    .background(ScratchLabDesign.Surface.controlFill, in: Circle())
             }
             .accessibilityLabel("Back")
 
@@ -124,20 +130,20 @@ struct VirtualPlatterPrototypeView: View {
 
             HStack(spacing: 7) {
                 Circle()
-                    .fill(Color(hex: "F59E0B"))
+                    .fill(ScratchLabDesign.Sem.warning)
                     .frame(width: 8, height: 8)
                 Text("Prototype")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(.white.opacity(0.76))
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Color.white.opacity(0.08), in: Capsule())
+            .background(ScratchLabDesign.Surface.controlFill, in: Capsule())
         }
         .overlay(
             Text("Virtual Platter")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(.white)
+                .font(ScratchLabDesign.Typo.title3)
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
         )
     }
 
@@ -228,34 +234,29 @@ struct VirtualPlatterPrototypeView: View {
 
             Button(action: togglePlay) {
                 HStack(spacing: 8) {
-                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                    Text(isPlaying ? "Stop" : "Play")
+                    Image(systemName: transport.isPlaying ? "stop.fill" : "play.fill")
+                    Text(transport.isPlaying ? "Stop" : "Play")
                 }
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(isPlaying ? Color(hex: "EF4444") : Color(hex: "22C55E"),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
+            .scratchLabPrimaryButton(fillsWidth: true)
+            .accessibilityLabel(transport.isPlaying ? "Stop" : "Play")
 
             Text(mode == .stage
                  ? "Press Play, then spin the record to match the ghost. The ahhh is fixed to the record: hold to stop, push/pull to move through it."
                  : "Press Play: the ahhh follows the record. Hold to stop, push forward to advance, pull back to reverse.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.62))
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
-        .padding(18)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .scratchLabCard(.standard)
     }
 
+    // Specialized platter visualization: the backdrop keeps a fixed
+    // low-opacity black wash (not a shared surface token) because it exists
+    // purely for text legibility over the rotating disc art underneath, not
+    // as generic card chrome. `directionColor` is preserved — it's the
+    // functional rotation/direction encoding shared with `telemetryTile`.
     private var centerLabel: some View {
         VStack(spacing: 2) {
             Image(systemName: directionIcon)
@@ -263,7 +264,7 @@ struct VirtualPlatterPrototypeView: View {
                 .foregroundColor(directionColor)
             Text(platter.direction.label)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary.opacity(0.8))
         }
         .padding(14)
         .background(Color.black.opacity(0.45), in: Circle())
@@ -283,7 +284,7 @@ struct VirtualPlatterPrototypeView: View {
                 telemetryTile(
                     title: "SPEED",
                     value: String(format: "%.0f%%", platter.normalizedSpeed * 100),
-                    accent: Color(hex: "0EA5E9"),
+                    accent: ScratchLabDesign.Sem.accent,
                     icon: "speedometer"
                 )
             }
@@ -291,10 +292,10 @@ struct VirtualPlatterPrototypeView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("NORMALIZED SPEED")
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white.opacity(0.46))
+                    .foregroundColor(ScratchLabDesign.Sem.textTertiary)
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.08))
+                        Capsule().fill(ScratchLabDesign.Surface.controlFill)
                         Capsule()
                             .fill(directionColor)
                             .frame(width: proxy.size.width * CGFloat(platter.normalizedSpeed))
@@ -304,18 +305,15 @@ struct VirtualPlatterPrototypeView: View {
             }
 
             Text(String(format: "Angular velocity: %+.2f rad/s", platter.angularVelocity))
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.56))
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .scratchLabCard(.standard)
     }
 
+    // `accent` carries functional meaning for the DIRECTION tile
+    // (`directionColor`, the shared rotation/direction encoding) but is a
+    // plain product token for the SPEED tile — the caller decides which.
     private func telemetryTile(title: String, value: String, accent: Color, icon: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
@@ -326,35 +324,39 @@ struct VirtualPlatterPrototypeView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white.opacity(0.46))
+                    .foregroundColor(ScratchLabDesign.Sem.textTertiary)
                 Text(value)
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
             }
             Spacer(minLength: 0)
         }
         .padding(10)
         .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(ScratchLabDesign.Surface.raised, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
     }
 
     // MARK: - Stage controls
 
+    // The border stays tied to `stagePhaseColor` — a functional playback-phase
+    // encoding (waiting/active/locked/missed), not decoration, so it is kept
+    // as a manual overlay rather than folded into a fixed `.scratchLabCard`
+    // border variant.
     private var stageControlCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("STAGE DRILL")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.white.opacity(0.46))
+                        .foregroundColor(ScratchLabDesign.Sem.textTertiary)
                     Text(stagePhaseLabel)
                         .font(.system(size: 20, weight: .bold))
                         .foregroundColor(stagePhaseColor)
                 }
                 Spacer()
                 Text(String(format: "%.1fs", stageClock))
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(ScratchLabDesign.Typo.technical)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
             }
 
             ProgressView(value: assessment.progress)
@@ -363,34 +365,27 @@ struct VirtualPlatterPrototypeView: View {
             Text("Target: spin \(Self.defaultStroke.direction.label.uppercased()) between "
                  + String(format: "%.0fs and %.0fs", Self.defaultStroke.start, Self.defaultStroke.end)
                  + ". Hold direction + speed to lock.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 12) {
                 Button(action: startStage) {
                     Label(stageRunning ? "Restart" : "Start Drill", systemImage: "play.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color(hex: "22C55E"), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .scratchLabPrimaryButton(fillsWidth: true)
+
                 Button(action: resetStage) {
                     Label("Reset", systemImage: "arrow.counterclockwise")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                .scratchLabSecondaryButton(fillsWidth: true)
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(ScratchLabDesign.Surface.card, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.card, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.card, style: .continuous)
                 .stroke(stagePhaseColor.opacity(0.3), lineWidth: 1)
         )
     }
@@ -435,7 +430,7 @@ struct VirtualPlatterPrototypeView: View {
         // held still, OR the motor driving it with the finger up. Held still
         // / finger up with the motor off ⇒ not moving ⇒ the audio freezes.
         let fingerMoving = platter.isDragging && platter.direction != .idle
-        let motorMoving = !platter.isDragging && allowMotor && isPlaying
+        let motorMoving = !platter.isDragging && allowMotor && transport.isPlaying
         let recordIsMoving = fingerMoving || motorMoving
 
         if platter.isDragging {
@@ -445,7 +440,7 @@ struct VirtualPlatterPrototypeView: View {
                 recordPhase += delta
             }
             // else: gripped but still → HOLD (no phase change), motor off.
-        } else if allowMotor && isPlaying {
+        } else if allowMotor && transport.isPlaying {
             recordPhase += motorTurnsPerTick
         }
         // else: finger up, motor off → frozen.
@@ -468,8 +463,8 @@ struct VirtualPlatterPrototypeView: View {
     }
 
     private func togglePlay() {
-        isPlaying.toggle()
-        if isPlaying { cueRecord() }
+        transport.toggle()
+        if transport.isPlaying { cueRecord() }
     }
 
     private func startStage() {
@@ -499,6 +494,15 @@ struct VirtualPlatterPrototypeView: View {
 
         // The single place the record phase advances (finger or motor).
         advanceRecord(allowMotor: true)
+
+        // Observe the current platter position into the scratch playback
+        // engine (data-flow only — no audio, no seeking).
+        let position = VirtualPlatterSampleMapper.platterPosition(
+            recordPhase: recordPhase,
+            direction: platter.direction,
+            velocity: Double(platter.angularVelocity)
+        )
+        playbackEngine.updatePlatterPosition(position)
 
         guard mode == .stage, stageRunning else { return }
         stageClock += 1.0 / 60.0
@@ -775,24 +779,33 @@ final class VirtualPlatterAudio: NSObject, ObservableObject, AVAudioPlayerDelega
         player.enableRate = false      // no pitch/time warp — original ahhh
         player.numberOfLoops = 0       // one-shot
         player.delegate = self         // detect natural end of the one-shot
-        player.prepareToPlay()
+        // prepareToPlay is deferred to start(): it warms the hardware decode
+        // buffers and can block, so it runs off the main thread there.
         self.player = player
     }
 
     func start() {
         #if canImport(UIKit)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, options: [.mixWithOthers])
-        try? session.setActive(true)
-        #endif
+        // The synchronous AVAudioSession configuration has no async overload
+        // that resolves here, so move the blocking work off the main thread.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try? session.setActive(true)
+            self?.player?.prepareToPlay()
+        }
+        #else
         player?.prepareToPlay()
+        #endif
     }
 
     func stop() {
         player?.stop()
         #if canImport(UIKit)
-        try? AVAudioSession.sharedInstance().setActive(false,
-            options: [.notifyOthersOnDeactivation])
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? AVAudioSession.sharedInstance().setActive(false,
+                options: [.notifyOthersOnDeactivation])
+        }
         #endif
     }
 
@@ -847,6 +860,8 @@ struct VirtualPlatterPrototypeView_Previews: PreviewProvider {
         NavigationStack {
             VirtualPlatterPrototypeView()
         }
+        .environmentObject(TransportState())
+        .environmentObject(IOScratchPlaybackEngine())
         .preferredColorScheme(.dark)
     }
 }

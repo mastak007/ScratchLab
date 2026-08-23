@@ -1689,6 +1689,14 @@ private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
     }
 
     func prepareToPlay() {
+        // Must run synchronously, on the same execution context as `play()`.
+        // `AVAudioPlayer` is not safe against a concurrent `prepareToPlay()`
+        // racing an immediately-following `play()` call from another thread —
+        // dispatching this to a background queue let that race corrupt
+        // playback (play() intermittently returning false, or returning true
+        // then silently stopping again within milliseconds). The bundled
+        // demo assets are small PCM WAVs with measured negligible prepare
+        // cost, so blocking here is not a real responsiveness concern.
         player.prepareToPlay()
     }
 
@@ -1763,6 +1771,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     // Smoothing, latency-compensated clock for the Demo-mode notation playhead
     // — see `sampledPlaybackTime()`.
     private var syncClock = DemoAudioClock()
+    private var cachedOutputLatency: TimeInterval = 0
 
     init(
         resourceURLProvider: @escaping ResourceURLProvider = ScratchCoachDemoAudioPlayer.defaultResourceURLProvider(in: .main),
@@ -1773,6 +1782,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         self.playerFactory = playerFactory
         self.hostTimeProvider = hostTimeProvider
         registerLifecycleObservers()
+        refreshOutputLatency()
     }
 
     deinit {
@@ -1796,7 +1806,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     /// instead of stepping coarsely and leading the sound.
     func sampledPlaybackTime() -> TimeInterval {
         let hostTime = hostTimeProvider()
-        syncClock.outputLatency = Self.currentOutputLatency()
+        syncClock.outputLatency = cachedOutputLatency
         syncClock.ingest(
             playerTime: player?.currentTime ?? 0,
             isPlaying: player?.isPlaying ?? false,
@@ -1866,6 +1876,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
     func play() {
         guard let player, isAudioAvailable else { return }
+        refreshOutputLatency()
         if player.play() {
             playbackState = .playing
         } else {
@@ -1881,6 +1892,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
     func replay() {
         guard let player, isAudioAvailable else { return }
+        refreshOutputLatency()
         player.currentTime = 0
         if player.play() {
             playbackState = .playing
@@ -1967,15 +1979,20 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Current audio output latency, used to align the notation playhead with
-    /// what the listener hears. Sourced from the audio session on iOS; macOS
-    /// has no equivalent API, so compensation is off there.
-    nonisolated private static func currentOutputLatency() -> TimeInterval {
-        #if canImport(UIKit)
-        return max(0, AVAudioSession.sharedInstance().outputLatency)
-        #else
-        return 0
-        #endif
+    /// Refreshes the session latency away from the main actor. The sampled
+    /// playhead reads the last completed value without synchronously querying
+    /// AVAudioSession on every display update.
+    private func refreshOutputLatency() {
+        Task { [weak self] in
+            let latency = await Task.detached(priority: .userInitiated) {
+                #if canImport(UIKit)
+                return max(0, AVAudioSession.sharedInstance().outputLatency)
+                #else
+                return 0.0
+                #endif
+            }.value
+            self?.cachedOutputLatency = latency
+        }
     }
 
     private func clearLoadedAudio() {
@@ -4628,7 +4645,7 @@ final class ScratchLabDemoModeController: ObservableObject {
     private let audioFileName: String
     private let audioURLProvider: ScratchCoachDemoAudioPlayer.ResourceURLProvider
     private var analyzer: ScratchLabDemoModeAnalyzer?
-    private var analysisTimer: Timer?
+    private(set) var analysisTimer: Timer?
 
     init(
         audioFileName: String = ScratchLabDemoSessionBuilder.demoAudioFileName,
@@ -4659,15 +4676,40 @@ final class ScratchLabDemoModeController: ObservableObject {
             )
             demoPlayer.configure(url: resolved.url, sourceFileName: resolved.sourceFileName, isFallback: resolved.isFallback)
             demoPlayer.replay()
-            isReady = true
-            statusMessage = resolved.isFallback
-                ? "Playing the bundled call-response practice reel — the exact demo track isn't in this build."
-                : "Bundled baby scratch demo is playing with synced coach feedback."
+            let startedPlaying = confirmPlaybackStarted(
+                successStatusMessage: resolved.isFallback
+                    ? "Playing the bundled call-response practice reel — the exact demo track isn't in this build."
+                    : "Bundled baby scratch demo is playing with synced coach feedback.",
+                failureStatusMessage: "ScratchLab could not start the bundled demo audio."
+            )
+            guard startedPlaying else { return }
             startAnalysisTimer()
         } catch {
             statusMessage = "ScratchLab could not load the bundled demo."
             isReady = false
         }
+    }
+
+    /// Confirms `demoPlayer.play()`/`.replay()` actually produced live audio
+    /// before this controller claims success. `AVAudioPlayer.play()` can
+    /// return true synchronously yet not sustain playback, so both
+    /// `playbackState` and `isActivelyPlayingAudio` are required — matching
+    /// `BabyScratchDemoPlaybackCoordinator`'s existing honest-reporting
+    /// pattern. Shared by every play/replay/resume path so failure is
+    /// reported identically instead of drifting between call sites.
+    @discardableResult
+    private func confirmPlaybackStarted(successStatusMessage: String, failureStatusMessage: String) -> Bool {
+        guard demoPlayer.playbackState == .playing, demoPlayer.isActivelyPlayingAudio else {
+            demoPlayer.stop()
+            analysisTimer?.invalidate()
+            analysisTimer = nil
+            statusMessage = failureStatusMessage
+            isReady = false
+            return false
+        }
+        statusMessage = successStatusMessage
+        isReady = true
+        return true
     }
 
     /// Resolves `audioFileName` through `DemoAudioResolver` — exact match
@@ -4723,10 +4765,13 @@ final class ScratchLabDemoModeController: ObservableObject {
         motionDirection = .neutral
         inputLevel = 0
         demoPlayer.replay()
+        guard confirmPlaybackStarted(
+            successStatusMessage: "Bundled baby scratch demo is playing with synced coach feedback.",
+            failureStatusMessage: "ScratchLab could not restart the bundled demo audio."
+        ) else { return }
         if analysisTimer == nil {
             startAnalysisTimer()
         }
-        statusMessage = "Bundled baby scratch demo is playing with synced coach feedback."
     }
 
     func pauseDemo() {
@@ -4739,10 +4784,13 @@ final class ScratchLabDemoModeController: ObservableObject {
     func resumeDemo() {
         guard demoPlayer.playbackState == .paused else { return }
         demoPlayer.play()
+        guard confirmPlaybackStarted(
+            successStatusMessage: "Demo resumed.",
+            failureStatusMessage: "ScratchLab could not resume the bundled demo audio."
+        ) else { return }
         if analysisTimer == nil {
             startAnalysisTimer()
         }
-        statusMessage = "Demo resumed."
     }
 
     /// Loads audio and analyzer without starting playback.
@@ -4771,8 +4819,11 @@ final class ScratchLabDemoModeController: ObservableObject {
     func startAlignedPlayback() {
         guard isReady else { return }
         demoPlayer.replay()
+        guard confirmPlaybackStarted(
+            successStatusMessage: "Demo playing with beat.",
+            failureStatusMessage: "ScratchLab could not start the bundled demo audio."
+        ) else { return }
         startAnalysisTimer()
-        statusMessage = "Demo playing with beat."
     }
 
     func coachAnimationState(

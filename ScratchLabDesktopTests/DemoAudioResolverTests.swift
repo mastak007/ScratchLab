@@ -37,6 +37,59 @@ private let realExactDemoAudioURL = demoAudioTestsRepoRoot()
 private let realFallbackDemoAudioURL = demoAudioTestsRepoRoot()
     .appendingPathComponent("ScratchLab/Resources/PracticeReelAudio/baby_reel_callresponse.wav")
 
+/// Deterministic, directly controllable `ScratchCoachDemoPlayable` stub.
+/// Unlike the real `AVAudioPlayer`-backed adapter, every method here runs
+/// synchronously and inline, so tests can assert exact call ordering and
+/// force specific `play()` outcomes without depending on real audio
+/// hardware or timing. This proves `ScratchLabDemoModeController`'s
+/// truthful-reporting logic in isolation; the real-file tests in this file
+/// (run repeatedly, per the fix's verification pass) prove the actual
+/// `AVAudioPlayer` adapter itself is race-free.
+private final class DeterministicDemoPlayable: ScratchCoachDemoPlayable {
+    private(set) var callLog: [String] = []
+    var playShouldSucceed = true
+    /// Lets a test simulate `play()` returning true but playback not
+    /// actually sustaining — the second race shape observed against the
+    /// real adapter before the fix (synchronous success, silent stop
+    /// moments later).
+    var reportsPlayingAfterSuccessfulPlay = true
+
+    var isPlaying = false
+    var currentTime: TimeInterval = 0
+
+    func prepareToPlay() {
+        callLog.append("prepare")
+    }
+
+    @discardableResult
+    func play() -> Bool {
+        callLog.append("play")
+        isPlaying = playShouldSucceed && reportsPlayingAfterSuccessfulPlay
+        return playShouldSucceed
+    }
+
+    func pause() {
+        callLog.append("pause")
+        isPlaying = false
+    }
+
+    func stop() {
+        callLog.append("stop")
+        isPlaying = false
+    }
+}
+
+@MainActor
+private func makeDemoModeController(
+    fakePlayer: DeterministicDemoPlayable
+) -> ScratchLabDemoModeController {
+    ScratchLabDemoModeController(
+        audioFileName: "baby_noBeat.wav",
+        audioURLProvider: { name in name == "baby_noBeat.wav" ? realExactDemoAudioURL : nil },
+        demoPlayer: ScratchCoachDemoAudioPlayer(playerFactory: { _ in fakePlayer })
+    )
+}
+
 @Suite("DemoAudioResolver")
 struct DemoAudioResolverTests {
 
@@ -169,6 +222,109 @@ struct ScratchLabDemoModeControllerTests {
 
         controller.replayDemo()
         #expect(controller.demoPlayer.playbackState == .playing)
+        controller.stopDemo()
+    }
+
+    // MARK: - Deterministic playback-sequencing / honest-failure coverage
+    //
+    // These use an injected `DeterministicDemoPlayable` (synchronous, no
+    // real audio hardware) to prove the controller's sequencing and
+    // honest-reporting contract precisely, independent of real `AVAudioPlayer`
+    // timing. The real-file tests above cover the actual adapter.
+
+    @Test("configure(url:) prepares audio before replay() plays it, in that order")
+    func configureThenReplayPreparesBeforePlaying() {
+        let fakePlayer = DeterministicDemoPlayable()
+        let demoAudioPlayer = ScratchCoachDemoAudioPlayer(playerFactory: { _ in fakePlayer })
+        demoAudioPlayer.configure(url: realExactDemoAudioURL, sourceFileName: "baby_noBeat.wav", isFallback: false)
+        demoAudioPlayer.replay()
+        #expect(fakePlayer.callLog == ["prepare", "play"])
+    }
+
+    @Test("startDemo() does not claim success when play() returns false")
+    func startDemoReportsHonestFailureWhenPlayReturnsFalse() {
+        let fakePlayer = DeterministicDemoPlayable()
+        fakePlayer.playShouldSucceed = false
+        let controller = makeDemoModeController(fakePlayer: fakePlayer)
+
+        controller.startDemo()
+
+        #expect(!controller.isReady)
+        #expect(controller.demoPlayer.playbackState == .stopped)
+        #expect(controller.analysisTimer == nil, "Analysis must not start when playback never started")
+        #expect(controller.statusMessage.lowercased().contains("could not"))
+        controller.stopDemo()
+    }
+
+    @Test("startDemo() does not claim success when play() returns true but audio never actually plays")
+    func startDemoReportsHonestFailureWhenPlaybackSilentlyDies() {
+        let fakePlayer = DeterministicDemoPlayable()
+        fakePlayer.playShouldSucceed = true
+        fakePlayer.reportsPlayingAfterSuccessfulPlay = false
+        let controller = makeDemoModeController(fakePlayer: fakePlayer)
+
+        controller.startDemo()
+
+        #expect(!controller.isReady)
+        #expect(
+            controller.demoPlayer.playbackState == .stopped,
+            "confirmPlaybackStarted must reset playbackState via demoPlayer.stop(), not leave a stale .playing value"
+        )
+        #expect(controller.analysisTimer == nil)
+        #expect(controller.statusMessage.lowercased().contains("could not"))
+        controller.stopDemo()
+    }
+
+    @Test("replayDemo() does not publish false success when playback fails to restart")
+    func replayDemoReportsHonestFailure() {
+        let fakePlayer = DeterministicDemoPlayable()
+        let controller = makeDemoModeController(fakePlayer: fakePlayer)
+        controller.startDemo()
+        #expect(controller.isReady)
+        #expect(controller.demoPlayer.playbackState == .playing)
+
+        fakePlayer.playShouldSucceed = false
+        controller.replayDemo()
+
+        #expect(!controller.isReady)
+        #expect(controller.demoPlayer.playbackState == .stopped)
+        #expect(controller.analysisTimer == nil)
+        #expect(controller.statusMessage.lowercased().contains("could not"))
+        controller.stopDemo()
+    }
+
+    @Test("resumeDemo() does not publish false success when playback fails to resume")
+    func resumeDemoReportsHonestFailure() {
+        let fakePlayer = DeterministicDemoPlayable()
+        let controller = makeDemoModeController(fakePlayer: fakePlayer)
+        controller.startDemo()
+        controller.pauseDemo()
+        #expect(controller.demoPlayer.playbackState == .paused)
+
+        fakePlayer.playShouldSucceed = false
+        controller.resumeDemo()
+
+        #expect(!controller.isReady)
+        #expect(controller.demoPlayer.playbackState == .stopped)
+        #expect(controller.analysisTimer == nil)
+        #expect(controller.statusMessage.lowercased().contains("could not"))
+        controller.stopDemo()
+    }
+
+    @Test("startAlignedPlayback() does not publish false success when playback fails to start")
+    func startAlignedPlaybackReportsHonestFailure() {
+        let fakePlayer = DeterministicDemoPlayable()
+        let controller = makeDemoModeController(fakePlayer: fakePlayer)
+        controller.prepareDemoForBeatAlignment()
+        #expect(controller.isReady)
+
+        fakePlayer.playShouldSucceed = false
+        controller.startAlignedPlayback()
+
+        #expect(!controller.isReady)
+        #expect(controller.demoPlayer.playbackState == .stopped)
+        #expect(controller.analysisTimer == nil)
+        #expect(controller.statusMessage.lowercased().contains("could not"))
         controller.stopDemo()
     }
 }
