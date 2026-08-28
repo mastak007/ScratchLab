@@ -2162,12 +2162,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var availableMIDISourceNames: [String] = []
     @Published private(set) var midiLearnState: MIDILearnState = .idle
     @Published private(set) var crossfaderCCMapping: CrossfaderCCMapping? = nil
-    @Published var selectedMIDIInputSourceID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID) ?? "" {
+    @Published var selectedMIDIInputSourceID: String {
         didSet {
             if selectedMIDIInputSourceID.isEmpty {
-                UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
+                midiSelectionDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
             } else {
-                UserDefaults.standard.set(selectedMIDIInputSourceID, forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
+                midiSelectionDefaults.set(selectedMIDIInputSourceID, forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
             }
             guard oldValue != selectedMIDIInputSourceID else { return }
             resetMIDIMonitoringState()
@@ -2179,6 +2179,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastMIDIEventSummary: String = "No MIDI received yet"
     @Published private(set) var lastMIDICCMessage: String = "CC -- Ch -- Value --"
     @Published private(set) var midiLearnFeedback: String = ""
+    @Published private(set) var liveCrossfaderRawValue: Int?
+    @Published private(set) var liveLeftUpfaderRawValue: Int?
+    @Published private(set) var liveRightUpfaderRawValue: Int?
+    @Published private(set) var liveHotCueIndex: Int?
+    @Published private(set) var liveHotCueSampleID: String?
+    @Published private(set) var leftUpfaderOutputGain: Double = 1.0
+    var leftUpfaderOutputHandler: ((Double) -> Void)?
+
+    private struct PendingControllerActivity {
+        var crossfaderRawValue: Int?
+        var leftUpfaderRawValue: Int?
+        var rightUpfaderRawValue: Int?
+        var hotCueIndex: Int?
+        var hotCueSampleID: String?
+        var leftUpfaderOutputGain: Double = 1.0
+    }
+
+    private enum ControllerActivityUpdate {
+        case crossfader(rawValue: Int)
+        case leftUpfader(rawValue: Int, outputGain: Double)
+        case rightUpfader(rawValue: Int)
+        case hotCue(index: Int, sampleID: String)
+    }
+
+    private var pendingControllerActivity = PendingControllerActivity()
+    private var isControllerActivityPublishPending = false
 
     // MARK: - Expanded MIDI Learn State (Phase 3)
     /// The mapping store for per-device learned MIDI mappings.
@@ -2318,11 +2344,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastScratchBankPadLabel: String = ""
 #if DEBUG
     @Published private(set) var lastRawPadDiagnostic: String = ""
-    /// Debug-only: outcome of the most recent `loadPlatterTestSample()`
-    /// request — "loaded: <id>" or "load failed: <reason>" — so a silent
-    /// load failure is never mistaken for a platter/MIDI hardware problem.
-    @Published private(set) var platterTestLoadStatus: String = ""
 #endif
+    /// Outcome of the most recent validated platter-sample load request, so
+    /// a missing asset is never mistaken for a platter/MIDI hardware fault.
+    @Published private(set) var platterTestLoadStatus: String = ""
     var scratchBankPadPreviewCallback: ((String) -> Void)?
 
     /// Platter CC6 ring-counter tracker per deck (ch=0 left, ch=1 right).
@@ -3625,6 +3650,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var fixedRigLayout: DJRigLayout?
     private var fixedRigLayoutUsesManualGuide = false
     private let autoRefreshDevicesAfterViewMount: Bool
+    /// Keeps hosted XCTest processes from overwriting the real app's selected
+    /// controller with synthetic `midi_test_*` identifiers. Production uses
+    /// `.standard`; tests get a process-local suite while retaining normal
+    /// persistence semantics between engine instances in the same test run.
+    private let midiSelectionDefaults: UserDefaults
     private var hasStartedDeviceDiscoveryAfterViewMount = false
     private let audioSignalStaleInterval: CFTimeInterval = 0.8
     private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
@@ -3644,15 +3674,37 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }()
 
     override init() {
+        let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
         autoRefreshDevicesAfterViewMount = true
+        self.midiSelectionDefaults = midiSelectionDefaults
+        selectedMIDIInputSourceID = midiSelectionDefaults.string(
+            forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
+        ) ?? ""
         super.init()
         configureInitialState()
     }
 
     init(autoRefreshDevices: Bool) {
+        let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
         autoRefreshDevicesAfterViewMount = autoRefreshDevices
+        self.midiSelectionDefaults = midiSelectionDefaults
+        selectedMIDIInputSourceID = midiSelectionDefaults.string(
+            forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
+        ) ?? ""
         super.init()
         configureInitialState()
+    }
+
+    private static func makeMIDISelectionDefaults(
+        processInfo: ProcessInfo = .processInfo
+    ) -> UserDefaults {
+        guard processInfo.environment["XCTestConfigurationFilePath"] != nil,
+              let isolatedDefaults = UserDefaults(
+                suiteName: "com.machelpnz.scratchlab.tests.midi-selection.\(processInfo.processIdentifier)"
+              ) else {
+            return .standard
+        }
+        return isolatedDefaults
     }
 
     private func configureInitialState() {
@@ -7547,8 +7599,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         startMIDILearn(for: .crossfader)
     }
 
-#if DEBUG
-    /// Debug-only right-deck platter test: loads the validated
+    /// Loads the validated right-deck platter sample
     /// one-revolution `dvs_ahhh` asset (`VirtualPlatter/ahhh.wav`,
     /// ~1.0474 s) with no automatic preview/playback — only loads it into
     /// `scratchPlaybackController`. Moving the right platter (channel 1
@@ -7573,8 +7624,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
         // Bounded: `load` only queues a small bundled-WAV read on the
-        // controller's own audio queue; draining it here (debug tool only,
-        // main-thread button action) lets the status reflect the real
+        // controller's own audio queue; draining it here from the explicit
+        // main-thread button action lets the status reflect the real
         // outcome instead of just "a request was queued".
         scratchPlaybackController.waitForAudioQueue()
         let snapshot = scratchPlaybackController.diagnosticsSnapshot()
@@ -7587,7 +7638,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
     }
-#endif
 
     private func publishOnMainAsync(field: String, _ update: @escaping () -> Void) {
         let requestTime = CACurrentMediaTime()
@@ -7618,6 +7668,84 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             if self.midiLearnState != nextState { self.midiLearnState = nextState }
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
+    }
+
+    var canApplyVerifiedRaneOneMKIIMapping: Bool {
+        !selectedMIDIInputSourceID.isEmpty
+            && RaneOneMKIIVerifiedLearnedMapping.matches(deviceName: selectedMIDIInputSourceName)
+    }
+
+    /// Installs the already-verified Rane ONE MKII mixer and right-deck pad
+    /// addresses into the selected device's learned mapping. This does not
+    /// alter platter decoding, captured MIDI events, notation, or DVS.
+    func applyVerifiedRaneOneMKIIMapping() {
+        installVerifiedRaneOneMKIIMapping(overwriteExisting: true, reportsSuccess: true)
+    }
+
+    /// Applies the verified mixer/pad addresses and arms the existing
+    /// right-deck platter renderer with the validated AHHH sample.
+    func applyVerifiedRaneOneMKIIMappingAndLoadAhhh() {
+        applyVerifiedRaneOneMKIIMapping()
+        loadPlatterTestSample()
+    }
+
+    private func seedVerifiedRaneOneMKIIMappingIfNeeded(
+        existingMapping: MIDIDeviceMapping?
+    ) {
+        guard canApplyVerifiedRaneOneMKIIMapping,
+              !RaneOneMKIIVerifiedLearnedMapping.isComplete(existingMapping)
+        else { return }
+        installVerifiedRaneOneMKIIMapping(overwriteExisting: false, reportsSuccess: true)
+    }
+
+    private func installVerifiedRaneOneMKIIMapping(
+        overwriteExisting: Bool,
+        reportsSuccess: Bool
+    ) {
+        guard canApplyVerifiedRaneOneMKIIMapping else {
+            publishOnMainAsync(field: "midiMappingError") { [weak self] in
+                self?.midiMappingError = "Select the Rane ONE MKII MIDI source before applying its verified mapping."
+            }
+            return
+        }
+
+        midiCaptureLock.lock()
+        learnSessionAction = nil
+        midiLearnRequestID &+= 1
+        midiCaptureLock.unlock()
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            RaneOneMKIIVerifiedLearnedMapping.apply(
+                to: &mapping,
+                overwriteExisting: overwriteExisting
+            )
+        }, completion: { [weak self] mapping in
+            guard let self, self.selectedMIDIInputSourceID == deviceID else { return }
+            self.currentMIDIDeviceMapping = mapping
+            self.midiMappingError = ""
+            self.activeMIDILearnAction = nil
+
+            if let crossfader = mapping.control(for: .crossfader) {
+                let legacy = CrossfaderCCMapping(
+                    channel: crossfader.channel,
+                    controller: crossfader.controlNumber
+                )
+                self.applyLearnedCrossfaderMapping(legacy)
+                self.crossfaderCCMapping = legacy
+                self.midiLearnState = .learned(legacy)
+            }
+            if let crossfader = mapping.control(for: .crossfader) {
+                self.pushResolvedCurve(for: crossfader)
+            }
+            if let rightUpfader = mapping.control(for: .rightUpfader) {
+                self.pushResolvedCurve(for: rightUpfader)
+            }
+            if reportsSuccess {
+                self.midiLearnFeedback = "Applied verified Rane ONE MKII mapping: faders and right-deck hot cues."
+            }
+        })
     }
 
     func clearCrossfaderMapping() {
@@ -8469,36 +8597,109 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         clearCurveCaptureSession(errorMessage: "")
     }
 
-    /// Evaluates whether this CC event matches the learned right-upfader or
-    /// crossfader mapping and, if so, forwards the calibrated/normalized
-    /// value (via the existing `MIDILearnedControl.normalizedValue(from:)` —
-    /// respecting min/max calibration and inversion exactly like every other
-    /// learned continuous control) to the playback controller as
-    /// scratch-sample audio gain. Matching is by EXACT (channel, controller),
-    /// same as `evaluateCalibrationForCC` above, so the platter's CC6 flood
-    /// can never match a fader binding.
-    ///
-    /// The left upfader intentionally has no audio effect (no supported beat
-    /// bus exists yet — see `MIDISemanticAction.leftUpfader`): it stays
-    /// mapped, persisted, and visible in diagnostics, but is never checked
-    /// here, so a learned left-upfader mapping simply never reaches the
-    /// playback controller.
+    /// Evaluates whether this CC event matches a learned mixer control. The
+    /// right upfader and crossfader keep feeding the existing scratch renderer;
+    /// the left upfader always publishes a calibrated/curved gain for the
+    /// macOS beat and demo players (unconditionally, independent of scratch
+    /// gain), and separately mirrors into the same scratch-gain path as the
+    /// right upfader ONLY when the device has no right-upfader mapping at
+    /// all — right stays authoritative whenever it's mapped. Matching
+    /// remains exact `(channel, controller)`, so the platter's CC6 flood
+    /// cannot match any fader binding.
     ///
     /// Called from the real CoreMIDI packet-parsing loop for every incoming
     /// CC message; also callable directly from tests as a seam.
     func evaluateUserMixerGainForCC(channel: Int, controller: Int, value: Int) {
         guard let mapping = currentMIDIDeviceMapping else { return }
+        if let leftUpfader = mapping.control(for: .leftUpfader),
+           leftUpfader.messageType == .controlChange,
+           leftUpfader.channel == channel,
+           leftUpfader.controlNumber == controller {
+            let normalizedPosition = leftUpfader.normalizedValue(from: value)
+            let outputGain = FaderCurveResponse.gain(
+                forNormalizedPosition: normalizedPosition,
+                response: leftUpfader.resolvedCurveConfig.resolvedResponse(for: leftUpfader)
+            )
+            queueControllerActivity(.leftUpfader(rawValue: value, outputGain: outputGain))
+        }
         if let rightUpfader = mapping.control(for: .rightUpfader),
            rightUpfader.messageType == .controlChange,
            rightUpfader.channel == channel,
            rightUpfader.controlNumber == controller {
             scratchPlaybackController.setRightUpfaderGain(rightUpfader.normalizedValue(from: value))
+            queueControllerActivity(.rightUpfader(rawValue: value))
+        } else if mapping.control(for: .rightUpfader) == nil,
+                  let leftUpfader = mapping.control(for: .leftUpfader),
+                  leftUpfader.messageType == .controlChange,
+                  leftUpfader.channel == channel,
+                  leftUpfader.controlNumber == controller {
+            // Right upfader stays authoritative for scratch gain whenever the
+            // device has one mapped at all — even for a CC event that isn't
+            // its own (e.g. the left fader's CC on a different channel), so
+            // it must never fall through to this branch. Only mirror left
+            // upfader into the same gain path when there is no right-upfader
+            // mapping on this device whatsoever, matching the iOS parity
+            // fallback in `IOSMIDIControllerDispatcher.receive(_:)`.
+            scratchPlaybackController.setRightUpfaderGain(leftUpfader.normalizedValue(from: value))
         }
         if let crossfader = mapping.control(for: .crossfader),
            crossfader.messageType == .controlChange,
            crossfader.channel == channel,
            crossfader.controlNumber == controller {
             scratchPlaybackController.setCrossfaderPosition(crossfader.normalizedValue(from: value))
+            queueControllerActivity(.crossfader(rawValue: value))
+        }
+    }
+
+    /// Coalesces high-rate controller input to at most one pending main-queue
+    /// publication while retaining the newest value for every control.
+    private func queueControllerActivity(_ update: ControllerActivityUpdate) {
+        midiCaptureLock.lock()
+        switch update {
+        case .crossfader(let rawValue):
+            pendingControllerActivity.crossfaderRawValue = rawValue
+        case .leftUpfader(let rawValue, let outputGain):
+            pendingControllerActivity.leftUpfaderRawValue = rawValue
+            pendingControllerActivity.leftUpfaderOutputGain = outputGain
+        case .rightUpfader(let rawValue):
+            pendingControllerActivity.rightUpfaderRawValue = rawValue
+        case .hotCue(let index, let sampleID):
+            pendingControllerActivity.hotCueIndex = index
+            pendingControllerActivity.hotCueSampleID = sampleID
+        }
+        let shouldSchedule = !isControllerActivityPublishPending
+        if shouldSchedule {
+            isControllerActivityPublishPending = true
+        }
+        midiCaptureLock.unlock()
+
+        guard shouldSchedule else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.midiCaptureLock.lock()
+            let snapshot = self.pendingControllerActivity
+            self.isControllerActivityPublishPending = false
+            self.midiCaptureLock.unlock()
+
+            if self.liveCrossfaderRawValue != snapshot.crossfaderRawValue {
+                self.liveCrossfaderRawValue = snapshot.crossfaderRawValue
+            }
+            if self.liveLeftUpfaderRawValue != snapshot.leftUpfaderRawValue {
+                self.liveLeftUpfaderRawValue = snapshot.leftUpfaderRawValue
+            }
+            if self.liveRightUpfaderRawValue != snapshot.rightUpfaderRawValue {
+                self.liveRightUpfaderRawValue = snapshot.rightUpfaderRawValue
+            }
+            if self.liveHotCueIndex != snapshot.hotCueIndex {
+                self.liveHotCueIndex = snapshot.hotCueIndex
+            }
+            if self.liveHotCueSampleID != snapshot.hotCueSampleID {
+                self.liveHotCueSampleID = snapshot.hotCueSampleID
+            }
+            if self.leftUpfaderOutputGain != snapshot.leftUpfaderOutputGain {
+                self.leftUpfaderOutputGain = snapshot.leftUpfaderOutputGain
+            }
+            self.leftUpfaderOutputHandler?(snapshot.leftUpfaderOutputGain)
         }
     }
 
@@ -8849,6 +9050,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let rightUpfaderControl = loadedMapping?.control(for: .rightUpfader) {
             pushResolvedCurve(for: rightUpfaderControl)
         }
+        if mappingError.isEmpty {
+            seedVerifiedRaneOneMKIIMappingIfNeeded(existingMapping: loadedMapping)
+        }
     }
 
     // MARK: - Hot-Cue Sample Assignment
@@ -8967,6 +9171,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard decision.shouldTrigger, let sampleID = decision.sampleID else {
             return false
         }
+
+        queueControllerActivity(.hotCue(index: action.hotCueIndex ?? 0, sampleID: sampleID))
 
         print("[HotCueAutoLoad] matched · action=\(action.displayName) sample=\(sampleID) channel=\(channel) control=\(controlNumber)")
         // Enqueue the load onto the controller's private audio queue — no file I/O
@@ -9821,6 +10027,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         batchedMidiCCMessage = ""
         batchedMidiSummary = "No MIDI received yet"
         lastMidiMonitorPublishTime = 0
+        pendingControllerActivity = PendingControllerActivity()
+        isControllerActivityPublishPending = false
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiMonitorReset") { [weak self] in
             guard let self else { return }
@@ -9829,6 +10037,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.lastMIDICCMessage = "CC -- Ch -- Value --"
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
             self.lastScratchBankPadLabel = ""
+            self.liveCrossfaderRawValue = nil
+            self.liveLeftUpfaderRawValue = nil
+            self.liveRightUpfaderRawValue = nil
+            self.liveHotCueIndex = nil
+            self.liveHotCueSampleID = nil
+            self.leftUpfaderOutputGain = 1.0
+            self.leftUpfaderOutputHandler?(1.0)
 #if DEBUG
             self.lastRawPadDiagnostic = ""
 #endif

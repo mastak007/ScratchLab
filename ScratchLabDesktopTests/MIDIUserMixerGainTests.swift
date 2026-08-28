@@ -5,7 +5,10 @@
 // the wiring from a learned crossfader/right-upfader CC event, through the
 // existing `MIDILearnedControl.normalizedValue(from:)` calibration/
 // inversion math, to `ScratchSamplePlaybackController`'s new gain API.
-// Left upfader is proven to have no audio effect. Mappings are constructed
+// Right upfader is authoritative for scratch gain whenever mapped; left
+// upfader only mirrors into that same path as a fallback when the device
+// has no right-upfader mapping at all (parity with the iOS dispatcher).
+// Mappings are constructed
 // directly via `MIDILearnedMappingStore`/`loadDeviceMappingForCurrentSource`
 // (the same store the production persistence path uses) rather than
 // driving the full interactive learn UI flow, so calibration/inversion can
@@ -109,24 +112,60 @@ final class MIDIUserMixerGainTests: XCTestCase {
         XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0)
     }
 
-    // MARK: - Regression #3: left upfader never alters scratch gain
+    // MARK: - Regression #3: left upfader falls back to scratch gain only when right upfader is unmapped
 
-    func testLearnedLeftUpfaderNeverAltersScratchGain() {
+    /// Right upfader is primary, but a device with only a left-upfader
+    /// mapping must still control scratch playback gain — mirrors the
+    /// equivalent iOS fallback in `IOSMIDIControllerDispatcher.receive(_:)`.
+    /// Asserts an intermediate value (64) rather than only the sequence's
+    /// final value: 0 and 127 both normalize to values indistinguishable
+    /// from a default/unity readout, which previously masked this exact
+    /// fallback from this same test.
+    func testLearnedLeftUpfaderFallsBackToScratchGainWhenRightUnmapped() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        let deviceID = "midi_test_left_upfader_no_audio"
+        let deviceID = "midi_test_left_upfader_fallback"
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
-        installMapping(
-            MIDILearnedControl(action: .leftUpfader, messageType: .controlChange, channel: 0, controlNumber: 7, deck: 0),
-            deviceID: deviceID, on: engine
-        )
+        let leftUpfader = MIDILearnedControl(action: .leftUpfader, messageType: .controlChange, channel: 0, controlNumber: 7, deck: 0)
+        installMapping(leftUpfader, deviceID: deviceID, on: engine)
 
-        for value in [0, 32, 64, 96, 127] {
-            engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: value)
-        }
+        engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 0)
+        engine.testOnly_scratchPlaybackController.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(engine), 0.0,
+            "with no right-upfader mapping, left-upfader must drive scratch gain")
+
+        engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 64)
+        engine.testOnly_scratchPlaybackController.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(engine), leftUpfader.normalizedValue(from: 64), accuracy: 0.0001,
+            "left-upfader's raw normalized value (uncurved) drives the scratch-gain fallback")
+    }
+
+    /// Once a device has BOTH upfaders learned (the normal Rane wiring: left
+    /// on one channel, right on another), right upfader must stay
+    /// authoritative for scratch gain — moving the left fader must not also
+    /// change it, even though left's own CC event still matches its own
+    /// learned binding.
+    func testRightUpfaderRemainsAuthoritativeWhenBothMapped() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_both_upfaders_mapped"
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        cleanUpMIDIMapping(deviceIdentifier: deviceID)
+        var mapping = MIDIDeviceMapping(deviceIdentifier: deviceID, deviceName: "Test Device")
+        mapping.upsert(MIDILearnedControl(action: .leftUpfader, messageType: .controlChange, channel: 0, controlNumber: 7, deck: 0))
+        mapping.upsert(MIDILearnedControl(action: .rightUpfader, messageType: .controlChange, channel: 1, controlNumber: 7, deck: 1))
+        MIDILearnedMappingStore.default.save(mapping)
+        engine.selectedMIDIInputSourceID = deviceID
+        loadMappingAndWait(on: engine)
+
+        engine.evaluateUserMixerGainForCC(channel: 1, controller: 7, value: 127)
+        engine.testOnly_scratchPlaybackController.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0)
+
+        engine.evaluateUserMixerGainForCC(channel: 0, controller: 7, value: 0)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
         XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0,
-            "a learned left-upfader mapping must never reach the playback controller's gain")
+            "right upfader stays authoritative for scratch gain once mapped, even when left is also mapped and moves")
     }
 
     // MARK: - Non-matching channel/controller never forwards
@@ -857,12 +896,20 @@ final class MIDIUserMixerGainTests: XCTestCase {
         XCTAssertTrue(engine.curveCaptureError.isEmpty)
     }
 
-    func testLeftUpfaderCurveIsPersistedButNeverAffectsScratchGain() {
+    /// A persisted left-upfader curve preset must feed the beat-bus output
+    /// gain path only — the scratch-gain fallback (which activates because
+    /// this device has no right-upfader mapping at all) still uses the RAW
+    /// `normalizedValue`, never the curve-resolved gain. Value 3 sits inside
+    /// sharpCut's 0...0.05 cut-in ramp, so its curved gain (~0.47) and raw
+    /// normalized value (~0.024) diverge sharply — proving this isn't a
+    /// coincidental match the way a boundary value (0 or 127) would be.
+    func testLeftUpfaderCurveAffectsBeatBusButNotScratchGainFallback() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        let deviceID = "midi_test_curve_left_upfader_inert"
+        let deviceID = "midi_test_curve_left_upfader_fallback"
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
-        installMapping(MIDILearnedControl(action: .leftUpfader, messageType: .controlChange, channel: 0, controlNumber: 20, deck: 0), deviceID: deviceID, on: engine)
+        let leftUpfader = MIDILearnedControl(action: .leftUpfader, messageType: .controlChange, channel: 0, controlNumber: 20, deck: 0)
+        installMapping(leftUpfader, deviceID: deviceID, on: engine)
         engine.setCurvePreset(.sharpCut, for: .leftUpfader)
         engine.testOnly_waitForMappingPersistenceQueue()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -870,12 +917,10 @@ final class MIDIUserMixerGainTests: XCTestCase {
         XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .leftUpfader)?.curveConfig?.preset, .sharpCut,
             "the left-upfader curve preference is persisted")
 
-        for value in [0, 32, 64, 96, 127] {
-            engine.evaluateUserMixerGainForCC(channel: 0, controller: 20, value: value)
-        }
+        engine.evaluateUserMixerGainForCC(channel: 0, controller: 20, value: 3)
         engine.testOnly_scratchPlaybackController.waitForAudioQueue()
-        XCTAssertEqual(publishedTargetUserMixerGain(engine), 1.0,
-            "a persisted left-upfader curve must still never reach scratch-audio gain")
+        XCTAssertEqual(publishedTargetUserMixerGain(engine), leftUpfader.normalizedValue(from: 3), accuracy: 0.0001,
+            "the scratch-gain fallback must use the raw normalized value, not the curved beat-bus gain")
     }
 
     func testCurvePresetChangeNeverTouchesPlaybackPositionOrPhase() throws {
