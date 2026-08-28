@@ -386,6 +386,11 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// than SwiftUI should redraw, so this is refreshed at the same ~25 Hz
     /// cadence as the macOS live tracker rather than publishing every packet.
     @Published private(set) var livePlatterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+    @Published private(set) var crossfaderMIDIValue: Int?
+    @Published private(set) var leftUpfaderMIDIValue: Int?
+    @Published private(set) var rightUpfaderMIDIValue: Int?
+    @Published private(set) var lastHotCueIndex: Int?
+    @Published private(set) var lastHotCueSampleID: String?
     private var captureBaselineTimestamp: Double = CACurrentMediaTime()
     private var liveNotationUpdateScheduled = false
     private static let liveNotationUpdateInterval: TimeInterval = 0.04
@@ -591,17 +596,45 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             print("[MIDI-DEBUG] transport state = \(transportState.isPlaying ? "playing" : "stopped")")
             print("[MIDI-DEBUG] platter running = \(transportState.isPlaying)")
             #endif
-        case .hotCue:
-            let decision = HotCueTriggerResolver.resolve(action: action, transportState: transportState)
+        case .hotCue(let semanticAction, _):
+            let decision = HotCueTriggerResolver.resolve(action: action)
             #if DEBUG
             print("[MIDI-DEBUG] hotcue trigger decision · shouldTrigger=\(decision.shouldTrigger) sample=\(decision.sampleID ?? "nil")")
             #endif
             guard decision.shouldTrigger, let sampleID = decision.sampleID else { return }
+            lastHotCueIndex = semanticAction?.hotCueIndex
+            lastHotCueSampleID = sampleID
             #if DEBUG
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
             #endif
             playbackEngine.playHotCue(sampleID: sampleID)
-        case .crossfader, .upfader, .unknown:
+        case .crossfader(let value):
+            crossfaderMIDIValue = value
+            if let control = currentMapping?.control(for: .crossfader) {
+                playbackEngine.setCrossfaderPosition(control.normalizedValue(from: value))
+            }
+        case .upfader(let deck, let value):
+            if deck == 0 {
+                leftUpfaderMIDIValue = value
+            } else if deck == 1 {
+                rightUpfaderMIDIValue = value
+            }
+
+            // The loaded scratch sample remains right-deck-owned, so the
+            // right upfader is the primary gain source. If this device has
+            // no right-upfader mapping at all, fall back to routing the
+            // left upfader through the same gain path — otherwise a
+            // single mapped channel fader learned as "left" would have no
+            // audible effect (the fader moves in the debug readout but
+            // never reaches playback).
+            if deck == 1, let control = currentMapping?.control(for: .rightUpfader) {
+                playbackEngine.setRightUpfaderGain(control.normalizedValue(from: value))
+            } else if deck == 0,
+                      currentMapping?.control(for: .rightUpfader) == nil,
+                      let control = currentMapping?.control(for: .leftUpfader) {
+                playbackEngine.setRightUpfaderGain(control.normalizedValue(from: value))
+            }
+        case .unknown:
             break
         }
     }
