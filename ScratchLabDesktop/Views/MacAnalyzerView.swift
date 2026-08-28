@@ -2915,17 +2915,13 @@ struct MacAnalyzerView: View {
         .hotCue1, .hotCue2, .hotCue3, .hotCue4, .hotCue5, .hotCue6, .hotCue7, .hotCue8
     ]
 
-    /// Parses the raw 0-127 value out of `lastMIDICCMessage`, formatted as
-    /// `"CC<n> Ch<c> Value<v>"` (or the `"CC -- Ch -- Value --"` placeholder).
-    private func parsedLastCCRawValue() -> Int? {
-        let message = captureEngine.lastMIDICCMessage
-        guard let range = message.range(of: "Value") else { return nil }
-        return Int(message[range.upperBound...])
-    }
-
     private var midiLearnLiveValueText: String? {
         guard let action = captureEngine.activeMIDILearnAction else { return nil }
-        guard let raw = parsedLastCCRawValue() else {
+        // Show only a value observed *since this Learn session started*. Before
+        // a fresh event arrives this is `nil`, so the panel never echoes the
+        // parked value of whatever control was last touched (e.g. the
+        // crossfader) as if it were this control's.
+        guard let raw = captureEngine.midiLearnObservedRawValue else {
             return "Learning \(action.displayName)… move the control now"
         }
         let normalized = Double(max(0, min(127, raw))) / 127.0

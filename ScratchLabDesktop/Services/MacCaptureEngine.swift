@@ -2179,6 +2179,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastMIDIEventSummary: String = "No MIDI received yet"
     @Published private(set) var lastMIDICCMessage: String = "CC -- Ch -- Value --"
     @Published private(set) var midiLearnFeedback: String = ""
+    /// Raw value (CC value, or note number for a pad) of the event the CURRENT
+    /// MIDI Learn session actually consumed. `nil` from the moment Learn starts
+    /// until a fresh event lands, so the Learn panel shows "move the control
+    /// now" rather than echoing the parked value of whatever control was last
+    /// touched (e.g. the crossfader sitting in `lastMIDICCMessage`).
+    @Published private(set) var midiLearnObservedRawValue: Int?
     @Published private(set) var liveCrossfaderRawValue: Int?
     @Published private(set) var liveLeftUpfaderRawValue: Int?
     @Published private(set) var liveRightUpfaderRawValue: Int?
@@ -7562,6 +7568,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = action
+            // Drop any value carried over from a previous Learn session so the
+            // panel shows "move the control now" until a fresh event lands.
+            if self.midiLearnObservedRawValue != nil { self.midiLearnObservedRawValue = nil }
             // Crossfader keeps the original `.listening` state/feedback text so the
             // pre-existing crossfader-only UI and tests continue to see the same
             // behaviour as before multi-action learn was added.
@@ -7664,9 +7673,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = nil
+            if self.midiLearnObservedRawValue != nil { self.midiLearnObservedRawValue = nil }
             let nextState: MIDILearnState = self.crossfaderCCMapping.map { .learned($0) } ?? .idle
             if self.midiLearnState != nextState { self.midiLearnState = nextState }
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+        }
+    }
+
+    /// Publishes the raw value of the event a Learn session actually consumed
+    /// (CC value, or note number for a pad). `startMIDILearn(for:)` and
+    /// `cancelMIDILearn()` clear it back to `nil` so the Learn panel never
+    /// shows a stale pre-Learn value.
+    private func publishMIDILearnObservedValue(_ value: Int?) {
+        publishOnMainAsync(field: "midiLearnObservedRawValue") { [weak self] in
+            guard let self, self.midiLearnObservedRawValue != value else { return }
+            self.midiLearnObservedRawValue = value
         }
     }
 
@@ -7999,6 +8020,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         guard let action = claimedAction else { return false }
 
+        // First real event from the pad being learned — surface its note
+        // number to the Learn panel.
+        publishMIDILearnObservedValue(noteNumber)
+
         let learned = MIDILearnedControl(
             action: action,
             messageType: .note,
@@ -8048,6 +8073,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
         }
 
+        // A Learn session must consume a genuinely new event from the control
+        // being learned, not a stale one from another. When learning a
+        // continuous control, ignore a CC whose (channel, controller) is
+        // already mapped to a *different* continuous action — that is the
+        // previously-touched control (typically the crossfader) still
+        // streaming as Learn begins, and it must not instantly claim the
+        // session. Hot-cue-via-CC learn is unaffected (a pad is not a
+        // continuous stream). The session stays open for the real control.
+        midiCaptureLock.lock()
+        let pendingAction = learnSessionAction
+        midiCaptureLock.unlock()
+        if let pendingAction,
+           pendingAction.hotCueIndex == nil,
+           currentMIDIDeviceMapping?.controls.contains(where: {
+               $0.messageType == .controlChange
+                   && $0.channel == channel
+                   && $0.controlNumber == controller
+                   && $0.action != pendingAction
+                   && $0.action.hotCueIndex == nil
+           }) == true {
+            return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
+        }
+
         midiCaptureLock.lock()
         let claimedAction = learnSessionAction
         if claimedAction != nil {
@@ -8059,6 +8107,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard let learnAction = claimedAction else {
             return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
         }
+
+        // First real event from the control being learned — surface its raw
+        // value to the Learn panel (which otherwise has nothing to show but
+        // the pre-Learn value).
+        publishMIDILearnObservedValue(value)
 
         let deck: Int?
         switch learnAction {
@@ -10036,6 +10089,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.lastMIDIEventSummary = "No MIDI received yet"
             self.lastMIDICCMessage = "CC -- Ch -- Value --"
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+            self.midiLearnObservedRawValue = nil
             self.lastScratchBankPadLabel = ""
             self.liveCrossfaderRawValue = nil
             self.liveLeftUpfaderRawValue = nil

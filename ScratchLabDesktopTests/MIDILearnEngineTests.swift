@@ -601,4 +601,148 @@ final class MIDILearnEngineTests: XCTestCase {
         )
         XCTAssertFalse(engine.midiMappingError.isEmpty, "Rejecting an unknown sample must surface a visible error")
     }
+
+    // MARK: - Learn panel: no stale value, wait for a fresh event
+
+    /// Saves a one-control mapping for `deviceID` and observes the production
+    /// load path through its main-queue publication boundary (mirrors the
+    /// helper in `MIDIUserMixerGainTests`).
+    private func installMapping(_ control: MIDILearnedControl, deviceID: String, on engine: MacCaptureEngine) {
+        cleanUpMIDIMapping(deviceIdentifier: deviceID)
+        var mapping = MIDIDeviceMapping(deviceIdentifier: deviceID, deviceName: "Test Device")
+        mapping.upsert(control)
+        MIDILearnedMappingStore.default.save(mapping)
+        engine.selectedMIDIInputSourceID = deviceID
+        loadMappingAndWait(on: engine)
+    }
+
+    func testLearnObservedValueIsNilUntilAFreshEventArrives() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_learn_observed_fresh"
+        engine.selectedMIDIInputSourceID = deviceID
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        engine.startMIDILearn(for: .rightUpfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(
+            engine.midiLearnObservedRawValue,
+            "The Learn panel must show nothing until an event arrives after Learn begins"
+        )
+
+        _ = engine.evaluateMIDILearnForCC(channel: 1, controller: 28, value: 100)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(
+            engine.midiLearnObservedRawValue, 100,
+            "Once a real event lands it becomes the value the panel shows"
+        )
+    }
+
+    func testLearnObservedValueResetsWhenANewSessionStarts() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_learn_observed_reset"
+        engine.selectedMIDIInputSourceID = deviceID
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        engine.startMIDILearn(for: .crossfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        _ = engine.evaluateMIDILearnForCC(channel: 0, controller: 20, value: 55)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(engine.midiLearnObservedRawValue, 55)
+
+        engine.startMIDILearn(for: .leftUpfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(
+            engine.midiLearnObservedRawValue,
+            "Starting a new Learn session must not carry the previous control's value across"
+        )
+    }
+
+    func testLearnObservedValueIsClearedOnCancel() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_learn_observed_cancel"
+        engine.selectedMIDIInputSourceID = deviceID
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        engine.startMIDILearn(for: .crossfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        _ = engine.evaluateMIDILearnForCC(channel: 0, controller: 20, value: 77)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(engine.midiLearnObservedRawValue, 77)
+
+        engine.startMIDILearn(for: .rightUpfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        engine.cancelMIDILearn()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(engine.midiLearnObservedRawValue, "Cancelling Learn must clear the observed value")
+    }
+
+    func testHotCueNoteLearnSurfacesTheNoteNumberAsObservedValue() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_learn_observed_hotcue"
+        engine.selectedMIDIInputSourceID = deviceID
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        engine.startMIDILearn(for: .hotCue1)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        engine.receiveNoteOnPadEvent(channel: 5, noteNumber: 20, velocity: 127)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(engine.midiLearnObservedRawValue, 20, "A learned pad surfaces its note number to the panel")
+        XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .hotCue1)?.controlNumber, 20)
+    }
+
+    // MARK: - Learn guard: a streaming other-control CC cannot claim the session
+
+    func testLearnRightUpfaderIgnoresStreamingCrossfaderCCThenLearnsTheRealControl() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_learn_guard_stale_cc"
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        // Crossfader already learned at ch16 (raw 15) / CC8 — the real Rane
+        // ONE MKII address, still streaming as the user starts a new Learn.
+        installMapping(
+            MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8),
+            deviceID: deviceID,
+            on: engine
+        )
+
+        engine.startMIDILearn(for: .rightUpfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let blocked = engine.evaluateMIDILearnForCC(channel: 15, controller: 8, value: 62)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertFalse(blocked.consumedByLearn, "The still-streaming crossfader CC must not claim the Right Upfader session")
+        XCTAssertEqual(engine.activeMIDILearnAction, .rightUpfader, "The session must stay open for the real control")
+        XCTAssertNil(engine.currentMIDIDeviceMapping?.control(for: .rightUpfader), "Nothing must be learned from the stale CC")
+        XCTAssertNil(engine.midiLearnObservedRawValue, "The stale CC's value must not appear in the Learn panel")
+
+        // Now the user actually moves the right upfader.
+        let learned = engine.evaluateMIDILearnForCC(channel: 1, controller: 28, value: 90)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(learned.consumedByLearn, "A distinct event from the target control is accepted")
+        XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .rightUpfader)?.channel, 1)
+        XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .rightUpfader)?.controlNumber, 28)
+        XCTAssertEqual(engine.midiLearnObservedRawValue, 90)
+    }
+
+    func testLearnGuardDoesNotBlockADistinctCCWhenNoCollision() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceID = "midi_test_learn_guard_no_collision"
+        defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
+
+        installMapping(
+            MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8),
+            deviceID: deviceID,
+            on: engine
+        )
+
+        engine.startMIDILearn(for: .leftUpfader)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let learned = engine.evaluateMIDILearnForCC(channel: 0, controller: 28, value: 40)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(learned.consumedByLearn, "A CC that collides with no other continuous control is learned normally")
+        XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .leftUpfader)?.channel, 0)
+        XCTAssertEqual(engine.currentMIDIDeviceMapping?.control(for: .leftUpfader)?.controlNumber, 28)
+    }
 }
