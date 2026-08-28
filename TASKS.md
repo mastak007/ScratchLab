@@ -1,3 +1,9 @@
+- [x] Docs: record the Rane ONE MKII channel-assign switch prerequisite for MIDI Learn (2026-08-28)
+  - Follow-up to the MIDI Learn root-cause entry below: the switch position was a live-verified hardware prerequisite but was not captured in any operator-facing doc.
+  - `docs/dj_operator_quickstart.md`: added a "Rane ONE MKII Controller Setup (MIDI Learn)" section — the channel-assign switch above the fader must be fully left before MIDI Learn, or the upfaders and the normal (unshifted) hot-cue pads may not transmit any MIDI; only the crossfader and the SHIFT + pad layer transmit otherwise. Included the verified addresses (crossfader `CC 8` ch 16; upfaders `CC 28` ch 1 / ch 2; Hot Cue 1/2 `NoteOn` ch 6 notes 20–21; SHIFT + Hot Cue 1 `NoteOn` ch 16 note 50).
+  - `docs/session_checklist.md`: added one "Before The Session" item for the same switch position.
+  - Docs only. No Swift / project / scheme / handoff / untracked files touched; all pre-existing dirty hunks preserved. `git diff --check` clean. Nothing staged, committed, or pushed.
+
 - [x] MIDI Learn stale-value fix + Rane ONE MKII mapping-failure root cause (2026-08-28)
   - Rane ONE MKII "left/right upfaders and hot cues never map" traced to the controller's physical channel-assign switch above the fader, not a CoreMIDI input-path defect: with that switch not fully left the mixer section transmits no MIDI at all; with it fully left every control transmits and its address matches the existing verified-mapping assumptions.
   - Verified MIDI tuples (single CoreMIDI source endpoint, switch fully left; 1-indexed channel then raw 0-indexed): crossfader `CC 8 ch 16 (raw 15)` value 0–127; left upfader `CC 28 ch 1 (raw 0)` value 0–127; right upfader `CC 28 ch 2 (raw 1)` value 0–127; Hot Cue 1 `NoteOn ch 6 (raw 5) note 20 vel 127`; Hot Cue 2 `NoteOn ch 6 (raw 5) note 21 vel 127`; SHIFT + Hot Cue 1 `NoteOn ch 16 (raw 15) note 50`.
