@@ -597,7 +597,10 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             print("[MIDI-DEBUG] platter running = \(transportState.isPlaying)")
             #endif
         case .hotCue(let semanticAction, _):
-            let decision = HotCueTriggerResolver.resolve(action: action)
+            let decision = HotCueTriggerResolver.resolve(
+                action: action,
+                transportState: transportState
+            )
             #if DEBUG
             print("[MIDI-DEBUG] hotcue trigger decision · shouldTrigger=\(decision.shouldTrigger) sample=\(decision.sampleID ?? "nil")")
             #endif
