@@ -4,7 +4,7 @@
 
 ### Repository state
 - **Branch:** `feature/ios-capture-camera-ux`
-- **Local HEAD == remote HEAD:** `10f79db8` — pushed and synchronized with `origin/feature/ios-capture-camera-ux` (normal fast-forward `37ec26c3..10f79db8`).
+- **Repository baseline:** `10f79db8` was the synchronized tip before this handoff; the handoff was then committed and pushed as `baa06fc9`. Run `git rev-parse HEAD origin/feature/ios-capture-camera-ux` for the live state.
 - **Index is empty.** Nothing staged.
 
 ### Recent completed commits (all on this branch, pushed)
@@ -40,10 +40,10 @@
   3. Optional non-Rane DVS hardware validation — optional, hardware-gated.
 - **There is no implementation-ready unchecked task.**
 
-### BLOCKER — product-priority decision required before more iOS work
-- `TASKS.md:1776-1783` (dated 2026-08-12) declares **"ScratchLab's active production product is now macOS-only"** and records the iOS/watchOS Xcode targets as retired from the project graph.
-- The current branch and ~20 of the 34 dirty files are a **large iOS/watchOS rebuild** (Companion Camera / capture UX, iOS audio/MIDI engines), and `ScratchLab.xcscheme` is *modified*, not removed. `PROFILE.md` still calls the app "multiplatform."
-- **The written product direction and the active WIP conflict. Karl must resolve this before any further iOS-target task is selected.**
+### RESOLVED 2026-08-29 — product direction is multiplatform
+- Product decision (2026-08-29): **ScratchLab remains multiplatform across macOS, iOS/iPadOS, and watchOS.** The 2026-08-12 "macOS-only" direction in `TASKS.md` is superseded.
+- Already reversed in code: `1061dc33` (2026-08-15) restored the iOS/iPad target; `37f81c06` (2026-08-22) restored the `ScratchLabWatch` target. At repository baseline `baa06fc9` the iOS `ScratchLab` target, the `ScratchLabWatch` target, and `ScratchLab.xcscheme` are all present. `PROFILE.md` / `README.md` / `AI_CONTEXT.md` / `docs/**` already say multiplatform.
+- `TASKS.md`, `DEV_LOG.md`, and `AI_HANDOFF/next_prompt.md` reconciled 2026-08-29 (docs only). The pre-existing 34-file WIP is consistent with the multiplatform direction but remains unreviewed and unapproved; it stays local, unstaged, and preserved. Any task selection against it needs a separate written per-slice scope.
 
 ### Stale-doc note
 - Everything below this entry (2026-08-17 and earlier) refers to branch `feature/v3.2-swiftui-20260815` / commit `7efbb70` and does **not** describe current state. Preserved for history only.

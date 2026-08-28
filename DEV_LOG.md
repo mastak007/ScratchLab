@@ -1,5 +1,12 @@
 # DEV_LOG
 
+## 2026-08-29 (Reconcile docs: ScratchLab remains multiplatform — 2026-08-12 target retirement was reversed; docs only)
+- Selected task: reconcile the written record with the standing product decision that ScratchLab remains multiplatform across macOS, iOS/iPadOS, and watchOS. The 2026-08-12 "Retire iOS and watchOS production targets" entry below is stale.
+- Findings: the 2026-08-12 retirement (`736e6abb`) was undone in code by `1061dc33` (2026-08-15, "Restore ScratchLab iOS and iPad production target") and `37f81c06` (2026-08-22, "Restore watchOS companion motion capture target"). At repository baseline `baa06fc9` the iOS `ScratchLab` target, the `ScratchLabWatch` target, and `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme` are all present. `PROFILE.md`, `README.md`, `AI_CONTEXT.md`, `AGENTS.md`, and `docs/**` already describe a multiplatform product.
+- Files changed: `TASKS.md` (SUPERSEDED banner on the 2026-08-12 block + new "Product direction — multiplatform (2026-08-29)" record), `AI_HANDOFF.md` (BLOCKER section → RESOLVED), `AI_HANDOFF/next_prompt.md` (obsolete STOP gate removed), and this entry. The historical 2026-08-12 entry below is left intact.
+- Scope: docs only. No behavior, code, schema, project-graph, scheme, or test change. The 34 modified + 1 untracked pre-existing WIP files remain local, unstaged, and unmodified; no Swift / `project.pbxproj` / scheme hunk was touched.
+- Verification: `git diff` limited to the four docs files; every Swift / `project.pbxproj` / scheme diffstat byte-identical to pre-task state; `git diff --check` clean; nothing staged, committed, pushed, reverted, stashed, or cleaned.
+
 ## 2026-08-28 (Docs: Rane ONE MKII channel-assign switch prerequisite for MIDI Learn; uncommitted)
 - Selected task: the documentation follow-up recorded in the MIDI Learn entry below — capture the channel-assign switch position as a setup prerequisite in operator-facing guidance. Docs only.
 - Files changed: `docs/dj_operator_quickstart.md`, `docs/session_checklist.md`, plus this entry and the matching `TASKS.md` record. No Swift, project, scheme, handoff, or untracked files touched. All pre-existing dirty files and hunks were preserved.

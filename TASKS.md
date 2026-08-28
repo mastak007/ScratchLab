@@ -1761,8 +1761,21 @@ Companion to the planning amendment landed in `AI_CONTEXT.md`, `docs/current_arc
 
 ## Product direction — macOS-only active production target (2026-08-12)
 
+> **SUPERSEDED 2026-08-29.** This retirement was undone in code: `1061dc33` (2026-08-15,
+> "Restore ScratchLab iOS and iPad production target") and `37f81c06` (2026-08-22, "Restore
+> watchOS companion motion capture target"). At repository baseline `baa06fc9` the iOS `ScratchLab` target,
+> the `ScratchLabWatch` target, and `ScratchLab.xcscheme` are all present. See
+> "Product direction — multiplatform (2026-08-29)" below. This block is kept for history only.
+
 - [x] Retire ScratchLab iOS and ScratchLabWatch as active production Xcode targets
   - Files: `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLab.xcscheme` (removed), `TASKS.md`, `DEV_LOG.md`
   - Done when: the `ScratchLab` (iOS) and `ScratchLabWatch` (watchOS) `PBXNativeTarget`s, their build phases/build-files/configuration lists/product references/target dependency, and the combined `ScratchLab.xcscheme` are removed from the active project graph; `ScratchLabDesktop`/`ScratchLabDesktopTests`/`ScratchLabDatasetBuilder` and all shared source are unaffected; every iOS/watchOS-exclusive Swift file remains on disk (unregistered from any target, still browsable/restorable) for potential future lightweight Companion Camera / sensor companion work; macOS Capture/Practice/Review continue to require no iPhone or Apple Watch; and `scripts/build.sh mac` plus the authoritative macOS test suite pass from a fresh checkout.
 
 **ScratchLab's active production product is now macOS-only.** The former iOS/watchOS implementations remain preserved in source/history for potential future lightweight Companion Camera / sensor companion work.
+
+## Product direction — multiplatform (2026-08-29)
+
+- [x] Reaffirm ScratchLab as a multiplatform product across macOS, iOS/iPadOS, and watchOS
+  - Context: the 2026-08-12 "macOS-only" retirement above was reversed in code — `1061dc33` (2026-08-15) restored the iOS/iPad production target and `37f81c06` (2026-08-22) restored the `ScratchLabWatch` target. At repository baseline `baa06fc9` those targets and `ScratchLab.xcscheme` are present, and the active branch `feature/ios-capture-camera-ux` is iOS/iPadOS/watchOS work.
+  - Decision (2026-08-29): ScratchLab remains multiplatform. `PROFILE.md`, `README.md`, `AI_CONTEXT.md`, `AGENTS.md`, and `docs/**` already reflect this and are unchanged.
+  - Reconciliation (docs only): this record + the SUPERSEDED banner above; a new 2026-08-29 entry in `DEV_LOG.md`; `AI_HANDOFF.md` BLOCKER → RESOLVED; the `AI_HANDOFF/next_prompt.md` stop-gate cleared. No Swift, project-graph, scheme, or WIP change.
