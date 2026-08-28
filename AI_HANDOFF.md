@@ -1,5 +1,55 @@
 # AI Handoff
 
+## 2026-08-28 — MIDI Learn fixes + Rane ONE MKII operator docs COMPLETE; branch pushed — AWAITING PRODUCT-PRIORITY DECISION
+
+### Repository state
+- **Branch:** `feature/ios-capture-camera-ux`
+- **Local HEAD == remote HEAD:** `10f79db8` — pushed and synchronized with `origin/feature/ios-capture-camera-ux` (normal fast-forward `37ec26c3..10f79db8`).
+- **Index is empty.** Nothing staged.
+
+### Recent completed commits (all on this branch, pushed)
+- `ce12fe0e` — MIDI Learn stale-value fix + cross-mapped-CC guard, with six regression tests in `MIDILearnEngineTests` (113/113 MIDI-suite pass).
+- `e9fd591a` — DEV_LOG hardware / root-cause record.
+- `37ec26c3` — TASKS completion record for the Rane ONE MKII MIDI Learn fix.
+- `10f79db8` — operator documentation for the Rane ONE MKII channel-assign switch (`docs/dj_operator_quickstart.md`, `docs/session_checklist.md`; scoped `DEV_LOG.md` / `TASKS.md` entries only — 4 files, +34/−0).
+
+### Verified hardware root cause (2026-08-28, live Rane ONE MKII)
+- No CoreMIDI input-path defect. The **channel-assign switch above the fader must be fully left** before MIDI Learn; otherwise the mixer section transmits no MIDI at all — the upfaders and the normal (unshifted) hot-cue pads emit nothing. Only the crossfader and the SHIFT + pad layer transmit when the switch is not fully left.
+- **Verified MIDI tuples** (single CoreMIDI source endpoint, switch fully left; 1-indexed channel, raw 0-indexed in parens):
+  - Crossfader — `CC 8`, ch 16 (raw 15), value 0–127
+  - Left upfader — `CC 28`, ch 1 (raw 0), value 0–127
+  - Right upfader — `CC 28`, ch 2 (raw 1), value 0–127
+  - Hot Cue 1 — `NoteOn` ch 6 (raw 5) note 20 / `NoteOff` note 20
+  - Hot Cue 2 — `NoteOn` ch 6 (raw 5) note 21
+  - SHIFT + Hot Cue 1 — `NoteOn` ch 16 (raw 15) note 50 (shift layer only)
+  - Platter (not scored) — `CC 6` flood + 14-bit `PitchBend` flood, both ch 2 (raw 1)
+- The MIDI Learn fixes and the operator documentation are **complete**.
+
+### Pre-existing WIP — DO NOT TOUCH
+- **34 modified files** + **1 untracked** `ScratchLabDesktopTests/CalibrationCameraOverlayTests.swift.plist` remain **local and unstaged**. This is a large in-flight iOS Companion Camera / capture-UX effort (e.g. `CompanionCameraView.swift` +3,489, `MainMenuView.swift` +1,770, `PracticeModeView.swift` +2,054, `MacAnalyzerView.swift` +2,790, `project.pbxproj` +910, `ScratchLab.xcscheme`) plus the in-flight `RaneOneMKIIVerifiedLearnedMapping` registry / iOS coordinator wiring. `DEV_LOG.md` and `TASKS.md` also still carry unstaged pre-existing WIP entries (only the scoped 2026-08-28 docs entries were committed).
+- **Do not clean, revert, stage, or commit any of this WIP without an explicit, written scope.**
+
+### Latest verification (docs-only task, commit `10f79db8`)
+- `git diff --check` clean.
+- `scripts/build.sh all`: capture-pipeline fixtures **47/47**; **zero compile errors**; the `xcodebuild` ScratchLabDesktop test plan stopped (via its own `set -e`) on **five pre-existing dirty-WIP test failures** — `testGuidedCaptureLandscapeHidesHelperTextDuringPreRoll`, `testGuidedCaptureSystemCheckScrollsOnSmallScreens`, `testLevelSelectSourceUsesSafeAreaAwareScrollableHeaderLayout`, `testPracticeSetupDoesNotRenderCoachCard`, `testRaneOneMkiiDebugPresetHasSetupNoteOtherPresetsDoNot`. These are source-slice / layout / byte-size assertions against dirty Swift files; a markdown-only change cannot cause them.
+
+### No implementation-ready work queued
+- Every section of `TASKS.md` (`Next Priority Sequence`, `Ready`, `Mapped Follow-up Tasks`, all "User Requested…" sections) is fully `[x]`. The only `- [ ]` items are:
+  1. **Capture-movement loss — Phase 1/2** (`TASKS.md:136`): already implemented (DEBUG trace + `Codable` diagnostics + `MovementTraceReplay`, tests pass); unchecked only because **closure is hardware-validation-gated** — a real capture take must produce a trace for offline-vs-live loss classification.
+  2. Keep playback override / notation routing off until approved — a standing guard rule, not a task.
+  3. Optional non-Rane DVS hardware validation — optional, hardware-gated.
+- **There is no implementation-ready unchecked task.**
+
+### BLOCKER — product-priority decision required before more iOS work
+- `TASKS.md:1776-1783` (dated 2026-08-12) declares **"ScratchLab's active production product is now macOS-only"** and records the iOS/watchOS Xcode targets as retired from the project graph.
+- The current branch and ~20 of the 34 dirty files are a **large iOS/watchOS rebuild** (Companion Camera / capture UX, iOS audio/MIDI engines), and `ScratchLab.xcscheme` is *modified*, not removed. `PROFILE.md` still calls the app "multiplatform."
+- **The written product direction and the active WIP conflict. Karl must resolve this before any further iOS-target task is selected.**
+
+### Stale-doc note
+- Everything below this entry (2026-08-17 and earlier) refers to branch `feature/v3.2-swiftui-20260815` / commit `7efbb70` and does **not** describe current state. Preserved for history only.
+
+---
+
 ## 2026-08-17 — V3.2 beta candidate COMMITTED `7efbb70` (NOT pushed) — AWAITING APPROVAL
 
 Final beta-candidate preparation. Committed one clean commit `7efbb70`
