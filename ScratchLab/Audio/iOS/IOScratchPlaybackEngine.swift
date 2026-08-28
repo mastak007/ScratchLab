@@ -219,10 +219,6 @@ final class IOScratchPlaybackEngine: ObservableObject {
         let routeName: String
     }
 
-    private enum PlaybackError: Error {
-        case audioSessionActivationFailed
-    }
-
     /// The latest observed platter position.
     private var currentPlatterPosition: PlatterPosition?
     /// Absolute RANE step phase at the most recent hotcue press. Playback is
@@ -290,6 +286,28 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
     }
 
+    /// Applies the learned right-deck channel fader to scratch playback.
+    func setRightUpfaderGain(_ normalizedGain: Double) {
+        rightUpfaderGain = FaderCurveResponse.gain(
+            forNormalizedPosition: normalizedGain,
+            response: FaderCurveResponse(zeroAt: 0, oneAt: 1, shape: .linear)
+        )
+        publishUserMixerGain()
+    }
+
+    /// Applies the same sharp scratch cut-in curve used by macOS.
+    func setCrossfaderPosition(_ normalizedPosition: Double) {
+        crossfaderRightDeckGain = FaderCurveResponse.gain(
+            forNormalizedPosition: normalizedPosition,
+            response: FaderCurveResponse(
+                zeroAt: 0,
+                oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+                shape: .linear
+            )
+        )
+        publishUserMixerGain()
+    }
+
     /// Stop playback entirely and reset the playhead.
     func stop() {
         midiControlLoop.stop()
@@ -352,27 +370,22 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
     }
 
+    private var rightUpfaderGain: Double = 1
+    private var crossfaderRightDeckGain: Double = 1
+
+    private func publishUserMixerGain() {
+        renderer?.setUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
+    }
+
     /// Builds the graph for the route observed at hot-cue load time. The RANE
     /// ONE MKII exposes Deck 1 on physical outputs 1/2 and Deck 2 on 3/4, so a
     /// four-channel discrete source writes only channels 2/3 (zero-based).
     /// Every other route retains the existing two-channel stereo graph.
     private func prepareRendererForCurrentRoute() async throws -> IOScratchRenderer {
         let session = AVAudioSession.sharedInstance()
-        if #available(iOS 27.0, *) {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                session.activate { succeeded, error in
-                    if succeeded {
-                        continuation.resume()
-                    } else {
-                        continuation.resume(throwing: error ?? PlaybackError.audioSessionActivationFailed)
-                    }
-                }
-            }
-        } else {
-            try await Task.detached(priority: .userInitiated) {
-                try AVAudioSession.sharedInstance().setActive(true)
-            }.value
-        }
+        try await Task.detached(priority: .userInitiated) {
+            try AVAudioSession.sharedInstance().setActive(true)
+        }.value
 
         let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
         let normalizedRouteName = routeName.lowercased()
@@ -413,6 +426,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
             ? [-1, -1, 0, 1]
             : nil
         self.renderer = renderer
+        renderer.setUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
         outputConfiguration = configuration
 
         #if DEBUG

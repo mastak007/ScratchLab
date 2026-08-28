@@ -69,6 +69,7 @@ final class IOScratchRenderer {
     private let snapPhaseWord = Atomic<UInt64>(0)
     private let controlEpoch = Atomic<UInt64>(0)
     private let isActiveWord = Atomic<UInt64>(0)
+    private let userMixerGainBits = Atomic<UInt64>(Double(1).bitPattern)
     private let nextIdentity = Atomic<UInt64>(0)
 
     // MARK: - Capture tap (lock-free)
@@ -113,6 +114,7 @@ final class IOScratchRenderer {
     /// handling: the position follower below is already continuous, so a
     /// reversed target is chased smoothly, not jumped to.
     private var renderGain: Double = 1
+    private var renderedUserMixerGain: Double = 1
     /// Render-thread-owned running count of frames written into the capture
     /// ring since the renderer was created; published to `captureWriteIndex`
     /// once per callback (not once per frame) so the consumer always sees a
@@ -303,6 +305,14 @@ final class IOScratchRenderer {
         isActiveWord.store(1, ordering: .relaxed)
     }
 
+    /// Publishes the learned crossfader × right-upfader gain to the render
+    /// thread. The render callback smooths changes with its existing 3 ms
+    /// click-suppression ramp.
+    func setUserMixerGain(_ gain: Double) {
+        let clamped = gain.isFinite ? min(max(gain, 0), 1) : 0
+        userMixerGainBits.store(clamped.bitPattern, ordering: .relaxed)
+    }
+
     /// Deactivate output and re-target the top. The render thread's own
     /// playhead snaps to 0 the next time it notices a fresh `load(buffer:)`
     /// (every hotcue re-trigger bumps the install identity), so no separate
@@ -350,10 +360,12 @@ final class IOScratchRenderer {
 
         let rawTarget = Double(bitPattern: targetFrameBits.load(ordering: .relaxed))
         let rawVelocity = Double(bitPattern: velocityFramesPerSecondBits.load(ordering: .relaxed))
+        let userMixerGainTarget = Double(bitPattern: userMixerGainBits.load(ordering: .relaxed))
         let epoch = controlEpoch.load(ordering: .acquiring)
         var current = currentFramePosition
         var velocity = currentVelocity
         var gain = renderGain
+        var userMixerGain = renderedUserMixerGain
 
         isSilence.pointee = false
         let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -414,6 +426,7 @@ final class IOScratchRenderer {
                 if current < 0 { current += loopLength }
             }
             gain += ((engaged ? 1.0 : 0.0) - gain) * Self.gainAlpha
+            userMixerGain += (userMixerGainTarget - userMixerGain) * Self.gainAlpha
 
             let base = current.rounded(.down)
             let fraction = Float(current - base)
@@ -421,7 +434,7 @@ final class IOScratchRenderer {
             let index0 = index1 - 1 < 0 ? table.loopFrameCount - 1 : index1 - 1
             let index2 = index1 + 1 >= table.loopFrameCount ? 0 : index1 + 1
             let index3 = index2 + 1 >= table.loopFrameCount ? 0 : index2 + 1
-            let sampleGain = Float(gain)
+            let sampleGain = Float(gain * userMixerGain)
             let left = Self.catmullRom(
                 Self.loopSample(srcL, index: index0, contentFrames: contentFrames, cueStart: table.cueStartFrame),
                 Self.loopSample(srcL, index: index1, contentFrames: contentFrames, cueStart: table.cueStartFrame),
@@ -454,6 +467,7 @@ final class IOScratchRenderer {
         currentFramePosition = current
         currentVelocity = velocity
         renderGain = gain
+        renderedUserMixerGain = userMixerGain
         isSilence.pointee = ObjCBool(!renderedAudibleSample)
         if captureTapEnabled {
             captureWriteIndex.store(localCaptureWriteIndex, ordering: .releasing)
