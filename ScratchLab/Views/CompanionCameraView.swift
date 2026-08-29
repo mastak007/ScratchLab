@@ -709,6 +709,10 @@ struct CompanionCameraView: View {
 
     private func stopTake() {
         beatEngine.stop()
+        // Close the MIDI take window before finalization begins, so controller
+        // moves made while the movie is still finalizing cannot land in this
+        // take's evidence.
+        midiControllerDispatcher.markCaptureStopped()
         captureStore.requestStopRecording()
         startFinalizationWatchdog()
         if let link = activeWatchCaptureLink {
@@ -1255,7 +1259,8 @@ struct CompanionCameraView: View {
                 syncClapUsed: nil,
                 note: review.operatorMessage,
                 captureTiming: review.summary.sidecar.captureTiming,
-                motionSources: exportMotionEvidence.motionSources
+                motionSources: exportMotionEvidence.motionSources,
+                faderMappingSource: exportMotionEvidence.faderMappingSource
             )
         }
 
@@ -3800,7 +3805,7 @@ private struct CaptureHardwareSetupView: View {
                         : ScratchLabDesign.Sem.warning)
 
                 VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
-                    HardwareSetupDetailRow(title: "Crossfader", value: mappingDescription(for: .crossfader, fallback: "Raw ch 15 · CC 8"))
+                    HardwareSetupDetailRow(title: "Crossfader", value: crossfaderMappingDescription)
                     HardwareSetupDetailRow(title: "Left upfader", value: mappingDescription(for: .leftUpfader, fallback: "Raw ch 0 · CC 28"))
                     HardwareSetupDetailRow(title: "Right upfader", value: mappingDescription(for: .rightUpfader, fallback: "Raw ch 1 · CC 28"))
                     HardwareSetupDetailRow(title: "Right pads", value: "Raw ch 5 · Notes 20–27 · ScratchLab samples")
@@ -3868,7 +3873,7 @@ private struct CaptureHardwareSetupView: View {
     private func selectMIDISource(_ source: IOSMIDIManager.Source) {
         selectedMIDISourceID = source.id
         midiLearnCoordinator.selectDevice(id: source.id, name: source.name)
-        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
+        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id, deviceName: source.name)
     }
 
     private func applyVerifiedRaneMapping() {
@@ -3910,6 +3915,22 @@ private struct CaptureHardwareSetupView: View {
             return "The verified mapping is only available for a detected RANE source."
         }
         return "Applies the verified controller mapping for notation, capture, and local ScratchLab sample playback."
+    }
+
+    /// Distinguishes the three real crossfader states. The previous single
+    /// `"Not active · expected …"` fallback could not say that ScratchLab is
+    /// recording fader evidence from a certified hardware default, which would
+    /// read as "not active" while events were genuinely being captured.
+    private var crossfaderMappingDescription: String {
+        if let control = midiLearnCoordinator.control(for: .crossfader) {
+            return "Learned · raw ch \(control.channel) · CC \(control.controlNumber)"
+        }
+        switch midiControllerDispatcher.crossfaderMappingSource {
+        case .certifiedRegistry:
+            return "Certified default · raw ch 15 · CC 8 · evidence only, no audio"
+        case .learned, .none:
+            return "Not active · expected raw ch 15 · CC 8"
+        }
     }
 
     private func mappingDescription(for action: MIDISemanticAction, fallback: String) -> String {

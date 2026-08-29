@@ -352,6 +352,10 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
 
     private let learnStore: MIDILearnedMappingStore
     private var currentMapping: MIDIDeviceMapping?
+    /// Identity of the connected source, used only to let `MIDIActionResolver`
+    /// consult a certified registry crossfader binding when no learned mapping
+    /// covers the control. Nil when no device is selected.
+    private var currentDeviceIdentity: MIDIDeviceIdentity?
 
     /// The iOS scratch playback boundary. The dispatcher resolves actions and
     /// delegates audio to this engine instead of owning playback itself.
@@ -431,8 +435,27 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
 
     /// Refresh the learned mapping for the active device so hot-cue presses
     /// resolve against the right per-device assignments.
-    func updateMapping(deviceIdentifier: String?) {
+    func updateMapping(deviceIdentifier: String?, deviceName: String? = nil) {
         currentMapping = deviceIdentifier.flatMap { learnStore.load(deviceIdentifier: $0) }
+        // Prefer the caller's live endpoint name; fall back to the saved
+        // mapping's name so a previously-learned device keeps its identity.
+        let resolvedName = deviceName ?? currentMapping?.deviceName
+        currentDeviceIdentity = deviceIdentifier == nil
+            ? nil
+            : resolvedName.map { MIDIDeviceIdentity(sourceName: $0) }
+    }
+
+    /// The crossfader mapping provenance in effect for this device, or nil when
+    /// neither a learned mapping nor a certified registry binding covers it.
+    /// Drives Hardware Setup wording and the take's recorded evidence.
+    var crossfaderMappingSource: FaderMappingSource? {
+        if currentMapping?.control(for: .crossfader) != nil { return .learned }
+        guard let currentDeviceIdentity,
+              let match = MIDIHardwareRegistry.shared.bestMatch(for: currentDeviceIdentity),
+              match.confidence == .certified,
+              match.profile.bindings.contains(where: { $0.role.kind == .crossfader && !$0.isDiagnosticOnly })
+        else { return nil }
+        return .certifiedRegistry
     }
 
     /// Clears accumulated CC6 telemetry and rebaselines the take-relative
@@ -443,10 +466,38 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         capturedCrossfaderMIDIEvents.removeAll()
         livePlatterMovementEvents.removeAll()
         captureBaselineTimestamp = CACurrentMediaTime()
+        captureStopRelativeTime = nil
         isSuppressingReleasedMotorRotation = false
         #if DEBUG
         print("[SCRATCH-DEBUG] shared scratch state reset for new attempt")
         #endif
+    }
+
+    /// Take-relative instant Stop was requested, or nil while the take is still
+    /// running. Finalization is not instantaneous — the movie-file callback can
+    /// arrive well after Stop, and the finalization watchdog exists for exactly
+    /// that window — so without this bound a fader move made after Stop would
+    /// be decoded into the finished take's evidence.
+    private var captureStopRelativeTime: Double?
+
+    /// Marks the end of the take window. Called when Stop is requested, in the
+    /// same `CACurrentMediaTime()` domain as `captureBaselineTimestamp`, so the
+    /// bound never has to be reconciled against the sidecar's wall-clock dates.
+    func markCaptureStopped() {
+        guard captureStopRelativeTime == nil else { return }
+        captureStopRelativeTime = max(0, CACurrentMediaTime() - captureBaselineTimestamp)
+    }
+
+    /// Drops events that arrived after Stop, via the shared boundary rule.
+    /// Applied to the finalized snapshot only; the live preview is already
+    /// gated on the recording flow state, so during a take this is a no-op.
+    private func withinTakeWindow(
+        _ events: [CaptureCore.RawMixerMIDIEvent]
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        CaptureMotionEvidenceResolver.eventsWithinTakeWindow(
+            events,
+            stopRelativeTime: captureStopRelativeTime
+        )
     }
 
     /// Canonical decoded movement events for the current attempt, via the
@@ -457,7 +508,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// this dispatcher.
     var platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
         CaptureCore.derivePlatterMovementEvents(
-            from: capturedPlatterMIDIEvents,
+            from: withinTakeWindow(capturedPlatterMIDIEvents),
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
         )
@@ -466,7 +517,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// Raw take-relative controller evidence, ordered across platter and
     /// crossfader streams for sidecar persistence and canonical export.
     var capturedMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent] {
-        (capturedPlatterMIDIEvents + capturedCrossfaderMIDIEvents).sorted { lhs, rhs in
+        (withinTakeWindow(capturedPlatterMIDIEvents) + withinTakeWindow(capturedCrossfaderMIDIEvents)).sorted { lhs, rhs in
             if lhs.takeRelativeTime == rhs.takeRelativeTime {
                 return lhs.timestamp < rhs.timestamp
             }
@@ -477,7 +528,18 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// Shared crossfader-event derivation used by both the live Capture HUD
     /// and the finalized take snapshot. No presentation-specific inference.
     var capturedCrossfaderEvents: [CaptureCore.DetectedNotationFaderEvent] {
-        CaptureCore.deriveDetectedNotationFaderEvents(from: capturedCrossfaderMIDIEvents)
+        CaptureCore.deriveDetectedNotationFaderEvents(from: withinTakeWindow(capturedCrossfaderMIDIEvents))
+    }
+
+    /// Provenance actually recorded on this take's crossfader evidence, for
+    /// review and export. Derived from the persisted events rather than the
+    /// live device state, so a mid-take device change cannot retroactively
+    /// relabel evidence that was already captured.
+    var capturedCrossfaderMappingSource: FaderMappingSource? {
+        let sources = Set(withinTakeWindow(capturedCrossfaderMIDIEvents).compactMap(\.mappingSource))
+        // A learned mapping outranks a registry default if both somehow appear.
+        if sources.contains(.learned) { return .learned }
+        return sources.contains(.certifiedRegistry) ? .certifiedRegistry : nil
     }
 
     /// Final take evidence in the same `DetectedNotationSnapshot` schema used
@@ -649,7 +711,11 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             return
         }
 
-        let action = MIDIActionResolver.resolve(message: message, mapping: currentMapping)
+        let action = MIDIActionResolver.resolve(
+            message: message,
+            mapping: currentMapping,
+            identity: currentDeviceIdentity
+        )
         switch action {
         case .transport:
             transportState.toggle()
@@ -670,23 +736,36 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
             #endif
             playbackEngine.playHotCue(sampleID: sampleID)
-        case .crossfader(let value):
+        case .crossfader(let value, let source):
             crossfaderMIDIValue = value
-            if let control = currentMapping?.control(for: .crossfader) {
-                let normalizedValue = control.normalizedValue(from: value)
-                let eventTimestamp = CACurrentMediaTime()
-                capturedCrossfaderMIDIEvents.append(
-                    CaptureCore.RawMixerMIDIEvent(
-                        timestamp: eventTimestamp,
-                        takeRelativeTime: max(0, eventTimestamp - captureBaselineTimestamp),
-                        deviceName: currentMapping?.deviceName ?? "iOS MIDI Controller",
-                        channel: Int(message.channel),
-                        controller: Int(message.controlNumber),
-                        value: value,
-                        normalizedValue: normalizedValue,
-                        mappedControl: "crossfader"
-                    )
+            // A learned control carries the user's own min/max/inverted
+            // calibration. A certified registry binding has none, so it uses the
+            // plain 7-bit range the profile documents — never a learned control's
+            // calibration borrowed from a different action.
+            let learnedControl = currentMapping?.control(for: .crossfader)
+            let normalizedValue = learnedControl?.normalizedValue(from: value)
+                ?? MIDIControlNormalization.sevenBit(value)
+            let eventTimestamp = CACurrentMediaTime()
+            capturedCrossfaderMIDIEvents.append(
+                CaptureCore.RawMixerMIDIEvent(
+                    timestamp: eventTimestamp,
+                    takeRelativeTime: max(0, eventTimestamp - captureBaselineTimestamp),
+                    deviceName: currentMapping?.deviceName
+                        ?? currentDeviceIdentity?.sourceName
+                        ?? "iOS MIDI Controller",
+                    channel: Int(message.channel),
+                    controller: Int(message.controlNumber),
+                    value: value,
+                    normalizedValue: normalizedValue,
+                    mappedControl: "crossfader",
+                    mappingSource: source
                 )
+            )
+            // Evidence-only for the certified-registry fallback: recognising a
+            // crossfader from the hardware registry must never start cutting
+            // ScratchLab's audio on a device the user never mapped. Only an
+            // explicit learned mapping drives audible playback.
+            if source == .learned {
                 playbackEngine.setCrossfaderPosition(normalizedValue)
             }
         case .upfader(let deck, let value):

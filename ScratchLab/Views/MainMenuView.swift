@@ -2007,7 +2007,7 @@ private struct AdvancedMIDIControllerView: View {
     private func selectMIDISource(_ source: IOSMIDIManager.Source) {
         selectedMIDISourceID = source.id
         midiLearnCoordinator.selectDevice(id: source.id, name: source.name)
-        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
+        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id, deviceName: source.name)
     }
 
     private func mappingDescription(for action: MIDISemanticAction) -> String {

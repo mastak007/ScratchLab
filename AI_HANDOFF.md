@@ -1,6 +1,28 @@
 # AI Handoff
 
-## 2026-08-29 — Capture-integrity Slice B: truthful review state derivation (uncommitted; current)
+## 2026-08-29 — Capture-integrity Slice C: crossfader provenance + take-window bounding (uncommitted; current)
+
+Started from `14685e06`. Neither `089965f4` nor `14685e06` was amended, reset, or rebased.
+
+**Resource deletions were restored** (Karl-authorised, gate checked first: all 32 entries were `D`, none `M`/`A`). This alone removed the whole Coach-demo / reference-audio / practice-reel failure family — the full-gate baseline went from **15 failures / 13 names to 11 failures / 9 names** before any Slice C code existed. `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and the untracked `.swift.plist` remain untouched.
+
+**TWO CORRECTIONS to earlier claims — read these before repeating them.**
+1. The old Slice C stub said the `"Raw ch 15 · CC 8"` row "shows as configured while persisting zero events". False — it already read `"Not active · expected …"`. Retracted.
+2. **The take-002 `Fader: No movement` is very likely CORRECT, not a bug.** `ScratchLabApp.configureMIDILearnDevice()` already auto-applies the verified RANE mapping at startup, and a Baby Scratch is played with the fader OPEN, which the existing delta gate correctly renders as zero events. Do not describe Slice C as the fix for that screenshot.
+
+**Real defects fixed.** (a) The resolver checked the registry for transport but not crossfader, despite a `.certified` RANE crossfader binding existing — so a device selected manually via `selectMIDISource` (which, unlike startup, never auto-applies) recorded nothing. (b) No take-END bound existed, so moves between Stop and finalization landed in the finished take.
+
+**What is in place.** `FaderMappingSource` (`learned` / `certifiedRegistry`); resolver step 2b gated on a real registry match at `.certified` confidence plus a non-diagnostic `.crossfader` binding — never a blind CC8 sniff, and learned always wins. **Evidence-only**: `setCrossfaderPosition` is called only for `.learned`; do not extend it to the registry path without a new decision. Provenance persists on `RawMixerMIDIEvent.mappingSource` (Optional → legacy sidecars decode `nil` = unknown, never "learned") and reaches review rows and `SessionExportTake.faderMappingSource`; no on-disk schema change. `markCaptureStopped()` bounds the take in the `CACurrentMediaTime()` domain, with the filter in shared `CaptureMotionEvidenceResolver.eventsWithinTakeWindow` because `iOSMIDIManager.swift` is iOS-target-only and unreachable from the macOS test target.
+
+**Untouched by design:** `deriveDetectedNotationFaderEvents` and its delta gates, so an open-fader Baby Scratch still yields zero events. macOS keeps its separate `CrossfaderCCMapping` — documented as a known divergence in `MIDIActionResolver.swift`.
+
+**Verification.** 21 new `CrossfaderMappingProvenanceTests` + Slice A/B suites = 51/51, twice. Regressions green (46/46, 29/29, 22/22, 58/58, 29/29, 14/14). iOS + macOS builds and `build-for-testing` green; fixtures 47/47; `git diff --check` clean. `scripts/build.sh all` exit 65, **3073 tests / 49 skipped / 11 failures** — count up by exactly 21, failing-name set **identical to the post-restore baseline (9 names)**.
+
+**Known pre-existing fragility, not a regression:** `MIDILearnEngineTests` shows 3 failures when run standalone via `xcrun xctest` but passes inside the full plan both before and after this change. All three read shared `UserDefaults.standard` and reference zero Slice C symbols. Worth its own cleanup slice.
+
+**Physical RANE checks still required:** registry matching depends on the real CoreMIDI endpoint name (`"rane one"` matching is unverified against the actual device string); confirm a fader cut records with `· certified default` provenance when no mapping is learned, that ScratchLab stays silent on that path, and that a move made just after Stop does not appear in the take.
+
+## 2026-08-29 — Capture-integrity Slice B: truthful review state derivation (now in commit 14685e06)
 
 Started from Codex checkpoint `089965f4`, which had absorbed Karl's prior WIP **and** Slice A. That commit was not amended, reset, rebased, or overwritten. The unstaged Xcode settings, resource deletions, and stray `CalibrationCameraOverlayTests.swift.plist` were left untouched — Slice B needed none of them.
 

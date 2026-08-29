@@ -2,7 +2,17 @@ Read `CLAUDE.md`, then `SOUL.md` and `PROFILE.md`.
 Read `AI_HANDOFF.md` — the top entry (2026-08-29) is current state; older branch histories below it are reference material only.
 Run `git status --short --branch` and `git rev-parse HEAD origin/feature/ios-capture-camera-ux`.
 
-## Capture-integrity batch: Slices A+B landed, C–H open (2026-08-29; current)
+## Capture-integrity batch: Slices A+B+C landed, D–H open (2026-08-29; current)
+
+**Slice C (current, uncommitted).** Crossfader provenance + take-window bounding. Two earlier claims were corrected and must not be repeated: the Hardware Setup row was already truthful (`"Not active · expected …"`), and take-002's `Fader: No movement` is very likely CORRECT — startup already auto-applies the verified RANE mapping, and a Baby Scratch is played fader-open. Slice C is robustness, not the fix for that screenshot.
+
+Keep these invariants: learned mapping always wins; the certified-registry fallback requires a real `.certified` registry match plus a non-diagnostic `.crossfader` binding (never a blind CC8 sniff); the registry path is **evidence-only** and must not call `setCrossfaderPosition`; `RawMixerMIDIEvent.mappingSource` stays Optional so legacy sidecars decode as unknown rather than "learned"; and `deriveDetectedNotationFaderEvents`' delta gates stay untouched so an open fader still yields zero events.
+
+**Resource deletions were restored**, dropping the full-gate baseline to **11 failures / 9 unique names**. Use that as the comparison point, not the older 15/13.
+
+**Known pre-existing fragility:** `MIDILearnEngineTests` fails 3 tests when run standalone via `xcrun xctest` but passes in the full plan. Shared `UserDefaults.standard` pollution; unrelated to any slice so far. A cleanup slice for test isolation is worth scheduling.
+
+## Capture-integrity batch: Slices A+B landed (2026-08-29; superseded by the section above)
 
 Karl's ten-requirement capture-integrity prompt was decomposed into eight slices (A–H) recorded at the top of `TASKS.md`. **Slices A and B are implemented.** Slice A is in Codex checkpoint `089965f4`; Slice B is uncommitted in the working tree. Do not attempt the remaining slices as one batch — the repository still carries a pre-existing dirty WIP baseline, and a single combined diff makes new regressions indistinguishable from it.
 

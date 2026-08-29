@@ -160,7 +160,7 @@ private struct RootContainerView: View {
            !RaneOneMKIIVerifiedLearnedMapping.isComplete(midiLearnCoordinator.currentMapping) {
             midiLearnCoordinator.applyVerifiedRaneOneMKIIMapping()
         }
-        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
+        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id, deviceName: source.name)
     }
 
     private func configureWatchRelay() {

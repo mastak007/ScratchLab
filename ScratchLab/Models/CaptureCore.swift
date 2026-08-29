@@ -536,17 +536,23 @@ struct CaptureMotionEvidence: Equatable, Sendable {
     let faderEventCount: Int
     let watch: CaptureWatchMotionEvidence
     let dvs: CaptureDVSMotionEvidence
+    /// How this take's crossfader was recognised, or nil when no fader
+    /// evidence carried provenance — either none was captured, or the sidecar
+    /// predates provenance being recorded.
+    let faderMappingSource: FaderMappingSource?
 
     init(
         platter: CapturePlatterMotionEvidence,
         faderEventCount: Int,
         watch: CaptureWatchMotionEvidence,
-        dvs: CaptureDVSMotionEvidence = .unsupported
+        dvs: CaptureDVSMotionEvidence = .unsupported,
+        faderMappingSource: FaderMappingSource? = nil
     ) {
         self.platter = platter
         self.faderEventCount = faderEventCount
         self.watch = watch
         self.dvs = dvs
+        self.faderMappingSource = faderMappingSource
     }
 
     /// Sources that independently establish motion presence, in a stable
@@ -575,7 +581,8 @@ struct CaptureMotionEvidence: Equatable, Sendable {
     static let none = CaptureMotionEvidence(
         platter: .absent,
         faderEventCount: 0,
-        watch: .notUsed
+        watch: .notUsed,
+        faderMappingSource: nil
     )
 }
 
@@ -617,8 +624,44 @@ enum CaptureMotionEvidenceResolver {
         CaptureMotionEvidence(
             platter: platterEvidence(from: detectedNotation?.recordMovementEvents ?? []),
             faderEventCount: detectedNotation?.faderEvents.count ?? 0,
-            watch: watchCaptureLinked ? .linked : .notUsed
+            watch: watchCaptureLinked ? .linked : .notUsed,
+            faderMappingSource: faderMappingSource(from: detectedNotation)
         )
+    }
+
+    /// Drops controller events that arrived after the take's Stop instant.
+    ///
+    /// Finalization is not instantaneous — the movie-file callback can arrive
+    /// well after Stop — so without this bound a fader or platter move made
+    /// while the take was still finalizing would be decoded into the finished
+    /// take's evidence. `stopRelativeTime` is in the same monotonic take-clock
+    /// domain as `RawMixerMIDIEvent.takeRelativeTime`; `nil` means the take is
+    /// still running and nothing is dropped.
+    ///
+    /// Shared rather than dispatcher-private so the boundary is one testable
+    /// rule (the iOS dispatcher is not reachable from the macOS test target).
+    static func eventsWithinTakeWindow(
+        _ events: [CaptureCore.RawMixerMIDIEvent],
+        stopRelativeTime: Double?
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        guard let stopRelativeTime else { return events }
+        return events.filter { $0.takeRelativeTime <= stopRelativeTime }
+    }
+
+    /// Reads provenance back off the persisted mixer events, so a take
+    /// recovered from disk reports the same source the live take did. Older
+    /// sidecars decode `mappingSource` as nil and simply report no provenance.
+    static func faderMappingSource(
+        from detectedNotation: CaptureCore.DetectedNotationSnapshot?
+    ) -> FaderMappingSource? {
+        guard let detectedNotation else { return nil }
+        let sources = Set(
+            detectedNotation.mixerMidiEvents
+                .filter { $0.mappedControl == "crossfader" }
+                .compactMap(\.mappingSource)
+        )
+        if sources.contains(.learned) { return .learned }
+        return sources.contains(.certifiedRegistry) ? .certifiedRegistry : nil
     }
 }
 
@@ -803,9 +846,10 @@ enum CaptureMotionEvidencePresenter {
             ),
             CaptureEvidenceRow(
                 label: "Fader",
-                value: evidence.faderEventCount == 0
-                    ? "No movement"
-                    : "\(evidence.faderEventCount) event\(evidence.faderEventCount == 1 ? "" : "s")",
+                value: faderValue(
+                    eventCount: evidence.faderEventCount,
+                    source: evidence.faderMappingSource
+                ),
                 isPresent: evidence.faderEventCount > 0
             ),
             CaptureEvidenceRow(
@@ -817,6 +861,23 @@ enum CaptureMotionEvidencePresenter {
         // DVS is deliberately absent: iOS capture has no timecode feed at take
         // finalization, and a permanent "Unavailable" row would imply a source
         // the product does not have. It returns as a row when a real feed exists.
+    }
+
+    /// Names the fader evidence and, when there is any, where its mapping came
+    /// from. A certified-registry take says so explicitly rather than implying
+    /// the user mapped the control. "No movement" stays unqualified — an open
+    /// fader is a real, correct result for a Baby Scratch, not a mapping fault.
+    private static func faderValue(
+        eventCount: Int,
+        source: FaderMappingSource?
+    ) -> String {
+        guard eventCount > 0 else { return "No movement" }
+        let base = "\(eventCount) event\(eventCount == 1 ? "" : "s")"
+        switch source {
+        case .learned: return "\(base) · learned"
+        case .certifiedRegistry: return "\(base) · certified default"
+        case .none: return base
+        }
     }
 
     private static func platterValue(_ platter: CapturePlatterMotionEvidence) -> String {
@@ -6273,6 +6334,33 @@ enum CaptureCore {
         let value: Int
         let normalizedValue: Double
         let mappedControl: String?
+        /// How this control was recognised — the user's learned mapping, or a
+        /// certified registry binding. Optional and additive: sidecars written
+        /// before provenance existed decode with `nil`, which means "unknown
+        /// provenance", never "learned".
+        let mappingSource: FaderMappingSource?
+
+        init(
+            timestamp: Double,
+            takeRelativeTime: Double,
+            deviceName: String,
+            channel: Int,
+            controller: Int,
+            value: Int,
+            normalizedValue: Double,
+            mappedControl: String?,
+            mappingSource: FaderMappingSource? = nil
+        ) {
+            self.timestamp = timestamp
+            self.takeRelativeTime = takeRelativeTime
+            self.deviceName = deviceName
+            self.channel = channel
+            self.controller = controller
+            self.value = value
+            self.normalizedValue = normalizedValue
+            self.mappedControl = mappedControl
+            self.mappingSource = mappingSource
+        }
     }
 
     struct DetectedNotationFaderEvent: Codable, Equatable, Sendable {

@@ -15215,3 +15215,374 @@ final class CaptureMotionEvidencePresenterTests: XCTestCase {
         XCTAssertEqual(rows.map(\.label), ["Platter", "Fader", "Watch"])
     }
 }
+
+// MARK: - Crossfader mapping provenance and take window (Slice C)
+//
+// Two defects, both robustness rather than the cause of the take-002
+// screenshot (a fader-open Baby Scratch correctly records no fader events):
+//   1. `MIDIActionResolver` resolved transport against the hardware registry
+//      but resolved crossfader only from a learned mapping, so a recognised
+//      controller selected manually — which, unlike app startup, never
+//      auto-applies the verified mapping — recorded no fader evidence.
+//   2. Nothing bounded the END of the take, so controller moves made between
+//      Stop and movie finalization were decoded into the finished take.
+
+final class CrossfaderMappingProvenanceTests: XCTestCase {
+
+    // MARK: Fixtures
+
+    private static let raneIdentity = MIDIDeviceIdentity(sourceName: "RANE ONE")
+    private static let unknownIdentity = MIDIDeviceIdentity(sourceName: "Generic USB Controller")
+
+    /// The certified RANE crossfader: CC8 on channel 15.
+    private func crossfaderMessage(value: Int = 64, channel: UInt8 = 15, cc: UInt8 = 8) -> ParsedMIDIMessage {
+        ParsedMIDIMessage(
+            channel: channel,
+            messageType: .controlChange,
+            controlNumber: cc,
+            noteNumber: cc,
+            value: UInt8(clamping: value)
+        )
+    }
+
+    private func learnedCrossfaderMapping(channel: Int = 15, controlNumber: Int = 8) -> MIDIDeviceMapping {
+        var mapping = MIDIDeviceMapping(deviceIdentifier: "dev-1", deviceName: "RANE ONE")
+        mapping.upsert(
+            MIDILearnedControl(
+                action: .crossfader,
+                messageType: .controlChange,
+                channel: channel,
+                controlNumber: controlNumber,
+                learnedAt: Date(timeIntervalSince1970: 0),
+                isVerified: true
+            )
+        )
+        return mapping
+    }
+
+    // MARK: Registry contract
+
+    func testRegistryCarriesCertifiedNonDiagnosticRaneCrossfaderBinding() throws {
+        let match = try XCTUnwrap(MIDIHardwareRegistry.shared.bestMatch(for: Self.raneIdentity))
+        XCTAssertEqual(match.confidence, .certified)
+
+        let crossfader = try XCTUnwrap(
+            match.profile.bindings.first { $0.role.kind == .crossfader }
+        )
+        XCTAssertFalse(crossfader.isDiagnosticOnly)
+        XCTAssertEqual(crossfader.channel, 15)
+        XCTAssertEqual(crossfader.signal.primaryCCNumber, 8)
+    }
+
+    // MARK: Resolution priority
+
+    func testLearnedMappingAlwaysWinsOverCertifiedRegistry() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(value: 100),
+            mapping: learnedCrossfaderMapping(),
+            identity: Self.raneIdentity
+        )
+
+        XCTAssertEqual(action, .crossfader(value: 100, source: .learned))
+    }
+
+    func testCertifiedRegistryResolvesCrossfaderWhenNoLearnedMappingExists() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(value: 100),
+            mapping: nil,
+            identity: Self.raneIdentity
+        )
+
+        XCTAssertEqual(action, .crossfader(value: 100, source: .certifiedRegistry))
+    }
+
+    func testUnrecognisedDeviceIsNeverSniffedForCC8() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(),
+            mapping: nil,
+            identity: Self.unknownIdentity
+        )
+
+        XCTAssertEqual(action, .unknown, "an unknown controller's CC8 must not be assumed to be a crossfader")
+    }
+
+    func testWithoutDeviceIdentityThereIsNoRegistryFallback() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(),
+            mapping: nil,
+            identity: nil
+        )
+
+        XCTAssertEqual(action, .unknown)
+    }
+
+    func testCertifiedFallbackIsChannelAndControlScoped() {
+        // Right CC, wrong channel.
+        XCTAssertEqual(
+            MIDIActionResolver.resolve(
+                message: crossfaderMessage(channel: 3), mapping: nil, identity: Self.raneIdentity
+            ),
+            .unknown
+        )
+        // Right channel, wrong CC.
+        XCTAssertEqual(
+            MIDIActionResolver.resolve(
+                message: crossfaderMessage(cc: 9), mapping: nil, identity: Self.raneIdentity
+            ),
+            .unknown
+        )
+    }
+
+    func testLearnedMappingOnADifferentAddressStillWinsOnItsOwnAddress() {
+        // A user who learned the crossfader onto a non-default control keeps it.
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(value: 20, channel: 3, cc: 42),
+            mapping: learnedCrossfaderMapping(channel: 3, controlNumber: 42),
+            identity: Self.raneIdentity
+        )
+
+        XCTAssertEqual(action, .crossfader(value: 20, source: .learned))
+    }
+
+    // MARK: Normalization
+
+    func testCertifiedFallbackUsesPlainSevenBitNormalization() {
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(0), 0.0, accuracy: 0.0001)
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(127), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(64), 64.0 / 127.0, accuracy: 0.0001)
+        // Out-of-range values clamp rather than producing a value outside 0…1.
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(-5), 0.0, accuracy: 0.0001)
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(300), 1.0, accuracy: 0.0001)
+    }
+
+    // MARK: Persistence / Codable backward compatibility
+
+    func testRawMixerMIDIEventRoundTripsMappingSource() throws {
+        let event = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 12.0, takeRelativeTime: 2.0, deviceName: "RANE ONE",
+            channel: 15, controller: 8, value: 100, normalizedValue: 100.0 / 127.0,
+            mappedControl: "crossfader", mappingSource: .certifiedRegistry
+        )
+
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: data)
+
+        XCTAssertEqual(decoded, event)
+        XCTAssertEqual(decoded.mappingSource, .certifiedRegistry)
+    }
+
+    func testLegacySidecarEventWithoutMappingSourceDecodesAsUnknownProvenance() throws {
+        // Exactly the shape written before provenance existed — no key at all.
+        let legacyJSON = """
+        {
+          "timestamp": 12.0,
+          "takeRelativeTime": 2.0,
+          "deviceName": "RANE ONE",
+          "channel": 15,
+          "controller": 8,
+          "value": 100,
+          "normalizedValue": 0.787,
+          "mappedControl": "crossfader"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: legacyJSON)
+
+        XCTAssertNil(decoded.mappingSource, "a legacy event has unknown provenance, not learned")
+        XCTAssertEqual(decoded.mappedControl, "crossfader")
+        XCTAssertEqual(decoded.channel, 15)
+    }
+
+    // MARK: Take-window boundary
+
+    private func mixerEvent(at takeRelativeTime: Double) -> CaptureCore.RawMixerMIDIEvent {
+        CaptureCore.RawMixerMIDIEvent(
+            timestamp: takeRelativeTime, takeRelativeTime: takeRelativeTime,
+            deviceName: "RANE ONE", channel: 15, controller: 8, value: 64,
+            normalizedValue: 0.5, mappedControl: "crossfader", mappingSource: .learned
+        )
+    }
+
+    func testEventsAfterStopAreExcludedFromTheFinishedTake() {
+        let events = [0.5, 1.0, 4.9, 5.0, 5.1, 8.0].map(mixerEvent(at:))
+
+        let bounded = CaptureMotionEvidenceResolver.eventsWithinTakeWindow(events, stopRelativeTime: 5.0)
+
+        XCTAssertEqual(bounded.map(\.takeRelativeTime), [0.5, 1.0, 4.9, 5.0])
+    }
+
+    func testEventExactlyAtStopIsKept() {
+        let bounded = CaptureMotionEvidenceResolver.eventsWithinTakeWindow(
+            [mixerEvent(at: 5.0)], stopRelativeTime: 5.0
+        )
+
+        XCTAssertEqual(bounded.count, 1, "the stop instant is inside the take")
+    }
+
+    func testNilStopBoundKeepsEverythingWhileTheTakeIsRunning() {
+        let events = [0.5, 1.0, 8.0].map(mixerEvent(at:))
+
+        let bounded = CaptureMotionEvidenceResolver.eventsWithinTakeWindow(events, stopRelativeTime: nil)
+
+        XCTAssertEqual(bounded.count, events.count)
+    }
+
+    // MARK: Provenance through evidence resolution
+
+    private func snapshot(
+        mixerEvents: [CaptureCore.RawMixerMIDIEvent],
+        faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected", notationConfidence: 0.8, detectedLabel: nil,
+            labelSource: "unknown", labelConfidence: nil, detectionSources: ["midi"],
+            recordMovementEvents: [], audioEvents: [], faderEvents: faderEvents,
+            mixerMidiEvents: mixerEvents, capturedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func faderEvent(at time: Double) -> CaptureCore.DetectedNotationFaderEvent {
+        .init(startTime: time, endTime: time + 0.02, eventKind: .cut, control: "crossfader",
+              fromValue: 1.0, toValue: 0.0, source: "midi", confidence: 0.9)
+    }
+
+    func testEvidenceReportsCertifiedRegistryProvenance() {
+        var registryEvent = mixerEvent(at: 1.0)
+        registryEvent = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1.0, takeRelativeTime: 1.0, deviceName: "RANE ONE",
+            channel: 15, controller: 8, value: 64, normalizedValue: 0.5,
+            mappedControl: "crossfader", mappingSource: .certifiedRegistry
+        )
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(mixerEvents: [registryEvent], faderEvents: [faderEvent(at: 1.0)]),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.faderMappingSource, .certifiedRegistry)
+    }
+
+    func testLearnedProvenanceOutranksRegistryWhenBothAppear() {
+        let registryEvent = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1.0, takeRelativeTime: 1.0, deviceName: "RANE ONE",
+            channel: 15, controller: 8, value: 64, normalizedValue: 0.5,
+            mappedControl: "crossfader", mappingSource: .certifiedRegistry
+        )
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(
+                mixerEvents: [registryEvent, mixerEvent(at: 2.0)],
+                faderEvents: [faderEvent(at: 1.0)]
+            ),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.faderMappingSource, .learned)
+    }
+
+    func testLegacySnapshotReportsNoProvenance() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(
+                mixerEvents: [
+                    CaptureCore.RawMixerMIDIEvent(
+                        timestamp: 1.0, takeRelativeTime: 1.0, deviceName: "RANE ONE",
+                        channel: 15, controller: 8, value: 64, normalizedValue: 0.5,
+                        mappedControl: "crossfader"
+                    )
+                ],
+                faderEvents: [faderEvent(at: 1.0)]
+            ),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertNil(evidence.faderMappingSource)
+    }
+
+    // MARK: Presentation
+
+    private func faderRowValue(_ evidence: CaptureMotionEvidence) -> String? {
+        CaptureMotionEvidencePresenter.rows(for: evidence).first { $0.label == "Fader" }?.value
+    }
+
+    func testFaderRowNamesItsProvenance() {
+        XCTAssertEqual(
+            faderRowValue(CaptureMotionEvidence(
+                platter: .absent, faderEventCount: 4, watch: .notUsed, faderMappingSource: .learned
+            )),
+            "4 events · learned"
+        )
+        XCTAssertEqual(
+            faderRowValue(CaptureMotionEvidence(
+                platter: .absent, faderEventCount: 4, watch: .notUsed, faderMappingSource: .certifiedRegistry
+            )),
+            "4 events · certified default"
+        )
+    }
+
+    func testOpenFaderStillReadsAsNoMovementWithoutProvenanceNoise() {
+        // An open fader is a correct Baby Scratch result, not a mapping fault,
+        // so it must not be qualified with a mapping source.
+        XCTAssertEqual(
+            faderRowValue(CaptureMotionEvidence(
+                platter: .gesture(movementRuns: 8, reversalRuns: 4),
+                faderEventCount: 0, watch: .notUsed, faderMappingSource: .certifiedRegistry
+            )),
+            "No movement"
+        )
+    }
+
+    // MARK: No fabricated events
+
+    func testOpenFaderProducesNoFaderEventsRegardlessOfProvenance() {
+        // A held-open fader emits repeated identical values; the existing
+        // minimum-delta gate must still yield zero events.
+        let held = (0..<20).map { index in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: Double(index) * 0.05, takeRelativeTime: Double(index) * 0.05,
+                deviceName: "RANE ONE", channel: 15, controller: 8, value: 127,
+                normalizedValue: 1.0, mappedControl: "crossfader", mappingSource: .certifiedRegistry
+            )
+        }
+
+        XCTAssertTrue(CaptureCore.deriveDetectedNotationFaderEvents(from: held).isEmpty)
+    }
+
+    func testRealCutStillProducesEventsUnderCertifiedProvenance() {
+        let cut = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 0.0, takeRelativeTime: 0.0, deviceName: "RANE ONE",
+                channel: 15, controller: 8, value: 127, normalizedValue: 1.0,
+                mappedControl: "crossfader", mappingSource: .certifiedRegistry
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 0.04, takeRelativeTime: 0.04, deviceName: "RANE ONE",
+                channel: 15, controller: 8, value: 0, normalizedValue: 0.0,
+                mappedControl: "crossfader", mappingSource: .certifiedRegistry
+            )
+        ]
+
+        XCTAssertFalse(CaptureCore.deriveDetectedNotationFaderEvents(from: cut).isEmpty,
+                       "a genuine fast full-travel cut must still register")
+    }
+
+    // MARK: Export
+
+    func testExportTakeCarriesFaderProvenance() {
+        let take = SessionExportTake(
+            takeID: "take-003", takeNumber: 3, bpm: 79,
+            mediaURL: URL(fileURLWithPath: "/tmp/t.mov"),
+            audioArtifactURL: URL(fileURLWithPath: "/tmp/t.wav"),
+            sidecarURL: URL(fileURLWithPath: "/tmp/t.json"),
+            watchCaptureSession: nil, drillName: "Baby Scratch", duration: 8.4,
+            quality: nil, comboTagged: false, audioPresent: true, motionPresent: true,
+            syncStatus: nil, recordingStatus: "completed", verbalSlateUsed: false,
+            syncClapUsed: false, note: nil, captureTiming: nil,
+            motionSources: [.platter], faderMappingSource: .certifiedRegistry
+        )
+
+        XCTAssertEqual(take.faderMappingSource, .certifiedRegistry)
+        // Provenance must not disturb the Slice A motion contract.
+        XCTAssertFalse(take.claimsWatchBackedMotion)
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+}

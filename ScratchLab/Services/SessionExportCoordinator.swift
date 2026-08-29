@@ -198,6 +198,11 @@ struct SessionExportTake: Sendable {
     /// `SessionExportTake` is an in-memory input struct, not a serialized
     /// type, so this adds no on-disk export-schema field.
     let motionSources: [CaptureMotionSource]?
+    /// How this take's crossfader was recognised, when it produced any fader
+    /// evidence. Additive and optional: `nil` means no fader evidence carried
+    /// provenance. Like `motionSources`, this lives on an in-memory input
+    /// struct and adds no on-disk export-schema field.
+    let faderMappingSource: FaderMappingSource?
 
     init(
         takeID: String,
@@ -219,7 +224,8 @@ struct SessionExportTake: Sendable {
         syncClapUsed: Bool?,
         note: String?,
         captureTiming: CaptureTimingMetadata? = nil,
-        motionSources: [CaptureMotionSource]? = nil
+        motionSources: [CaptureMotionSource]? = nil,
+        faderMappingSource: FaderMappingSource? = nil
     ) {
         self.takeID = takeID
         self.takeNumber = takeNumber
@@ -241,6 +247,7 @@ struct SessionExportTake: Sendable {
         self.note = note
         self.captureTiming = captureTiming
         self.motionSources = motionSources
+        self.faderMappingSource = faderMappingSource
     }
 
     /// Whether export must find a valid linked Watch artifact to honour this
@@ -1929,7 +1936,8 @@ struct SessionArchiveBuilder: Sendable {
                     syncClapUsed: false,
                     note: nil,
                     captureTiming: sidecar.captureTiming,
-                    motionSources: motionEvidence.motionSources
+                    motionSources: motionEvidence.motionSources,
+                    faderMappingSource: motionEvidence.faderMappingSource
                 )
             }
             .sorted { $0.takeNumber < $1.takeNumber }
@@ -3215,7 +3223,8 @@ struct SessionArchiveBuilder: Sendable {
                 syncClapUsed: resolvedSyncClapUsed,
                 note: take.note,
                 captureTiming: take.captureTiming,
-                motionSources: take.motionSources
+                motionSources: take.motionSources,
+                faderMappingSource: take.faderMappingSource
             )
         }
 
