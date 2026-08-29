@@ -1,6 +1,28 @@
 # AI Handoff
 
-## 2026-08-29 — Capture-integrity Slice C: crossfader provenance + take-window bounding (uncommitted; current)
+## 2026-08-29 — RANE right-deck playback routing FIXED and PHYSICALLY APPROVED (uncommitted; current)
+
+Started from `37e2d1d1`. No commit amended or reset.
+
+**MEASURED HARDWARE TRUTH — treat as settled, do not re-derive.** The RANE ONE MKII exposes **10** USB output channels (not 14). USB output **1/2 is the left deck**, **3/4 is the right deck** (Karl, hardware-confirmed). **13/14 is the master path** and must never be used for deck playback — it bypasses the channel strip, fader, and meter.
+
+**Root cause.** `IOScratchPlaybackEngine` hardcoded `raneOutputChannelCount = 14` and gated the channel map on `maximumOutputNumberOfChannels >= 14`. `10 >= 14` is false → requested stereo → `channelMap` never installed → playback fell to the device's first pair, **1/2, the left deck**. The pair index `2` was correct all along and was never applied — which is why both the earlier 13/14 assumption and the later 3/4 value lit the wrong meter. The old DEBUG log printed the *requested* channel count, so it read `14` even when nothing was installed; that is what hid the defect across two prior attempts.
+
+**AVAudioSession is NOT at fault — do not "fix" it.** The diagnostic showed it granting 10 of 10 on request, and `options=8` is `.defaultToSpeaker` alone, which did not block multichannel USB. No category/mode/option was changed, and the earlier `.defaultToSpeaker`/`.mixWithOthers` hypothesis is disproved.
+
+**What is in place.** `RanePlaybackRoutingPolicy` lives in `DVSHardwareProfile.swift` — chosen because that file is in **both** targets and Foundation-only, so the policy is testable from the macOS test target while the engine that applies it is iOS-only. `minimumRequiredOutputChannels` is **derived** (`rightDeckPairStartIndex + 2 = 4`), never a device size. The engine requests the route's real maximum, decides from the granted session count **and** the output node's own count, sizes the map to the real destination count, applies it, then **reads it back and verifies** before allowing playback. A recognized RANE that cannot reach the right deck **throws and refuses to play** — do not reintroduce a stereo fallback, that silent downgrade to 1/2 *was* the bug. Non-RANE routes are untouched.
+
+**Physical acceptance (Karl, iPhone K):** AHHH plays through the right deck, only the right meter responds, right upfader and right-deck crossfader control it, master output normal, DVS unaffected. Log corroborates: `granted=10 max=10 outputNode=10 map=[-1,-1,0,1,-1,-1,-1,-1,-1,-1] onRightDeck=true decision=raneRightDeck`, identical at `after-engine-start`.
+
+**Test debt repaid.** The old `testRaneScratchPlaybackUsesRightDeckOutputThreeFourIndependentlyOfDVSInput` asserted the literal string `"let raneOutputPairStartIndex = 2"` and **passed throughout the entire bug**. Replaced by 17 behavioural tests. Do not reintroduce source-string assertions for routing.
+
+**DVS input stays physical 3/4** in the independent input namespace. Input and output both using 3/4 is not a collision; neither may be derived from the other.
+
+**Verification.** 17/17 twice; regressions green (39/39, 22/22, 40/40, 17/17, plus Slice A/B/C); iOS + signed device + macOS `build-for-testing` all built; fixtures 47/47; `git diff --check` clean. `scripts/build.sh all` exit 65, **3090 / 49 skipped / 11 failures**, failing-name set **identical to the post-restore baseline (9 names)**.
+
+**Known unrelated fragility:** `PlatterTestSampleLoadTests` (5) and `MIDILearnEngineTests` (3) fail when run **standalone** via `xcrun xctest` but pass in the full plan. Shared-state/test-isolation sensitivity — `dvs_ahhh` is present in source and bundle. A test-isolation cleanup slice is warranted.
+
+## 2026-08-29 — Capture-integrity Slice C: crossfader provenance + take-window bounding (now in commit 37e2d1d1)
 
 Started from `14685e06`. Neither `089965f4` nor `14685e06` was amended, reset, or rebased.
 

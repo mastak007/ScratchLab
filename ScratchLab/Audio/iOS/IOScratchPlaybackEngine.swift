@@ -521,6 +521,13 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private func startEngineIfNeeded() throws {
         if !engine.isRunning {
             try engine.start()
+            #if DEBUG
+            // A channel map can be accepted at assignment time and then dropped
+            // or renegotiated when the engine starts and a format is committed,
+            // so the post-start state is logged separately from the configure
+            // stage rather than inferred from it.
+            logRaneRoutingDiagnostic(stage: "after-engine-start")
+            #endif
         }
     }
 
@@ -531,12 +538,18 @@ final class IOScratchPlaybackEngine: ObservableObject {
         renderer?.setUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
     }
 
-    /// Builds the graph for the route observed at hot-cue load time. ScratchLab
-    /// playback uses the RANE ONE MKII's right-deck USB playback pair 3/4.
-    /// USB input and output channel spaces are independent, so the separate
-    /// DVS/timecode input pair can use the same channel numbers without an
-    /// audio-routing collision. Every other route retains the existing
-    /// two-channel stereo graph.
+    /// Builds the graph for the route observed at hot-cue load time.
+    ///
+    /// On a recognized RANE route, ScratchLab's audio must reach the **right
+    /// deck**, physical USB output 3/4 (destination indices 2/3) — see
+    /// `RanePlaybackRoutingPolicy` for the measured hardware truth and why the
+    /// previous `>= 14` gate silently defeated this. Every other route keeps
+    /// the ordinary two-channel stereo graph, unchanged.
+    ///
+    /// A recognized RANE that cannot be routed to the right deck now throws
+    /// rather than degrading to stereo: plain stereo lands on the device's
+    /// first pair, 1/2, which is the **left** deck, so a silent fallback plays
+    /// AHHH on the wrong channel strip with no indication anything is wrong.
     private func prepareRendererForCurrentRoute() async throws -> IOScratchRenderer {
         let session = AVAudioSession.sharedInstance()
         try await Task.detached(priority: .userInitiated) {
@@ -544,14 +557,16 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }.value
 
         let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
-        let normalizedRouteName = routeName.lowercased()
-        let isRaneOne = normalizedRouteName.contains("rane") && normalizedRouteName.contains("one")
-        let raneOutputChannelCount = 14
-        let raneOutputPairStartIndex = 2
-        let supportsRaneOutputPair = session.maximumOutputNumberOfChannels >= raneOutputChannelCount
+        let isRaneOne = RanePlaybackRoutingPolicy.matchesRaneRoute(portName: routeName)
+        // Ask the connected route for everything it has rather than a guessed
+        // constant. The RANE ONE MKII reports 10 outputs, so the previous
+        // hardcoded 14 requirement could never be satisfied.
+        let requestedChannelCount = isRaneOne
+            ? max(session.maximumOutputNumberOfChannels, RanePlaybackRoutingPolicy.minimumRequiredOutputChannels)
+            : 2
         let configuration = OutputConfiguration(
-            preferredHardwareChannelCount: isRaneOne && supportsRaneOutputPair ? raneOutputChannelCount : 2,
-            outputPairStartIndex: isRaneOne && supportsRaneOutputPair ? raneOutputPairStartIndex : nil,
+            preferredHardwareChannelCount: requestedChannelCount,
+            outputPairStartIndex: isRaneOne ? RanePlaybackRoutingPolicy.rightDeckPairStartIndex : nil,
             routeName: routeName
         )
         if configuration == outputConfiguration, let renderer {
@@ -565,7 +580,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
         engine.disconnectNodeOutput(engine.mainMixerNode)
 
-        try session.setPreferredOutputNumberOfChannels(configuration.preferredHardwareChannelCount)
+        try session.setPreferredOutputNumberOfChannels(requestedChannelCount)
         let renderer = IOScratchRenderer()
         engine.attach(renderer.sourceNode)
         let stereoFormat = renderer.sourceNode.outputFormat(forBus: 0)
@@ -576,29 +591,83 @@ final class IOScratchPlaybackEngine: ObservableObject {
         )
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
 
-        // The output unit's channel map is destination-indexed. Preserve the
-        // renderer's proven stereo graph while silencing every unused RANE
-        // destination and placing source L/R on the right-deck playback pair
-        // 3/4. Input 3/4 belongs to a separate Core Audio direction and does
-        // not conflict with this output map.
-        if let startIndex = configuration.outputPairStartIndex {
-            var channelMap = [NSNumber](
-                repeating: NSNumber(value: -1),
-                count: configuration.preferredHardwareChannelCount
-            )
-            channelMap[startIndex] = NSNumber(value: 0)
-            channelMap[startIndex + 1] = NSNumber(value: 1)
-            engine.outputNode.auAudioUnit.channelMap = channelMap
-        } else {
+        // Decide from what the hardware actually reported after the request —
+        // the granted session count and the output node's own channel count —
+        // never from the requested value.
+        let grantedChannelCount = session.outputNumberOfChannels
+        let outputNodeChannelCount = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
+        let decision = RanePlaybackRoutingPolicy.decide(
+            portName: routeName,
+            grantedOutputChannels: grantedChannelCount,
+            outputNodeChannels: outputNodeChannelCount
+        )
+
+        switch decision {
+        case let .raneRightDeck(channelMap):
+            engine.outputNode.auAudioUnit.channelMap = channelMap.map(NSNumber.init(value:))
+            // Assignment is not proof: read the map back and confirm it still
+            // places the renderer on the right deck before allowing playback.
+            let applied = engine.outputNode.auAudioUnit.channelMap?.map(\.intValue)
+            guard RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(applied) else {
+                engine.detach(renderer.sourceNode)
+                outputConfiguration = nil
+                throw IOScratchPlaybackRoutingError.raneRightDeckUnavailable(
+                    .channelMapRejected(
+                        expectedPairStartIndex: RanePlaybackRoutingPolicy.rightDeckPairStartIndex,
+                        applied: applied
+                    )
+                )
+            }
+        case .ordinaryStereo:
             engine.outputNode.auAudioUnit.channelMap = nil
+        case let .unroutable(failure):
+            engine.detach(renderer.sourceNode)
+            outputConfiguration = nil
+            throw IOScratchPlaybackRoutingError.raneRightDeckUnavailable(failure)
         }
+
         self.renderer = renderer
         renderer.setUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
         outputConfiguration = configuration
 
         #if DEBUG
-        print("[SCRATCH-DEBUG] playback output configured · route=\(routeName) hardwareChannels=\(configuration.preferredHardwareChannelCount) channelMap=\(engine.outputNode.auAudioUnit.channelMap ?? [])")
+        logRaneRoutingDiagnostic(stage: "configured", session: session, decision: decision)
         #endif
         return renderer
     }
+
+    #if DEBUG
+    /// Concise requested-versus-granted routing readout. Read-only, and
+    /// compiled out of release builds — there is no Release logging here.
+    ///
+    /// Reports the five facts that actually distinguish routing outcomes:
+    /// route recognition, requested vs granted channels, what the output node
+    /// exposes, and whether the applied map really lands on the right deck.
+    /// The old log printed the *requested* channel count, which read `14` even
+    /// when the map was never installed — that is what hid this bug.
+    private func logRaneRoutingDiagnostic(
+        stage: String,
+        session: AVAudioSession = .sharedInstance(),
+        decision: RanePlaybackRoutingPolicy.Decision? = nil
+    ) {
+        let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
+        let applied = engine.outputNode.auAudioUnit.channelMap?.map(\.intValue)
+        let outcome: String
+        switch decision {
+        case .raneRightDeck: outcome = "raneRightDeck"
+        case .ordinaryStereo: outcome = "ordinaryStereo"
+        case let .unroutable(failure): outcome = "unroutable(\(failure))"
+        case nil: outcome = "n/a"
+        }
+        print(
+            "[RANE-ROUTING] stage=\(stage) route=\(routeName) "
+            + "rane=\(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: routeName)) "
+            + "granted=\(session.outputNumberOfChannels) max=\(session.maximumOutputNumberOfChannels) "
+            + "outputNode=\(engine.outputNode.outputFormat(forBus: 0).channelCount) "
+            + "map=\(applied.map { "[\($0.map(String.init).joined(separator: ","))]" } ?? "nil") "
+            + "onRightDeck=\(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(applied)) "
+            + "decision=\(outcome) running=\(engine.isRunning)"
+        )
+    }
+    #endif
 }

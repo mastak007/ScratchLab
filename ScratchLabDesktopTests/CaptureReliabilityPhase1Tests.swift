@@ -3151,16 +3151,21 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(viewSource.contains("recorder.startCapture()"))
     }
 
-    func testRaneScratchPlaybackUsesRightDeckOutputThreeFourIndependentlyOfDVSInput() throws {
-        let playbackURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
-        let dvsURL = projectRootURL().appendingPathComponent("ScratchLab/Models/DVSHardwareProfile.swift")
-        let playbackSource = try String(contentsOf: playbackURL, encoding: .utf8)
-        let dvsSource = try String(contentsOf: dvsURL, encoding: .utf8)
+    /// Replaces an earlier source-string test that merely asserted the literal
+    /// `"let raneOutputPairStartIndex = 2"` appeared in the engine. That test
+    /// passed throughout the entire left-deck bug: the pair index was correct
+    /// the whole time, while a hardcoded `>= 14` channel gate meant the map was
+    /// never installed at all. Behaviour is asserted here instead.
+    func testRaneScratchPlaybackRoutesToRightDeckIndependentlyOfDVSInput() throws {
+        // The right-deck pair and the derived channel requirement.
+        XCTAssertEqual(RanePlaybackRoutingPolicy.rightDeckPairStartIndex, 2,
+                       "destination 2/3 == physical USB output 3/4 == right deck")
+        XCTAssertEqual(RanePlaybackRoutingPolicy.minimumRequiredOutputChannels, 4,
+                       "the requirement is 'enough channels to reach the right deck', not a guessed device size")
 
-        XCTAssertTrue(playbackSource.contains("let raneOutputChannelCount = 14"))
-        XCTAssertTrue(playbackSource.contains("let raneOutputPairStartIndex = 2"))
-        XCTAssertTrue(playbackSource.contains("channelMap[startIndex] = NSNumber(value: 0)"))
-        XCTAssertTrue(playbackSource.contains("channelMap[startIndex + 1] = NSNumber(value: 1)"))
+        // DVS input stays on its own pair, in the independent input namespace.
+        let dvsURL = projectRootURL().appendingPathComponent("ScratchLab/Models/DVSHardwareProfile.swift")
+        let dvsSource = try String(contentsOf: dvsURL, encoding: .utf8)
         XCTAssertTrue(dvsSource.contains("firstChannelIndex: 2, secondChannelIndex: 3"))
     }
 
@@ -15584,5 +15589,197 @@ final class CrossfaderMappingProvenanceTests: XCTestCase {
         // Provenance must not disturb the Slice A motion contract.
         XCTAssertFalse(take.claimsWatchBackedMotion)
         XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+}
+
+// MARK: - RANE playback output routing (right deck 3/4)
+//
+// Measured hardware truth (iPhone K + RANE ONE MKII, 2026-08-29): the device
+// exposes 10 USB output channels. USB output 1/2 is the left deck, 3/4 is the
+// right deck. The previous engine hardcoded a guessed 14-channel requirement
+// and gated the channel map on `maximumOutputNumberOfChannels >= 14`; the real
+// device reports 10, so the gate was always false, no map was ever installed,
+// and playback fell back to plain stereo — the first pair, 1/2, the LEFT deck.
+// That is why two different pair constants both lit the left meter.
+
+final class RanePlaybackRoutingPolicyTests: XCTestCase {
+
+    private let raneRoute = "Rane ONE MKII"
+
+    private func decide(
+        route: String,
+        granted: Int,
+        outputNode: Int
+    ) -> RanePlaybackRoutingPolicy.Decision {
+        RanePlaybackRoutingPolicy.decide(
+            portName: route,
+            grantedOutputChannels: granted,
+            outputNodeChannels: outputNode
+        )
+    }
+
+    // MARK: Accepted hardware shapes
+
+    func testTenOutputRaneIsAccepted() {
+        // The exact shape measured on Karl's hardware.
+        guard case let .raneRightDeck(map) = decide(route: raneRoute, granted: 10, outputNode: 10) else {
+            return XCTFail("a 10-output RANE must route to the right deck")
+        }
+        XCTAssertEqual(map.count, 10, "the map is sized to the real destination count, not a guess")
+        XCTAssertEqual(map[2], 0)
+        XCTAssertEqual(map[3], 1)
+    }
+
+    func testFourOutputRaneIsAccepted() {
+        // The minimum that can still reach the right-deck pair.
+        guard case let .raneRightDeck(map) = decide(route: raneRoute, granted: 4, outputNode: 4) else {
+            return XCTFail("four outputs is exactly enough to reach destination 2/3")
+        }
+        XCTAssertEqual(map, [-1, -1, 0, 1])
+    }
+
+    func testFourteenOutputRaneStillWorks() {
+        // The old guessed size must not become a new implicit requirement.
+        guard case let .raneRightDeck(map) = decide(route: raneRoute, granted: 14, outputNode: 14) else {
+            return XCTFail("a larger device must still route")
+        }
+        XCTAssertEqual(map.count, 14)
+        XCTAssertEqual(map[2], 0)
+        XCTAssertEqual(map[3], 1)
+    }
+
+    // MARK: Rejected rather than silently sent to the left deck
+
+    func testFewerThanFourOutputsIsRejectedNotRoutedToOneTwo() {
+        guard case let .unroutable(failure) = decide(route: raneRoute, granted: 2, outputNode: 2) else {
+            return XCTFail("two channels cannot reach the right deck and must not fall back to stereo 1/2")
+        }
+        XCTAssertEqual(failure, .insufficientGrantedChannels(granted: 2, required: 4))
+    }
+
+    func testOutputNodeShortfallIsRejectedEvenWhenSessionGrantsEnough() {
+        // The session granting enough is not proof the node did.
+        guard case let .unroutable(failure) = decide(route: raneRoute, granted: 10, outputNode: 2) else {
+            return XCTFail("an output node with too few channels must be rejected")
+        }
+        XCTAssertEqual(failure, .insufficientOutputNodeChannels(channels: 2, required: 4))
+    }
+
+    func testTheOldFourteenChannelGateWouldHaveRejectedRealHardware() {
+        // Regression pin for the actual defect: 10 >= 14 is false, which is
+        // what silently disabled the map on real hardware.
+        XCTAssertLessThan(10, 14)
+        XCTAssertGreaterThanOrEqual(10, RanePlaybackRoutingPolicy.minimumRequiredOutputChannels,
+                                    "the corrected requirement must accept the measured 10-output device")
+    }
+
+    func testRoutingFailureMessagesAreTruthfulAboutNotPlaying() {
+        let error = IOScratchPlaybackRoutingError.raneRightDeckUnavailable(
+            .insufficientGrantedChannels(granted: 2, required: 4)
+        )
+        XCTAssertTrue(error.userMessage.contains("did not play"))
+        XCTAssertTrue(error.userMessage.contains("left deck"))
+    }
+
+    // MARK: Map places renderer only on 3/4, everything else silent
+
+    func testRendererMapsOnlyToRightDeckPairAndSilencesEveryOtherDestination() {
+        let map = RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 10)
+
+        XCTAssertEqual(map[2], 0, "renderer L on destination 2 (physical 3)")
+        XCTAssertEqual(map[3], 1, "renderer R on destination 3 (physical 4)")
+        for index in 0..<map.count where index != 2 && index != 3 {
+            XCTAssertEqual(map[index], RanePlaybackRoutingPolicy.silentDestination,
+                           "destination \(index) must be silent")
+        }
+    }
+
+    func testLeftDeckPairIsExplicitlySilenced() {
+        let map = RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 10)
+
+        // The whole bug was audio landing here.
+        XCTAssertEqual(map[0], RanePlaybackRoutingPolicy.silentDestination)
+        XCTAssertEqual(map[1], RanePlaybackRoutingPolicy.silentDestination)
+    }
+
+    func testMasterPairIsNeverTargeted() {
+        let map = RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 14)
+
+        // 13/14 is the master path; routing there bypasses the channel strip,
+        // fader, and meter.
+        XCTAssertEqual(map[12], RanePlaybackRoutingPolicy.silentDestination)
+        XCTAssertEqual(map[13], RanePlaybackRoutingPolicy.silentDestination)
+    }
+
+    // MARK: Read-back verification
+
+    func testMapReadBackVerificationAcceptsCorrectMapAndRejectsOthers() {
+        XCTAssertTrue(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([-1, -1, 0, 1]))
+        XCTAssertTrue(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(
+            RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 10)
+        ))
+        // Left-deck placement — the failure this whole slice exists to stop.
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([0, 1, -1, -1]))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(nil))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([-1, -1]))
+        // Swapped L/R on the right pair is still wrong.
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([-1, -1, 1, 0]))
+    }
+
+    // MARK: Non-RANE routes keep ordinary stereo
+
+    func testNonRaneRoutesRemainOrdinaryStereo() {
+        for route in ["Speaker", "Headphones", "MacBook Pro Speakers", "Some USB Interface"] {
+            XCTAssertEqual(decide(route: route, granted: 2, outputNode: 2), .ordinaryStereo,
+                           "\(route) must keep the ordinary stereo graph")
+        }
+    }
+
+    func testNonRaneMultichannelRouteIsStillOrdinaryStereo() {
+        // A big non-RANE interface must not inherit RANE deck routing.
+        XCTAssertEqual(decide(route: "Some USB Interface", granted: 10, outputNode: 10), .ordinaryStereo)
+    }
+
+    func testRaneRouteRecognition() {
+        XCTAssertTrue(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "Rane ONE MKII"))
+        XCTAssertTrue(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "RANE ONE"))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "Rane Seventy-Two"))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "Speaker"))
+    }
+
+    // MARK: DVS input independence
+
+    func testDVSInputPairIsUnchangedAndIndependentOfPlaybackOutput() {
+        let pair = DVSHardwareProfile.preferredStereoPair(forDeviceName: "Rane ONE MKII")
+
+        XCTAssertEqual(pair?.firstChannelIndex, 2)
+        XCTAssertEqual(pair?.secondChannelIndex, 3)
+        // Input and output namespaces are separate: both legitimately use 3/4,
+        // and neither value may be derived from the other.
+        XCTAssertEqual(RanePlaybackRoutingPolicy.rightDeckPairStartIndex, pair?.firstChannelIndex,
+                       "same numbers, different Core Audio directions — not a collision")
+    }
+
+    func testDVSProfileIgnoresUnknownDevices() {
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: "Some USB Interface"))
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: nil))
+    }
+
+    // MARK: Right-deck ownership is untouched by this slice
+
+    private func repoRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    func testRightUpfaderAndCrossfaderOwnershipUnchanged() throws {
+        let engineURL = repoRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let source = try String(contentsOf: engineURL, encoding: .utf8)
+
+        // Gain remains the product of right-upfader and right-deck crossfader.
+        XCTAssertTrue(source.contains("rightUpfaderGain * crossfaderRightDeckGain"))
+        XCTAssertTrue(source.contains("func setRightUpfaderGain"))
+        XCTAssertTrue(source.contains("func setCrossfaderPosition"))
     }
 }

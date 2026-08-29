@@ -2,7 +2,23 @@ Read `CLAUDE.md`, then `SOUL.md` and `PROFILE.md`.
 Read `AI_HANDOFF.md` — the top entry (2026-08-29) is current state; older branch histories below it are reference material only.
 Run `git status --short --branch` and `git rev-parse HEAD origin/feature/ios-capture-camera-ux`.
 
-## Capture-integrity batch: Slices A+B+C landed, D–H open (2026-08-29; current)
+## RANE right-deck routing: FIXED and physically approved (2026-08-29; current, uncommitted)
+
+**Settled hardware truth — do not re-derive or re-test from scratch.** RANE ONE MKII exposes **10** USB output channels. **1/2 = left deck, 3/4 = right deck, 13/14 = master** (never route deck playback there). Karl physically approved: AHHH on the right deck, only the right meter, right upfader/crossfader control, master normal, DVS unaffected.
+
+Root cause was a hardcoded `>= 14` channel gate against a 10-output device, so the channel map was never installed and playback fell to the first pair (1/2, left deck). The pair index `2` was correct all along. **`AVAudioSession` is not at fault** — it grants 10/10; `options=8` is `.defaultToSpeaker` alone and does not block multichannel USB. Do not change category/mode/options.
+
+Invariants to preserve: `minimumRequiredOutputChannels` stays **derived** from the pair, never a device size; the engine must keep reading back the applied map and verifying it before playback; a recognized RANE that cannot reach the right deck must keep **throwing and refusing to play** — reinstating a stereo fallback recreates the original bug; non-RANE routes stay ordinary stereo; DVS input stays 3/4 in its independent namespace.
+
+`RanePlaybackRoutingPolicy` lives in `DVSHardwareProfile.swift` specifically because that file is in **both** targets and Foundation-only — the engine is iOS-target-only and unreachable from the macOS test target. Do not move it without checking target membership.
+
+**Do not reintroduce source-string routing tests.** The old one asserted `"let raneOutputPairStartIndex = 2"` and passed throughout the entire bug.
+
+**Test-isolation cleanup is now clearly warranted** (suggest scheduling it before more capture slices): `PlatterTestSampleLoadTests` (5 failures) and `MIDILearnEngineTests` (3 failures) fail when run standalone via `xcrun xctest` but pass in the full plan. Shared `UserDefaults`/bundle-state sensitivity, unrelated to any slice so far.
+
+Full-gate baseline is now **11 failures / 9 unique names** (post resource-restore). Compare against that, not the older 15/13.
+
+## Capture-integrity batch: Slices A+B+C landed, D–H open (2026-08-29)
 
 **Slice C (current, uncommitted).** Crossfader provenance + take-window bounding. Two earlier claims were corrected and must not be repeated: the Hardware Setup row was already truthful (`"Not active · expected …"`), and take-002's `Fader: No movement` is very likely CORRECT — startup already auto-applies the verified RANE mapping, and a Baby Scratch is played fader-open. Slice C is robustness, not the fix for that screenshot.
 
