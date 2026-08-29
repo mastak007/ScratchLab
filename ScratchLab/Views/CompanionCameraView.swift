@@ -12,7 +12,10 @@ struct CompanionCameraView: View {
     @State private var captureLiveNotationEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
     @State private var captureLiveFaderEvents: [CaptureCore.DetectedNotationFaderEvent] = []
     @State private var captureNotationBaselineTime: TimeInterval?
-    @State private var finalizationWatchdog: Task<Void, Never>?
+    /// The single finalization timer. `CaptureFinalizationMachine` is the only
+    /// thing that arms it, and scheduling replaces any previous deadline, so a
+    /// second watchdog cannot appear alongside it.
+    @State private var finalizationScheduler = CaptureFinalizationDeadlineScheduler()
     /// The rendered-scratch WAV destination for the take currently recording,
     /// if any — set when scratch capture starts and consumed once the take
     /// finishes (see `beginLinkedRecording`/`handleFinishedRecording`).
@@ -158,13 +161,15 @@ struct CompanionCameraView: View {
             refreshReviewMotionAssociation()
         })
         view = AnyView(view.onReceive(broadcaster.$lastRecordingSummary.compactMap { $0 }) { summary in
+            // One of three delivery paths for the same summary. All three end
+            // in `handleFinishedRecording`, which is idempotent because the
+            // finalization machine accepts exactly one summary per take.
             guard captureStore.matchesActiveSavingTake(summary) else { return }
             handleFinishedRecording(summary)
         })
         view = AnyView(view.onChange(of: captureStore.flowState) { _, newState in
             if newState != .saving {
-                finalizationWatchdog?.cancel()
-                finalizationWatchdog = nil
+                finalizationScheduler.cancel()
             }
             if newState == .recording {
                 // `beginLinkedRecording` resets the dispatcher's take clock,
@@ -409,7 +414,7 @@ struct CompanionCameraView: View {
                         startTake()
                     },
                     onStop: {
-                        stopTake()
+                        stopTake(source: .phone)
                     },
                     onRecheck: {
                         captureStore.flowState = .systemCheck
@@ -543,8 +548,7 @@ struct CompanionCameraView: View {
 
     private func cleanupFlow() {
         watchMotionCaptureStore.onPhoneCaptureCommand = nil
-        finalizationWatchdog?.cancel()
-        finalizationWatchdog = nil
+        finalizationScheduler.cancel()
         beatEngine.stop()
         audioEngine.stopAnalyzing()
         audioEngine.stop()
@@ -707,14 +711,26 @@ struct CompanionCameraView: View {
         }
     }
 
-    private func stopTake() {
+    /// The one Stop transition path.
+    ///
+    /// The phone Stop button and the Watch Stop command both enter here, so
+    /// there is a single place that can move a take into finalization and a
+    /// single place that decides what a Stop costs. `CaptureFinalizationMachine`
+    /// decides; this function only performs the effects it returns.
+    private func stopTake(source: CaptureStopSource) {
         beatEngine.stop()
-        // Close the MIDI take window before finalization begins, so controller
-        // moves made while the movie is still finalizing cannot land in this
-        // take's evidence.
-        midiControllerDispatcher.markCaptureStopped()
-        captureStore.requestStopRecording()
-        startFinalizationWatchdog()
+        // `isRecording` is only true once `AVCaptureFileOutput` has reported
+        // didStart. A Stop before that must still reach the recorder, or
+        // capture keeps running with no visible UI state.
+        let effects = captureStore.requestStopRecording(
+            source: source,
+            recorderPhase: broadcaster.isRecording ? .recording : .starting
+        )
+        // Empty means this Stop joined an in-flight finalization: the timer
+        // stays frozen at the first accepted Stop and no second deadline,
+        // recorder stop, or Watch stop is issued.
+        guard !effects.isEmpty else { return }
+
         if let link = activeWatchCaptureLink {
             watchMotionCaptureStore.requestRemoteCaptureStop(
                 sessionID: link.sessionID,
@@ -723,20 +739,92 @@ struct CompanionCameraView: View {
             activeWatchCaptureLink = nil
         }
         scratchPlaybackEngine.stopRecordingScratchAudio()
-        broadcaster.endRecording { summary in
-            guard captureStore.flowState == .saving else { return }
-            guard let summary else {
-                captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)
-                return
+        runFinalizationEffects(effects)
+    }
+
+    /// Performs one machine-emitted effect list in the order it was returned.
+    /// The ordering is load-bearing: staged media is always preserved before a
+    /// recoverable failure is presented.
+    private func runFinalizationEffects(_ effects: [CaptureFinalizationEffect]) {
+        for effect in effects {
+            switch effect {
+            case let .freezeElapsedTimer(date):
+                captureStore.freezeElapsedTime(at: date)
+
+            case .closeTakeEvidenceWindow:
+                // Close the MIDI take window before finalization begins, so
+                // controller moves made while the movie is still finalizing
+                // cannot land in this take's evidence.
+                midiControllerDispatcher.markCaptureStopped()
+
+            case .cancelPendingRecorderStart:
+                // Stop arrived while the recorder was still starting. Nothing
+                // that a start would have left running may survive it.
+                beatEngine.stop()
+                scratchPlaybackEngine.stopRecordingScratchAudio()
+
+            case let .scheduleDeadline(date):
+                finalizationScheduler.schedule(at: date) {
+                    handleFinalizationDeadline()
+                }
+
+            case .cancelDeadline:
+                finalizationScheduler.cancel()
+
+            case .requestRecorderStop:
+                broadcaster.endRecording { summary in
+                    guard let summary else {
+                        runFinalizationEffects(
+                            captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)
+                        )
+                        return
+                    }
+                    handleFinishedRecording(summary)
+                }
+
+            case .completeToReview:
+                // The Review transition needs the summary itself, so the
+                // delivery site performs it; see `handleFinishedRecording`.
+                break
+
+            case .preserveStagedMedia:
+                preserveStagedMediaForRecovery()
+
+            case let .presentRecoverableFailure(message):
+                captureStore.presentRecoverableFinalizationFailure(message: message)
             }
-            guard captureStore.matchesActiveSavingTake(summary) else {
-                captureStore.handleFinalizationTimeout(
-                    status: "The recorder finalized a different take than the active Save Take request."
-                )
-                return
-            }
-            handleFinishedRecording(summary)
         }
+    }
+
+    /// The one deadline handler. A summary that was already published while
+    /// the deadline was pending is consumed here rather than being lost.
+    private func handleFinalizationDeadline() {
+        if let summary = broadcaster.lastRecordingSummary,
+           captureStore.matchesActiveSavingTake(summary) {
+            handleFinishedRecording(summary)
+            return
+        }
+
+        runFinalizationEffects(
+            captureStore.applyFinalization(
+                .deadlineElapsed(
+                    recorderStillRecording: broadcaster.isRecording,
+                    status: broadcaster.recordingStatus
+                )
+            )
+        )
+    }
+
+    /// Failure must never cost the operator the recording.
+    ///
+    /// The movie and its sidecar are already staged on disk by the broadcaster
+    /// and are not removed on any failure path. This additionally stops the
+    /// scratch recorder and detaches the staged stem from the pending slot, so
+    /// the file survives on disk for recovery and the next take cannot adopt
+    /// another take's stem.
+    private func preserveStagedMediaForRecovery() {
+        scratchPlaybackEngine.stopRecordingScratchAudio()
+        pendingScratchAudioURL = nil
     }
 
     /// Routes the Watch's Start/Stop button through the same capture actions
@@ -779,11 +867,20 @@ struct CompanionCameraView: View {
         case .stop:
             switch captureStore.flowState {
             case .preRoll:
+                // Startup, not recording: there is no take to finalize, but
+                // every service a start would have armed is stopped so nothing
+                // can keep running invisibly behind the cancelled take.
                 beatEngine.stop()
+                midiControllerDispatcher.markCaptureStopped()
+                scratchPlaybackEngine.stopRecordingScratchAudio()
+                pendingScratchAudioURL = nil
+                runFinalizationEffects(captureStore.armFinalizationForActiveTake())
                 captureStore.cancelPendingCapture(message: "Take start cancelled from Watch.")
                 reply(.notRequested, "The pending iPhone take was cancelled.")
             case .recording:
-                stopTake()
+                // Identical transition path to the phone Stop button; only the
+                // recorded provenance and this reply differ.
+                stopTake(source: .watch)
                 reply(.requested, "iPhone accepted Stop Take and is saving the recording.")
             case .saving:
                 reply(.requested, "The iPhone take is already saving.")
@@ -793,47 +890,14 @@ struct CompanionCameraView: View {
         }
     }
 
-    /// Saving must never become an unbounded state. The broadcaster normally
-    /// publishes a finalized summary within a moment; if that event was
-    /// already delivered, consume it. Otherwise preserve the staged files and
-    /// return the operator to System Check with an explicit recovery message.
-    private func startFinalizationWatchdog() {
-        finalizationWatchdog?.cancel()
-        finalizationWatchdog = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 12_000_000_000)
-            guard !Task.isCancelled, captureStore.flowState == .saving else { return }
-
-            if let summary = broadcaster.lastRecordingSummary,
-               captureStore.matchesActiveSavingTake(summary) {
-                handleFinishedRecording(summary)
-                return
-            }
-
-            // A missing callback can mean the original stop request raced the
-            // movie output becoming active. Retry once before abandoning the
-            // UI state so recording cannot continue invisibly in the
-            // background after the operator has pressed Save Take.
-            if broadcaster.isRecording {
-                broadcaster.endRecording()
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                guard !Task.isCancelled, captureStore.flowState == .saving else { return }
-
-                if let summary = broadcaster.lastRecordingSummary,
-                   captureStore.matchesActiveSavingTake(summary) {
-                    handleFinishedRecording(summary)
-                    return
-                }
-            }
-
-            captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)
-        }
-    }
-
     /// Starts the existing WatchConnectivity capture command with the exact
     /// identity the local recording sidecar will use. Recording remains
     /// available when the watch is optional, skipped, or unreachable.
     private func beginLinkedRecording(captureTiming: CaptureTimingMetadata) {
         broadcaster.recordingSessionConfig = captureStore.sessionSetup.config
+        // Retire the previous take's terminal finalization result so this take
+        // owns a fresh, take-ID-scoped cycle.
+        runFinalizationEffects(captureStore.armFinalizationForActiveTake())
         midiControllerDispatcher.resetCapturedPlatterEvents()
         captureNotationBaselineTime = nil
         captureLiveNotationEvents.removeAll()
@@ -892,9 +956,20 @@ struct CompanionCameraView: View {
     }
 
     private func handleFinishedRecording(_ summary: CompanionCameraBroadcaster.RecordingSummary) {
+        // The single idempotent gate. Duplicate recorder callbacks, a
+        // re-published summary, and deadline-driven delivery all arrive here;
+        // the finalization machine accepts exactly one summary per take, and a
+        // summary for any other take is refused before any side effect runs.
+        let effects = captureStore.applyFinalization(
+            .summaryDelivered(
+                take: captureStore.takeKey(for: summary),
+                recordingID: summary.id
+            )
+        )
+        guard !effects.isEmpty else { return }
+        runFinalizationEffects(effects)
+
         beatEngine.stop()
-        finalizationWatchdog?.cancel()
-        finalizationWatchdog = nil
         let calibrationValid = captureStore.isCalibrationConfirmed
         let scratchAudioURL = finalizedScratchAudioURL(for: summary)
         pendingScratchAudioURL = nil
@@ -942,8 +1017,16 @@ struct CompanionCameraView: View {
             scratchAudioURL: scratchAudioURL
         )
 
+        // Optional and already past Review. It is additionally bounded so a
+        // stalled AVAsset load cannot leave an inspection running forever.
+        // A timed-out inspection reports nothing: the sidecar-derived value
+        // stands, because "the asset was slow to open" is not evidence that
+        // the take is silent.
         Task {
-            let audioPresent = await Self.mediaContainsAudio(persistedSummary.mediaURL)
+            guard let audioPresent = await Self.mediaContainsAudio(
+                persistedSummary.mediaURL,
+                timeout: captureStore.finalizationBudget.audioInspection
+            ) else { return }
             captureStore.updateAudioPresence(audioPresent, forRecordingID: persistedSummary.id)
         }
     }
@@ -1040,8 +1123,11 @@ struct CompanionCameraView: View {
         return nil
     }
 
-    private static func mediaContainsAudio(_ url: URL) async -> Bool {
-        await Task.detached(priority: .userInitiated) {
+    /// Bounded optional audio inspection. Returns `nil` when the bound was
+    /// reached first, which the caller treats as "no new information" rather
+    /// than as a silent take.
+    private static func mediaContainsAudio(_ url: URL, timeout: TimeInterval) async -> Bool? {
+        let inspection = Task.detached(priority: .userInitiated) { () -> Bool? in
             let asset = AVURLAsset(url: url)
             do {
                 let tracks = try await asset.loadTracks(withMediaType: .audio)
@@ -1049,7 +1135,23 @@ struct CompanionCameraView: View {
             } catch {
                 return false
             }
-        }.value
+        }
+
+        let deadline = Task.detached(priority: .utility) { () -> Bool? in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+            return nil
+        }
+
+        let result = await withTaskGroup(of: Bool?.self, returning: Bool?.self) { group in
+            group.addTask { await inspection.value }
+            group.addTask { await deadline.value }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        inspection.cancel()
+        deadline.cancel()
+        return result
     }
 
     private var performerNameBinding: Binding<String> {
@@ -1700,14 +1802,28 @@ private final class GuidedCaptureStore: ObservableObject {
         defaultsKey: "guidedCapture.sessionLastOpenedAt"
     )
     private var didBootstrap = false
-    private var lastHandledRecordingID: String?
     private var needsNewSessionIdentity = false
     private var cancellables: Set<AnyCancellable> = []
+
+    /// The one authoritative finalization state. Nothing else stores "are we
+    /// saving", "did the watchdog already run", or "was this summary already
+    /// handled"; `flowState` is a projection of this plus the setup flow.
+    @Published private(set) var finalizationState: CaptureFinalizationState = .idle
+    private var finalization: CaptureFinalizationMachine
+    private let finalizationClock: CaptureFinalizationClock
+
+    var finalizationBudget: CaptureFinalizationBudget { finalization.budget }
+
     var sessionStartedAt: Date {
         sessionSetup.config.createdAt
     }
 
-    init() {
+    init(
+        finalizationBudget: CaptureFinalizationBudget = .default,
+        finalizationClock: CaptureFinalizationClock = .system
+    ) {
+        self.finalization = CaptureFinalizationMachine(budget: finalizationBudget)
+        self.finalizationClock = finalizationClock
         sessionSetup.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
@@ -1962,29 +2078,75 @@ private final class GuidedCaptureStore: ObservableObject {
         flowState = .systemCheck
     }
 
-    func requestStopRecording() {
-        guard flowState == .recording else { return }
+    /// The take key the finalization machine scopes the active cycle to.
+    var activeTakeKey: CaptureFinalizationTakeKey? {
+        guard let activeTake else { return nil }
+        return CaptureFinalizationTakeKey(
+            sessionID: sessionSetup.config.sessionID,
+            takeNumber: activeTake.takeNumber
+        )
+    }
+
+    /// The take key a delivered summary belongs to. A summary carries its own
+    /// identity, so a summary for another take is recognisable without
+    /// consulting the take that happens to be active.
+    func takeKey(for summary: CompanionCameraBroadcaster.RecordingSummary) -> CaptureFinalizationTakeKey {
+        CaptureFinalizationTakeKey(
+            sessionID: summary.sidecar.sessionID,
+            takeNumber: summary.sidecar.appLocalTakeNumber
+        )
+    }
+
+    /// Drives the one finalization machine and republishes its state. The
+    /// caller performs the returned effects, in order.
+    @discardableResult
+    func applyFinalization(_ event: CaptureFinalizationEvent) -> [CaptureFinalizationEffect] {
+        let effects = finalization.apply(event, at: finalizationClock.now())
+        finalizationState = finalization.state
+        return effects
+    }
+
+    /// Retires the previous take's terminal result so a new take owns a fresh,
+    /// take-ID-scoped cycle.
+    func armFinalizationForActiveTake() -> [CaptureFinalizationEffect] {
+        guard let key = activeTakeKey else { return [] }
+        return applyFinalization(.takeArmedForRecording(take: key))
+    }
+
+    func requestStopRecording(
+        source: CaptureStopSource,
+        recorderPhase: CaptureRecorderPhase
+    ) -> [CaptureFinalizationEffect] {
+        guard flowState == .recording, let key = activeTakeKey else { return [] }
+        return applyFinalization(
+            .stopRequested(take: key, source: source, recorderPhase: recorderPhase)
+        )
+    }
+
+    /// Freezes the visible elapsed readout at the first accepted Stop and
+    /// moves the flow into Saving. A later Stop emits no effect, so this can
+    /// never run twice for one take.
+    func freezeElapsedTime(at date: Date) {
         if var activeTake {
-            activeTake.stoppedAt = Date()
+            activeTake.stoppedAt = date
             self.activeTake = activeTake
         }
         flowState = .saving
     }
 
     func matchesActiveSavingTake(_ summary: CompanionCameraBroadcaster.RecordingSummary) -> Bool {
-        guard flowState == .saving, let activeTake else { return false }
-        return summary.sidecar.sessionID == sessionSetup.config.sessionID
-            && summary.sidecar.appLocalTakeNumber == activeTake.takeNumber
+        finalization.acceptsSummary(for: takeKey(for: summary))
     }
 
-    func handleFinalizationTimeout(status: String) {
-        guard flowState == .saving else { return }
-        let trimmedStatus = status.trimmingCharacters(in: .whitespacesAndNewlines)
-        let detail = trimmedStatus.isEmpty ? "The recorder did not report completion." : trimmedStatus
-        showBanner(
-            message: "Take save did not finish. The staged recording was preserved. \(detail)",
-            tone: .warning
-        )
+    /// The recorder stated no summary will arrive for this take.
+    func handleFinalizationTimeout(status: String) -> [CaptureFinalizationEffect] {
+        applyFinalization(.recorderReportedNoSummary(status: status))
+    }
+
+    /// The single recoverable-failure presentation. The staged media has
+    /// already been preserved by the time this runs.
+    func presentRecoverableFinalizationFailure(message: String) {
+        showBanner(message: message, tone: .warning)
         activeTake = nil
         flowState = .systemCheck
     }
@@ -2000,9 +2162,6 @@ private final class GuidedCaptureStore: ObservableObject {
         calibrationValid: Bool,
         scratchAudioURL: URL? = nil
     ) {
-        guard lastHandledRecordingID != summary.id else { return }
-        lastHandledRecordingID = summary.id
-
         let duration = max(0, (summary.sidecar.endedAt ?? Date()).timeIntervalSince(summary.sidecar.startedAt))
         let drillName = ScratchLibrary.shared.scratch(byID: sessionSetup.scratchTypeID)?.name ?? sessionSetup.scratchTypeName
 
@@ -2045,7 +2204,9 @@ private final class GuidedCaptureStore: ObservableObject {
     }
 
     func updateAudioPresence(_ audioPresent: Bool, forRecordingID recordingID: String) {
-        if var currentReview = review, currentReview.summary.id == recordingID {
+        if var currentReview = review,
+           currentReview.summary.id == recordingID,
+           finalization.acceptsAudioInspection(forRecordingID: recordingID) {
             applyAudioPresence(audioPresent, to: &currentReview)
             review = currentReview
         }

@@ -2773,9 +2773,102 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("activeTake.stoppedAt = Date()"))
+        // The freeze instant comes from the finalization machine's accepted
+        // Stop, not from a second `Date()` read at the display layer. The
+        // machine emits `freezeElapsedTimer` exactly once per take, which is
+        // asserted behaviourally in `CaptureFinalizationMachineTests`.
+        XCTAssertTrue(source.contains("case let .freezeElapsedTimer(date):"))
+        XCTAssertTrue(source.contains("captureStore.freezeElapsedTime(at: date)"))
+        XCTAssertTrue(source.contains("activeTake.stoppedAt = date"))
         XCTAssertTrue(source.contains("recordingStoppedAt: captureStore.activeTake?.stoppedAt"))
         XCTAssertTrue(source.contains("(recordingStoppedAt ?? now).timeIntervalSince(recordingStartedAt)"))
+    }
+
+    /// Slice E: there is one finalization timer and one Stop transition path.
+    /// A second watchdog or a parallel "is saving" flag is what made the
+    /// original repair contradict itself, so their absence is asserted here
+    /// rather than left to review.
+    func testGuidedCaptureHasExactlyOneFinalizationTimerAndOneStopPath() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("CaptureFinalizationDeadlineScheduler()"))
+        XCTAssertFalse(source.contains("finalizationWatchdog"), "the second watchdog must stay deleted")
+        XCTAssertFalse(source.contains("12_000_000_000"), "the hardcoded watchdog sleep is now a budget")
+        XCTAssertFalse(source.contains("3_000_000_000"), "the hardcoded retry sleep is now a budget")
+        XCTAssertEqual(
+            source.components(separatedBy: "finalizationScheduler.schedule(").count - 1,
+            1,
+            "only the machine's scheduleDeadline effect may arm a finalization timer"
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "private func stopTake(source:").count - 1,
+            1
+        )
+        XCTAssertTrue(source.contains("stopTake(source: .phone)"))
+        XCTAssertTrue(source.contains("stopTake(source: .watch)"))
+        // Both sources reach the same function; nothing branches on which one.
+        let stopTakeBody = try sourceSlice(
+            in: source,
+            from: "private func stopTake(source: CaptureStopSource) {",
+            through: "private func runFinalizationEffects("
+        )
+        XCTAssertFalse(stopTakeBody.contains("case .watch"))
+        XCTAssertFalse(stopTakeBody.contains("case .phone"))
+    }
+
+    /// Slice E: every summary delivery path is gated by the machine before any
+    /// side effect runs, so a duplicate recorder callback cannot re-persist
+    /// notation, re-move the scratch stem, or re-raise an artifact banner.
+    func testGuidedCaptureGatesEverySummaryDeliveryOnTheFinalizationMachine() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let finalizationSource = try sourceSlice(
+            in: source,
+            from: "private func handleFinishedRecording(_ summary:",
+            through: "private func refreshReviewMotionAssociation()"
+        )
+
+        let gate = try XCTUnwrap(finalizationSource.range(of: "captureStore.applyFinalization("))
+        let guardClause = try XCTUnwrap(finalizationSource.range(of: "guard !effects.isEmpty else { return }"))
+        let firstSideEffect = try XCTUnwrap(finalizationSource.range(of: "broadcaster.persistingDetectedNotation("))
+        XCTAssertLessThan(gate.lowerBound, guardClause.lowerBound)
+        XCTAssertLessThan(guardClause.lowerBound, firstSideEffect.lowerBound)
+        XCTAssertTrue(finalizationSource.contains(".summaryDelivered("))
+
+        // The de-duplication key that used to live on the store is gone; the
+        // machine is the only place a take can be marked already handled.
+        XCTAssertFalse(source.contains("lastHandledRecordingID"))
+    }
+
+    /// Slice E: optional audio inspection is bounded and take-scoped.
+    func testGuidedCaptureBoundsOptionalAudioInspection() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private static func mediaContainsAudio(_ url: URL, timeout: TimeInterval) async -> Bool?"))
+        XCTAssertTrue(source.contains("timeout: captureStore.finalizationBudget.audioInspection"))
+        XCTAssertTrue(source.contains("finalization.acceptsAudioInspection(forRecordingID: recordingID)"))
+        // A timed-out inspection must report nothing rather than "no audio":
+        // a slow AVAsset open is not evidence that the take is silent.
+        XCTAssertTrue(source.contains("guard let audioPresent = await Self.mediaContainsAudio("))
+    }
+
+    /// Slice E: media is preserved before a recoverable failure is presented,
+    /// and Stop during startup stops everything a start would have armed.
+    func testGuidedCapturePreservesMediaBeforePresentingFailure() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("case .preserveStagedMedia:"))
+        XCTAssertTrue(source.contains("preserveStagedMediaForRecovery()"))
+        XCTAssertTrue(source.contains("case let .presentRecoverableFailure(message):"))
+        XCTAssertTrue(source.contains("captureStore.presentRecoverableFinalizationFailure(message: message)"))
+        XCTAssertTrue(source.contains("case .cancelPendingRecorderStart:"))
+        // Effect ordering is the machine's responsibility and is asserted in
+        // `CaptureFinalizationMachineTests`; the view must simply run the list
+        // in the order it was handed.
+        XCTAssertTrue(source.contains("for effect in effects {"))
     }
 
     func testGuidedCaptureConsumesCompletedSummaryBeforeOptionalAudioInspection() throws {
@@ -3170,7 +3263,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(captureSource.contains("case .start:"))
         XCTAssertTrue(captureSource.contains("startTake()"))
         XCTAssertTrue(captureSource.contains("case .recording:"))
-        XCTAssertTrue(captureSource.contains("stopTake()"))
+        // Slice E unified the two Stop entries: the Watch reaches the same
+        // `stopTake(source:)` transition the phone button does, and only the
+        // recorded provenance differs.
+        XCTAssertTrue(captureSource.contains("stopTake(source: .watch)"))
+        XCTAssertTrue(captureSource.contains("stopTake(source: .phone)"))
         XCTAssertTrue(recorderSource.contains("func requestPairedPhoneCapture("))
         XCTAssertTrue(viewSource.contains("recorder.requestPairedPhoneCapture("))
         XCTAssertTrue(viewSource.contains("recorder.isPhoneCaptureCommandPending || !canSendCaptureCommand"))
@@ -16008,4 +16105,527 @@ final class RanePlaybackRoutingPolicyTests: XCTestCase {
         XCTAssertTrue(source.contains("func setRightUpfaderGain"))
         XCTAssertTrue(source.contains("func setCrossfaderPosition"))
     }
+}
+
+// MARK: - Capture-integrity Slice E: bounded finalization state machine
+
+/// Deterministic coverage of the one finalization cycle.
+///
+/// Every transition is driven by an injected instant, so the races that
+/// produced the original Saving hang — duplicate recorder callbacks, a stale
+/// published summary, a Stop that raced the recorder starting, and a watchdog
+/// that could fire after the take had already reached Review — are reproduced
+/// exactly, with no real waiting and no flakiness.
+final class CaptureFinalizationMachineTests: XCTestCase {
+    private let origin = Date(timeIntervalSince1970: 1_700_000_000)
+    private let budget = CaptureFinalizationBudget(firstWait: 12, retryWait: 3, audioInspection: 5)
+
+    private func takeKey(_ number: Int, session: String = "session-A") -> CaptureFinalizationTakeKey {
+        CaptureFinalizationTakeKey(sessionID: session, takeNumber: number)
+    }
+
+    private func machine() -> CaptureFinalizationMachine {
+        CaptureFinalizationMachine(budget: budget)
+    }
+
+    private func startedMachine(
+        source: CaptureStopSource = .phone,
+        recorderPhase: CaptureRecorderPhase = .recording
+    ) -> (CaptureFinalizationMachine, [CaptureFinalizationEffect]) {
+        var machine = self.machine()
+        let effects = machine.apply(
+            .stopRequested(take: takeKey(1), source: source, recorderPhase: recorderPhase),
+            at: origin
+        )
+        return (machine, effects)
+    }
+
+    // MARK: One typed authoritative state
+
+    func testIdleUntilAStopIsAccepted() {
+        let machine = self.machine()
+        XCTAssertEqual(machine.state, .idle)
+        XCTAssertFalse(machine.isSaving)
+        XCTAssertNil(machine.activeTake)
+        XCTAssertNil(machine.stoppedAt)
+    }
+
+    func testAcceptedStopArmsExactlyOneDeadlineWithinTheBound() {
+        let (machine, effects) = startedMachine()
+
+        XCTAssertEqual(
+            machine.state,
+            .awaitingRecorder(
+                take: takeKey(1),
+                stoppedAt: origin,
+                deadline: origin.addingTimeInterval(12)
+            )
+        )
+        XCTAssertEqual(
+            effects,
+            [
+                .freezeElapsedTimer(at: origin),
+                .closeTakeEvidenceWindow,
+                .scheduleDeadline(at: origin.addingTimeInterval(12)),
+                .requestRecorderStop
+            ]
+        )
+        XCTAssertEqual(effects.filter { if case .scheduleDeadline = $0 { return true } else { return false } }.count, 1)
+    }
+
+    // MARK: Phone Stop and Watch Stop enter the same transition path
+
+    func testPhoneStopAndWatchStopProduceIdenticalEffectsAndState() {
+        let (phoneMachine, phoneEffects) = startedMachine(source: .phone)
+        let (watchMachine, watchEffects) = startedMachine(source: .watch)
+
+        XCTAssertEqual(phoneEffects, watchEffects)
+        XCTAssertEqual(phoneMachine.state, watchMachine.state)
+    }
+
+    // MARK: Timer freezes at the first accepted Stop
+
+    func testSecondStopDoesNotRefreezeTheTimerOrArmASecondDeadline() {
+        var (machine, _) = startedMachine()
+
+        let later = origin.addingTimeInterval(4)
+        let repeatEffects = machine.apply(
+            .stopRequested(take: takeKey(1), source: .watch, recorderPhase: .recording),
+            at: later
+        )
+
+        XCTAssertTrue(repeatEffects.isEmpty, "a Stop during Saving must join the in-flight cycle")
+        XCTAssertEqual(machine.stoppedAt, origin, "elapsed time freezes at the FIRST accepted Stop")
+        XCTAssertEqual(machine.state.deadline, origin.addingTimeInterval(12))
+    }
+
+    // MARK: Stop during startup cannot leave hidden recording active
+
+    func testStopWhileRecorderIsStartingCancelsThePendingStartAndStillStopsTheRecorder() {
+        let (machine, effects) = startedMachine(recorderPhase: .starting)
+
+        XCTAssertEqual(
+            effects,
+            [
+                .freezeElapsedTimer(at: origin),
+                .closeTakeEvidenceWindow,
+                .cancelPendingRecorderStart,
+                .scheduleDeadline(at: origin.addingTimeInterval(12)),
+                .requestRecorderStop
+            ]
+        )
+        XCTAssertTrue(machine.isSaving)
+    }
+
+    func testStopWhileRecordingDoesNotEmitAStartupCancel() {
+        let (_, effects) = startedMachine(recorderPhase: .recording)
+        XCTAssertFalse(effects.contains(.cancelPendingRecorderStart))
+    }
+
+    // MARK: Every Stop reaches exactly one terminal result
+
+    func testMatchingSummaryCompletesTheTakeToReview() {
+        var (machine, _) = startedMachine()
+
+        let effects = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(0.4)
+        )
+
+        XCTAssertEqual(effects, [.cancelDeadline, .completeToReview(recordingID: "rec-1")])
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+        XCTAssertTrue(machine.state.isTerminal)
+        XCTAssertFalse(machine.isSaving)
+    }
+
+    func testDeadlineWithoutASummaryOrActiveRecorderFailsRecoverably() {
+        var (machine, _) = startedMachine()
+
+        let effects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: false, status: "Recorder stalled."),
+            at: origin.addingTimeInterval(12)
+        )
+
+        XCTAssertEqual(
+            effects,
+            [
+                .preserveStagedMedia,
+                .presentRecoverableFailure(
+                    message: "Take save did not finish. The staged recording was preserved. Recorder stalled."
+                )
+            ]
+        )
+        XCTAssertEqual(
+            machine.state,
+            .failed(
+                take: takeKey(1),
+                reason: "Take save did not finish. The staged recording was preserved. Recorder stalled."
+            )
+        )
+    }
+
+    func testSavingIsBoundedByExactlyOneRetryAndNeverExceedsTheWorstCase() {
+        var (machine, _) = startedMachine()
+
+        let firstDeadline = origin.addingTimeInterval(12)
+        let retryEffects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: firstDeadline
+        )
+        XCTAssertEqual(
+            retryEffects,
+            [.scheduleDeadline(at: firstDeadline.addingTimeInterval(3)), .requestRecorderStop]
+        )
+        XCTAssertEqual(
+            machine.state,
+            .retryingStop(take: takeKey(1), stoppedAt: origin, deadline: firstDeadline.addingTimeInterval(3))
+        )
+
+        // A still-recording recorder does NOT buy a second retry.
+        let secondDeadline = firstDeadline.addingTimeInterval(3)
+        let finalEffects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: secondDeadline
+        )
+        XCTAssertEqual(
+            finalEffects,
+            [
+                .preserveStagedMedia,
+                .presentRecoverableFailure(
+                    message: "Take save did not finish. The staged recording was preserved. Stopping recording"
+                )
+            ]
+        )
+        XCTAssertTrue(machine.state.isTerminal)
+        XCTAssertEqual(secondDeadline.timeIntervalSince(origin), budget.worstCaseSaving, accuracy: 0.000_1)
+    }
+
+    func testRetryStillCompletesWhenTheRetriedStopProducesASummary() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: origin.addingTimeInterval(12)
+        )
+
+        let effects = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(13)
+        )
+
+        XCTAssertEqual(effects, [.cancelDeadline, .completeToReview(recordingID: "rec-1")])
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testExplicitNoSummaryReportFailsRecoverablyAndCancelsTheDeadline() {
+        var (machine, _) = startedMachine()
+
+        let effects = machine.apply(
+            .recorderReportedNoSummary(status: "The camera recorder was not active when Save Take was requested."),
+            at: origin.addingTimeInterval(0.2)
+        )
+
+        XCTAssertEqual(
+            effects,
+            [
+                .cancelDeadline,
+                .preserveStagedMedia,
+                .presentRecoverableFailure(
+                    message: "Take save did not finish. The staged recording was preserved. "
+                        + "The camera recorder was not active when Save Take was requested."
+                )
+            ]
+        )
+        XCTAssertTrue(machine.state.isTerminal)
+    }
+
+    func testEmptyRecorderStatusStillProducesAnExplicitReason() {
+        var (machine, _) = startedMachine()
+        let effects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: false, status: "   "),
+            at: origin.addingTimeInterval(12)
+        )
+
+        XCTAssertEqual(
+            effects.last,
+            .presentRecoverableFailure(
+                message: "Take save did not finish. The staged recording was preserved. "
+                    + "The recorder did not report completion."
+            )
+        )
+    }
+
+    // MARK: Preserve media before presenting failure
+
+    func testEveryFailurePathPreservesStagedMediaBeforePresentingIt() {
+        let failureEventsAndSetups: [(String, () -> [CaptureFinalizationEffect])] = [
+            ("first-wait timeout", {
+                var machine = self.machine()
+                _ = machine.apply(
+                    .stopRequested(take: self.takeKey(1), source: .phone, recorderPhase: .recording),
+                    at: self.origin
+                )
+                return machine.apply(
+                    .deadlineElapsed(recorderStillRecording: false, status: "stalled"),
+                    at: self.origin.addingTimeInterval(12)
+                )
+            }),
+            ("retry exhaustion", {
+                var machine = self.machine()
+                _ = machine.apply(
+                    .stopRequested(take: self.takeKey(1), source: .watch, recorderPhase: .starting),
+                    at: self.origin
+                )
+                _ = machine.apply(
+                    .deadlineElapsed(recorderStillRecording: true, status: "stalled"),
+                    at: self.origin.addingTimeInterval(12)
+                )
+                return machine.apply(
+                    .deadlineElapsed(recorderStillRecording: true, status: "stalled"),
+                    at: self.origin.addingTimeInterval(15)
+                )
+            }),
+            ("explicit no-summary report", {
+                var machine = self.machine()
+                _ = machine.apply(
+                    .stopRequested(take: self.takeKey(1), source: .phone, recorderPhase: .recording),
+                    at: self.origin
+                )
+                return machine.apply(.recorderReportedNoSummary(status: "stalled"), at: self.origin)
+            })
+        ]
+
+        for (name, produce) in failureEventsAndSetups {
+            let effects = produce()
+            let preserve = effects.firstIndex(of: .preserveStagedMedia)
+            let present = effects.firstIndex(where: {
+                if case .presentRecoverableFailure = $0 { return true } else { return false }
+            })
+            let preserveIndex = try? XCTUnwrap(preserve, "\(name): staged media must be preserved")
+            let presentIndex = try? XCTUnwrap(present, "\(name): failure must be presented")
+            XCTAssertNotNil(preserveIndex, name)
+            XCTAssertNotNil(presentIndex, name)
+            if let preserveIndex, let presentIndex {
+                XCTAssertLessThan(preserveIndex, presentIndex, "\(name): preserve media BEFORE presenting failure")
+            }
+        }
+    }
+
+    // MARK: Idempotence of duplicate deliveries
+
+    func testDuplicateSummaryForTheSameTakeDoesNothing() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let duplicate = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(duplicate.isEmpty, "a duplicate recorder callback must not repeat any side effect")
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testARepublishedSummaryWithADifferentRecordingIDCannotOverwriteTheCompletedTake() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let republished = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-2"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(republished.isEmpty)
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testDeadlineDeliveredAfterReviewIsInert() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let lateWatchdog = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: origin.addingTimeInterval(12)
+        )
+
+        XCTAssertTrue(lateWatchdog.isEmpty, "a watchdog that outlived its cycle must not touch a completed take")
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testDeadlineDeliveredTwiceCannotFailATakeTwice() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.deadlineElapsed(recorderStillRecording: false, status: "stalled"), at: origin)
+
+        let second = machine.apply(
+            .deadlineElapsed(recorderStillRecording: false, status: "stalled"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(second.isEmpty)
+    }
+
+    func testALateSummaryCannotReopenAFailedTake() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.deadlineElapsed(recorderStillRecording: false, status: "stalled"), at: origin)
+
+        let late = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(20)
+        )
+
+        XCTAssertTrue(late.isEmpty, "exactly one terminal result per Stop")
+        if case .failed = machine.state {} else {
+            XCTFail("expected the take to remain failed, got \(machine.state)")
+        }
+    }
+
+    // MARK: A summary for the wrong take cannot complete the active take
+
+    func testSummaryForAnotherTakeNumberIsRefused() {
+        var (machine, _) = startedMachine()
+
+        let foreign = machine.apply(
+            .summaryDelivered(take: takeKey(2), recordingID: "rec-2"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(foreign.isEmpty)
+        XCTAssertTrue(machine.isSaving, "the active take must still be waiting for its own summary")
+        XCTAssertEqual(machine.activeTake, takeKey(1))
+    }
+
+    func testSummaryForAnotherSessionIsRefused() {
+        var (machine, _) = startedMachine()
+
+        let foreign = machine.apply(
+            .summaryDelivered(take: takeKey(1, session: "session-B"), recordingID: "rec-x"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(foreign.isEmpty)
+        XCTAssertTrue(machine.isSaving)
+    }
+
+    func testAcceptsSummaryOnlyForTheActiveSavingTake() {
+        let (machine, _) = startedMachine()
+
+        XCTAssertTrue(machine.acceptsSummary(for: takeKey(1)))
+        XCTAssertFalse(machine.acceptsSummary(for: takeKey(2)))
+        XCTAssertFalse(machine.acceptsSummary(for: takeKey(1, session: "session-B")))
+        XCTAssertFalse(self.machine().acceptsSummary(for: takeKey(1)), "idle accepts nothing")
+    }
+
+    func testAPreviouslyStagedSummaryCannotCompleteTheNextTake() {
+        var machine = self.machine()
+        _ = machine.apply(
+            .stopRequested(take: takeKey(1), source: .phone, recorderPhase: .recording),
+            at: origin
+        )
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        // Take 2 records and stops. Take 1's summary is still the broadcaster's
+        // last published value.
+        _ = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(30))
+        _ = machine.apply(
+            .stopRequested(take: takeKey(2), source: .phone, recorderPhase: .recording),
+            at: origin.addingTimeInterval(40)
+        )
+
+        let stale = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(40.1)
+        )
+
+        XCTAssertTrue(stale.isEmpty)
+        XCTAssertTrue(machine.isSaving)
+        XCTAssertEqual(machine.activeTake, takeKey(2))
+    }
+
+    // MARK: Arming a new take retires the previous terminal result
+
+    func testArmingANewTakeReturnsToIdleAndCancelsAnyOutstandingDeadline() {
+        var (machine, _) = startedMachine()
+
+        let armed = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(50))
+
+        XCTAssertEqual(armed, [.cancelDeadline], "an outstanding deadline must not outlive its take")
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testArmingAfterACompletedTakeEmitsNoDeadlineCancel() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let armed = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(50))
+
+        XCTAssertTrue(armed.isEmpty)
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    // MARK: Optional audio inspection cannot block Review indefinitely
+
+    func testAudioInspectionIsOnlyAcceptedForTheCompletedRecording() {
+        var (machine, _) = startedMachine()
+        XCTAssertFalse(
+            machine.acceptsAudioInspection(forRecordingID: "rec-1"),
+            "inspection results must never be applied while the take is still finalizing"
+        )
+
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+        XCTAssertTrue(machine.acceptsAudioInspection(forRecordingID: "rec-1"))
+        XCTAssertFalse(machine.acceptsAudioInspection(forRecordingID: "rec-2"))
+
+        _ = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(30))
+        XCTAssertFalse(
+            machine.acceptsAudioInspection(forRecordingID: "rec-1"),
+            "a slow inspection returning after the next take began must not rewrite the live review"
+        )
+    }
+
+    func testAudioInspectionHasItsOwnBoundSeparateFromTheSavingBound() {
+        XCTAssertGreaterThan(budget.audioInspection, 0)
+        XCTAssertEqual(CaptureFinalizationBudget.default.audioInspection, 5)
+        XCTAssertEqual(CaptureFinalizationBudget.default.worstCaseSaving, 15)
+    }
+
+    func testBudgetRejectsNegativeBounds() {
+        let clamped = CaptureFinalizationBudget(firstWait: -4, retryWait: -1, audioInspection: -9)
+        XCTAssertEqual(clamped.firstWait, 0)
+        XCTAssertEqual(clamped.retryWait, 0)
+        XCTAssertEqual(clamped.audioInspection, 0)
+        XCTAssertEqual(clamped.worstCaseSaving, 0)
+    }
+
+    // MARK: Deterministic scheduler
+
+    @MainActor
+    func testDeadlineSchedulerFiresOnceAndReplacesRatherThanStacksTimers() async {
+        var stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let scheduler = CaptureFinalizationDeadlineScheduler(
+            clock: CaptureFinalizationClock { stamp }
+        )
+        let counter = FinalizationFireCounter()
+
+        // An already-elapsed deadline fires immediately.
+        scheduler.schedule(at: stamp) { counter.increment() }
+        XCTAssertTrue(scheduler.isScheduled)
+
+        // Re-scheduling replaces the previous timer instead of adding one.
+        stamp = stamp.addingTimeInterval(1)
+        scheduler.schedule(at: stamp.addingTimeInterval(120)) { counter.increment() }
+        XCTAssertTrue(scheduler.isScheduled)
+
+        scheduler.cancel()
+        XCTAssertFalse(scheduler.isScheduled)
+
+        // Yield so any immediate timer that survived cancellation would have run.
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertLessThanOrEqual(counter.value, 1, "no stacked watchdogs")
+    }
+}
+
+/// Main-actor-confined counter for the scheduler test.
+@MainActor
+private final class FinalizationFireCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
 }

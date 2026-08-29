@@ -817,6 +817,350 @@ enum GuidedCaptureReviewStateResolver {
     static let minimumKeepableTakeDuration: TimeInterval = 1.0
 }
 
+// MARK: - Bounded capture finalization state machine
+
+/// Where an accepted Stop originated.
+///
+/// Both sources drive the *identical* transition. This value exists only so
+/// the Watch reply text and the take audit trail can name the origin; it must
+/// never be branched on to decide what finalization does, which is exactly
+/// how the phone and Watch paths drifted apart before.
+enum CaptureStopSource: String, Equatable, Sendable {
+    case phone
+    case watch
+}
+
+/// What the movie recorder was doing when a Stop was accepted.
+enum CaptureRecorderPhase: Equatable, Sendable {
+    /// `startRecording(to:)` was issued but `AVCaptureFileOutput` has not yet
+    /// reported `didStartRecordingTo`. A Stop here must still be delivered to
+    /// the recorder, or capture keeps running with no visible UI state.
+    case starting
+    case recording
+}
+
+/// Identity of the take one finalization cycle belongs to.
+///
+/// Finalization is scoped to this key, not to a global "is saving" flag, so a
+/// summary published for a different take cannot complete the active one.
+struct CaptureFinalizationTakeKey: Hashable, Sendable {
+    let sessionID: String
+    let takeNumber: Int
+
+    init(sessionID: String, takeNumber: Int) {
+        self.sessionID = sessionID
+        self.takeNumber = takeNumber
+    }
+}
+
+/// The bound on one finalization cycle.
+///
+/// `worstCaseSaving` is the total time Saving can last before the operator is
+/// returned to System Check with an explicit recoverable failure. There is no
+/// path that exceeds it, because exactly one retry is permitted.
+struct CaptureFinalizationBudget: Equatable, Sendable {
+    let firstWait: TimeInterval
+    let retryWait: TimeInterval
+    /// Optional post-Review audio inspection bound. Review is already reached
+    /// before inspection starts; this only stops a stalled `AVAsset` load from
+    /// leaving a task alive forever.
+    let audioInspection: TimeInterval
+
+    init(firstWait: TimeInterval, retryWait: TimeInterval, audioInspection: TimeInterval) {
+        self.firstWait = max(0, firstWait)
+        self.retryWait = max(0, retryWait)
+        self.audioInspection = max(0, audioInspection)
+    }
+
+    static let `default` = CaptureFinalizationBudget(
+        firstWait: 12,
+        retryWait: 3,
+        audioInspection: 5
+    )
+
+    var worstCaseSaving: TimeInterval { firstWait + retryWait }
+}
+
+/// The single authoritative finalization state.
+///
+/// Nothing else may store "are we saving", "did the watchdog already fire",
+/// or "was this summary already handled" — those all became contradictory
+/// when they lived in separate flags across the view, the store, and the
+/// watchdog task.
+enum CaptureFinalizationState: Equatable, Sendable {
+    case idle
+    /// Stop accepted; the first recorder-summary window is open.
+    case awaitingRecorder(take: CaptureFinalizationTakeKey, stoppedAt: Date, deadline: Date)
+    /// The single permitted stop retry is outstanding.
+    case retryingStop(take: CaptureFinalizationTakeKey, stoppedAt: Date, deadline: Date)
+    /// Terminal: the take reached Review.
+    case completed(take: CaptureFinalizationTakeKey, recordingID: String)
+    /// Terminal: the take could not be finalized and the operator was given an
+    /// explicit recoverable failure with the staged media preserved.
+    case failed(take: CaptureFinalizationTakeKey, reason: String)
+
+    /// True while a Stop has been accepted but no terminal result exists yet.
+    var isSaving: Bool {
+        switch self {
+        case .awaitingRecorder, .retryingStop: return true
+        case .idle, .completed, .failed: return false
+        }
+    }
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed: return true
+        case .idle, .awaitingRecorder, .retryingStop: return false
+        }
+    }
+
+    var take: CaptureFinalizationTakeKey? {
+        switch self {
+        case .idle: return nil
+        case let .awaitingRecorder(take, _, _): return take
+        case let .retryingStop(take, _, _): return take
+        case let .completed(take, _): return take
+        case let .failed(take, _): return take
+        }
+    }
+
+    /// The instant the first accepted Stop was recorded. The elapsed-time
+    /// readout freezes here and never moves again for this take.
+    var stoppedAt: Date? {
+        switch self {
+        case let .awaitingRecorder(_, stoppedAt, _): return stoppedAt
+        case let .retryingStop(_, stoppedAt, _): return stoppedAt
+        case .idle, .completed, .failed: return nil
+        }
+    }
+
+    var deadline: Date? {
+        switch self {
+        case let .awaitingRecorder(_, _, deadline): return deadline
+        case let .retryingStop(_, _, deadline): return deadline
+        case .idle, .completed, .failed: return nil
+        }
+    }
+}
+
+/// Everything that can move the finalization cycle forward.
+enum CaptureFinalizationEvent: Equatable, Sendable {
+    /// A new take started recording, so the previous cycle's terminal result
+    /// is retired.
+    case takeArmedForRecording(take: CaptureFinalizationTakeKey)
+    /// Stop pressed on the phone, or received from the Watch. Identical
+    /// handling for both.
+    case stopRequested(
+        take: CaptureFinalizationTakeKey,
+        source: CaptureStopSource,
+        recorderPhase: CaptureRecorderPhase
+    )
+    /// A finalized recorder summary arrived, from any delivery path: the
+    /// `endRecording` completion, the published-summary subscription, or the
+    /// deadline handler consuming an already-published summary.
+    case summaryDelivered(take: CaptureFinalizationTakeKey, recordingID: String)
+    /// The recorder stated that no summary will arrive for this take.
+    case recorderReportedNoSummary(status: String)
+    /// The one scheduled deadline fired.
+    case deadlineElapsed(recorderStillRecording: Bool, status: String)
+}
+
+/// Side effects the owner must perform, in the order returned.
+///
+/// `preserveStagedMedia` always precedes `presentRecoverableFailure`, so the
+/// operator is never shown a failure for media that has not been secured yet.
+enum CaptureFinalizationEffect: Equatable, Sendable {
+    case freezeElapsedTimer(at: Date)
+    /// Close the controller/MIDI take window so moves made during
+    /// finalization cannot land in this take's evidence.
+    case closeTakeEvidenceWindow
+    /// The recorder had not reached `didStartRecordingTo`; make sure the
+    /// pending start cannot leave capture running invisibly.
+    case cancelPendingRecorderStart
+    case requestRecorderStop
+    case scheduleDeadline(at: Date)
+    case cancelDeadline
+    case completeToReview(recordingID: String)
+    case preserveStagedMedia
+    case presentRecoverableFailure(message: String)
+}
+
+/// One bounded, take-ID-scoped finalization state machine.
+///
+/// This is the whole of the finalization policy. It is pure and clock-free —
+/// every transition is given the current instant — so the races that produced
+/// the original hang (duplicate recorder callbacks, a stale published summary,
+/// a stop that raced the recorder starting, and a watchdog that could fire
+/// after the take had already reached Review) are reproducible in tests
+/// without waiting on real time.
+///
+/// Guarantees, each covered by a test:
+/// - every accepted Stop reaches exactly one terminal state, within
+///   `budget.worstCaseSaving`;
+/// - duplicate summaries, duplicate deadline deliveries, and repeated Stop
+///   presses are no-ops that emit no effects;
+/// - a summary whose take key differs from the active take is ignored;
+/// - phone and Watch Stops produce byte-identical effect lists;
+/// - failure preserves staged media before it is presented.
+struct CaptureFinalizationMachine: Equatable, Sendable {
+    let budget: CaptureFinalizationBudget
+    private(set) var state: CaptureFinalizationState
+
+    init(budget: CaptureFinalizationBudget = .default) {
+        self.budget = budget
+        self.state = .idle
+    }
+
+    var isSaving: Bool { state.isSaving }
+    var activeTake: CaptureFinalizationTakeKey? { state.take }
+    var stoppedAt: Date? { state.stoppedAt }
+
+    /// Whether a summary for `take` would be accepted right now. The delivery
+    /// sites use this to skip *all* of their side work — notation persistence,
+    /// scratch-stem renaming, artifact banners — on a duplicate or foreign
+    /// summary, rather than doing that work and de-duplicating afterwards.
+    func acceptsSummary(for take: CaptureFinalizationTakeKey) -> Bool {
+        state.isSaving && state.take == take
+    }
+
+    /// Optional audio inspection may only refine the take it was started for.
+    func acceptsAudioInspection(forRecordingID recordingID: String) -> Bool {
+        guard case let .completed(_, completedID) = state else { return false }
+        return completedID == recordingID
+    }
+
+    @discardableResult
+    mutating func apply(
+        _ event: CaptureFinalizationEvent,
+        at now: Date
+    ) -> [CaptureFinalizationEffect] {
+        switch event {
+        case let .takeArmedForRecording(take):
+            let hadTimer = state.isSaving
+            _ = take
+            state = .idle
+            return hadTimer ? [.cancelDeadline] : []
+
+        case let .stopRequested(take, _, recorderPhase):
+            // A Stop while already saving joins the in-flight cycle. It must
+            // not re-freeze the timer, re-close the evidence window, or start
+            // a second deadline.
+            guard !state.isSaving else { return [] }
+
+            let deadline = now.addingTimeInterval(budget.firstWait)
+            state = .awaitingRecorder(take: take, stoppedAt: now, deadline: deadline)
+
+            var effects: [CaptureFinalizationEffect] = [
+                .freezeElapsedTimer(at: now),
+                .closeTakeEvidenceWindow
+            ]
+            if recorderPhase == .starting {
+                effects.append(.cancelPendingRecorderStart)
+            }
+            // The deadline is armed before the stop is issued, so a recorder
+            // that finalizes synchronously cancels a timer that already
+            // exists rather than racing one into existence behind it.
+            effects.append(.scheduleDeadline(at: deadline))
+            effects.append(.requestRecorderStop)
+            return effects
+
+        case let .summaryDelivered(take, recordingID):
+            guard acceptsSummary(for: take) else { return [] }
+            state = .completed(take: take, recordingID: recordingID)
+            return [.cancelDeadline, .completeToReview(recordingID: recordingID)]
+
+        case let .recorderReportedNoSummary(status):
+            guard let take = state.take, state.isSaving else { return [] }
+            let message = Self.recoveryMessage(status: status)
+            state = .failed(take: take, reason: message)
+            return [.cancelDeadline, .preserveStagedMedia, .presentRecoverableFailure(message: message)]
+
+        case let .deadlineElapsed(recorderStillRecording, status):
+            switch state {
+            case let .awaitingRecorder(take, stoppedAt, _) where recorderStillRecording:
+                // The original stop can race the movie output becoming
+                // active. Retry exactly once so recording cannot continue
+                // invisibly after Save Take, then give up within the bound.
+                let deadline = now.addingTimeInterval(budget.retryWait)
+                state = .retryingStop(take: take, stoppedAt: stoppedAt, deadline: deadline)
+                return [.scheduleDeadline(at: deadline), .requestRecorderStop]
+
+            case let .awaitingRecorder(take, _, _):
+                return fail(take: take, status: status)
+
+            case let .retryingStop(take, _, _):
+                return fail(take: take, status: status)
+
+            case .idle, .completed, .failed:
+                // A deadline that outlived its cycle is inert.
+                return []
+            }
+        }
+    }
+
+    private mutating func fail(
+        take: CaptureFinalizationTakeKey,
+        status: String
+    ) -> [CaptureFinalizationEffect] {
+        let message = Self.recoveryMessage(status: status)
+        state = .failed(take: take, reason: message)
+        return [.preserveStagedMedia, .presentRecoverableFailure(message: message)]
+    }
+
+    /// The exact operator-facing recovery wording. Kept here so the timeout,
+    /// the retry exhaustion, and the explicit no-summary report cannot drift
+    /// into three different explanations of the same situation.
+    static func recoveryMessage(status: String) -> String {
+        let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = trimmed.isEmpty ? "The recorder did not report completion." : trimmed
+        return "Take save did not finish. The staged recording was preserved. \(detail)"
+    }
+}
+
+/// Injectable time source so a finalization cycle is deterministic in tests.
+struct CaptureFinalizationClock: Sendable {
+    let now: @Sendable () -> Date
+
+    init(now: @escaping @Sendable () -> Date) {
+        self.now = now
+    }
+
+    static let system = CaptureFinalizationClock { Date() }
+}
+
+/// The one place a finalization deadline becomes real elapsed time.
+///
+/// Exactly one timer exists per scheduler, and scheduling replaces the
+/// previous one. This is what keeps a second watchdog from reappearing: the
+/// machine emits `scheduleDeadline`, and there is nowhere else to start one.
+final class CaptureFinalizationDeadlineScheduler {
+    private var task: Task<Void, Never>?
+    private let clock: CaptureFinalizationClock
+
+    init(clock: CaptureFinalizationClock = .system) {
+        self.clock = clock
+    }
+
+    var isScheduled: Bool { task != nil }
+
+    func schedule(at deadline: Date, _ body: @escaping () -> Void) {
+        cancel()
+        let interval = max(0, deadline.timeIntervalSince(clock.now()))
+        task = Task { @MainActor in
+            if interval > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            body()
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+}
+
 // MARK: - Capture evidence presentation
 
 /// One labelled evidence row for the review surface.
